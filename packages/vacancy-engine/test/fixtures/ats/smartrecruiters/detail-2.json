@@ -1,0 +1,9 @@
+{
+  "id": "sr-2",
+  "name": "Cloud Security Engineer",
+  "postingUrl": "https://jobs.smartrecruiters.com/Acme/sr-2-cloud-security-engineer",
+  "releasedDate": "2026-08-16T08:00:00Z",
+  "location": { "city": "Rotterdam", "country": "Netherlands", "remote": false },
+  "typeOfEmployment": { "label": "Permanent" },
+  "jobAd": { "sections": { "jobDescription": { "text": "<p>Secure cloud workloads.</p>" } } }
+}

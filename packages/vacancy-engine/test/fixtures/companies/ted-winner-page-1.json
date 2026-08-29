@@ -1,0 +1,53 @@
+{
+  "notices": [
+    {
+      "publication-number": "1726-2024",
+      "publication-date": "2024-01-02+01:00",
+      "winner-identifier": ["08053410"],
+      "winner-name": { "nld": ["Achmea Schadeverzekeringen N.V."] },
+      "winner-internet-address": ["https://www.achmea.nl"],
+      "winner-country": ["NLD"]
+    },
+    {
+      "publication-number": "1704-2024",
+      "publication-date": "2024-01-02+01:00",
+      "winner-identifier": ["06065537", "64289826"],
+      "winner-name": {
+        "nld": ["Atalian B.V.", "Marcella de Schoonmaakspecialist B.V."]
+      },
+      "winner-internet-address": ["http://www.atalianworld.nl"],
+      "winner-country": ["NLD", "NLD"]
+    },
+    {
+      "publication-number": "bad-id-2024",
+      "winner-identifier": ["NL-KVK-12345678"],
+      "winner-name": { "nld": ["Ongeldige Identifier B.V."] },
+      "winner-internet-address": ["https://invalid-id.nl"],
+      "winner-country": ["NLD"]
+    },
+    {
+      "publication-number": "no-url-2024",
+      "winner-identifier": ["12345678"],
+      "winner-name": { "nld": ["Geen Website B.V."] },
+      "winner-internet-address": [],
+      "winner-country": ["NLD"]
+    },
+    {
+      "publication-number": "bare-url-2024",
+      "winner-identifier": ["01234567"],
+      "winner-name": { "nld": ["Acme B.V.", "Acme B.V."] },
+      "winner-internet-address": ["www.acme.nl"],
+      "winner-country": ["NLD"]
+    },
+    {
+      "publication-number": "bad-url-2024",
+      "winner-identifier": ["87654321"],
+      "winner-name": { "nld": ["Onveilige Website B.V."] },
+      "winner-internet-address": ["javascript:alert(1)"],
+      "winner-country": ["NLD"]
+    }
+  ],
+  "totalNoticeCount": 7,
+  "iterationNextToken": "next-page-token",
+  "timedOut": false
+}

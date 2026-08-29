@@ -1,0 +1,2287 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "9d213b3a-59fa-4ecc-ad9e-35bdd051333b",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "application_status": {
+      "name": "application_status",
+      "columns": {
+        "vacancy_id": {
+          "name": "vacancy_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'new'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "application_status_vacancy_id_vacancies_id_fk": {
+          "name": "application_status_vacancy_id_vacancies_id_fk",
+          "tableFrom": "application_status",
+          "tableTo": "vacancies",
+          "columnsFrom": [
+            "vacancy_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "career_sources": {
+      "name": "career_sources",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "base_url": {
+          "name": "base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "board_identifier": {
+          "name": "board_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "canonical_key": {
+          "name": "canonical_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "discovery_method": {
+          "name": "discovery_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "discovery_evidence": {
+          "name": "discovery_evidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "last_success_at": {
+          "name": "last_success_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_failure_at": {
+          "name": "last_failure_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "consecutive_complete_misses": {
+          "name": "consecutive_complete_misses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "catalog_managed": {
+          "name": "catalog_managed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "discovery_managed": {
+          "name": "discovery_managed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "career_sources_company_url_unique": {
+          "name": "career_sources_company_url_unique",
+          "columns": [
+            "company_id",
+            "base_url"
+          ],
+          "isUnique": true
+        },
+        "career_sources_canonical_key_unique": {
+          "name": "career_sources_canonical_key_unique",
+          "columns": [
+            "canonical_key"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "career_sources_company_id_companies_id_fk": {
+          "name": "career_sources_company_id_companies_id_fk",
+          "tableFrom": "career_sources",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "companies": {
+      "name": "companies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "brand_name": {
+          "name": "brand_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "domain": {
+          "name": "domain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mapping_confidence": {
+          "name": "mapping_confidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "mapping_source": {
+          "name": "mapping_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "mapping_evidence": {
+          "name": "mapping_evidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "last_verified_at": {
+          "name": "last_verified_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "catalog_hash": {
+          "name": "catalog_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_scanned_at": {
+          "name": "last_scanned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scan_enabled": {
+          "name": "scan_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "companies_domain_unique": {
+          "name": "companies_domain_unique",
+          "columns": [
+            "domain"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "company_aliases": {
+      "name": "company_aliases",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "alias": {
+          "name": "alias",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "normalized_alias": {
+          "name": "normalized_alias",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        }
+      },
+      "indexes": {
+        "company_aliases_company_alias_unique": {
+          "name": "company_aliases_company_alias_unique",
+          "columns": [
+            "company_id",
+            "normalized_alias"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "company_aliases_company_id_companies_id_fk": {
+          "name": "company_aliases_company_id_companies_id_fk",
+          "tableFrom": "company_aliases",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "company_discovery_attempts": {
+      "name": "company_discovery_attempts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scan_run_id": {
+          "name": "scan_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sponsor_id": {
+          "name": "sponsor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_source": {
+          "name": "candidate_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_version": {
+          "name": "candidate_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_hash": {
+          "name": "candidate_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "inspection_policy_version": {
+          "name": "inspection_policy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "pages_inspected": {
+          "name": "pages_inspected",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "physical_request_count": {
+          "name": "physical_request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "http_status": {
+          "name": "http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "diagnostic": {
+          "name": "diagnostic",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "company_discovery_attempts_run_sponsor_unique": {
+          "name": "company_discovery_attempts_run_sponsor_unique",
+          "columns": [
+            "scan_run_id",
+            "sponsor_id"
+          ],
+          "isUnique": true
+        },
+        "company_discovery_attempts_sponsor_created_idx": {
+          "name": "company_discovery_attempts_sponsor_created_idx",
+          "columns": [
+            "sponsor_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "company_discovery_attempts_scan_run_id_scan_runs_id_fk": {
+          "name": "company_discovery_attempts_scan_run_id_scan_runs_id_fk",
+          "tableFrom": "company_discovery_attempts",
+          "tableTo": "scan_runs",
+          "columnsFrom": [
+            "scan_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "company_discovery_attempts_sponsor_id_sponsor_discovery_sponsor_id_fk": {
+          "name": "company_discovery_attempts_sponsor_id_sponsor_discovery_sponsor_id_fk",
+          "tableFrom": "company_discovery_attempts",
+          "tableTo": "sponsor_discovery",
+          "columnsFrom": [
+            "sponsor_id"
+          ],
+          "columnsTo": [
+            "sponsor_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "company_discovery_attempts_official_url_check": {
+          "name": "company_discovery_attempts_official_url_check",
+          "value": "(\"company_discovery_attempts\".\"official_url\" glob 'http://?*' or \"company_discovery_attempts\".\"official_url\" glob 'https://?*') and \"company_discovery_attempts\".\"official_url\" not glob '*[?#@]*'"
+        },
+        "company_discovery_attempts_candidate_hash_check": {
+          "name": "company_discovery_attempts_candidate_hash_check",
+          "value": "length(\"company_discovery_attempts\".\"candidate_hash\") = 64 and \"company_discovery_attempts\".\"candidate_hash\" not glob '*[^0-9a-f]*'"
+        },
+        "company_discovery_attempts_provenance_check": {
+          "name": "company_discovery_attempts_provenance_check",
+          "value": "length(\"company_discovery_attempts\".\"candidate_source\") > 0\n        and length(\"company_discovery_attempts\".\"candidate_version\") > 0\n        and length(\"company_discovery_attempts\".\"inspection_policy_version\") > 0"
+        },
+        "company_discovery_attempts_outcome_check": {
+          "name": "company_discovery_attempts_outcome_check",
+          "value": "\"company_discovery_attempts\".\"outcome\" in (\n        'careers_found',\n        'no_public_careers',\n        'unsupported',\n        'blocked',\n        'manual_review',\n        'error'\n      )"
+        },
+        "company_discovery_attempts_pages_check": {
+          "name": "company_discovery_attempts_pages_check",
+          "value": "\"company_discovery_attempts\".\"pages_inspected\" between 0 and 2"
+        },
+        "company_discovery_attempts_request_count_check": {
+          "name": "company_discovery_attempts_request_count_check",
+          "value": "\"company_discovery_attempts\".\"physical_request_count\" >= 0"
+        },
+        "company_discovery_attempts_duration_check": {
+          "name": "company_discovery_attempts_duration_check",
+          "value": "\"company_discovery_attempts\".\"duration_ms\" >= 0"
+        },
+        "company_discovery_attempts_diagnostic_length_check": {
+          "name": "company_discovery_attempts_diagnostic_length_check",
+          "value": "\"company_discovery_attempts\".\"diagnostic\" is null or length(\"company_discovery_attempts\".\"diagnostic\") <= 4000"
+        },
+        "company_discovery_attempts_http_status_check": {
+          "name": "company_discovery_attempts_http_status_check",
+          "value": "\"company_discovery_attempts\".\"http_status\" is null or \"company_discovery_attempts\".\"http_status\" between 100 and 599"
+        },
+        "company_discovery_attempts_result_object_check": {
+          "name": "company_discovery_attempts_result_object_check",
+          "value": "json_type(\"company_discovery_attempts\".\"result\") = 'object'"
+        }
+      }
+    },
+    "company_discovery_campaign_items": {
+      "name": "company_discovery_campaign_items",
+      "columns": {
+        "campaign_run_id": {
+          "name": "campaign_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sponsor_id": {
+          "name": "sponsor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_identity_key_snapshot": {
+          "name": "source_identity_key_snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "legal_name_snapshot": {
+          "name": "legal_name_snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kvk_number_snapshot": {
+          "name": "kvk_number_snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "final_phase": {
+          "name": "final_phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reason_code": {
+          "name": "reason_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "network_attempted": {
+          "name": "network_attempted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "pages_attempted": {
+          "name": "pages_attempted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "pages_fetched": {
+          "name": "pages_fetched",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "physical_request_count": {
+          "name": "physical_request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "http_status": {
+          "name": "http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "company_discovery_campaign_items_run_ordinal_unique": {
+          "name": "company_discovery_campaign_items_run_ordinal_unique",
+          "columns": [
+            "campaign_run_id",
+            "ordinal"
+          ],
+          "isUnique": true
+        },
+        "company_discovery_campaign_items_queue_idx": {
+          "name": "company_discovery_campaign_items_queue_idx",
+          "columns": [
+            "campaign_run_id",
+            "state",
+            "ordinal"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "company_discovery_campaign_items_campaign_run_id_scan_runs_id_fk": {
+          "name": "company_discovery_campaign_items_campaign_run_id_scan_runs_id_fk",
+          "tableFrom": "company_discovery_campaign_items",
+          "tableTo": "scan_runs",
+          "columnsFrom": [
+            "campaign_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "company_discovery_campaign_items_sponsor_id_ind_sponsors_id_fk": {
+          "name": "company_discovery_campaign_items_sponsor_id_ind_sponsors_id_fk",
+          "tableFrom": "company_discovery_campaign_items",
+          "tableTo": "ind_sponsors",
+          "columnsFrom": [
+            "sponsor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "company_discovery_campaign_items_campaign_run_id_sponsor_id_pk": {
+          "columns": [
+            "campaign_run_id",
+            "sponsor_id"
+          ],
+          "name": "company_discovery_campaign_items_campaign_run_id_sponsor_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "company_discovery_campaign_items_ordinal_check": {
+          "name": "company_discovery_campaign_items_ordinal_check",
+          "value": "\"company_discovery_campaign_items\".\"ordinal\" > 0"
+        },
+        "company_discovery_campaign_items_pages_check": {
+          "name": "company_discovery_campaign_items_pages_check",
+          "value": "\"company_discovery_campaign_items\".\"pages_attempted\" between 0 and 2\n        and \"company_discovery_campaign_items\".\"pages_fetched\" between 0 and \"company_discovery_campaign_items\".\"pages_attempted\""
+        },
+        "company_discovery_campaign_items_request_count_check": {
+          "name": "company_discovery_campaign_items_request_count_check",
+          "value": "\"company_discovery_campaign_items\".\"physical_request_count\" >= 0"
+        },
+        "company_discovery_campaign_items_network_check": {
+          "name": "company_discovery_campaign_items_network_check",
+          "value": "(\n        \"company_discovery_campaign_items\".\"network_attempted\" = true\n        and \"company_discovery_campaign_items\".\"pages_attempted\" > 0\n      ) or (\n        \"company_discovery_campaign_items\".\"network_attempted\" = false\n        and \"company_discovery_campaign_items\".\"pages_attempted\" = 0\n        and \"company_discovery_campaign_items\".\"pages_fetched\" = 0\n        and \"company_discovery_campaign_items\".\"physical_request_count\" = 0\n        and \"company_discovery_campaign_items\".\"http_status\" is null\n      )"
+        },
+        "company_discovery_campaign_items_http_status_check": {
+          "name": "company_discovery_campaign_items_http_status_check",
+          "value": "\"company_discovery_campaign_items\".\"http_status\" is null or \"company_discovery_campaign_items\".\"http_status\" between 100 and 599"
+        },
+        "company_discovery_campaign_items_details_object_check": {
+          "name": "company_discovery_campaign_items_details_object_check",
+          "value": "json_type(\"company_discovery_campaign_items\".\"details\") = 'object'"
+        },
+        "company_discovery_campaign_items_terminal_check": {
+          "name": "company_discovery_campaign_items_terminal_check",
+          "value": "(\n        \"company_discovery_campaign_items\".\"state\" = 'pending'\n        and \"company_discovery_campaign_items\".\"final_phase\" is null\n        and \"company_discovery_campaign_items\".\"outcome\" is null\n        and \"company_discovery_campaign_items\".\"reason_code\" is null\n        and \"company_discovery_campaign_items\".\"completed_at\" is null\n      ) or (\n        \"company_discovery_campaign_items\".\"state\" = 'terminal'\n        and \"company_discovery_campaign_items\".\"final_phase\" is not null\n        and length(\"company_discovery_campaign_items\".\"final_phase\") between 1 and 100\n        and \"company_discovery_campaign_items\".\"outcome\" is not null\n        and \"company_discovery_campaign_items\".\"reason_code\" is not null\n        and length(\"company_discovery_campaign_items\".\"reason_code\") between 1 and 100\n        and \"company_discovery_campaign_items\".\"completed_at\" is not null\n      )"
+        }
+      }
+    },
+    "company_sponsors": {
+      "name": "company_sponsors",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sponsor_id": {
+          "name": "sponsor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "relationship": {
+          "name": "relationship",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'legal_entity'"
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "catalog_managed": {
+          "name": "catalog_managed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "discovery_managed": {
+          "name": "discovery_managed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "company_sponsors_company_id_companies_id_fk": {
+          "name": "company_sponsors_company_id_companies_id_fk",
+          "tableFrom": "company_sponsors",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "company_sponsors_sponsor_id_ind_sponsors_id_fk": {
+          "name": "company_sponsors_sponsor_id_ind_sponsors_id_fk",
+          "tableFrom": "company_sponsors",
+          "tableTo": "ind_sponsors",
+          "columnsFrom": [
+            "sponsor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "company_sponsors_company_id_sponsor_id_pk": {
+          "columns": [
+            "company_id",
+            "sponsor_id"
+          ],
+          "name": "company_sponsors_company_id_sponsor_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "http_cache": {
+      "name": "http_cache",
+      "columns": {
+        "cache_key": {
+          "name": "cache_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "final_url": {
+          "name": "final_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_type": {
+          "name": "content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "response_headers": {
+          "name": "response_headers",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "etag": {
+          "name": "etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_modified": {
+          "name": "last_modified",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body_hash": {
+          "name": "body_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ind_sponsor_snapshots": {
+      "name": "ind_sponsor_snapshots",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_url": {
+          "name": "source_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_last_updated": {
+          "name": "source_last_updated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "retrieved_at": {
+          "name": "retrieved_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raw_row_count": {
+          "name": "raw_row_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "unique_sponsor_count": {
+          "name": "unique_sponsor_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "duplicate_row_count": {
+          "name": "duplicate_row_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "membership_hash": {
+          "name": "membership_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accepted": {
+          "name": "accepted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rejection_reason": {
+          "name": "rejection_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "ind_sponsor_snapshots_accepted_retrieved_idx": {
+          "name": "ind_sponsor_snapshots_accepted_retrieved_idx",
+          "columns": [
+            "accepted",
+            "retrieved_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ind_sponsors": {
+      "name": "ind_sponsors",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_identity_key": {
+          "name": "source_identity_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "legal_name": {
+          "name": "legal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "normalized_name": {
+          "name": "normalized_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "search_name": {
+          "name": "search_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kvk_number": {
+          "name": "kvk_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_url": {
+          "name": "source_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_retrieved_at": {
+          "name": "source_retrieved_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_last_updated": {
+          "name": "source_last_updated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "active": {
+          "name": "active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        }
+      },
+      "indexes": {
+        "ind_sponsors_source_identity_unique": {
+          "name": "ind_sponsors_source_identity_unique",
+          "columns": [
+            "source_identity_key"
+          ],
+          "isUnique": true
+        },
+        "ind_sponsors_kvk_idx": {
+          "name": "ind_sponsors_kvk_idx",
+          "columns": [
+            "kvk_number"
+          ],
+          "isUnique": false
+        },
+        "ind_sponsors_normalized_name_idx": {
+          "name": "ind_sponsors_normalized_name_idx",
+          "columns": [
+            "normalized_name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "scan_errors": {
+      "name": "scan_errors",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scan_run_id": {
+          "name": "scan_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "career_source_id": {
+          "name": "career_source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "http_status": {
+          "name": "http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "context": {
+          "name": "context",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "scan_errors_scan_run_id_scan_runs_id_fk": {
+          "name": "scan_errors_scan_run_id_scan_runs_id_fk",
+          "tableFrom": "scan_errors",
+          "tableTo": "scan_runs",
+          "columnsFrom": [
+            "scan_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "scan_errors_company_id_companies_id_fk": {
+          "name": "scan_errors_company_id_companies_id_fk",
+          "tableFrom": "scan_errors",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "scan_errors_career_source_id_career_sources_id_fk": {
+          "name": "scan_errors_career_source_id_career_sources_id_fk",
+          "tableFrom": "scan_errors",
+          "tableTo": "career_sources",
+          "columnsFrom": [
+            "career_source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "scan_runs": {
+      "name": "scan_runs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "command": {
+          "name": "command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'running'"
+        },
+        "ai_enabled": {
+          "name": "ai_enabled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "statistics": {
+          "name": "statistics",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "scan_source_outcomes": {
+      "name": "scan_source_outcomes",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scan_run_id": {
+          "name": "scan_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "career_source_id": {
+          "name": "career_source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "complete": {
+          "name": "complete",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "vacancies_seen": {
+          "name": "vacancies_seen",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "request_count": {
+          "name": "request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "scan_source_outcomes_run_source_unique": {
+          "name": "scan_source_outcomes_run_source_unique",
+          "columns": [
+            "scan_run_id",
+            "career_source_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "scan_source_outcomes_scan_run_id_scan_runs_id_fk": {
+          "name": "scan_source_outcomes_scan_run_id_scan_runs_id_fk",
+          "tableFrom": "scan_source_outcomes",
+          "tableTo": "scan_runs",
+          "columnsFrom": [
+            "scan_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "scan_source_outcomes_career_source_id_career_sources_id_fk": {
+          "name": "scan_source_outcomes_career_source_id_career_sources_id_fk",
+          "tableFrom": "scan_source_outcomes",
+          "tableTo": "career_sources",
+          "columnsFrom": [
+            "career_source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "sponsor_discovery": {
+      "name": "sponsor_discovery",
+      "columns": {
+        "sponsor_id": {
+          "name": "sponsor_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'needs_domain'"
+        },
+        "brand_name": {
+          "name": "brand_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "official_hostname": {
+          "name": "official_hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "candidate_source": {
+          "name": "candidate_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "candidate_version": {
+          "name": "candidate_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "candidate_hash": {
+          "name": "candidate_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "careers_url": {
+          "name": "careers_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_base_url": {
+          "name": "source_base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "board_identifier": {
+          "name": "board_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "last_attempt_at": {
+          "name": "last_attempt_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "next_check_at": {
+          "name": "next_check_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_http_status": {
+          "name": "last_http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "diagnostic": {
+          "name": "diagnostic",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "candidate_verified_at": {
+          "name": "candidate_verified_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "sponsor_discovery_candidate_queue_idx": {
+          "name": "sponsor_discovery_candidate_queue_idx",
+          "columns": [
+            "status",
+            "priority",
+            "next_check_at",
+            "sponsor_id"
+          ],
+          "isUnique": false
+        },
+        "sponsor_discovery_official_hostname_idx": {
+          "name": "sponsor_discovery_official_hostname_idx",
+          "columns": [
+            "official_hostname"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "sponsor_discovery_sponsor_id_ind_sponsors_id_fk": {
+          "name": "sponsor_discovery_sponsor_id_ind_sponsors_id_fk",
+          "tableFrom": "sponsor_discovery",
+          "tableTo": "ind_sponsors",
+          "columnsFrom": [
+            "sponsor_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "sponsor_discovery_priority_check": {
+          "name": "sponsor_discovery_priority_check",
+          "value": "\"sponsor_discovery\".\"priority\" between 0 and 100"
+        },
+        "sponsor_discovery_attempt_count_check": {
+          "name": "sponsor_discovery_attempt_count_check",
+          "value": "\"sponsor_discovery\".\"attempt_count\" >= 0"
+        },
+        "sponsor_discovery_diagnostic_length_check": {
+          "name": "sponsor_discovery_diagnostic_length_check",
+          "value": "\"sponsor_discovery\".\"diagnostic\" is null or length(\"sponsor_discovery\".\"diagnostic\") <= 4000"
+        },
+        "sponsor_discovery_http_status_check": {
+          "name": "sponsor_discovery_http_status_check",
+          "value": "\"sponsor_discovery\".\"last_http_status\" is null or \"sponsor_discovery\".\"last_http_status\" between 100 and 599"
+        },
+        "sponsor_discovery_evidence_object_check": {
+          "name": "sponsor_discovery_evidence_object_check",
+          "value": "json_type(\"sponsor_discovery\".\"evidence\") = 'object'"
+        },
+        "sponsor_discovery_candidate_contract_check": {
+          "name": "sponsor_discovery_candidate_contract_check",
+          "value": "\"sponsor_discovery\".\"status\" not in (\n        'candidate_ready',\n        'domain_verified',\n        'careers_found',\n        'source_verified',\n        'no_public_careers',\n        'unsupported',\n        'blocked',\n        'error'\n      ) or (\n        (\"sponsor_discovery\".\"official_url\" glob 'http://?*' or \"sponsor_discovery\".\"official_url\" glob 'https://?*') and \"sponsor_discovery\".\"official_url\" not glob '*[?#@]*'\n        and \"sponsor_discovery\".\"official_hostname\" is not null\n        and length(\"sponsor_discovery\".\"official_hostname\") > 0\n        and \"sponsor_discovery\".\"candidate_source\" is not null\n        and length(\"sponsor_discovery\".\"candidate_source\") > 0\n        and \"sponsor_discovery\".\"candidate_version\" is not null\n        and length(\"sponsor_discovery\".\"candidate_version\") > 0\n        and length(\"sponsor_discovery\".\"candidate_hash\") = 64 and \"sponsor_discovery\".\"candidate_hash\" not glob '*[^0-9a-f]*'\n        and \"sponsor_discovery\".\"confidence\" = 'high'\n        and \"sponsor_discovery\".\"evidence\" <> '{}'\n        and \"sponsor_discovery\".\"candidate_verified_at\" is not null\n      )"
+        }
+      }
+    },
+    "vacancies": {
+      "name": "vacancies",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "career_source_id": {
+          "name": "career_source_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "location": {
+          "name": "location",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "employment_type": {
+          "name": "employment_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "remote": {
+          "name": "remote",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "workplace_mode": {
+          "name": "workplace_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "posted_at": {
+          "name": "posted_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash_version": {
+          "name": "hash_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'vacancy-content-v2'"
+        },
+        "active": {
+          "name": "active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "missing_complete_scans": {
+          "name": "missing_complete_scans",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "vacancies_source_external_unique": {
+          "name": "vacancies_source_external_unique",
+          "columns": [
+            "career_source_id",
+            "external_id"
+          ],
+          "isUnique": true
+        },
+        "vacancies_active_score_idx": {
+          "name": "vacancies_active_score_idx",
+          "columns": [
+            "active",
+            "last_seen_at"
+          ],
+          "isUnique": false
+        },
+        "vacancies_content_hash_idx": {
+          "name": "vacancies_content_hash_idx",
+          "columns": [
+            "content_hash"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "vacancies_company_id_companies_id_fk": {
+          "name": "vacancies_company_id_companies_id_fk",
+          "tableFrom": "vacancies",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "vacancies_career_source_id_career_sources_id_fk": {
+          "name": "vacancies_career_source_id_career_sources_id_fk",
+          "tableFrom": "vacancies",
+          "tableTo": "career_sources",
+          "columnsFrom": [
+            "career_source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "vacancy_scores": {
+      "name": "vacancy_scores",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "vacancy_id": {
+          "name": "vacancy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "candidate_profile_version": {
+          "name": "candidate_profile_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scoring_version": {
+          "name": "scoring_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "deterministic_score": {
+          "name": "deterministic_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "semantic_config_version": {
+          "name": "semantic_config_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "final_score": {
+          "name": "final_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "technical_fit": {
+          "name": "technical_fit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role_fit": {
+          "name": "role_fit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "seniority_fit": {
+          "name": "seniority_fit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "language_fit": {
+          "name": "language_fit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "location_fit": {
+          "name": "location_fit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dutch_required": {
+          "name": "dutch_required",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dutch_preferred": {
+          "name": "dutch_preferred",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "language_evidence": {
+          "name": "language_evidence",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "primary_fit": {
+          "name": "primary_fit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "matching_skills": {
+          "name": "matching_skills",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "gaps": {
+          "name": "gaps",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "reasons": {
+          "name": "reasons",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scored_at": {
+          "name": "scored_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "vacancy_scores_cache_unique": {
+          "name": "vacancy_scores_cache_unique",
+          "columns": [
+            "vacancy_id",
+            "content_hash",
+            "candidate_profile_version",
+            "scoring_version"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "vacancy_scores_vacancy_id_vacancies_id_fk": {
+          "name": "vacancy_scores_vacancy_id_vacancies_id_fk",
+          "tableFrom": "vacancy_scores",
+          "tableTo": "vacancies",
+          "columnsFrom": [
+            "vacancy_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "vacancy_snapshots": {
+      "name": "vacancy_snapshots",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "vacancy_id": {
+          "name": "vacancy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hash_version": {
+          "name": "hash_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(cast(unixepoch('subsec') * 1000 as integer))"
+        }
+      },
+      "indexes": {
+        "vacancy_snapshots_vacancy_hash_unique": {
+          "name": "vacancy_snapshots_vacancy_hash_unique",
+          "columns": [
+            "vacancy_id",
+            "content_hash"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "vacancy_snapshots_vacancy_id_vacancies_id_fk": {
+          "name": "vacancy_snapshots_vacancy_id_vacancies_id_fk",
+          "tableFrom": "vacancy_snapshots",
+          "tableTo": "vacancies",
+          "columnsFrom": [
+            "vacancy_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

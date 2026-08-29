@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:tt="https://teamtailor.com/rss/namespace">
+  <channel>
+    <title>Acme jobs</title>
+    <item>
+      <title>Staff Software Engineer</title>
+      <description>&lt;p&gt;Design distributed systems.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Go &amp;amp; TypeScript&lt;/li&gt;&lt;/ul&gt;</description>
+      <pubDate>Thu, 20 Aug 2026 10:00:00 GMT</pubDate>
+      <link>https://acme.teamtailor.com/jobs/500-staff-software-engineer</link>
+      <guid>teamtailor-500</guid>
+      <remoteStatus>hybrid</remoteStatus>
+      <tt:locations><tt:location><tt:name>Amsterdam</tt:name></tt:location></tt:locations>
+      <tt:department>Engineering</tt:department>
+    </item>
+    <item>
+      <title>DevOps Engineer</title>
+      <description>&lt;p&gt;Automate delivery.&lt;/p&gt;</description>
+      <pubDate>Fri, 21 Aug 2026 10:00:00 GMT</pubDate>
+      <link>https://acme.teamtailor.com/jobs/501-devops-engineer</link>
+      <guid>teamtailor-501</guid>
+      <remoteStatus>remote</remoteStatus>
+      <tt:locations><tt:location><tt:name>Netherlands</tt:name></tt:location></tt:locations>
+    </item>
+  </channel>
+</rss>

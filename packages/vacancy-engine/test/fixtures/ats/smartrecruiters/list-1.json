@@ -1,0 +1,21 @@
+{
+  "offset": 0,
+  "limit": 2,
+  "totalFound": 3,
+  "content": [
+    {
+      "id": "sr-1",
+      "name": "Senior Software Engineer",
+      "releasedDate": "2026-08-15T08:00:00Z",
+      "location": { "fullLocation": "Amsterdam, Netherlands", "remote": false, "hybrid": true },
+      "typeOfEmployment": { "label": "Full-time" }
+    },
+    {
+      "id": "sr-2",
+      "name": "Cloud Security Engineer",
+      "releasedDate": "2026-08-16T08:00:00Z",
+      "location": { "city": "Rotterdam", "country": "Netherlands", "remote": false },
+      "typeOfEmployment": { "label": "Permanent" }
+    }
+  ]
+}

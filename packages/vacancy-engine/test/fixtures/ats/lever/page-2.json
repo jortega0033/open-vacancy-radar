@@ -1,0 +1,18 @@
+[
+  {
+    "id": "lever-2",
+    "text": "Cloud Engineer",
+    "categories": { "location": "Remote - Netherlands", "commitment": "Permanent" },
+    "descriptionPlain": "Operate cloud infrastructure.",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-2",
+    "workplaceType": "remote"
+  },
+  {
+    "id": "lever-3",
+    "text": "Data Engineer",
+    "categories": { "location": "Utrecht", "commitment": "Full-time" },
+    "description": "<p>Own streaming data pipelines.</p>",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-3",
+    "workplaceType": "on-site"
+  }
+]

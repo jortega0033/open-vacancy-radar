@@ -1,0 +1,25 @@
+{
+  "jobs": [
+    {
+      "id": 101,
+      "title": "Senior Platform Engineer",
+      "updated_at": "2026-08-20T10:00:00Z",
+      "location": { "name": "Amsterdam, Netherlands" },
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/101",
+      "content": "&lt;p&gt;Build reliable platforms.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;TypeScript &amp;amp; Node.js&lt;/li&gt;&lt;li&gt;Kubernetes&lt;/li&gt;&lt;/ul&gt;"
+    },
+    {
+      "id": "102",
+      "title": "Security Engineer",
+      "location": { "name": "Remote - Netherlands" },
+      "absolute_url": "https://careers.acme.example/security-engineer",
+      "content": "<div>Improve product security.<br>Partner with engineering.</div>"
+    },
+    {
+      "id": 103,
+      "title": "Malformed entry without content",
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/103"
+    }
+  ],
+  "meta": { "total": 3 }
+}

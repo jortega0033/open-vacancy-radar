@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:tt="https://teamtailor.com/rss/namespace">
+  <channel>
+    <item>
+      <title>QA Automation Engineer</title>
+      <description>&lt;p&gt;Build robust test automation.&lt;/p&gt;</description>
+      <pubDate>Sat, 22 Aug 2026 10:00:00 GMT</pubDate>
+      <link>https://acme.teamtailor.com/jobs/502-qa-automation-engineer</link>
+      <guid>teamtailor-502</guid>
+      <remoteStatus>on-site</remoteStatus>
+      <tt:locations><tt:location><tt:name>Rotterdam</tt:name></tt:location></tt:locations>
+    </item>
+  </channel>
+</rss>

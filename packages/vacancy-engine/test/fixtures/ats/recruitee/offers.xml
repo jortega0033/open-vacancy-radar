@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hash>
+  <offers>
+    <offer>
+      <id>700</id>
+      <title>Senior Backend Engineer</title>
+      <description>&amp;lt;p&amp;gt;Build payment services.&amp;lt;/p&amp;gt;</description>
+      <requirements>&amp;lt;ul&amp;gt;&amp;lt;li&amp;gt;Node.js &amp;amp; PostgreSQL&amp;lt;/li&amp;gt;&amp;lt;/ul&amp;gt;</requirements>
+      <location>Amsterdam</location>
+      <country>Netherlands</country>
+      <remote>true</remote>
+      <hybrid>false</hybrid>
+      <on-site>false</on-site>
+      <careers-url>https://acme.recruitee.com/o/senior-backend-engineer</careers-url>
+      <careers-apply-url>https://acme.recruitee.com/o/senior-backend-engineer/c/new</careers-apply-url>
+      <published-at>2026-08-19T09:30:00Z</published-at>
+      <employment-type-code>full_time</employment-type-code>
+    </offer>
+    <offer>
+      <id>701</id>
+      <title>Platform Engineer</title>
+      <description><![CDATA[<p>Improve the developer platform.</p>]]></description>
+      <city>Utrecht</city>
+      <country>Netherlands</country>
+      <on-site>true</on-site>
+      <careers-url>https://careers.acme.example/platform-engineer</careers-url>
+      <published-at>not-a-date</published-at>
+    </offer>
+    <offer>
+      <id>702</id>
+      <title>Malformed without description</title>
+      <careers-url>https://acme.recruitee.com/o/malformed</careers-url>
+    </offer>
+  </offers>
+</hash>

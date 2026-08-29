@@ -1,0 +1,33 @@
+{
+  "name": "@open-vacancy-radar/vacancy-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic vacancy-discovery engine (IND sponsor matching + global-remote frontend search), vendored from ind-job-radar and ported to an embedded SQLite store for standalone desktop distribution.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.6"
+  }
+}

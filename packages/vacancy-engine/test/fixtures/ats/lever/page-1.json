@@ -1,0 +1,26 @@
+[
+  {
+    "id": "lever-1",
+    "text": "Backend Engineer",
+    "categories": {
+      "location": "Amsterdam",
+      "allLocations": ["Amsterdam", "Rotterdam"],
+      "commitment": "Full-time"
+    },
+    "description": "<p>Build APIs.</p>",
+    "lists": [{ "text": "What you bring", "content": "<ul><li>TypeScript</li></ul>" }],
+    "hostedUrl": "https://jobs.lever.co/acme/lever-1",
+    "applyUrl": "https://jobs.lever.co/acme/lever-1/apply",
+    "workplaceType": "hybrid",
+    "createdAt": 1787133600000
+  },
+  {
+    "id": "lever-2",
+    "text": "Cloud Engineer",
+    "categories": { "location": "Remote - Netherlands", "commitment": "Permanent" },
+    "descriptionPlain": "Operate cloud infrastructure.",
+    "additional": "<p>On-call rotation.</p>",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-2",
+    "workplaceType": "remote"
+  }
+]

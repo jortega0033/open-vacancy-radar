@@ -1,0 +1,16 @@
+{
+  "jobPostingInfo": {
+    "title": "Senior Angular Developer",
+    "jobDescription": "<p>Build accessible enterprise applications.</p><ul><li>Angular and TypeScript</li><li>RxJS</li></ul>",
+    "location": "Amsterdam, Netherlands",
+    "additionalLocations": [
+      "Utrecht, Netherlands",
+      "Amsterdam, Netherlands"
+    ],
+    "remoteType": "Hybrid",
+    "externalUrl": "https://acme.wd5.myworkdayjobs.com/en-US/External/job/Netherlands/Senior-Angular-Developer_R-1001",
+    "jobReqId": "R-1001",
+    "startDate": "2026-08-20",
+    "timeType": "Full time"
+  }
+}

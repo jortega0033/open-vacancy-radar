@@ -1,0 +1,9 @@
+{
+  "id": "sr-3",
+  "name": "Data Platform Engineer",
+  "postingUrl": "https://jobs.smartrecruiters.com/Acme/sr-3-data-platform-engineer",
+  "releasedDate": "2026-08-17T08:00:00Z",
+  "location": { "fullLocation": "Netherlands", "remote": true },
+  "typeOfEmployment": { "label": "Full-time" },
+  "jobAd": { "sections": { "jobDescription": { "text": "<p>Operate streaming infrastructure.</p>" } } }
+}

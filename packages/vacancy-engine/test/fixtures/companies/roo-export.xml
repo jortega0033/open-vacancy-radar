@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<p:overheidsorganisaties
+  p:timestamp="2026-08-28T00:00:00+02:00"
+  xmlns:p="https://organisaties.overheid.nl/static/schema/oo/export/2.6.9"
+>
+  <p:organisaties>
+    <p:organisatie
+      p:systeemId="100"
+      p:resourceIdentifierTOOI="https://identifier.overheid.nl/tooi/id/oorg/oorg00100"
+    >
+      <p:naam>Acme Overheidsorganisatie</p:naam>
+      <p:classificaties>
+        <p:classificatie>
+          <p:wettelijkeGrondslagen>
+            <p:wettelijkeGrondslag>
+              <p:referentie>https://wetten.overheid.nl/not-an-official-site</p:referentie>
+            </p:wettelijkeGrondslag>
+          </p:wettelijkeGrondslagen>
+        </p:classificatie>
+      </p:classificaties>
+      <p:contact>
+        <p:internetadressen>
+          <p:internetadres>
+            <p:url>https://www.acme.nl/about/?campaign=ignored#fragment</p:url>
+            <p:label>algemeen</p:label>
+          </p:internetadres>
+          <p:internetadres>
+            <p:url>https://acme.nl/</p:url>
+            <p:label>website</p:label>
+          </p:internetadres>
+          <p:internetadres>
+            <p:url>ftp://files.acme.nl/</p:url>
+          </p:internetadres>
+        </p:internetadressen>
+      </p:contact>
+      <p:functies>
+        <p:functie>
+          <p:medewerkers>
+            <p:medewerker>
+              <p:contact>
+                <p:internetadressen>
+                  <p:internetadres><p:url>https://employee.invalid.nl/</p:url></p:internetadres>
+                </p:internetadressen>
+              </p:contact>
+            </p:medewerker>
+          </p:medewerkers>
+        </p:functie>
+      </p:functies>
+      <p:identificatiecodes>
+        <p:resourceIdentifier p:naam="KVK-nummer">1234567</p:resourceIdentifier>
+      </p:identificatiecodes>
+    </p:organisatie>
+
+    <p:organisatie
+      p:systeemId="200"
+      p:resourceIdentifierTOOI="https://identifier.overheid.nl/tooi/id/oorg/oorg00200"
+    >
+      <p:naam>Conflicterende Organisatie</p:naam>
+      <p:contact>
+        <p:internetadressen>
+          <p:internetadres><p:url>https://one.nl/</p:url></p:internetadres>
+          <p:internetadres><p:url>https://two.nl/</p:url></p:internetadres>
+        </p:internetadressen>
+      </p:contact>
+      <p:identificatiecodes>
+        <p:resourceIdentifier p:naam="KVK-nummer">87654321</p:resourceIdentifier>
+      </p:identificatiecodes>
+    </p:organisatie>
+
+    <p:organisatie
+      p:systeemId="300"
+      p:resourceIdentifierTOOI="https://identifier.overheid.nl/tooi/id/oorg/oorg00300"
+    >
+      <p:naam>Parent Zonder Eigen Website</p:naam>
+      <p:identificatiecodes>
+        <p:resourceIdentifier p:naam="KVK-nummer">11111111</p:resourceIdentifier>
+      </p:identificatiecodes>
+      <p:organisaties>
+        <p:organisatie
+          p:systeemId="301"
+          p:resourceIdentifierTOOI="https://identifier.overheid.nl/tooi/id/oorg/oorg00301"
+        >
+          <p:naam>Zelfstandig Kind</p:naam>
+          <p:contact>
+            <p:internetadressen>
+              <p:internetadres><p:url>https://child.nl/</p:url></p:internetadres>
+            </p:internetadressen>
+          </p:contact>
+          <p:identificatiecodes>
+            <p:resourceIdentifier p:naam="KVK-nummer">22222222</p:resourceIdentifier>
+          </p:identificatiecodes>
+        </p:organisatie>
+      </p:organisaties>
+    </p:organisatie>
+
+    <p:organisatie
+      p:systeemId="400"
+      p:resourceIdentifierTOOI="https://identifier.overheid.nl/tooi/id/oorg/oorg00400"
+    >
+      <p:naam>Ongeldig KVK</p:naam>
+      <p:contact>
+        <p:internetadressen>
+          <p:internetadres><p:url>https://linkedin.com/company/nope</p:url></p:internetadres>
+        </p:internetadressen>
+      </p:contact>
+      <p:identificatiecodes>
+        <p:resourceIdentifier p:naam="KVK-nummer">not-a-kvk</p:resourceIdentifier>
+      </p:identificatiecodes>
+    </p:organisatie>
+  </p:organisaties>
+</p:overheidsorganisaties>

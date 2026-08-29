@@ -1,0 +1,14 @@
+{
+  "offset": 2,
+  "limit": 2,
+  "totalFound": 3,
+  "content": [
+    {
+      "id": "sr-3",
+      "name": "Data Platform Engineer",
+      "releasedDate": "2026-08-17T08:00:00Z",
+      "location": { "fullLocation": "Netherlands", "remote": true },
+      "typeOfEmployment": { "label": "Full-time" }
+    }
+  ]
+}

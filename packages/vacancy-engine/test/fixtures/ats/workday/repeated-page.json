@@ -1,0 +1,17 @@
+{
+  "total": 4,
+  "jobPostings": [
+    {
+      "title": "Senior Angular Developer",
+      "externalPath": "/job/Netherlands/Senior-Angular-Developer_R-1001",
+      "locationsText": "Amsterdam, Netherlands",
+      "bulletFields": ["R-1001"]
+    },
+    {
+      "title": "Frontend Platform Engineer",
+      "externalPath": "/job/Netherlands/Frontend-Platform-Engineer_R-1002",
+      "locationsText": "Rotterdam, Netherlands",
+      "bulletFields": ["R-1002"]
+    }
+  ]
+}

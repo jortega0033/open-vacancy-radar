@@ -1,0 +1,30 @@
+{
+  "count": 8,
+  "next": null,
+  "results": [
+    {
+      "id": "iati-acme-second-record",
+      "short_name": "acme-second",
+      "human_readable_name": "Acme Overheidsorganisatie",
+      "organisation_identifier": "NL-KVK-01234567",
+      "reporting_source_type": "primary_source",
+      "website": "http://acme.nl/about/"
+    },
+    {
+      "id": "conflict-one",
+      "short_name": "conflict-one",
+      "human_readable_name": "Conflicterende Organisatie",
+      "organisation_identifier": "NL-KVK-87654321",
+      "reporting_source_type": "primary_source",
+      "website": "https://one.nl/"
+    },
+    {
+      "id": "conflict-two",
+      "short_name": "conflict-two",
+      "human_readable_name": "Conflicterende Organisatie",
+      "organisation_identifier": "NL-KVK-87654321",
+      "reporting_source_type": "primary_source",
+      "website": "https://two.nl/"
+    }
+  ]
+}

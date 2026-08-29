@@ -1,0 +1,46 @@
+{
+  "count": 8,
+  "next": "https://merged.dashboard.iatistandard.org/api/reporting-orgs/?format=json&page=2&page_size=5000",
+  "results": [
+    {
+      "id": "iati-acme",
+      "short_name": "acme",
+      "human_readable_name": "Acme Overheidsorganisatie",
+      "organisation_identifier": "NL-KVK-1234567-branch",
+      "reporting_source_type": "primary_source",
+      "website": "https://www.acme.nl/?campaign=ignored#fragment"
+    },
+    {
+      "id": "secondary",
+      "short_name": "secondary",
+      "human_readable_name": "Secondary Reporter",
+      "organisation_identifier": "NL-KVK-33333333",
+      "reporting_source_type": "secondary_source",
+      "website": "https://secondary.nl/"
+    },
+    {
+      "id": "bad-id",
+      "short_name": "bad-id",
+      "human_readable_name": "Bad Identifier",
+      "organisation_identifier": "NL-OTHER-44444444",
+      "reporting_source_type": "primary_source",
+      "website": "https://bad-id.nl/"
+    },
+    {
+      "id": "linkedin",
+      "short_name": "linkedin",
+      "human_readable_name": "LinkedIn Is Not An Official Site",
+      "organisation_identifier": "NL-KVK-55555555",
+      "reporting_source_type": "primary_source",
+      "website": "https://nl.linkedin.com/company/nope"
+    },
+    {
+      "id": "missing-site",
+      "short_name": "missing-site",
+      "human_readable_name": "Missing Site",
+      "organisation_identifier": "NL-KVK-66666666",
+      "reporting_source_type": "primary_source",
+      "website": ""
+    }
+  ]
+}

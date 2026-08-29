@@ -1,0 +1,15 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {
+      "title": "Senior Angular Developer",
+      "externalPath": "/job/Netherlands/Senior-Angular-Developer_R-1001",
+      "locationsText": "Amsterdam, Netherlands",
+      "bulletFields": ["R-1001"]
+    },
+    {
+      "title": "Missing external path",
+      "locationsText": "Amsterdam, Netherlands"
+    }
+  ]
+}

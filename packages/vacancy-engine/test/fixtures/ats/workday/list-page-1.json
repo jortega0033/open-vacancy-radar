@@ -1,0 +1,23 @@
+{
+  "total": 3,
+  "jobPostings": [
+    {
+      "title": "Senior Angular Developer",
+      "externalPath": "/job/Netherlands/Senior-Angular-Developer_R-1001",
+      "locationsText": "Amsterdam, Netherlands",
+      "postedOn": "Posted 2 Days Ago",
+      "bulletFields": ["R-1001"],
+      "remoteType": "Hybrid",
+      "timeType": "Full time"
+    },
+    {
+      "title": "Frontend Platform Engineer",
+      "externalPath": "/job/Netherlands/Frontend-Platform-Engineer_R-1002",
+      "locationsText": "2 locations",
+      "postedOn": "Posted 5 Days Ago",
+      "bulletFields": ["R-1002"],
+      "remoteType": "Remote",
+      "timeType": "Full time"
+    }
+  ]
+}

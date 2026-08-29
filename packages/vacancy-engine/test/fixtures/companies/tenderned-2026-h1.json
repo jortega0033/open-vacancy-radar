@@ -1,0 +1,246 @@
+{
+  "uri": "https://www.tenderned.nl/cms/nl/aanbesteden-in-cijfers/datasets-aanbestedingen",
+  "publisher": {
+    "name": "Ministry of Economic Affairs and Climate Policy"
+  },
+  "publishedDate": "2026-07-24T21:41:52.008+02:00",
+  "version": "1.1",
+  "releases": [
+    {
+      "ocid": "ocds-1l04xe-valid",
+      "id": "500001",
+      "parties": [
+        {
+          "name": "Acme B.V.",
+          "id": "01234567",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://www.acme.nl/about/?tracking=1#team" },
+          "roles": ["supplier"]
+        },
+        {
+          "name": "Acme B.V.",
+          "id": "01234567",
+          "address": { "countryName": "NL" },
+          "contactPoint": { "url": "https://www.acme.nl/about" },
+          "roles": ["supplier"]
+        },
+        {
+          "name": "Public buyer",
+          "id": 123456,
+          "roles": ["buyer"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500001"
+          }
+        ]
+      },
+      "awards": [
+        {
+          "suppliers": [{ "name": "Acme B. V.", "id": "01234567" }]
+        }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-ambiguous-name",
+      "id": "500002",
+      "parties": [
+        {
+          "name": "Ambiguous One B.V.",
+          "id": "87654321",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://ambiguous.example.org" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500002"
+          }
+        ]
+      },
+      "awards": [
+        {
+          "suppliers": [
+            { "name": "Ambiguous One B.V.", "id": "87654321" },
+            { "name": "Other Legal Name B.V.", "id": "87654321" }
+          ]
+        }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-unconfirmed",
+      "id": "500003",
+      "parties": [
+        {
+          "name": "Not Awarded B.V.",
+          "id": "11111111",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://not-awarded.nl" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500003"
+          }
+        ]
+      },
+      "awards": []
+    },
+    {
+      "ocid": "ocds-1l04xe-short-kvk",
+      "id": "500004",
+      "parties": [
+        {
+          "name": "Short KVK B.V.",
+          "id": "1234567",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://short-kvk.nl" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500004"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "Short KVK B.V.", "id": "1234567" }] }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-invalid-url",
+      "id": "500005",
+      "parties": [
+        {
+          "name": "Invalid URL B.V.",
+          "id": "22222222",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "javascript:alert(1)" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500005"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "Invalid URL B.V.", "id": "22222222" }] }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-foreign",
+      "id": "500006",
+      "parties": [
+        {
+          "name": "Foreign Supplier GmbH",
+          "id": "33333333",
+          "address": { "countryName": "Deutschland" },
+          "contactPoint": { "url": "https://foreign.example.de" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500006"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "Foreign Supplier GmbH", "id": "33333333" }] }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-incomplete",
+      "id": "500007",
+      "parties": [
+        {
+          "name": "No Website B.V.",
+          "id": "44444444",
+          "address": { "countryName": "Nederland" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500007"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "No Website B.V.", "id": "44444444" }] }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-name-mismatch",
+      "id": "500008",
+      "parties": [
+        {
+          "name": "Party Name B.V.",
+          "id": "55555555",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://party-name.nl" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500008"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "Award Name B.V.", "id": "55555555" }] }
+      ]
+    },
+    {
+      "ocid": "ocds-1l04xe-ambiguous-notice",
+      "id": "500009",
+      "parties": [
+        {
+          "name": "Two Notices B.V.",
+          "id": "66666666",
+          "address": { "countryName": "Nederland" },
+          "contactPoint": { "url": "https://two-notices.nl" },
+          "roles": ["supplier"]
+        }
+      ],
+      "tender": {
+        "documents": [
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/500009"
+          },
+          {
+            "documentType": "tenderNotice",
+            "url": "https://www.tenderned.nl/tenderned-tap/aankondigingen/599999"
+          }
+        ]
+      },
+      "awards": [
+        { "suppliers": [{ "name": "Two Notices B.V.", "id": "66666666" }] }
+      ]
+    }
+  ]
+}

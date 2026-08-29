@@ -1,0 +1,15 @@
+{
+  "notices": [
+    {
+      "publication-number": "1739-2024",
+      "publication-date": "2024-01-02+01:00",
+      "winner-identifier": ["88879518"],
+      "winner-name": { "nld": ["Crowe Foederer Audit & Assurance B.V."] },
+      "winner-internet-address": ["http://www.foederer.nl"],
+      "winner-country": ["NLD"]
+    }
+  ],
+  "totalNoticeCount": 7,
+  "iterationNextToken": null,
+  "timedOut": false
+}
