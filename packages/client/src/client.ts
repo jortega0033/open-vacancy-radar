@@ -4,11 +4,21 @@ import {
   createSessionRequestSchema,
   healthResponseSchema,
   providerStatusSchema,
+  mcpConnectionStatusSchema,
+  mcpCredentialInputSchema,
+  mcpProviderIdSchema,
+  mcpSearchRequestSchema,
+  mcpVacancyResultSchema,
   type AgentEventEnvelope,
   type AgentSession,
   type CreateSessionRequest,
   type ProviderId,
   type ProviderStatus,
+  type McpConnectionStatus,
+  type McpCredentialInput,
+  type McpProviderId,
+  type McpSearchRequest,
+  type McpVacancyResult,
 } from '@agent-dock/shared';
 import {
   DaemonError,
@@ -76,6 +86,13 @@ export class AgentDockClient {
      * quitting the app doesn't orphan any session besides the one it happens to be tracking —
      * see electron/main.ts#killDaemon. */
     cancelAll: (): Promise<void> => this.cancelAllSessions(),
+  };
+
+  readonly mcp = {
+    statuses: (): Promise<McpConnectionStatus[]> => this.listMcpStatuses(),
+    search: (input: McpSearchRequest): Promise<McpVacancyResult[]> => this.searchMcp(input),
+    setCredential: (input: McpCredentialInput): Promise<void> => this.setMcpCredential(input),
+    remove: (providerId: McpProviderId): Promise<void> => this.removeMcpProvider(providerId),
   };
 
   constructor(options: AgentDockClientOptions) {
@@ -160,6 +177,35 @@ export class AgentDockClient {
   private async listProviders(): Promise<ProviderStatus[]> {
     const body = await this.request<{ providers: unknown[] }>('/providers');
     return body.providers.map((raw) => validate(providerStatusSchema, raw, 'provider status'));
+  }
+
+  private async listMcpStatuses(): Promise<McpConnectionStatus[]> {
+    const body = await this.request<{ providers: unknown[] }>('/mcp/providers');
+    return body.providers.map((raw) => validate(mcpConnectionStatusSchema, raw, 'MCP provider status'));
+  }
+
+  private async searchMcp(input: McpSearchRequest): Promise<McpVacancyResult[]> {
+    const parsed = mcpSearchRequestSchema.parse(input);
+    const body = await this.request<{ results: unknown[] }>('/mcp/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parsed),
+    });
+    return body.results.map((raw) => validate(mcpVacancyResultSchema, raw, 'MCP vacancy result'));
+  }
+
+  private async setMcpCredential(input: McpCredentialInput): Promise<void> {
+    const parsed = mcpCredentialInputSchema.parse(input);
+    await this.request<void>(`/mcp/providers/${encodeURIComponent(parsed.providerId)}/credential`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: parsed.credential }),
+    });
+  }
+
+  private async removeMcpProvider(providerId: McpProviderId): Promise<void> {
+    const parsed = mcpProviderIdSchema.parse(providerId);
+    await this.request<void>(`/mcp/providers/${encodeURIComponent(parsed)}`, { method: 'DELETE' });
   }
 
   private async getProvider(id: ProviderId): Promise<ProviderStatus> {

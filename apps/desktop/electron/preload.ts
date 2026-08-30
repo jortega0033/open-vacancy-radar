@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
+import {
+  mcpConnectionStatusSchema,
+  mcpVacancyResultSchema,
+  type AgentEvent,
+  type AgentSession,
+  type McpConnectionStatus,
+  type McpCredentialInput,
+  type McpProviderId,
+  type McpSearchRequest,
+  type McpVacancyResult,
+  type ProviderId,
+  type ProviderStatus,
+} from '@agent-dock/shared';
 import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
 import type { WorkspaceBridge } from './workspace/types.js';
 
@@ -23,6 +35,10 @@ export interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
+  listMcpProviders(): Promise<McpConnectionStatus[]>;
+  searchMcp(input: McpSearchRequest): Promise<McpVacancyResult[]>;
+  setMcpCredential(input: McpCredentialInput): Promise<void>;
+  removeMcpProvider(providerId: McpProviderId): Promise<void>;
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   cancelSession(sessionId: string): Promise<void>;
   onSessionEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
@@ -114,6 +130,20 @@ const api: AgentDockBridge = {
   },
   listProviders() {
     return ipcRenderer.invoke('daemon:list-providers');
+  },
+  async listMcpProviders() {
+    const value: unknown = await ipcRenderer.invoke('daemon:mcp-statuses');
+    return Array.isArray(value) ? value.map((item) => mcpConnectionStatusSchema.parse(item)) : [];
+  },
+  async searchMcp(input) {
+    const value: unknown = await ipcRenderer.invoke('daemon:mcp-search', input);
+    return Array.isArray(value) ? value.map((item) => mcpVacancyResultSchema.parse(item)) : [];
+  },
+  setMcpCredential(input) {
+    return ipcRenderer.invoke('daemon:mcp-set-credential', input);
+  },
+  removeMcpProvider(providerId) {
+    return ipcRenderer.invoke('daemon:mcp-remove', providerId);
   },
   createSession(input) {
     return ipcRenderer.invoke('daemon:create-session', input);
