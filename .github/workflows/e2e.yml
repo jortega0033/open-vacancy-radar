@@ -1,0 +1,83 @@
+name: E2E
+
+# Drives the real, built Electron app with Playwright (apps/desktop/e2e/) — separate from ci.yml's
+# unit/component suite (vitest) since this one launches an actual Electron process under a virtual
+# display and takes meaningfully longer. Runs on the same ubuntu-latest runner as ci.yml so the
+# committed visual-snapshot baselines under apps/desktop/e2e/**/*-snapshots/ stay meaningful
+# regardless of what OS a contributor develops on locally.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: >-
+          Regenerate the committed visual-snapshot baselines under apps/desktop/e2e/**/*-snapshots/
+          for this runner's OS instead of comparing against them. Download the "e2e-snapshots"
+          artifact from the run and commit its contents in place of the existing baselines.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Electron e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Electron on headless Linux needs both a virtual display (xvfb) and a handful of system
+      # libraries ubuntu-latest doesn't ship by default (GTK/NSS/ALSA — Chromium's usual Linux
+      # runtime deps), or the app process fails to even open a window.
+      - name: Install Electron runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xauth libasound2t64
+
+      - name: Build the desktop app
+        run: pnpm --filter @agent-dock/desktop run build
+
+      - name: Run e2e tests
+        run: |
+          if [ "${{ inputs.update_snapshots }}" = "true" ]; then
+            xvfb-run -a pnpm --filter @agent-dock/desktop run test:e2e:update
+          else
+            xvfb-run -a pnpm --filter @agent-dock/desktop run test:e2e
+          fi
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: apps/desktop/playwright-report/
+          retention-days: 14
+
+      - name: Upload snapshot baselines
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-snapshots
+          path: apps/desktop/e2e/**/*-snapshots/**
+          retention-days: 14
