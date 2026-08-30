@@ -43,12 +43,31 @@ export interface CvBridge {
   getWorkspaceDir(): Promise<string>;
 }
 
-/** Mirror of `SystemBridge` in electron/preload.ts — OS login-item integration for Settings. */
+export interface SaveFileFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface SaveFileInput {
+  suggestedName: string;
+  data: string;
+  encoding: 'utf8' | 'base64';
+  filters: SaveFileFilter[];
+}
+
+export interface SaveFileResult {
+  saved: boolean;
+  path?: string;
+}
+
+/** Mirror of `SystemBridge` in electron/preload.ts — OS-level integration: login item, app
+ * version, and the native save-file dialog used for real document export. */
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
   /** `app.getVersion()` — reads `package.json`'s `version`, so the About section can never drift
    * from what actually shipped. */
   getAppVersion(): Promise<string>;
+  saveFile(input: SaveFileInput): Promise<SaveFileResult>;
 }
 
 /**

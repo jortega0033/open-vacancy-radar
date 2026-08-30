@@ -13,6 +13,7 @@ import type {
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
+import { exportDocx, exportMarkdown, exportPdf } from './export.js';
 import { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
 import {
   labelFor,
@@ -27,6 +28,9 @@ import {
 const JOB_LIVE = 'live';
 const JOB_MANUAL = 'manual';
 const JOB_SAVED_PREFIX = 'saved:';
+
+/** How long the "Copied" / "Exported" feedback stays up. */
+const COPY_FEEDBACK_MS = 2_000;
 
 export interface LetterGeneratorProps {
   /** An existing row to edit. Saving updates it in place rather than creating a second copy. */
@@ -102,11 +106,27 @@ export function LetterGenerator({
   const [saveError, setSaveError] = useState<string>();
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
 
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [copyError, setCopyError] = useState<string>();
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
+  const [exportError, setExportError] = useState<string>();
+  const exportTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
   // Which run's output has already been moved into the editor. A counter rather than a text
   // comparison, so a second run that happens to produce the identical text still replaces edits the
   // user made in between — "Regenerate" must always mean "replace with the new draft".
   const runSeq = useRef(0);
   const appliedSeq = useRef(0);
+
+  useEffect(
+    () => () => {
+      if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
+      if (exportTimeoutRef.current !== undefined) clearTimeout(exportTimeoutRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -342,6 +362,42 @@ export function LetterGenerator({
     letterId,
     onSaved,
   ]);
+
+  const handleCopy = useCallback(async () => {
+    if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopyState('copied');
+      setCopyError(undefined);
+    } catch (err) {
+      setCopyState('failed');
+      setCopyError(describeError(err, 'could not copy to the clipboard'));
+    }
+    copyTimeoutRef.current = setTimeout(() => setCopyState('idle'), COPY_FEEDBACK_MS);
+  }, [body]);
+
+  const handleExport = useCallback(
+    async (format: 'md' | 'docx' | 'pdf') => {
+      if (exportTimeoutRef.current !== undefined) clearTimeout(exportTimeoutRef.current);
+      setExportState('exporting');
+      setExportError(undefined);
+      const exportTitle = title.trim() || derivedTitle;
+      try {
+        const exporter = format === 'md' ? exportMarkdown : format === 'docx' ? exportDocx : exportPdf;
+        const result = await exporter(exportTitle, body);
+        if (result.saved) {
+          setExportState('exported');
+          exportTimeoutRef.current = setTimeout(() => setExportState('idle'), COPY_FEEDBACK_MS);
+        } else {
+          setExportState('idle'); // the user cancelled the save dialog — not a failure
+        }
+      } catch (err) {
+        setExportState('failed');
+        setExportError(describeError(err, 'could not export this letter'));
+      }
+    },
+    [body, title, derivedTitle],
+  );
 
   const showStreamPanel = run.isBusy || run.status === 'failed' || run.status === 'cancelled';
 
@@ -640,6 +696,37 @@ export function LetterGenerator({
             {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
             {letterId ? 'Save changes' : 'Save letter'}
           </button>
+          <button
+            className="btn btn-outline"
+            type="button"
+            onClick={() => void handleCopy()}
+            disabled={!hasBody}
+          >
+            Copy
+          </button>
+          <div className="dropdown dropdown-end">
+            <button tabIndex={0} className="btn btn-outline" type="button" disabled={!hasBody || exportState === 'exporting'}>
+              {exportState === 'exporting' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              Export
+            </button>
+            <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-44 border border-base-300 p-2 shadow">
+              <li>
+                <button type="button" onClick={() => void handleExport('md')}>
+                  Markdown (.md)
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => void handleExport('docx')}>
+                  Word (.docx)
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => void handleExport('pdf')}>
+                  PDF (.pdf)
+                </button>
+              </li>
+            </ul>
+          </div>
           {onClose && (
             <button className="btn btn-ghost" type="button" onClick={onClose}>
               Back to library
@@ -654,11 +741,31 @@ export function LetterGenerator({
             </span>
           )}
           {letterId && isDirty && <span className="text-base-content/60">Unsaved changes.</span>}
+          {copyState === 'copied' && (
+            <span className="text-success" role="status">
+              Copied to clipboard.
+            </span>
+          )}
+          {exportState === 'exported' && (
+            <span className="text-success" role="status">
+              Exported.
+            </span>
+          )}
         </div>
 
         {saveError && (
           <div className="alert alert-error mt-3 text-sm" role="alert">
             {saveError}
+          </div>
+        )}
+        {copyState === 'failed' && copyError && (
+          <div className="alert alert-error mt-3 text-sm" role="alert">
+            {copyError}
+          </div>
+        )}
+        {exportState === 'failed' && exportError && (
+          <div className="alert alert-error mt-3 text-sm" role="alert">
+            {exportError}
           </div>
         )}
 

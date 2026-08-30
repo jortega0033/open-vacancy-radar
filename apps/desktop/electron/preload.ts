@@ -273,9 +273,29 @@ contextBridge.exposeInMainWorld('cv', cvApi);
  * boolean ever reaches the channel, and the promise resolves to void — main returns nothing worth
  * forwarding.
  */
+export interface SaveFileFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface SaveFileInput {
+  suggestedName: string;
+  data: string;
+  encoding: 'utf8' | 'base64';
+  filters: SaveFileFilter[];
+}
+
+export interface SaveFileResult {
+  saved: boolean;
+  path?: string;
+}
+
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
   getAppVersion(): Promise<string>;
+  /** Writes renderer-built file bytes (a real export, not a stub) to a user-chosen path via the
+   * native save dialog. `{ saved: false }` means the user cancelled the dialog, not a failure. */
+  saveFile(input: SaveFileInput): Promise<SaveFileResult>;
 }
 
 const systemApi: SystemBridge = {
@@ -284,6 +304,9 @@ const systemApi: SystemBridge = {
   },
   async getAppVersion() {
     return (await ipcRenderer.invoke('system:get-app-version')) as string;
+  },
+  async saveFile(input) {
+    return (await ipcRenderer.invoke('system:save-file', input)) as SaveFileResult;
   },
 };
 

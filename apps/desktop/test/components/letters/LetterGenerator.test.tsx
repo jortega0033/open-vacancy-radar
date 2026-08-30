@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LetterGenerator, MAX_INSTRUCTION_CHARS } from '../../../src/components/letters/index.js';
 import { installBridges } from '../../cv-bridges.js';
-import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 import { LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
 
 /**
@@ -15,7 +15,14 @@ function setup(workspace: Parameters<typeof installWorkspaceBridge>[0] = {}) {
     listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
     ...workspace,
   });
-  return { ...bridges, workspace: ws };
+  const system = installSystemBridge();
+  return { ...bridges, workspace: ws, system };
+}
+
+/** jsdom has no clipboard implementation, so install one we can assert against. */
+function installClipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
+  return writeText;
 }
 
 /** The Generate button only enables once a CV and a job are both resolved. */
@@ -199,5 +206,67 @@ describe('LetterGenerator', () => {
     fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /regenerate anyway/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+  });
+
+  it('copies the letter body to the clipboard and confirms it', async () => {
+    setup();
+    const writeText = installClipboard();
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(makeLetter().body));
+    expect(await screen.findByText(/copied to clipboard/i)).toBeInTheDocument();
+  });
+
+  it('reports a clipboard failure instead of silently claiming success', async () => {
+    setup();
+    installClipboard(vi.fn().mockRejectedValue(new Error('permission denied')));
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('permission denied');
+    expect(screen.queryByText(/copied to clipboard/i)).not.toBeInTheDocument();
+  });
+
+  it('exports the letter as a real file through the native save dialog', async () => {
+    const { system } = setup();
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /markdown \(\.md\)/i }));
+
+    await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(system.saveFile).mock.calls[0]?.[0];
+    expect(call?.suggestedName).toMatch(/\.md$/);
+    expect(call?.encoding).toBe('utf8');
+    expect(call?.data).toContain(makeLetter().body);
+    expect(await screen.findByText(/^exported\.$/i)).toBeInTheDocument();
+  });
+
+  it('does not report an error when the user cancels the save dialog', async () => {
+    const { system } = setup();
+    vi.mocked(system.saveFile).mockResolvedValue({ saved: false });
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /word \(\.docx\)/i }));
+
+    await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/^exported\.$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('reports an export failure without losing the letter', async () => {
+    const { system } = setup();
+    vi.mocked(system.saveFile).mockRejectedValue(new Error('disk is full'));
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /pdf \(\.pdf\)/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk is full');
+    expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(makeLetter().body);
   });
 });

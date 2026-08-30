@@ -110,6 +110,7 @@ ${GROUNDING_RULES}
 Do not invent a hiring manager, recruiter, or contact name — address it generically (for example "Dear hiring team,"). Do not invent an address block, reference number, or date.
 Do not produce a template with placeholders such as [Your Name] or [Company]: every sentence must be usable as written, drawing on the CV and the vacancy details below.
 Avoid stock phrases such as "I am passionate about", "proven track record" and "team player".
+Write in natural, conversational English. Do not use em dashes. Avoid jargon and buzzwords. Do not be sycophantic or overly flattering.
 
 Write it so that it:
 ${requirements}
