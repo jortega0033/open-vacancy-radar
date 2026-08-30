@@ -1,0 +1,8 @@
+{
+  "status": "not_found",
+  "data": null,
+  "next_action": "Choose another active Remoote job id.",
+  "limits": null,
+  "payment": null,
+  "result_note": "Job not found or no longer public."
+}

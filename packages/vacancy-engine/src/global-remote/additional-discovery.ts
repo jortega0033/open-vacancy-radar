@@ -19,6 +19,7 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+import { discoverRemoote } from './remoote-discovery.js';
 
 function decodedText(html: string): string {
   return load(html).text().replace(/\s+/gu, ' ').trim();
@@ -238,6 +239,7 @@ export async function runAdditionalDiscovery(
 ): Promise<DiscoveryRun> {
   const runs = await Promise.all([
     discoverDice(http, config),
+    discoverRemoote(http, config),
     ...(config.discovery.museEnabled ? [discoverTheMuse(http, config)] : []),
   ]);
   return {
