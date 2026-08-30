@@ -1,0 +1,13 @@
+Jordan Rivers
+Frontend Engineer
+
+Experience
+Senior Frontend Engineer, Northwind Software (2020-2025)
+- Built and maintained a React + TypeScript design system used across five product teams.
+- Led migration from Webpack to Vite, cutting local build times by 70%.
+
+Skills
+React, TypeScript, Vite, Accessibility, Design Systems
+
+Languages
+English (native), Dutch (B2)
