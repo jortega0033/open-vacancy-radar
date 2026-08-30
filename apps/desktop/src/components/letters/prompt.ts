@@ -1,5 +1,11 @@
 import type { LetterLength, LetterTone, LetterType } from '../../window.js';
-import { clampPromptText, formatVacancy, GROUNDING_RULES, MAX_CV_PROMPT_CHARS } from '../cv/prompts.js';
+import {
+  clampPromptText,
+  fieldPromptText,
+  formatVacancy,
+  GROUNDING_RULES,
+  MAX_CV_PROMPT_CHARS,
+} from '../cv/prompts.js';
 import type { CvDocument } from '../cv/types.js';
 import type { SelectedVacancy } from './types.js';
 
@@ -113,6 +119,6 @@ Output the document text only — no title, no commentary before or after it, no
 === VACANCY ===
 ${formatVacancy(vacancy)}
 
-=== CANDIDATE CV (${cv.fileName}) ===
+=== CANDIDATE CV (${fieldPromptText(cv.fileName)}) ===
 ${clampPromptText(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }

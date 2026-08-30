@@ -119,7 +119,7 @@ describe('LettersLibrary', () => {
 
     fireEvent.click(within(rowFor('Motivation letter — Redwood')).getByRole('button', { name: /delete/i }));
 
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText(/motivation letter — redwood/i)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
@@ -135,10 +135,10 @@ describe('LettersLibrary', () => {
     await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(deleteLetter).not.toHaveBeenCalled();
     expect(screen.getByText(makeLetter().title)).toBeInTheDocument();
   });

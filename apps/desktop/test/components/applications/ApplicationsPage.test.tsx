@@ -159,7 +159,7 @@ describe('ApplicationsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
-    const confirmDialog = await screen.findByRole('dialog');
+    const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(deleteApplication).toHaveBeenCalledWith('del-1'));
@@ -182,10 +182,10 @@ describe('ApplicationsPage', () => {
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
-    const confirmDialog = await screen.findByRole('dialog');
+    const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^cancel$/i }));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(deleteApplication).not.toHaveBeenCalled();
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
   });

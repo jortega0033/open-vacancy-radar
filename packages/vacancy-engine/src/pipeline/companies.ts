@@ -7,8 +7,9 @@ import type { Database } from '../db/client.js';
 export async function runCompanyMappingSync(
   database: Database,
   logger: Logger,
+  mappingsFilePath?: string,
 ): Promise<CompanyMappingSyncResult> {
-  const mappings = await loadCompanyMappings();
+  const mappings = await loadCompanyMappings(mappingsFilePath);
   const result = await syncVerifiedCompanyMappings(database, mappings);
   logger.info(
     {

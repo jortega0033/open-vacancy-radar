@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
-import { ConfirmDialog } from '../applications/ConfirmDialog.js';
 import { describeError } from '../cv/useAgentRun.js';
-import { EmptyState } from '../shell/index.js';
+import { ConfirmDialog, EmptyState } from '../shell/index.js';
 import {
   formatUpdatedAt,
   labelFor,

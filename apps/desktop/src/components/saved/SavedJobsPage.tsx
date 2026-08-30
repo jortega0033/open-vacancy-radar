@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
 import emptySavedJobsIllustration from '../../../assets/illustrations/empty-saved-jobs.svg?no-inline';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
-import { EmptyState } from '../shell/index.js';
-import { ConfirmDeleteDialog } from './ConfirmDeleteDialog.js';
+import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
 import { SavedJobDrawer } from './SavedJobDrawer.js';
 import { SavedJobFilterBox } from './SavedJobFilterBox.js';
 import { toSavedJobInput } from './saved-job-input.js';
 import { SavedJobsTable } from './SavedJobsTable.js';
-import { UndoToast } from './UndoToast.js';
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; job: SavedJobRecord };
 
@@ -222,7 +220,18 @@ export function SavedJobsPage() {
       )}
 
       {deleteTarget && (
-        <ConfirmDeleteDialog job={deleteTarget} onConfirm={confirmDelete} onCancel={cancelDelete} />
+        <ConfirmDialog
+          title="Delete saved job?"
+          message={
+            <>
+              This removes <span className="font-medium text-base-content">{deleteTarget.role}</span> at{' '}
+              <span className="font-medium text-base-content">{deleteTarget.company}</span> from your saved
+              jobs. You can undo this for a few seconds after deleting.
+            </>
+          }
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
+        />
       )}
 
       {pendingUndo && (

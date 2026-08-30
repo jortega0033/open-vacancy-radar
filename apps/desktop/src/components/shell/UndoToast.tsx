@@ -9,9 +9,11 @@ export interface UndoToastProps {
 }
 
 /**
- * The delete undo affordance from the prototype (`showToast(msg, undoFn)` in
+ * Shared "deleted — undo" affordance (`showToast(msg, undoFn)` in the prototype's
  * `export-src.html`): the delete already happened for real, but for a short window the user can
- * click "Undo" to re-create an equivalent row. Auto-dismisses itself so a forgotten toast doesn't
+ * click "Undo" to re-create an equivalent row. Deliberately neutral/grayscale — a delete-undo
+ * notice is a lifecycle notice, not a success/warning/error outcome, so per DESIGN-TOKENS.md it
+ * does not get one of the three reserved hues. Auto-dismisses itself so a forgotten toast doesn't
  * linger forever; unmounting (e.g. because the page navigated away) also clears the timer.
  */
 export function UndoToast({ message, onUndo, onDismiss, durationMs = 3500 }: UndoToastProps) {

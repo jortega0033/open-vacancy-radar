@@ -34,7 +34,7 @@ function clamp(text: string, limit: number): string {
  * with exactly the same rule this module uses. Additive: nothing here changes for existing
  * callers of `buildGapAnalysisPrompt` / `buildCoverLetterPrompt`.
  */
-export { clamp as clampPromptText };
+export { clamp as clampPromptText, field as fieldPromptText };
 
 /**
  * Renders one untrusted single-line vacancy field.
@@ -129,7 +129,7 @@ Two or three sentences: how strong a candidate this is for this specific vacancy
 === VACANCY ===
 ${formatVacancy(vacancy)}
 
-=== CANDIDATE CV (${cv.fileName}) ===
+=== CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
@@ -152,6 +152,6 @@ Output the letter text only — no title, no commentary before or after it, no M
 === VACANCY ===
 ${formatVacancy(vacancy)}
 
-=== CANDIDATE CV (${cv.fileName}) ===
+=== CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }

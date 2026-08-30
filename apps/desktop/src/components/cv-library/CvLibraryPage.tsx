@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CvDocumentRecord } from '../../window.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
-import { EmptyState } from '../shell/index.js';
-import { ConfirmDeleteCvDialog } from './ConfirmDeleteCvDialog.js';
+import { ConfirmDialog, EmptyState } from '../shell/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
@@ -29,7 +28,7 @@ function describeError(err: unknown, fallback: string): string {
  * copy of that text once a row is saved (an uploaded file's text lives only in the database row,
  * and the picked-file state is dropped as soon as `SaveCvToLibrary` persists it). A fabricated
  * "undo" that silently recreated a blank-text row would be worse than admitting there isn't one,
- * so `ConfirmDeleteCvDialog` says "cannot be undone" instead.
+ * so its delete confirmation says "cannot be undone" instead.
  */
 export function CvLibraryPage() {
   const [documents, setDocuments] = useState<CvDocumentRecord[] | null>(null);
@@ -174,7 +173,17 @@ export function CvLibraryPage() {
       )}
 
       {deleteTarget && (
-        <ConfirmDeleteCvDialog cv={deleteTarget} onConfirm={() => void confirmDelete()} onCancel={cancelDelete} />
+        <ConfirmDialog
+          title="Delete this CV?"
+          message={
+            <>
+              This permanently removes <span className="font-medium text-base-content">{deleteTarget.name}</span>{' '}
+              from your CV library, including any extracted text. This cannot be undone.
+            </>
+          }
+          onConfirm={() => void confirmDelete()}
+          onCancel={cancelDelete}
+        />
       )}
     </div>
   );

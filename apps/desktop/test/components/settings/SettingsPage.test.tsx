@@ -242,7 +242,7 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('dark'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /reset settings/i }));
 
     await waitFor(() =>
@@ -283,7 +283,7 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
 
     await waitFor(() => expect(screen.getByText('Application data reset')).toBeInTheDocument());
@@ -304,10 +304,10 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(bridge.deleteApplication).not.toHaveBeenCalled();
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });

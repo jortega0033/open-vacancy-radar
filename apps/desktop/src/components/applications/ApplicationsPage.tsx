@@ -9,12 +9,10 @@ import type {
   SavedJobRecord,
 } from '../../window.js';
 import emptyApplicationsIllustration from '../../../assets/illustrations/empty-applications.svg?no-inline';
-import { EmptyState } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
-import { ConfirmDialog } from './ConfirmDialog.js';
-import { UndoToast } from './UndoToast.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
 
@@ -25,9 +23,6 @@ interface PendingUndo {
    * gets a new id. */
   input: ApplicationInput;
 }
-
-/** How long the "Deleted — Undo" toast stays up before it auto-dismisses. */
-const UNDO_WINDOW_MS = 5000;
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -99,14 +94,6 @@ export function ApplicationsPage() {
       cancelled = true;
     };
   }, [filter]);
-
-  // `UndoToast` has no auto-dismiss timer of its own (unlike the saved-jobs one) — the page owns
-  // the "a few seconds" window and clears it on unmount or if a newer undo replaces this one.
-  useEffect(() => {
-    if (!pendingUndo) return undefined;
-    const timer = setTimeout(() => setPendingUndo(null), UNDO_WINDOW_MS);
-    return () => clearTimeout(timer);
-  }, [pendingUndo]);
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
 
@@ -189,10 +176,11 @@ export function ApplicationsPage() {
     }
   }, [deleteTarget]);
 
+  const dismissUndo = useCallback(() => setPendingUndo(null), []);
+
   const handleUndo = useCallback(async () => {
     const undo = pendingUndo;
     if (!undo) return;
-    setPendingUndo(null);
     try {
       const recreated = await window.workspace.createApplication(undo.input);
       setApplications((prev) => [...(prev ?? []), recreated]);
@@ -290,7 +278,9 @@ export function ApplicationsPage() {
         />
       )}
 
-      {pendingUndo && <UndoToast message={pendingUndo.message} onUndo={handleUndo} />}
+      {pendingUndo && (
+        <UndoToast message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
+      )}
     </div>
   );
 }

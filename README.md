@@ -1,10 +1,13 @@
 # Open Vacancy Radar
 
-An open-source, local-first Electron workspace for discovering vacancies, evaluating employers and
-preparing applications. It uses the reusable AgentDock runtime to run prompts through AI agent
-CLIs already installed and authenticated on the user's computer — starting with
+An open-source, local-first Electron desktop app for discovering frontend-developer vacancies,
+tracking applications, and preparing CVs and cover letters — with no external database, no cloud
+account, and no API key held by this project. Application data lives in an embedded SQLite
+workspace on the user's own machine; AI features run through the reusable AgentDock runtime, which
+drives AI agent CLIs already installed and authenticated on the user's computer — starting with
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex) — without handling the user's credentials.
+[Codex](https://github.com/openai/codex) — without this project ever seeing a password, token, or
+API key.
 
 ![Open Vacancy Radar search workspace](docs/images/social/readme-hero.webp)
 
@@ -13,17 +16,47 @@ this repository, not the bundled prototype used to prepare the image._
 
 ## What this is
 
+A personal job-search workspace built around two real, verified discovery pipelines — there is no
+third "generic country" pipeline; every match is either Netherlands-sponsor-verified or
+worldwide-remote-verified, never a placeholder:
+
+- **Netherlands** — frontend vacancies cross-checked against the IND's official recognised-sponsor
+  register, so a match means the employer is a verified sponsor, not just a keyword hit.
+- **Worldwide / remote** — frontend-only roles from ~50 researched public sources (ATS APIs, RSS
+  feeds, keyed job-board APIs), filtered for genuinely remote, non-US-only eligibility.
+
+Both pipelines are deterministic-first: official ATS APIs and structured feeds before plain HTTP,
+before JSON-LD, before HTML parsing, with a narrowly-scoped headless-browser fallback only where
+nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for the engine itself —
+vendored from the standalone `ind-job-radar` CLI project and ported from PostgreSQL to an embedded
+`better-sqlite3` database so the desktop app needs no external services at all.
+
+On top of that, the desktop app is a full personal tracker:
+
+- **Search** — run either pipeline on demand, save leads, or open the CV assistant on any result.
+- **Saved Jobs** / **Applications** — track status end to end, with confirm-before-delete and a
+  short undo window on every delete.
+- **CV Library** — upload or hand-enter multiple CVs, one marked default, each usable for AI
+  gap-analysis against a specific vacancy.
+- **Letters** — generate motivation letters, cover letters, recruiter messages, or short
+  application-form blurbs from a CV + vacancy pair, in a chosen tone and length, with a library of
+  saved drafts.
+- **Settings** — theme (light/dark/system), density, default market, and data export/reset, all
+  persisted locally.
+- **AI Runtime** — the AgentDock provider panel: pick a provider (Claude Code, Codex) and, where
+  supported, a specific model, and watch a run's events stream live.
+
 A desktop product on a **Bring Your Own Subscription** foundation: if a user already has `claude`
 or `codex` installed and logged in, Open Vacancy Radar can use that existing session for local AI
-workflows. The installed CLI stays the sole authentication and provider boundary; this project
-never sees a password, token or API key.
+workflows (gap analysis, letter drafting). The installed CLI stays the sole authentication and
+provider boundary; this project never sees a password, token or API key.
 
 ```
 Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──▶ Local Daemon (Fastify, protocol v1)
-                                                                          │
-                                                             Unified Agent Runtime
-                                                        ├── Claude Code adapter ──▶ claude CLI
-                                                        └── Codex adapter ────────▶ codex CLI
+                              │                                          │
+                    embedded SQLite (workspace +               Unified Agent Runtime
+                    vendored vacancy-engine)              ├── Claude Code adapter ──▶ claude CLI
+                                                           └── Codex adapter ────────▶ codex CLI
 ```
 
 The renderer never calls the daemon directly — only Electron's main process does, through the
@@ -61,13 +94,22 @@ See [docs/architecture.md](docs/architecture.md) for the full breakdown, and
 
 ```
 apps/
-  desktop/        Open Vacancy Radar Electron + React application
-  daemon/         Standalone local Node.js service (Fastify), runnable without Electron
+  desktop/          Open Vacancy Radar Electron + React application
+                       src/components/{search,saved,applications,cv-library,letters,settings}/
+                       electron/workspace/  — the personal-data SQLite schema, IPC, repository
+  daemon/           Standalone local Node.js service (Fastify), runnable without Electron
 packages/
-  agent-runtime/  Provider-neutral runtime: process management, adapters, normalized events
-  client/         @agent-dock/client — typed daemon SDK (HTTP+SSE, auth, protocol version check)
-  shared/         Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
+  vacancy-engine/   The discovery/scoring engine (NL sponsor pipeline + worldwide remote pipeline),
+                     vendored from the standalone `ind-job-radar` CLI and ported to embedded SQLite
+  agent-runtime/    Provider-neutral runtime: process management, adapters, normalized events
+  client/           @agent-dock/client — typed daemon SDK (HTTP+SSE, auth, protocol version check)
+  shared/           Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
 ```
+
+Design tokens and shared UI primitives live in `apps/desktop/src/styles/tokens.css` (the single
+source of theme/color/spacing truth — see [DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md)) and
+`apps/desktop/src/components/shell/` (`ConfirmDialog`, `UndoToast`, `EmptyState`, and the app
+shell), reused across every page rather than redefined per feature.
 
 ## Requirements
 
@@ -102,11 +144,17 @@ The daemon prints its listening URL and where it wrote its discovery file (port 
 startup — see [SECURITY.md](SECURITY.md#local-auth-token) for what that file is and why the token
 exists, and [docs/daemon.md](docs/daemon.md) for everything else about running it standalone.
 
-To run the full desktop demo (spawns the daemon automatically):
+To run the full desktop app (spawns the daemon automatically):
 
 ```bash
 pnpm dev:desktop
 ```
+
+No database server or setup step is required: both the vacancy-engine's own database and the
+personal workspace database are embedded SQLite files under Electron's per-user app-data directory,
+created and migrated automatically on first launch. `pnpm install`'s `postinstall` step also
+rebuilds `better-sqlite3`'s native binding against Electron's ABI (`electron-rebuild`) — a plain
+`node_modules` install alone is not sufficient for the desktop app to run.
 
 ### Everyday commands
 
@@ -235,6 +283,7 @@ To build a different product on the same foundation:
 - [docs/electron.md](docs/electron.md) — the renderer/main/daemon boundary, IPC bridge, where to safely add native functionality
 - [docs/packaging.md](docs/packaging.md) — electron-builder/NSIS specifics, verified commands, platform support
 - [docs/assets.md](docs/assets.md) — brand sources, icon generation, renderer mapping and rebranding
+- [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md) — the design-token rules every component follows
 - [docs/troubleshooting.md](docs/troubleshooting.md) — common problems and how to diagnose them
 - [SECURITY.md](SECURITY.md) — the daemon's threat model and local-auth mechanism
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow and checklist

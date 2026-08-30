@@ -5,6 +5,14 @@
   "description": "Open Vacancy Radar desktop job-search workspace built on the AgentDock local runtime",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jortega0033/open-vacancy-radar.git"
+  },
+  "homepage": "https://github.com/jortega0033/open-vacancy-radar#readme",
+  "bugs": {
+    "url": "https://github.com/jortega0033/open-vacancy-radar/issues"
+  },
   "engines": {
     "node": ">=20"
   },

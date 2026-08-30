@@ -284,6 +284,10 @@ function candidateProfilePathFor(projectRoot: string | undefined): string | unde
   return projectRoot === undefined ? undefined : path.join(projectRoot, 'config', 'candidate-profile-v1.json');
 }
 
+function companyMappingsPathFor(projectRoot: string | undefined): string | undefined {
+  return projectRoot === undefined ? undefined : path.join(projectRoot, 'config', 'company-mappings-v1.json');
+}
+
 async function runUnlockedEndToEndScan(
   database: Database,
   config: AppConfig,
@@ -335,7 +339,11 @@ async function runUnlockedEndToEndScan(
       durationMs: Date.now() - fullScanStartedAt,
     };
     stage = 'company_mapping';
-    const companyMapping = await runCompanyMappingSync(database, logger);
+    const companyMapping = await runCompanyMappingSync(
+      database,
+      logger,
+      companyMappingsPathFor(options.projectRoot),
+    );
     fallbackStatistics = {
       ...fallbackStatistics,
       companiesMapped: companyMapping.companiesMapped,
@@ -346,7 +354,10 @@ async function runUnlockedEndToEndScan(
     const vacancyScan = await runVacancyScan(database, config, logger, scanRunId);
     await pruneStaleHttpCache(database, config, logger);
     stage = 'deterministic_scoring';
-    const scoring = await runPersistedDeterministicScoring(database);
+    const scoring = await runPersistedDeterministicScoring(
+      database,
+      profilePath === undefined ? {} : { profilePath },
+    );
     const durationMs = Date.now() - fullScanStartedAt;
     fallbackStatistics = reportStatisticsForVacancyScan(
       vacancyScan,

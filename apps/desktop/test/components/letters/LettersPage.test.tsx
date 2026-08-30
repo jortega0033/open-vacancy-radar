@@ -106,7 +106,7 @@ describe('LettersPage', () => {
     await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(deleteLetter).toHaveBeenCalledWith('del-1'));

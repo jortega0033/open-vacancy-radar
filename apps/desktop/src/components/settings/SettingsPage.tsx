@@ -5,7 +5,7 @@ import type {
   CvDocumentRecord,
 } from '../../window.js';
 import { applyDensity, applyTheme } from '../../theme.js';
-import { ConfirmDialog } from '../applications/ConfirmDialog.js';
+import { ConfirmDialog } from '../shell/index.js';
 import { SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
 

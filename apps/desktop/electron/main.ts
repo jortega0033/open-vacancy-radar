@@ -112,7 +112,11 @@ async function ensureVacancyEngine(): Promise<Database> {
   vacancyEngineInit ??= (async () => {
     const config = vacancyEngineConfig();
     const { db } = createDatabaseClient(config.databasePath);
-    await migrateDatabase(db);
+    // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
+    // resolves when the process cwd happens to be `packages/vacancy-engine` — never true once
+    // Electron actually launches. Resolve it against the same dev-mode project root used for
+    // `config/` and `reports/` below instead of relying on cwd.
+    await migrateDatabase(db, join(vacancyEngineProjectRoot(), 'drizzle'));
     vacancyDb = db;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
     // sidecar SQLite file keyed to this database path, so it is meaningful across processes
