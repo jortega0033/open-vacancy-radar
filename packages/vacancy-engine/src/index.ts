@@ -1,7 +1,7 @@
 /**
  * Public programmatic API surface for embedding this engine in a host process (e.g. Electron's
  * main process) instead of invoking it as a CLI. Re-exports only what a host needs to migrate its
- * database, run a scan, and read back a report — never `process.exit`/argv-parsing concerns, which
+ * database, run a scan, and read back a report, never `process.exit`/argv-parsing concerns, which
  * stay in cli.ts and would be wrong to carry into a long-lived host process.
  */
 export { loadConfig, type AppConfig } from './config.js';

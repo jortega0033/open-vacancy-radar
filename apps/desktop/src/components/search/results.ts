@@ -13,12 +13,12 @@ import type { VacancyLead } from '../cv/types.js';
  *
  * `window.vacancyRadar` exposes two report shapes that are not variants of each other:
  *
- * - `JobRadarReport.vacancies: ReportVacancy[]` — the Netherlands pipeline. Carries a deterministic
+ * - `JobRadarReport.vacancies: ReportVacancy[]`: the Netherlands pipeline. Carries a deterministic
  *   relevance score with sub-dimensions, matched/missing skills, Dutch-language evidence, a posting
- *   date, a workplace mode, and — the reason this pipeline exists — the IND recognised-sponsor
+ *   date, a workplace mode, and (the reason this pipeline exists) the IND recognised-sponsor
  *   legal entities matched to the employer plus the confidence of that mapping. It carries no
  *   salary and no employment type.
- * - `GlobalRemoteReport.discoveryAudit: DiscoveryVacancyAudit[]` — the worldwide/remote pipeline.
+ * - `GlobalRemoteReport.discoveryAudit: DiscoveryVacancyAudit[]`: the worldwide/remote pipeline.
  *   Carries advertised salary, employment type and a discovery decision. It has no posting date, no
  *   workplace mode, no score, and **no employer-verification concept at all**.
  *
@@ -48,12 +48,12 @@ export type VerificationLevel =
 
 export interface Verification {
   level: VerificationLevel;
-  /** Short status, always rendered as text — colour is never the only signal. */
+  /** Short status, always rendered as text. Colour is never the only signal. */
   label: string;
   /** The honest explanation of what was and was not checked. */
   note: string;
   /**
-   * State hue for the status dot, or `null` for a market where no check exists — a market with no
+   * State hue for the status dot, or `null` for a market where no check exists. A market with no
    * verification step must not get a green, amber or red dot, because it has no outcome to colour.
    */
   tone: 'success' | 'warning' | null;
@@ -64,7 +64,7 @@ export const WORLDWIDE_VERIFICATION: Verification = {
   label: 'Not available for this market',
   tone: null,
   note:
-    'The worldwide/remote pipeline discovers vacancies from public job feeds and does not check employers against any register. Nothing was verified about this employer — that is an absent check, not a negative result.',
+    'The worldwide/remote pipeline discovers vacancies from public job feeds and does not check employers against any register. Nothing was verified about this employer: that is an absent check, not a negative result.',
 };
 
 export type ArrangementValue = 'remote' | 'hybrid' | 'onsite' | 'unknown';
@@ -108,7 +108,7 @@ export type SearchResult =
       raw: DiscoveryVacancyAudit;
       /**
        * The official-source audit row for this exact URL, when the same run happened to verify it.
-       * Matched on exact URL only — a fuzzy company/title match would manufacture evidence.
+       * Matched on exact URL only. A fuzzy company/title match would manufacture evidence.
        */
       official: OfficialVacancyAudit | null;
     });
@@ -137,7 +137,7 @@ export function netherlandsVerification(vacancy: ReportVacancy): Verification {
       label: 'Sponsor entity not resolved',
       tone: 'warning',
       note:
-        'No IND-recognised legal entity was matched to this employer in this run. That is a missing match, not a finding that the employer is unrecognised — a trading name often differs from the registered legal entity.',
+        'No IND-recognised legal entity was matched to this employer in this run. That is a missing match, not a finding that the employer is unrecognised: a trading name often differs from the registered legal entity.',
     };
   }
 
@@ -225,7 +225,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     url: vacancy.url,
     provider: vacancy.provider,
     // The worldwide profile *searches* for fully-remote work, but a discovery lead is not per-row
-    // evidence that this vacancy is remote — `location_restricted` is one of its decisions. So no
+    // evidence that this vacancy is remote. `location_restricted` is one of its decisions. So no
     // arrangement is claimed for a worldwide row.
     arrangement: null,
     arrangementValue: 'unknown' as const,
@@ -260,13 +260,13 @@ export interface SearchFilters {
   location: string;
   /** Netherlands only: keep only rows with a resolved IND sponsor legal entity. */
   sponsorOnly: boolean;
-  /** Netherlands only — the worldwide pipeline records no workplace mode. */
+  /** Netherlands only: the worldwide pipeline records no workplace mode. */
   arrangement: 'any' | ArrangementValue;
-  /** Netherlands only — the worldwide pipeline records no posting date. */
+  /** Netherlands only: the worldwide pipeline records no posting date. */
   postedWithin: PostedWithin;
   /** Both markets: the discovery source / ATS provider. */
   source: string;
-  /** Worldwide only — the Netherlands pipeline records no employment type. */
+  /** Worldwide only: the Netherlands pipeline records no employment type. */
   employment: string;
 }
 
@@ -315,8 +315,8 @@ function matches(haystack: string | null, needle: string): boolean {
 }
 
 /**
- * Client-side filtering over an already-fetched report. There is no server-side filtered search —
- * both pipelines produce a whole report per run, and narrowing it must never trigger a new scan.
+ * Client-side filtering over an already-fetched report. There is no server-side filtered search.
+ * Both pipelines produce a whole report per run, and narrowing it must never trigger a new scan.
  *
  * Every predicate is skipped for a market whose data cannot support it, so switching market can
  * never silently drop rows on a dimension that market does not record.

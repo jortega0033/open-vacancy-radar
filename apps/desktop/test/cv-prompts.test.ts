@@ -80,7 +80,7 @@ describe('prompt builders', () => {
     });
 
     // The injected text is still present (it is evidence about the posting), but only ever inside
-    // the single `Label: value` line it arrived on — never at the start of a line of its own.
+    // the single `Label: value` line it arrived on, never at the start of a line of its own.
     for (const line of hostile.split('\n')) {
       expect(line).not.toMatch(/^=== /u);
       expect(line).not.toMatch(/^SYSTEM:/u);

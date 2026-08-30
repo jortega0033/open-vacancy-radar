@@ -53,7 +53,7 @@ describe('RuntimePage', () => {
     expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
   });
 
-  it('renders real provider cards — installed/auth/version/capabilities — not the old prompt runner', async () => {
+  it('renders real provider cards (installed, auth, version, capabilities), not the old prompt runner', async () => {
     installAgentDockBridge();
     installWorkspaceBridge();
     render(<RuntimePage daemonState="ready" />);
@@ -106,7 +106,7 @@ describe('RuntimePage', () => {
 
     await waitFor(() => expect(screen.getByText(/executable detected/i)).toBeInTheDocument());
     expect(screen.getByText('/usr/local/bin/claude')).toBeInTheDocument();
-    expect(screen.getByText(/version check passed — 2\.4\.1/i)).toBeInTheDocument();
+    expect(screen.getByText(/version check passed: 2\.4\.1/i)).toBeInTheDocument();
   });
 
   it('verify reports a real failure when the default provider is not authenticated', async () => {

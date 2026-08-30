@@ -299,7 +299,7 @@ describe('SSE events + cancellation', () => {
         });
     }
 
-    // A full, fresh subscription — this is what "the client saw sequence N" is based on.
+    // A full, fresh subscription: this is what "the client saw sequence N" is based on.
     const fullRes = await app.inject({
       method: 'GET',
       url: `/sessions/${sessionId}/events`,
@@ -310,7 +310,7 @@ describe('SSE events + cancellation', () => {
 
     const n = fullFrames[0]!.sequence; // pretend the client got disconnected right after the first event
 
-    // Reconnect with Last-Event-ID: n — must receive n+1 onward, not the full replay again.
+    // Reconnect with Last-Event-ID: n. Must receive n+1 onward, not the full replay again.
     const resumedRes = await app.inject({
       method: 'GET',
       url: `/sessions/${sessionId}/events`,
@@ -344,7 +344,7 @@ describe('SSE events + cancellation', () => {
     });
 
     // The key assertion is that inject() resolved at all (didn't time out) with a real ended
-    // response — before the fix, this exact scenario left an already-200'd stream open forever.
+    // response. Before the fix, this exact scenario left an already-200'd stream open forever.
     expect(res.statusCode).toBe(200);
     subscribeSpy.mockRestore();
   });
@@ -484,7 +484,7 @@ describe('adversarial input handling', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('rejects a chrome-extension:// Origin even with a valid token — the exact gap the old http(s)-only check missed (AD-04)', async () => {
+  it('rejects a chrome-extension:// Origin even with a valid token: the exact gap the old http(s)-only check missed (AD-04)', async () => {
     const { app } = setup();
     const res = await app.inject({
       method: 'GET',
@@ -504,7 +504,7 @@ describe('adversarial input handling', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('rejects a missing token independently of Origin — omitting Origin does not bypass auth', async () => {
+  it('rejects a missing token independently of Origin: omitting Origin does not bypass auth', async () => {
     const { app } = setup();
     const res = await app.inject({ method: 'GET', url: '/providers' });
     expect(res.statusCode).toBe(401);
@@ -518,7 +518,7 @@ describe('adversarial input handling', () => {
       headers: { origin: 'http://evil.example', 'content-type': 'text/plain' },
       payload: JSON.stringify({ provider: 'claude', cwd, prompt: 'pwned' }),
     });
-    // Must fail closed regardless of *why* — Origin check and/or auth check, either is correct —
+    // Must fail closed regardless of *why* (Origin check and/or auth check, either is correct),
     // but it must never reach session creation.
     expect(res.statusCode).not.toBe(201);
     expect([401, 403]).toContain(res.statusCode);

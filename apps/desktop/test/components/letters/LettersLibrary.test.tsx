@@ -4,7 +4,7 @@ import { LettersLibrary } from '../../../src/components/letters/index.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 import { makeLetter } from './fixtures.js';
 
-/** The row for a letter, found by its title cell — the actions are only unique within it. */
+/** The row for a letter, found by its title cell: the actions are only unique within it. */
 function rowFor(title: string): HTMLElement {
   const cell = screen.getByRole('cell', { name: title });
   const row = cell.closest('tr');
@@ -55,7 +55,7 @@ describe('LettersLibrary', () => {
     await waitFor(() => expect(screen.getByText(/no letters yet/i)).toBeInTheDocument());
     expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('empty-letters');
 
-    // One in the toolbar, one under the empty-state copy — the prototype offers both.
+    // One in the toolbar, one under the empty-state copy: the prototype offers both.
     const newButtons = screen.getAllByRole('button', { name: /new letter/i });
     expect(newButtons).toHaveLength(2);
     fireEvent.click(newButtons[1] as HTMLElement);

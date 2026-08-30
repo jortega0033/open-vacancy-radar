@@ -1,6 +1,6 @@
 name: E2E
 
-# Drives the real, built Electron app with Playwright (apps/desktop/e2e/) — separate from ci.yml's
+# Drives the real, built Electron app with Playwright (apps/desktop/e2e/), separate from ci.yml's
 # unit/component suite (vitest) since this one launches an actual Electron process under a virtual
 # display and takes meaningfully longer. Runs on the same ubuntu-latest runner as ci.yml so the
 # committed visual-snapshot baselines under apps/desktop/e2e/**/*-snapshots/ stay meaningful
@@ -47,7 +47,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Electron on headless Linux needs both a virtual display (xvfb) and a handful of system
-      # libraries ubuntu-latest doesn't ship by default (GTK/NSS/ALSA — Chromium's usual Linux
+      # libraries ubuntu-latest doesn't ship by default (GTK/NSS/ALSA, Chromium's usual Linux
       # runtime deps), or the app process fails to even open a window.
       - name: Install Electron runtime dependencies
         run: |

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseCodexLoginStatus } from '../src/providers/codex/detect.js';
 
-describe('parseCodexLoginStatus — pure parser (AD-16)', () => {
+describe('parseCodexLoginStatus: pure parser (AD-16)', () => {
   it('returns "authenticated" for a real "Logged in using ChatGPT" line', () => {
     expect(parseCodexLoginStatus('Logged in using ChatGPT')).toBe('authenticated');
   });
@@ -33,7 +33,7 @@ describe('parseCodexLoginStatus — pure parser (AD-16)', () => {
   });
 });
 
-describe('detectCodex — end-to-end failure paths (mocked exec, no real CLI)', () => {
+describe('detectCodex: end-to-end failure paths (mocked exec, no real CLI)', () => {
   beforeEach(() => {
     vi.resetModules();
   });

@@ -6,12 +6,12 @@ import { basename, extname } from 'node:path';
  * for the same reason as send-to-renderer.ts: it is pure "path in, text out" logic with no Electron
  * runtime dependency, so it stays testable and the IPC handler stays a thin, auditable wrapper.
  *
- * PDF extraction uses `unpdf` — a pure-JS, zero-runtime-dependency wrapper around a serverless
+ * PDF extraction uses `unpdf`, a pure-JS, zero-runtime-dependency wrapper around a serverless
  * build of Mozilla's pdf.js. It was chosen over `pdfjs-dist`'s legacy Node build because it needs
  * no worker file to locate, no `standardFontDataUrl`/`isEvalSupported` tuning, and no
  * `@napi-rs/canvas` (a native, prebuild-install-backed optional dependency of pdfjs-dist) for the
- * text-only path — i.e. nothing that requires a native rebuild toolchain in Electron's main
- * process. `pdf-parse` was rejected: it is effectively unmaintained and its entry point runs a
+ * text-only path (i.e. nothing that requires a native rebuild toolchain in Electron's main
+ * process). `pdf-parse` was rejected: it is effectively unmaintained and its entry point runs a
  * debug harness that reads a fixture file from disk when imported without a module parent.
  */
 export interface CvFileContent {
@@ -19,7 +19,7 @@ export interface CvFileContent {
   text: string;
 }
 
-/** Also the `dialog.showOpenDialog` filter list — see main.ts. */
+/** Also the `dialog.showOpenDialog` filter list. See main.ts. */
 export const CV_FILE_EXTENSIONS = ['pdf', 'txt', 'md'] as const;
 
 /**
@@ -30,7 +30,7 @@ export const MAX_CV_FILE_BYTES = 10 * 1024 * 1024;
 
 function tooLargeError(fileName: string, byteLength: number): Error {
   return new Error(
-    `"${fileName}" is ${Math.round(byteLength / 1024 / 1024)} MB — CV files are limited to ${
+    `"${fileName}" is ${Math.round(byteLength / 1024 / 1024)} MB. CV files are limited to ${
       MAX_CV_FILE_BYTES / 1024 / 1024
     } MB`,
   );
@@ -65,7 +65,7 @@ export function isSupportedCvFile(filePath: string): boolean {
 /**
  * Reads one CV file and returns its plain text. The extension is re-validated here even though
  * `dialog.showOpenDialog` was given a filter, because that filter is a UI hint the user can defeat
- * on every platform (typing a name, "All files" on some window managers) — validation happens on
+ * on every platform (typing a name, "All files" on some window managers): validation happens on
  * both sides of the boundary, never only in the picker.
  */
 export async function readCvFile(filePath: string): Promise<CvFileContent> {
@@ -73,12 +73,12 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
   const extension = cvFileExtension(filePath);
 
   if (!isSupportedCvFile(filePath)) {
-    throw new Error(`unsupported CV file type ".${extension}" — expected one of: ${CV_FILE_EXTENSIONS.join(', ')}`);
+    throw new Error(`unsupported CV file type ".${extension}": expected one of: ${CV_FILE_EXTENSIONS.join(', ')}`);
   }
 
   // Checked from the directory entry BEFORE reading, so an accidentally-picked multi-gigabyte file
   // never lands in the main process's heap at all. Reading first and measuring the buffer
-  // afterwards still spared pdf.js, but not the read itself — a large enough file would have
+  // afterwards still spared pdf.js, but not the read itself: a large enough file would have
   // exhausted memory (or hit Node's own buffer ceiling) before this bound could ever be applied.
   const stats = await stat(filePath);
   if (stats.size > MAX_CV_FILE_BYTES) throw tooLargeError(fileName, stats.size);
@@ -97,7 +97,7 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
   if (!text) {
     throw new Error(
       extension === 'pdf'
-        ? `no selectable text found in "${fileName}" — it looks like a scanned image; export a text-based PDF or paste the CV as .txt`
+        ? `no selectable text found in "${fileName}". It looks like a scanned image; export a text-based PDF or paste the CV as .txt`
         : `"${fileName}" is empty`,
     );
   }

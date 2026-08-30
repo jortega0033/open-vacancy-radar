@@ -1,6 +1,6 @@
 # electron-builder config for the Open Vacancy Radar desktop shell.
 #
-# appId is a placeholder reverse-DNS identifier, not a claim to own that domain — anyone forking
+# appId is a placeholder reverse-DNS identifier, not a claim to own that domain. Anyone forking
 # this boilerplate for real distribution should change it (and productName) to their own.
 appId: dev.agentdock.desktop
 productName: Open Vacancy Radar
@@ -8,7 +8,7 @@ copyright: Copyright © Open Vacancy Radar contributors
 
 directories:
   # Keep installer/unpacked-app output out of Vite's dist/ and esbuild's dist-electron/, and out
-  # of the repo root's own node_modules — a dedicated top-level folder is unambiguous either way.
+  # of the repo root's own node_modules: a dedicated top-level folder is unambiguous either way.
   output: ../../dist-packages
   buildResources: assets/app-icons
 
@@ -23,7 +23,7 @@ files:
   - package.json
 
 # The daemon is a *separate* process the packaged app spawns (see electron/main.ts), not code the
-# renderer or main bundle import — it has to exist as a real file on disk for `spawn()` to launch,
+# renderer or main bundle import: it has to exist as a real file on disk for `spawn()` to launch,
 # so it can't just live inside main.js. It's shipped as an extraResource (outside app.asar
 # entirely) rather than relying on Electron's asar-aware fs patching, since spawning a *new*
 # process against a path inside an asar archive is exactly the kind of "works by accident"
@@ -37,7 +37,7 @@ extraResources:
 
 asar: true
 
-# No auto-update in this boilerplate (out of scope by design — see docs/architecture.md). Without
+# No auto-update in this boilerplate (out of scope by design, see docs/architecture.md). Without
 # this, electron-builder still tries to generate update-feed metadata (latest.yml, .blockmap) and
 # infer a publish target from the git remote, which crashes when there isn't one configured.
 publish: null
@@ -59,5 +59,5 @@ nsis:
   uninstallerIcon: open-vacancy-radar.ico
   artifactName: "${productName}-Setup-${version}.${ext}"
   # A .blockmap is only useful for differential auto-update downloads, which this project doesn't
-  # have — skip generating one rather than ship a file with no purpose.
+  # have. Skip generating one rather than ship a file with no purpose.
   differentialPackage: false

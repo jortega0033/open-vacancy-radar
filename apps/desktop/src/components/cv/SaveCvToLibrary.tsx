@@ -13,7 +13,7 @@ export interface SaveCvToLibraryProps {
  *
  * The ephemeral path deliberately stays: picking a CV to run a single gap analysis against one
  * vacancy is a legitimate thing to do without committing the document to a library you then have
- * to curate. So saving is an explicit second step rather than a side effect of the upload — the
+ * to curate. So saving is an explicit second step rather than a side effect of the upload: the
  * user decides whether this file is a keeper.
  *
  * Only the extracted text and the file name cross into the database; the file itself is never

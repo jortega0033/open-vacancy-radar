@@ -36,7 +36,7 @@ test.describe('CV library', () => {
   });
 
   test('uploads a CV file and saves the extracted text to the library', async ({ window, electronApp }) => {
-    // `cv:select-and-read`'s native OS file picker can't be driven by Playwright directly — the
+    // `cv:select-and-read`'s native OS file picker can't be driven by Playwright directly: the
     // standard workaround for Electron e2e is stubbing `dialog.showOpenDialog` in the main process
     // to return a canned path instead of opening a real dialog.
     await electronApp.evaluate(({ dialog }, filePath) => {
@@ -48,7 +48,7 @@ test.describe('CV library', () => {
     await expect(window.getByText(/loaded/i)).toContainText('sample-cv.txt');
 
     // "Save to CV library" unmounts the picked-file panel the instant the save resolves (back to
-    // the plain "Upload CV" button) and reloads the list — the durable, testable outcome is the
+    // the plain "Upload CV" button) and reloads the list: the durable, testable outcome is the
     // new row appearing with a "Parsed" status, not the transient confirmation in between.
     await window.getByRole('button', { name: /save to cv library/i }).click();
     await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();

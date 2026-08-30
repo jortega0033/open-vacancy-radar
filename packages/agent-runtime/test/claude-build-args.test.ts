@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildClaudeArgs } from '../src/providers/claude/build-args.js';
 
-describe('buildClaudeArgs — prompt transport (AD-05)', () => {
+describe('buildClaudeArgs: prompt transport (AD-05)', () => {
   it('never includes the prompt anywhere in the returned argv', () => {
     const prompt = 'this exact string must never appear in argv, not even split across elements';
     const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt });
@@ -23,14 +23,14 @@ describe('buildClaudeArgs — prompt transport (AD-05)', () => {
     expect(resumed).toEqual(['-p', '--input-format', 'text', '--output-format', 'stream-json', '--verbose', '--resume', 'thread-1']);
   });
 
-  it('does not change shape based on prompt length — a huge prompt is still absent from argv', () => {
+  it('does not change shape based on prompt length: a huge prompt is still absent from argv', () => {
     const hugePrompt = 'x'.repeat(500_000); // well beyond Windows' ~32,767-char argv limit
     const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: hugePrompt });
     expect(args.join('').length).toBeLessThan(200); // just the flags, nowhere near the prompt size
   });
 });
 
-describe('buildClaudeArgs — model selection', () => {
+describe('buildClaudeArgs: model selection', () => {
   it('omits --model entirely when no model is given', () => {
     const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi' });
     expect(args).not.toContain('--model');

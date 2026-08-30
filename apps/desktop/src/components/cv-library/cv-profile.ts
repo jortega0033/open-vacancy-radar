@@ -28,7 +28,7 @@ export interface ParseStatus {
 }
 
 /**
- * There is no persisted "parse status" column on `CvDocumentRecord` — it is derived from what the
+ * There is no persisted "parse status" column on `CvDocumentRecord`: it is derived from what the
  * record already tells us. A manual profile was never parsed (that's the point of typing it in by
  * hand), so it is neither a success nor a failure, just "not applicable." An uploaded CV either
  * produced usable extracted text or it didn't (e.g. a scanned PDF with no selectable text), which

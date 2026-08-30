@@ -36,7 +36,7 @@ export interface VerificationSectionProps {
  * "Employer verification & sources", branched on the market's *real* capability.
  *
  * Netherlands: the pipeline resolves an employer to an IND recognised-sponsor legal entity, so
- * there is a genuine result to show — including which entity, at what mapping confidence, and
+ * there is a genuine result to show: including which entity, at what mapping confidence, and
  * whether this vacancy was re-verified in the run that produced the report.
  *
  * Worldwide: the pipeline has no employer-verification step whatsoever. The panel says that
@@ -131,7 +131,7 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
         {official ? (
           <>
             <p className="mt-1.5 text-sm text-base-content/70">
-              This exact URL was also fetched from an official employer/ATS source in this run —
+              This exact URL was also fetched from an official employer/ATS source in this run:
               a check on the <em>vacancy</em>, not on the employer.
             </p>
             <KeyValue

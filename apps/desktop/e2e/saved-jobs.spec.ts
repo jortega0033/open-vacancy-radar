@@ -23,7 +23,7 @@ test.describe('Saved Jobs', () => {
     await expect(editDialog).toBeHidden();
     await expect(window.getByRole('row', { name: /Redwood Software/ })).toContainText('Staff Frontend Engineer');
 
-    // Delete offers an undo — recreating the row is a real, load-bearing feature here, not just a
+    // Delete offers an undo. Recreating the row is a real, load-bearing feature here, not just a
     // toast: SavedJobsPage's docstring is explicit that CV documents deliberately do NOT get this
     // (their text can't be reconstructed), which makes this the one place undo must actually work.
     await window.getByRole('row', { name: /Redwood Software/ }).getByRole('button', { name: /^delete$/i }).click();

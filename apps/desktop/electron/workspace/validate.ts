@@ -13,7 +13,7 @@
  *  3. **Errors say what is wrong, never what was sent.** The message is echoed back through IPC
  *     and may end up in a log; the value itself might be CV text or personal notes.
  *
- * Everything here is pure — no database, no Electron — which is why it is a separate module from
+ * Everything here is pure (no database, no Electron), which is why it is a separate module from
  * the handlers: it is exhaustively unit-testable on its own (see test/workspace-validate.test.ts).
  */
 
@@ -51,7 +51,7 @@ export const LIMITS = {
   short: 512,
   /** notes, summaries, next steps */
   medium: 20_000,
-  /** an extracted CV — a long PDF is realistically well under this */
+  /** an extracted CV: a long PDF is realistically well under this */
   cvText: 2_000_000,
   /** a generated letter */
   letterBody: 200_000,
@@ -162,7 +162,7 @@ export const THEMES: readonly ThemePreference[] = ['light', 'dark', 'system'];
 export const DENSITIES: readonly DensityPreference[] = ['comfortable', 'compact'];
 export const SIDEBAR_STARTS: readonly SidebarStartPreference[] = ['expanded', 'collapsed', 'remember_last'];
 export const DEFAULT_PROVIDERS: readonly DefaultAiProvider[] = ['claude', 'codex'];
-/** Values `lastOpenedPage` may hold — the renderer's nav ids, not the `startPage` enum. */
+/** Values `lastOpenedPage` may hold: the renderer's nav ids, not the `startPage` enum. */
 export const NAV_PAGES = ['search', 'saved', 'applications', 'cv', 'letters', 'runtime', 'settings'] as const;
 
 /** Every `…:update` / `…:delete` channel takes its row id through here first. */

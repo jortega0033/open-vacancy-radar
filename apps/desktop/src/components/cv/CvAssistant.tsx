@@ -10,7 +10,7 @@ import type { CvDocument, VacancyLead } from './types.js';
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
  *
- * It owns exactly one piece of shared state — the loaded CV — so the two AI features below it read
+ * It owns exactly one piece of shared state (the loaded CV) so the two AI features below it read
  * the same document without the user uploading it twice. Everything else (session lifecycle,
  * streaming, errors) belongs to the individual feature components.
  */
@@ -67,7 +67,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
       <div>
         <h2 className="text-lg font-semibold">CV assistant</h2>
         <p className="mt-1 text-sm text-base-content/60">
-          Runs on your own authenticated {providerLabel} CLI — this app never holds an API key.
+          Runs on your own authenticated {providerLabel} CLI. This app never holds an API key.
         </p>
       </div>
 
@@ -90,7 +90,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         <div className="rounded-box border border-base-300 p-4 text-sm">
           <div className="font-semibold">{vacancy.title}</div>
           <div className="text-base-content/60">
-            {vacancy.company} — {vacancy.location}
+            {vacancy.company}, {vacancy.location}
           </div>
         </div>
       )}

@@ -74,7 +74,7 @@ describe('SettingsPage', () => {
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('renders exactly these sections — no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections, no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
@@ -205,7 +205,7 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     const input = await screen.findByLabelText('Default location');
 
-    fireEvent.blur(input); // unchanged — no save
+    fireEvent.blur(input); // unchanged, no save
     expect(bridge.updateSettings).not.toHaveBeenCalled();
 
     fireEvent.change(input, { target: { value: 'Amsterdam' } });

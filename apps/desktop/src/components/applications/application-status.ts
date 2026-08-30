@@ -2,12 +2,12 @@ import type { ApplicationFilter, ApplicationInput, ApplicationRecord, Applicatio
 
 /**
  * Canonical status list/labels/styling. `types.ts` (electron/workspace/types.ts) is the source of
- * truth for the enum itself — nothing here may invent a status the schema does not have.
+ * truth for the enum itself. Nothing here may invent a status the schema does not have.
  *
  * Colors follow DESIGN-TOKENS.md: the pipeline states (preparing/applied/recruiter_screen/
  * interview) are "still working on it" and stay grayscale, matching the "info stays grayscale"
  * rule. `offer` and `rejected` are genuine outcomes, so they get the real success/error hue on the
- * inline `<select>` itself — the option text still names the state either way, so color is never
+ * inline `<select>` itself. The option text still names the state either way, so color is never
  * the only signal.
  */
 export const APPLICATION_STATUS_ORDER: readonly ApplicationStatus[] = [
@@ -80,7 +80,7 @@ export function toDateInputValue(iso: string | null): string {
   return iso ? iso.slice(0, 10) : '';
 }
 
-/** Rebuilds the create payload for an existing record — used to recreate a row on delete-undo. */
+/** Rebuilds the create payload for an existing record: used to recreate a row on delete-undo. */
 export function toApplicationInput(record: ApplicationRecord): ApplicationInput {
   return {
     role: record.role,

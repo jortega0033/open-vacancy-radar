@@ -274,7 +274,7 @@ export async function finishScanAndPublishReport(
  * Defaults to `process.cwd()`, which is correct for the CLI and preserves every existing
  * caller's behavior. A host process that embeds this engine (the Electron main process) has a
  * cwd with nothing to do with the engine's checked-in configuration, so it passes an explicit
- * root — exactly the `projectRoot` parameter `runGlobalRemoteScan` already takes.
+ * root (exactly the `projectRoot` parameter `runGlobalRemoteScan` already takes).
  */
 export type EndToEndScanOptions = {
   projectRoot?: string;

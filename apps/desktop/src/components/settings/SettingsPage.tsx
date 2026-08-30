@@ -13,12 +13,12 @@ import { DataManagement } from './DataManagement.js';
 
 /**
  * Top-level "Settings" screen. Every control autosaves its own field through
- * `window.workspace.updateSettings({ [field]: value })` the moment it changes — there is no page
- * "Save" button — and the "Saved" flash only appears after the IPC call actually resolves, never
+ * `window.workspace.updateSettings({ [field]: value })` the moment it changes (there is no page
+ * "Save" button), and the "Saved" flash only appears after the IPC call actually resolves, never
  * optimistically. Theme and density additionally take effect immediately via `applyTheme` /
  * `applyDensity` (the same calls App.tsx makes on initial hydration).
  *
- * Deliberately not wired into `App.tsx` here — exported standalone (see `index.ts`) so the
+ * Deliberately not wired into `App.tsx` here: exported standalone (see `index.ts`) so the
  * shell's router can pick it up in a separate integration pass.
  *
  * What is intentionally NOT on this page:
@@ -28,7 +28,7 @@ import { DataManagement } from './DataManagement.js';
  *    user navigates, not preferences a person sets; `sidebarStart` is the user-facing knob.
  */
 
-/** Mirrors the column defaults in electron/workspace/schema.ts — used by both reset actions. */
+/** Mirrors the column defaults in electron/workspace/schema.ts: used by both reset actions. */
 const SETTINGS_DEFAULTS: AppSettingsPatch = {
   launchAtLogin: false,
   startPage: 'search',
@@ -75,7 +75,7 @@ const SIDEBAR_START_OPTIONS = [
   { value: 'remember_last', label: 'Remember last state' },
 ] as const;
 
-/** Exactly the two pipelines this app can search — never a per-country list. */
+/** Exactly the two pipelines this app can search. Never a per-country list. */
 const MARKET_OPTIONS = [
   { value: 'netherlands', label: 'Netherlands (IND sponsors)' },
   { value: 'worldwide', label: 'Worldwide remote' },
@@ -205,7 +205,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   /**
    * The single autosave path: reflect the choice in local state immediately (so the control shows
    * what the user picked), persist just that field, and only report "Saved" once the IPC call has
-   * resolved. On failure the previous record — and any theme/density it implied — is restored.
+   * resolved. On failure the previous record (and any theme/density it implied) is restored.
    */
   const changeField = useCallback(
     (patch: AppSettingsPatch) => {
@@ -484,7 +484,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
       <SettingsSection title="Market integrations">
         <SettingsRow
-          label="Netherlands — IND recognised sponsor verification"
+          label="Netherlands: IND recognised sponsor verification"
           description="Source: IND Public Register · checks employers of Netherlands vacancies."
         >
           <ToggleSwitch
@@ -514,7 +514,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             cvListError
               ? `The CV library could not be loaded: ${cvListError}`
               : cvDocuments.length === 0
-                ? 'No CVs in the library yet — add one on the CV page first.'
+                ? 'No CVs in the library yet. Add one on the CV page first.'
                 : 'Pre-selected CV for gap analysis and letter generation.'
           }
           htmlFor="setting-default-cv"

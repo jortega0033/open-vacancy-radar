@@ -57,11 +57,11 @@ export interface LetterGeneratorProps {
  * That means it is genuinely asynchronous and can genuinely fail, so this component keeps three
  * separate ideas apart that a fake instant generator would let collapse into one:
  *
- * - **the stream** (`run.text`) — read-only, appended to as it arrives, shown through the same
+ * - **the stream** (`run.text`): read-only, appended to as it arrives, shown through the same
  *   `AiOutput` surface as the rest of the app;
- * - **the working document** (`body`) — a plain editable text area, seeded from the stream once the
+ * - **the working document** (`body`): a plain editable text area, seeded from the stream once the
  *   run completes and owned by the user from that moment on;
- * - **the saved row** (`letterId` / `savedBody`) — what is actually in the database.
+ * - **the saved row** (`letterId` / `savedBody`): what is actually in the database.
  *
  * Because those are separate, a failed *re*generation cannot destroy a letter that was already
  * loaded or already saved: the error appears above the editor and the text stays exactly as it was.
@@ -116,7 +116,7 @@ export function LetterGenerator({
 
   // Which run's output has already been moved into the editor. A counter rather than a text
   // comparison, so a second run that happens to produce the identical text still replaces edits the
-  // user made in between — "Regenerate" must always mean "replace with the new draft".
+  // user made in between: "Regenerate" must always mean "replace with the new draft".
   const runSeq = useRef(0);
   const appliedSeq = useRef(0);
 
@@ -184,7 +184,7 @@ export function LetterGenerator({
   }, [letter]);
 
   // Which CLI a generation runs through is a runtime preference, not a per-document style choice
-  // like tone/type/length, so it is read for every letter — new or existing — not gated on `!letter`.
+  // like tone/type/length, so it is read for every letter (new or existing), not gated on `!letter`.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -269,7 +269,7 @@ export function LetterGenerator({
   const typeLabel = labelFor(LETTER_TYPE_OPTIONS, type);
   const derivedTitle = useMemo(() => {
     const company = lead?.company?.trim() ?? '';
-    return company ? `${typeLabel} — ${company}` : typeLabel;
+    return company ? `${typeLabel}, ${company}` : typeLabel;
   }, [typeLabel, lead?.company]);
 
   useEffect(() => {
@@ -305,7 +305,7 @@ export function LetterGenerator({
 
   const handleGenerate = useCallback(() => {
     // Replacing text the user has edited but not saved is the one destructive thing this screen
-    // does, so it asks first — and only then.
+    // does, so it asks first, and only then.
     if (hasBody && isDirty && !confirmRegenerate) {
       setConfirmRegenerate(true);
       return;
@@ -389,7 +389,7 @@ export function LetterGenerator({
           setExportState('exported');
           exportTimeoutRef.current = setTimeout(() => setExportState('idle'), COPY_FEEDBACK_MS);
         } else {
-          setExportState('idle'); // the user cancelled the save dialog — not a failure
+          setExportState('idle'); // the user cancelled the save dialog, not a failure
         }
       } catch (err) {
         setExportState('failed');
@@ -416,11 +416,11 @@ export function LetterGenerator({
                 onChange={(event) => setJobSource(event.target.value)}
                 disabled={run.isBusy}
               >
-                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title} — ${vacancy.company}`}</option>}
+                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title}, ${vacancy.company}`}</option>}
                 <option value={JOB_MANUAL}>Enter the job manually</option>
                 {savedJobs.map((job) => (
                   <option key={job.id} value={`${JOB_SAVED_PREFIX}${job.id}`}>
-                    {`${job.role} — ${job.company}`}
+                    {`${job.role}, ${job.company}`}
                   </option>
                 ))}
               </select>
@@ -431,7 +431,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{vacancy.title}</div>
                 <div className="text-base-content/60">
                   {vacancy.company}
-                  {vacancy.location ? ` — ${vacancy.location}` : ''}
+                  {vacancy.location ? `, ${vacancy.location}` : ''}
                 </div>
               </div>
             )}
@@ -441,7 +441,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{selectedSavedJob.role}</div>
                 <div className="text-base-content/60">
                   {selectedSavedJob.company}
-                  {selectedSavedJob.location ? ` — ${selectedSavedJob.location}` : ''}
+                  {selectedSavedJob.location ? `, ${selectedSavedJob.location}` : ''}
                 </div>
               </div>
             )}
@@ -794,7 +794,7 @@ export function LetterGenerator({
             />
             <p className="mt-2 text-xs text-base-content/50">
               A first draft written from your CV and the posting text above. Read it before you send
-              it — you are responsible for the final text.
+              it: you are responsible for the final text.
             </p>
           </div>
         ) : (

@@ -3,7 +3,7 @@
  *
  * Deliberately free of Electron and of `ipcMain`: main.ts's handlers are a thin layer that
  * validates (validate.ts) and then calls exactly one function from here, which keeps every
- * behavior worth arguing about — default-CV promotion, archive filtering, duplication — testable
+ * behavior worth arguing about (default-CV promotion, archive filtering, duplication) testable
  * against a real SQLite file with no Electron process in sight (test/workspace-repository.test.ts).
  *
  * better-sqlite3 is synchronous, so is everything here. The handlers are still `async` because
@@ -109,7 +109,7 @@ export function createSavedJob(db: WorkspaceDb, input: SavedJobInput): SavedJobR
 }
 
 export function updateSavedJob(db: WorkspaceDb, id: string, values: SavedJobPatch): SavedJobRecord {
-  // An empty patch is a no-op read rather than an invalid `set {}` statement — the renderer
+  // An empty patch is a no-op read rather than an invalid `set {}` statement. The renderer
   // sending "nothing changed" should not be an error.
   if (Object.keys(values).length === 0) {
     const existing = db.select().from(savedJobs).where(eq(savedJobs.id, id)).get();
@@ -123,7 +123,7 @@ export function updateSavedJob(db: WorkspaceDb, id: string, values: SavedJobPatc
 
 export function deleteSavedJob(db: WorkspaceDb, id: string): DeleteResult {
   // `applications.saved_job_id` is `on delete set null`, so any application created from this
-  // saved job survives as a standalone row — the prototype's "deleting a saved job detaches
+  // saved job survives as a standalone row. The prototype's "deleting a saved job detaches
   // applications" behavior falls straight out of the schema.
   const removed = db.delete(savedJobs).where(eq(savedJobs.id, id)).returning({ id: savedJobs.id }).all();
   return { deleted: removed.length > 0 };
@@ -310,7 +310,7 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
     if (!existing) return { deleted: false };
 
     // Foreign keys (`on delete set null`) detach letters, applications and `app_settings`
-    // .default_cv_id by themselves — the client opens the connection with `foreign_keys = ON`.
+    // .default_cv_id by themselves. The client opens the connection with `foreign_keys = ON`.
     tx.delete(cvDocuments).where(eq(cvDocuments.id, id)).run();
 
     if (existing.isDefault) {
@@ -387,7 +387,7 @@ export function deleteLetter(db: WorkspaceDb, id: string): DeleteResult {
 
 /**
  * Copies a letter into a new draft. The copy is always a `draft` regardless of the original's
- * status — duplicating a letter you already sent must not produce a second row claiming to have
+ * status. Duplicating a letter you already sent must not produce a second row claiming to have
  * been sent.
  */
 export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {

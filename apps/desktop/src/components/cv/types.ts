@@ -9,7 +9,7 @@ export type CvDocument = CvFile;
  * Deliberately a *structural subset* of `DiscoveryVacancyAudit`
  * (packages/vacancy-engine/src/global-remote/models.ts) rather than an import of it: every field
  * that type declares as required is required here too and with the same type, so the Vacancy Leads
- * screen can pass a `DiscoveryVacancyAudit` straight in with no adapter — while this package keeps
+ * screen can pass a `DiscoveryVacancyAudit` straight in with no adapter, while this package keeps
  * no build-time coupling to the engine's model, and stays usable with a hand-built vacancy in a
  * test or a future manually-entered one.
  *

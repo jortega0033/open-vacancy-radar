@@ -25,7 +25,7 @@ function describeError(err: unknown, fallback: string): string {
  * delete through a confirm dialog with a short undo window.
  *
  * Owns the whole lifecycle against `window.workspace`. Deliberately not wired into `App.tsx`
- * here — this page is exported standalone (see `index.ts`) so the shell's router can pick it up
+ * here. This page is exported standalone (see `index.ts`) so the shell's router can pick it up
  * once every page agent's work has landed, without every agent racing to edit the same file.
  */
 export function SavedJobsPage() {
