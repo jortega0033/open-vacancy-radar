@@ -21,7 +21,6 @@ test.describe('Applications', () => {
     await row.getByLabel('Application status').selectOption('applied');
     await expect(row.getByLabel('Application status')).toHaveValue('applied');
 
-    // Edit drawer: change a different field, confirm the row reflects it.
     await row.getByRole('button', { name: /^edit$/i }).click();
     const editDialog = window.getByRole('dialog').filter({ hasText: 'Edit application' });
     await editDialog.getByLabel(/next step/i).fill('Technical interview · 2 Sep');
@@ -29,7 +28,6 @@ test.describe('Applications', () => {
     await expect(editDialog).toBeHidden();
     await expect(window.getByRole('row', { name: /Redwood Software/ })).toContainText('Technical interview');
 
-    // Delete offers an undo.
     await window.getByRole('row', { name: /Redwood Software/ }).getByRole('button', { name: /^delete$/i }).click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/delete this application/i);

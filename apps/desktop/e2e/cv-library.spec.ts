@@ -18,7 +18,6 @@ test.describe('CV library', () => {
     await expect(addDialog).toBeHidden();
     await expect(window.getByText('Frontend CV — Netherlands')).toBeVisible();
 
-    // Edit: rename it, confirm the row and the drawer's prefilled name both reflect it.
     const row = window.getByRole('row', { name: /Frontend CV — Netherlands/ });
     await row.getByRole('button', { name: /^edit$/i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit cv/i });

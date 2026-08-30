@@ -12,8 +12,13 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: false, // one Electron app instance per worker is enough overhead already
-  workers: 1, // each test launches its own Electron process against an isolated user-data dir
+  fullyParallel: false,
+  // Each test's --user-data-dir is isolated, but the daemon every launch spawns (electron/main.ts's
+  // spawnDaemon) writes its discovery file to a fixed path keyed only by AGENT_DOCK_APP_ID — the
+  // same id for every test process. Two Electron instances running at once would race on that file
+  // (assertNoLiveDaemon in apps/desktop/electron/discovery-file.ts throws if it finds another one's
+  // PID still alive), so tests must run one at a time, not just isolated from each other's data.
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
   timeout: 30_000,
   reporter: process.env.CI ? [['html', { open: 'never' }], ['github']] : 'list',

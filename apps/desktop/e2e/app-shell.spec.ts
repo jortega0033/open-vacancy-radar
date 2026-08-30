@@ -36,8 +36,11 @@ test.describe('app shell', () => {
     await expect(window.getByText('Local profile')).toBeVisible();
   });
 
-  test('Search page visual baseline', async ({ window }) => {
+  test('Search and Settings page visual baselines', async ({ window }) => {
     await ensureLightTheme(window);
+    // Already on Settings — ensureLightTheme just navigated here to click "Light".
+    await expect(window).toHaveScreenshot('settings-page.png');
+
     await goto(window, 'Search');
     await expect(window).toHaveScreenshot('search-page.png');
   });

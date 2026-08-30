@@ -15,7 +15,6 @@ test.describe('Saved Jobs', () => {
     const row = window.getByRole('row', { name: /Redwood Software/ });
     await expect(row).toContainText('Senior Frontend Engineer');
 
-    // Edit: change the role, confirm the row reflects it.
     await row.getByRole('button', { name: /^edit$/i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit saved job/i });
     await expect(editDialog.getByLabel('Role')).toHaveValue('Senior Frontend Engineer');
