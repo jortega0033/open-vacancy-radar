@@ -1,3 +1,4 @@
+import { CV_PROFILE_FIELD_DESCRIPTIONS, CV_PROFILE_FIELD_ORDER } from '../../../electron/workspace/cv-profile-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -133,6 +134,18 @@ ${formatVacancy(vacancy)}
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
+/** `{"title": string, ..., "skills": string[], ...}` — generated from the shared schema, once at
+ * module load since `CV_PROFILE_FIELD_ORDER` is static, so this can never describe a field the
+ * schema doesn't declare, or omit one it does. Matches the `GROUNDING_RULES` pattern above: a
+ * static prompt fragment is a module-level `const`, not recomputed on every call. */
+const CV_PROFILE_JSON_SHAPE = `{${CV_PROFILE_FIELD_ORDER.map(
+  (key) => `"${key}": ${key === 'skills' ? 'string[]' : 'string'}`,
+).join(', ')}}`;
+
+const CV_PROFILE_FIELD_BULLETS = CV_PROFILE_FIELD_ORDER.map(
+  (key) => `- "${key}": ${CV_PROFILE_FIELD_DESCRIPTIONS[key]}`,
+).join('\n');
+
 /**
  * Asks the model to read raw CV text and return the same fields `CvDrawer` collects by hand
  * (title, years, location, languages, skills, summary, auth) as one JSON object, so an uploaded CV
@@ -148,15 +161,9 @@ ${GROUNDING_RULES}
 Never invent a value: if a field is not stated or cannot be inferred from the CV text, use an empty string ("") or an empty array ([]) for it — do not guess.
 
 Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
-{"title": string, "years": string, "location": string, "languages": string, "skills": string[], "summary": string, "auth": string}
+${CV_PROFILE_JSON_SHAPE}
 
-- "title": the candidate's current or most recent job title.
-- "years": years of relevant professional experience, as a short phrase (e.g. "5 years").
-- "location": the candidate's stated location or timezone.
-- "languages": spoken/written languages with proficiency if stated (e.g. "Dutch (B2), English (native)").
-- "skills": an array of concrete technical skills actually named in the CV (technologies, frameworks, tools).
-- "summary": a 2-3 sentence neutral summary of the candidate's background, drawn only from the CV text.
-- "auth": work authorization / visa status if the CV states it, otherwise "".
+${CV_PROFILE_FIELD_BULLETS}
 
 === CANDIDATE CV (${field(fileName)}) ===
 ${clamp(text, MAX_CV_PROMPT_CHARS)}`;

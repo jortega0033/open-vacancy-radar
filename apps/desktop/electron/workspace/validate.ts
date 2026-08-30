@@ -17,6 +17,7 @@
  * the handlers: it is exhaustively unit-testable on its own (see test/workspace-validate.test.ts).
  */
 
+import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from './cv-profile-schema.js';
 import type {
   ApplicationFilter,
   ApplicationInput,
@@ -54,8 +55,6 @@ export const LIMITS = {
   cvText: 2_000_000,
   /** a generated letter */
   letterBody: 200_000,
-  /** number of entries in cvProfile.skills */
-  skills: 200,
 } as const;
 
 export class WorkspaceInputError extends Error {
@@ -274,16 +273,16 @@ export function parseApplicationPatch(value: unknown): ApplicationPatch {
 function parseProfile(value: unknown): Partial<CvProfile> {
   const input = asRecord(value, '"profile"');
   const out: Partial<CvProfile> = {};
-  patch(input, out, 'title', (v) => str(v, 'profile.title', LIMITS.short));
-  patch(input, out, 'years', (v) => str(v, 'profile.years', LIMITS.short));
-  patch(input, out, 'location', (v) => str(v, 'profile.location', LIMITS.short));
-  patch(input, out, 'languages', (v) => str(v, 'profile.languages', LIMITS.short));
-  patch(input, out, 'summary', (v) => str(v, 'profile.summary', LIMITS.medium));
-  patch(input, out, 'auth', (v) => str(v, 'profile.auth', LIMITS.short));
+  for (const key of CV_PROFILE_SHORT_FIELDS) {
+    patch(input, out, key, (v) => str(v, `profile.${key}`, CV_PROFILE_LIMITS.shortField));
+  }
+  patch(input, out, 'summary', (v) => str(v, 'profile.summary', CV_PROFILE_LIMITS.summary));
   patch(input, out, 'skills', (v) => {
     if (!Array.isArray(v)) fail('"profile.skills" must be an array of strings');
-    if (v.length > LIMITS.skills) fail(`"profile.skills" must have at most ${LIMITS.skills} entries`);
-    return v.map((entry, index) => str(entry, `profile.skills[${index}]`, LIMITS.short));
+    if (v.length > CV_PROFILE_LIMITS.skills) {
+      fail(`"profile.skills" must have at most ${CV_PROFILE_LIMITS.skills} entries`);
+    }
+    return v.map((entry, index) => str(entry, `profile.skills[${index}]`, CV_PROFILE_LIMITS.shortField));
   });
   return out;
 }

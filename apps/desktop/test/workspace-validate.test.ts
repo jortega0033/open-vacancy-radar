@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { CV_PROFILE_LIMITS } from '../electron/workspace/cv-profile-schema.js';
 import {
   LIMITS,
   parseApplicationFilter,
@@ -116,8 +117,12 @@ describe('workspace input validation — bounds', () => {
 
   it('bounds the skills array both in length and per entry', () => {
     expect(() =>
-      parseCvDocumentInput({ name: 'CV', kind: 'manual', profile: { skills: new Array(LIMITS.skills + 1).fill('x') } }),
-    ).toThrow(/at most 200 entries/);
+      parseCvDocumentInput({
+        name: 'CV',
+        kind: 'manual',
+        profile: { skills: new Array(CV_PROFILE_LIMITS.skills + 1).fill('x') },
+      }),
+    ).toThrow(new RegExp(`at most ${CV_PROFILE_LIMITS.skills} entries`));
     expect(() => parseCvDocumentInput({ name: 'CV', kind: 'manual', profile: { skills: [{ not: 'a string' }] } })).toThrow(
       /profile\.skills\[0\]" must be a string/,
     );
