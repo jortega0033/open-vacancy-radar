@@ -1,6 +1,6 @@
 import { cpSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, type Plugin } from 'vitest/config';
+import { configDefaults, defineConfig, type Plugin } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import electron from 'vite-plugin-electron/simple';
@@ -72,5 +72,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
+    // `e2e/**/*.spec.ts` are Playwright specs (see playwright.config.ts), not vitest's — vitest's
+    // default include glob would otherwise try to run them too and fail on the API mismatch.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 });
