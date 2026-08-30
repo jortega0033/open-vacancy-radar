@@ -1,3 +1,4 @@
+import { CaretLeft } from '@phosphor-icons/react';
 import type { WorkspaceCounts } from '../../window.js';
 import { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 import { NavIcon } from './NavIcon.js';
@@ -57,19 +58,7 @@ export function AppSidebar({
           title={toggleLabel}
           onClick={onToggleCollapsed}
         >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className={collapsed ? 'rotate-180' : undefined}
-            aria-hidden="true"
-          >
-            <polyline points="14 6 8 12 14 18" />
-            <line x1="17" y1="6" x2="17" y2="18" />
-          </svg>
+          <CaretLeft size={15} className={collapsed ? 'rotate-180' : undefined} aria-hidden="true" />
         </button>
       </div>
 

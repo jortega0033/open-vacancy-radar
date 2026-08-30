@@ -23,6 +23,7 @@
     "@agent-dock/client": "workspace:*",
     "@agent-dock/shared": "workspace:*",
     "@electron/rebuild": "^3.7.1",
+    "@phosphor-icons/react": "^2.1.10",
     "@types/better-sqlite3": "^7.6.12",
     "drizzle-kit": "^0.31.10",
     "@open-vacancy-radar/vacancy-engine": "workspace:*",
