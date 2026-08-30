@@ -7,6 +7,7 @@ import { SafeHttpClient } from '../../src/crawler/http-client.js';
 import { globalRemoteConfigSchema } from '../../src/global-remote/models.js';
 import {
   discoverRemoote,
+  fetchRemooteJobDetail,
   REMOOTE_PUBLIC_LIMIT,
 } from '../../src/global-remote/remoote-discovery.js';
 import { createAtsHttpClient } from '../../src/pipeline/ats-http-client.js';
@@ -29,19 +30,6 @@ type RemooteTools = {
   };
 };
 
-type RemooteDetail = {
-  status: string;
-  data: null | {
-    job: {
-      id: number;
-      remoote_url: string;
-      salary: unknown;
-      location: unknown;
-      apply_action: { url: string };
-    };
-  };
-};
-
 liveIt('matches the anonymous Remoote tools, search, and detail contracts', async () => {
   const safeHttp = new SafeHttpClient({
     globalConcurrency: 1,
@@ -54,6 +42,7 @@ liveIt('matches the anonymous Remoote tools, search, and detail contracts', asyn
       'OpenVacancyRadar/live-contract-test (+https://github.com/jortega0033/open-vacancy-radar)',
   });
   const allowedOrigins = [REMOOTE_API_ORIGIN];
+  const atsHttp = createAtsHttpClient(safeHttp);
 
   const toolsResponse = await safeHttp.get(REMOOTE_TOOLS_URL, { allowedOrigins });
   expect(toolsResponse.status).toBe(200);
@@ -74,7 +63,7 @@ liveIt('matches the anonymous Remoote tools, search, and detail contracts', asyn
 
   const profilePath = path.resolve(process.cwd(), 'config/global-remote-profile-v1.json');
   const profile = globalRemoteConfigSchema.parse(JSON.parse(await readFile(profilePath, 'utf8')));
-  const result = await discoverRemoote(createAtsHttpClient(safeHttp), {
+  const result = await discoverRemoote(atsHttp, {
     ...profile,
     discovery: {
       ...profile.discovery,
@@ -86,7 +75,7 @@ liveIt('matches the anonymous Remoote tools, search, and detail contracts', asyn
     expect.objectContaining({
       provider: 'remoote',
       requests: 1,
-      status: 'success',
+      status: expect.stringMatching(/^(?:success|partial)$/u),
     }),
   ]);
   expect(result.vacancies.length).toBeGreaterThan(0);
@@ -101,18 +90,12 @@ liveIt('matches the anonymous Remoote tools, search, and detail contracts', asyn
   expect(vacancy.advertisedMinimum === null || vacancy.advertisedMinimum > 0).toBe(true);
 
   const jobId = Number(vacancy.key.slice('remoote:'.length));
-  const detailResponse = await safeHttp.get(`${REMOOTE_API_ORIGIN}/remoote/agents/jobs/${jobId}`, {
-    allowedOrigins,
-  });
-  expect(detailResponse.status).toBe(200);
-  const detail = JSON.parse(detailResponse.text()) as RemooteDetail;
-  expect(detail.status).toBe('ok');
-  expect(detail.data?.job.id).toBe(jobId);
-  expect(detail.data?.job.remoote_url).toMatch(
-    new RegExp(`^https://remoote\\.app/jobs/${jobId}(?:-|/?$)`, 'u'),
-  );
-  expect(detail.data?.job.apply_action.url).toBe(detail.data?.job.remoote_url);
-  expect(detail.data?.job).toHaveProperty('salary');
-  expect(detail.data?.job).toHaveProperty('location');
+  const detail = await fetchRemooteJobDetail(atsHttp, jobId);
+  expect(detail.status).toBe('active');
+  if (detail.status !== 'active') throw new Error('Remoote live detail became inactive');
+  expect(detail.job.id).toBe(jobId);
+  expect(detail.job.url).toMatch(new RegExp(`^https://remoote\\.app/jobs/${jobId}(?:-|/?$)`, 'u'));
+  expect(detail.job.location === null || detail.job.location.length > 0).toBe(true);
+  expect(detail.job.advertisedMinimum === null || detail.job.advertisedMinimum > 0).toBe(true);
   expect(JSON.stringify(detail)).not.toMatch(/employer_apply_url/iu);
 });

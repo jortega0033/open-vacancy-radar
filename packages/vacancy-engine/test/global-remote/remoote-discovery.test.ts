@@ -5,10 +5,15 @@ import { describe, expect, it } from 'vitest';
 
 import type { AtsHttpResponse } from '../../src/ats/http.js';
 import {
+  createRemooteSearchCache,
   discoverRemoote,
+  fetchRemooteJobDetail,
+  remooteJobDetailUrl,
+  REMOOTE_CACHE_TTL_MS,
   REMOOTE_PUBLIC_LIMIT,
   REMOOTE_SEARCH_URL,
 } from '../../src/global-remote/remoote-discovery.js';
+import type { RemooteDiscoveryOptions } from '../../src/global-remote/remoote-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
 import { FixtureHttpClient, jsonPostFixtureKey } from '../ats/helpers.js';
 
@@ -61,6 +66,10 @@ function searchBody(): unknown {
   };
 }
 
+function isolatedOptions(): RemooteDiscoveryOptions {
+  return { cache: createRemooteSearchCache() };
+}
+
 describe('Remoote linked-index discovery', () => {
   it('makes one capped anonymous search and retains only canonical normalized fields', async () => {
     const routes = new Map([
@@ -68,14 +77,15 @@ describe('Remoote linked-index discovery', () => {
     ]);
     const http = new FixtureHttpClient(routes);
 
-    const result = await discoverRemoote(http, profile());
+    const result = await discoverRemoote(http, profile(), isolatedOptions());
 
     expect(result.sources).toEqual([
       expect.objectContaining({
         provider: 'remoote',
         requests: 1,
         listings: 1,
-        status: 'success',
+        status: 'partial',
+        error: 'ignored 1 invalid Remoote result(s)',
       }),
     ]);
     expect(result.vacancies).toEqual([
@@ -102,15 +112,16 @@ describe('Remoote linked-index discovery', () => {
     expect(JSON.stringify(result)).not.toContain('employer.invalid');
   });
 
-  it.each([
-    ['empty search', 'search-empty.json'],
-    ['non-canonical job link', 'search-noncanonical.json'],
-  ])('returns a successful empty source for %s', async (_label, fixtureName) => {
+  it('returns a successful empty source for an empty search', async () => {
     const routes = new Map([
-      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture(fixtureName)],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture('search-empty.json')],
     ]);
 
-    const result = await discoverRemoote(new FixtureHttpClient(routes), profile());
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(result.sources).toEqual([
       expect.objectContaining({
@@ -122,12 +133,38 @@ describe('Remoote linked-index discovery', () => {
     expect(result.vacancies).toEqual([]);
   });
 
+  it('fails closed when a non-empty response contains no usable canonical job', async () => {
+    const routes = new Map([
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture('search-noncanonical.json')],
+    ]);
+
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
+
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        provider: 'remoote',
+        listings: 0,
+        status: 'error',
+        error: expect.stringContaining('search response contained no usable jobs'),
+      }),
+    ]);
+    expect(result.vacancies).toEqual([]);
+  });
+
   it('preserves missing salary and location as explicit uncertainty', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture('search-uncertain.json')],
     ]);
 
-    const result = await discoverRemoote(new FixtureHttpClient(routes), profile());
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(result.vacancies).toEqual([
       expect.objectContaining({
@@ -149,7 +186,11 @@ describe('Remoote linked-index discovery', () => {
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), JSON.stringify(payload)],
     ]);
 
-    const result = await discoverRemoote(new FixtureHttpClient(routes), profile());
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(result.sources).toEqual([
       expect.objectContaining({
@@ -161,16 +202,27 @@ describe('Remoote linked-index discovery', () => {
     expect(result.vacancies).toEqual([]);
   });
 
-  it('does not retain POST search results between discovery runs', async () => {
+  it('reuses sanitized search results until the bounded cache expires', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture('search-empty.json')],
     ]);
     const http = new FixtureHttpClient(routes);
+    const cache = createRemooteSearchCache();
+    let currentTime = 1_000;
+    const options: RemooteDiscoveryOptions = {
+      cache,
+      now: () => currentTime,
+    };
 
-    await discoverRemoote(http, profile());
-    await discoverRemoote(http, profile());
+    const first = await discoverRemoote(http, profile(), options);
+    const cached = await discoverRemoote(http, profile(), options);
+    currentTime += REMOOTE_CACHE_TTL_MS;
+    const expired = await discoverRemoote(http, profile(), options);
 
     expect(http.requestedUrls).toEqual([REMOOTE_SEARCH_URL, REMOOTE_SEARCH_URL]);
+    expect(first.sources[0]?.requests).toBe(1);
+    expect(cached.sources[0]?.requests).toBe(0);
+    expect(expired.sources[0]?.requests).toBe(1);
   });
 
   it('does not fold an unknown raw employer URL into retained content', async () => {
@@ -186,8 +238,16 @@ describe('Remoote linked-index discovery', () => {
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), secondPayload],
     ]);
 
-    const first = await discoverRemoote(new FixtureHttpClient(firstRoutes), profile());
-    const second = await discoverRemoote(new FixtureHttpClient(secondRoutes), profile());
+    const first = await discoverRemoote(
+      new FixtureHttpClient(firstRoutes),
+      profile(),
+      isolatedOptions(),
+    );
+    const second = await discoverRemoote(
+      new FixtureHttpClient(secondRoutes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(first.vacancies[0]?.contentHash).toBe(second.vacancies[0]?.contentHash);
   });
@@ -197,7 +257,11 @@ describe('Remoote linked-index discovery', () => {
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), fixture('search-malformed.json')],
     ]);
 
-    const result = await discoverRemoote(new FixtureHttpClient(routes), profile());
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(result.sources).toEqual([
       expect.objectContaining({
@@ -219,7 +283,11 @@ describe('Remoote linked-index discovery', () => {
     };
     const routes = new Map([[jsonPostFixtureKey(REMOOTE_SEARCH_URL, searchBody()), response]]);
 
-    const result = await discoverRemoote(new FixtureHttpClient(routes), profile());
+    const result = await discoverRemoote(
+      new FixtureHttpClient(routes),
+      profile(),
+      isolatedOptions(),
+    );
 
     expect(result.sources).toEqual([
       expect.objectContaining({
@@ -232,7 +300,53 @@ describe('Remoote linked-index discovery', () => {
     ]);
   });
 
-  it('pins the sanitized public tools, detail, and inactive response contracts', () => {
+  it('fetches and sanitizes one active detail without retaining its raw response', async () => {
+    const url = remooteJobDetailUrl(12345);
+    const http = new FixtureHttpClient(new Map([[url, fixture('detail-valid.json')]]));
+
+    const detail = await fetchRemooteJobDetail(http, 12345);
+
+    expect(detail).toEqual({
+      status: 'active',
+      job: {
+        id: 12345,
+        url: 'https://remoote.app/jobs/12345-senior-frontend-engineer',
+        location: 'Europe, including Netherlands',
+        advertisedMinimum: 120_000,
+        currency: 'USD',
+        salaryPeriod: 'year',
+      },
+    });
+    expect(http.requestedOptions).toEqual([
+      {
+        allowedOrigins: ['https://api.remoote.app'],
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      },
+    ]);
+    expect(JSON.stringify(detail)).not.toMatch(/apply_action|employer_apply_url/iu);
+  });
+
+  it('maps an inactive detail response without fabricating a vacancy', async () => {
+    const url = remooteJobDetailUrl(999999);
+    const http = new FixtureHttpClient(new Map([[url, fixture('detail-inactive.json')]]));
+
+    await expect(fetchRemooteJobDetail(http, 999999)).resolves.toEqual({
+      status: 'inactive',
+      job: null,
+    });
+  });
+
+  it('rejects a malformed or non-canonical detail response', async () => {
+    const url = remooteJobDetailUrl(12345);
+    const http = new FixtureHttpClient(new Map([[url, fixture('detail-malformed.json')]]));
+
+    await expect(fetchRemooteJobDetail(http, 12345)).rejects.toThrow(
+      'remoote: detail job contract is invalid',
+    );
+  });
+
+  it('pins the sanitized public tools contract', () => {
     const tools = JSON.parse(fixture('tools.json')) as {
       tools: Array<{
         name: string;
@@ -247,15 +361,6 @@ describe('Remoote linked-index discovery', () => {
         raw_employer_apply_urls: boolean;
       };
     };
-    const detail = JSON.parse(fixture('detail-valid.json')) as {
-      status: string;
-      data: { job: { remoote_url: string; apply_action: { url: string } } };
-    };
-    const inactive = JSON.parse(fixture('detail-inactive.json')) as {
-      status: string;
-      data: unknown;
-    };
-
     const searchTool = tools.tools.find((tool) => tool.name === 'search_jobs');
     const detailTool = tools.tools.find((tool) => tool.name === 'get_job');
     expect(searchTool).toMatchObject({ auth_required: false, public_limit: 10 });
@@ -276,9 +381,5 @@ describe('Remoote linked-index discovery', () => {
       bulk_export: false,
       raw_employer_apply_urls: false,
     });
-    expect(detail.status).toBe('ok');
-    expect(detail.data.job.remoote_url).toBe(detail.data.job.apply_action.url);
-    expect(detail.data.job.remoote_url).toMatch(/^https:\/\/remoote\.app\/jobs\//u);
-    expect(inactive).toMatchObject({ status: 'not_found', data: null });
   });
 });

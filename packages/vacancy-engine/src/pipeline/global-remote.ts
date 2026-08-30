@@ -303,7 +303,7 @@ export async function runGlobalRemoteScan(
       'One blocked or malformed source is logged and does not fail the other sources.',
       'The official Workable all-customer XML is streamed only after normal source scans, parsed incrementally, and cached as a compact hourly snapshot; raw XML is never buffered or persisted.',
       'Dice results are retrieved through Dice’s AI-powered MCP search and are clearly treated as discovery leads requiring official employer verification.',
-      'Remoote results come from one capped anonymous REST search, retain only canonical Remoote links, are not cached, and are never expanded into a bulk export.',
+      'Remoote results come from one capped anonymous REST search, retain only canonical Remoote links, use a five-minute bounded in-memory cache after sanitization, and are never expanded into a bulk export.',
       ...(reuseDiscovery
         ? [
             'Discovery API data was reused from the prior report; this run made no new discovery-feed requests.',
