@@ -5,6 +5,17 @@ AgentDock and is designed to be forked and
 extended, so contributions here should stay in that spirit: keep the core small, provider-neutral,
 and easy for someone else to reason about after forking it.
 
+## Contribution workflow
+
+1. Search existing issues before starting work. Use the issue forms for bugs, features, or questions.
+2. Discuss large, security-sensitive, or architecture-changing work in an issue before implementation.
+3. Work from a focused branch in your fork; direct pushes to the default branch are blocked.
+4. Open a pull request using the repository template and link the relevant issue.
+5. Resolve review conversations and keep all required checks green before merge.
+
+Report vulnerabilities privately through the repository's **Security** tab, never through a public
+issue or pull request.
+
 ## Development setup
 
 ```bash
@@ -13,7 +24,7 @@ pnpm typecheck
 pnpm test
 ```
 
-Requires Node 20+ and pnpm (see the `packageManager` field in the root `package.json` for the
+Requires Node 22+ and pnpm (see the `packageManager` field in the root `package.json` for the
 exact version this repo was built against).
 
 ## Project structure

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/jortega0033/open-vacancy-radar/security/advisories/new
+    about: Never disclose vulnerabilities, credentials, personal application data, or exploit details in a public issue.

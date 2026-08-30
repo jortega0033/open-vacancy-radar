@@ -14,7 +14,7 @@
     "url": "https://github.com/jortega0033/open-vacancy-radar/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "pnpm -r --filter=./packages/* --filter=./apps/* run build",
