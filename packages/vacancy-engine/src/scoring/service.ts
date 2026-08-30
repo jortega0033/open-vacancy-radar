@@ -44,8 +44,10 @@ export async function scoreActiveVacancies(
     // No target roles, no strongest skills: every dimension of scoreVacancy would be scoring
     // against an absence rather than a real preference, producing a plausible-looking number that
     // means nothing. Skip scoring outright rather than caching a degenerate score for every
-    // vacancy — the report layer surfaces `profileConfigured: false` and shows unscored results
-    // instead of an empty "nothing matched" list.
+    // vacancy. `profileConfigured: false` is returned here so a caller *can* distinguish "no
+    // profile configured" from "genuinely nothing matched" -- as of this change, no caller reads
+    // it yet (see issue #56, PR 2: threading this into the report and the Search UI so a fresh,
+    // unconfigured install shows an honest "complete your profile" state instead of an empty one).
     return {
       candidateProfileVersion: profile.profileVersion,
       scoringVersion: DETERMINISTIC_SCORING_VERSION,

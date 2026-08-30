@@ -39,7 +39,7 @@ async function discoverAdzuna(
       url.searchParams.set('app_id', adzunaAppId);
       url.searchParams.set('app_key', adzunaAppKey);
       url.searchParams.set('content-type', 'application/json');
-      url.searchParams.set('what', 'frontend developer');
+      if (config.discovery.roleQuery) url.searchParams.set('what', config.discovery.roleQuery);
       url.searchParams.set('results_per_page', '50');
       lastUrl = url.toString();
       requests += 1;
@@ -100,7 +100,10 @@ async function discoverJooble(
 ): Promise<DiscoveryRun> {
   const url = `https://jooble.org/api/${config.discovery.joobleApiKey}`;
   try {
-    const response = await http.postJson(url, { keywords: 'frontend developer', location: 'remote' });
+    const response = await http.postJson(url, {
+      ...(config.discovery.roleQuery ? { keywords: config.discovery.roleQuery } : {}),
+      location: 'remote',
+    });
     requireSuccessfulResponse('jooble', response);
     let root: unknown;
     try {
@@ -150,7 +153,10 @@ async function discoverReed(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const url = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend+developer&resultsToTake=100';
+  const reedUrl = new URL('https://www.reed.co.uk/api/1.0/search');
+  if (config.discovery.roleQuery) reedUrl.searchParams.set('keywords', config.discovery.roleQuery);
+  reedUrl.searchParams.set('resultsToTake', '100');
+  const url = reedUrl.toString();
   try {
     const response = await http.get(url, { headers: { Authorization: basicAuthHeader(config.discovery.reedApiKey) } });
     requireSuccessfulResponse('reed', response);
@@ -207,7 +213,7 @@ async function discoverJobsPipe(
     const response = await http.postJson(
       url,
       {
-        job_title_or: ['frontend developer', 'frontend engineer', 'frontend architect'],
+        ...(config.discovery.roleQuery ? { job_title_or: [config.discovery.roleQuery] } : {}),
         remote: true,
         posted_at_max_age_days: 30,
         limit: 25,

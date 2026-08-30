@@ -13,11 +13,13 @@ export const ALL_COUNTRIES: readonly string[] = [
   'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina', 'Botswana',
   'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia', 'Cameroon',
   'Canada', 'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia', 'Comoros',
-  'Congo', 'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czechia', 'Denmark', 'Djibouti', 'Dominica',
+  'Congo', 'Costa Rica', 'Croatia', 'Cuba', 'Cyprus', 'Czechia',
+  'Democratic Republic of the Congo', 'Denmark', 'Djibouti', 'Dominica',
   'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia',
   'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France', 'Gabon', 'Gambia', 'Georgia', 'Germany',
   'Ghana', 'Greece', 'Grenada', 'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras',
-  'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy', 'Jamaica',
+  'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy',
+  'Ivory Coast', 'Jamaica',
   'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos',
   'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg',
   'Madagascar', 'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania',
@@ -57,21 +59,40 @@ const COUNTRY_ALIASES: Readonly<Record<string, string>> = {
   scotland: 'United Kingdom',
   wales: 'United Kingdom',
   uae: 'United Arab Emirates',
-  'south korea': 'South Korea',
   'republic of korea': 'South Korea',
   korea: 'South Korea',
   holland: 'Netherlands',
   'czech republic': 'Czechia',
-  'ivory coast': 'Congo',
-  drc: 'Congo',
-  'congo-kinshasa': 'Congo',
+  "cote d'ivoire": 'Ivory Coast',
+  'drc': 'Democratic Republic of the Congo',
+  'congo-kinshasa': 'Democratic Republic of the Congo',
+  'congo-brazzaville': 'Congo',
 };
 
-/** Sorted longest-first so e.g. "United Arab Emirates" matches before a shorter unrelated prefix. */
-const MATCH_TERMS: readonly { term: string; country: string }[] = [
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Sorted longest-first so e.g. "United Arab Emirates" matches before a shorter unrelated prefix.
+ * Each regex is compiled once here, at module load, rather than inside `normalizeCountry` on every
+ * call: this list is checked against every vacancy's location on every filter-bar keystroke (any
+ * filter change re-runs the whole result set, not just a country change), and re-compiling ~200
+ * regexes per vacancy per keystroke measured in the hundreds of milliseconds on a worldwide
+ * report's typical vacancy count — long enough to visibly stall typing.
+ */
+const MATCH_TERMS: readonly { pattern: RegExp; country: string }[] = [
   ...ALL_COUNTRIES.map((country) => ({ term: country.toLowerCase(), country })),
   ...Object.entries(COUNTRY_ALIASES).map(([alias, country]) => ({ term: alias, country })),
-].sort((a, b) => b.term.length - a.term.length);
+]
+  .sort((a, b) => b.term.length - a.term.length)
+  .map(({ term, country }) => ({
+    pattern: new RegExp(`(?:^|[^a-z])${escapeRegExp(term)}(?:$|[^a-z])`, 'u'),
+    country,
+  }));
+
+/** Memoized by raw location text: many vacancies in one report repeat the same location string. */
+const normalizeCache = new Map<string, string | null>();
 
 /**
  * Matches a country name/alias as a whole word within free-text location, so "Ireland" doesn't
@@ -81,14 +102,18 @@ const MATCH_TERMS: readonly { term: string; country: string }[] = [
  */
 export function normalizeCountry(location: string | null | undefined): string | null {
   if (!location) return null;
+  const cached = normalizeCache.get(location);
+  if (cached !== undefined) return cached;
   const haystack = location.toLowerCase();
-  for (const { term, country } of MATCH_TERMS) {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(?:^|[^a-z])${escaped}(?:$|[^a-z])`, 'u').test(haystack)) {
-      return country;
+  let result: string | null = null;
+  for (const { pattern, country } of MATCH_TERMS) {
+    if (pattern.test(haystack)) {
+      result = country;
+      break;
     }
   }
-  return null;
+  normalizeCache.set(location, result);
+  return result;
 }
 
 export const UNSPECIFIED_LOCATION = 'Unspecified location';

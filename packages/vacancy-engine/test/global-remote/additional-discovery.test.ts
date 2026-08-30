@@ -46,12 +46,12 @@ function profile(museEnabled = false): GlobalRemoteConfig {
 function diceBody(): unknown {
   return {
     jsonrpc: '2.0',
-    id: 'dice-frontend-1',
+    id: 'dice-search-1',
     method: 'tools/call',
     params: {
       name: 'search_jobs',
       arguments: {
-        keyword: 'frontend developer',
+        keyword: 'frontend',
         jobs_per_page: 100,
         page_number: 1,
         sort: 'relevance',
@@ -65,7 +65,7 @@ function diceBody(): unknown {
 function diceSse(data: unknown[]): string {
   return `event: message\ndata: ${JSON.stringify({
     jsonrpc: '2.0',
-    id: 'dice-frontend-1',
+    id: 'dice-search-1',
     result: { structuredContent: { data } },
   })}\n\n`;
 }

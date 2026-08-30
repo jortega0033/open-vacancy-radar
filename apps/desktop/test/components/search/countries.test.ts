@@ -34,6 +34,19 @@ describe('normalizeCountry', () => {
   it('prefers the longer, more specific match over a shorter unrelated one', () => {
     expect(normalizeCountry('United Arab Emirates')).toBe('United Arab Emirates');
   });
+
+  it('does not conflate Ivory Coast, the Democratic Republic of the Congo, and Congo into one country', () => {
+    expect(normalizeCountry('Abidjan, Ivory Coast')).toBe('Ivory Coast');
+    expect(normalizeCountry("Remote, Cote d'Ivoire")).toBe('Ivory Coast');
+    expect(normalizeCountry('Kinshasa, DRC')).toBe('Democratic Republic of the Congo');
+    expect(normalizeCountry('Remote (Congo-Kinshasa)')).toBe('Democratic Republic of the Congo');
+    expect(normalizeCountry('Brazzaville, Congo')).toBe('Congo');
+  });
+
+  it('returns the same result on repeated calls for the same location text (memoization does not change correctness)', () => {
+    expect(normalizeCountry('Amsterdam, Netherlands')).toBe(normalizeCountry('Amsterdam, Netherlands'));
+    expect(normalizeCountry('nowhere in particular')).toBe(normalizeCountry('nowhere in particular'));
+  });
 });
 
 describe('ALL_COUNTRIES', () => {

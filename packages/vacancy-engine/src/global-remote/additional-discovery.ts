@@ -77,12 +77,12 @@ async function discoverDice(
       requests += 1;
       const response = await http.postJson(url, {
         jsonrpc: '2.0',
-        id: `dice-frontend-${page}`,
+        id: `dice-search-${page}`,
         method: 'tools/call',
         params: {
           name: 'search_jobs',
           arguments: {
-            keyword: 'frontend developer',
+            ...(config.discovery.roleQuery ? { keyword: config.discovery.roleQuery } : {}),
             jobs_per_page: 100,
             page_number: page,
             sort: 'relevance',
