@@ -3,6 +3,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
+  DiscoverySourceAudit,
   DiscoveryVacancyAudit,
   GlobalRemoteReport,
   OfficialVacancyAudit,
@@ -64,6 +65,21 @@ function discoveryRows(vacancies: readonly DiscoveryVacancyAudit[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+function discoverySourceRows(sources: readonly DiscoverySourceAudit[]): string {
+  if (sources.length === 0) return '<p>No discovery sources were recorded.</p>';
+  return `<table><thead><tr><th>Discovery source</th><th>Status</th><th>Requests / listings</th><th>Detail</th></tr></thead><tbody>${sources
+    .map(
+      (source) => `
+    <tr>
+      <td>${link(source.url, source.provider)}<br><small>${escapeHtml(source.id)}</small></td>
+      <td><code>${escapeHtml(source.status)}</code></td>
+      <td>${source.requests.toLocaleString('en-US')} / ${source.listings.toLocaleString('en-US')}</td>
+      <td>${source.error === null ? 'None.' : escapeHtml(source.error)}</td>
+    </tr>`,
+    )
+    .join('')}</tbody></table>`;
+}
+
 function registryRows(sources: readonly SourceRegistryEntry[]): string {
   return `<table><thead><tr><th>Source</th><th>Transport</th><th>State</th><th>Production decision</th></tr></thead><tbody>${sources.map((source) => `
     <tr>
@@ -98,6 +114,9 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
 <h2>Salary near misses</h2>${officialRows(report.nearMisses)}
 <h2>Excluded or inactive official roles</h2>${officialRows(report.excludedOrInactive)}
 <h2>Blocked or errored official sources</h2>${officialRows(report.blockedOrErrored)}
+<h2>Discovery source health</h2>
+<p>Partial, blocked, and errored sources may reduce coverage. Snapshot age and fallback reasons are shown here.</p>
+${discoverySourceRows(report.discoverySources)}
 <h2>Discovery-board title matches</h2>
 <p>The complete per-listing record, including role mismatches, is in <code>latest.audit.ndjson</code>.</p>
 ${discoveryRows(report.discoveryAudit)}

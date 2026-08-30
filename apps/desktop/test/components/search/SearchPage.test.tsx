@@ -106,7 +106,10 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
   };
 }
 
-function makeWorldwideReport(vacancies: DiscoveryVacancyAudit[]): GlobalRemoteReport {
+function makeWorldwideReport(
+  vacancies: DiscoveryVacancyAudit[],
+  discoverySources: GlobalRemoteReport['discoverySources'] = [],
+): GlobalRemoteReport {
   return {
     runId: 'ww-run-1',
     generatedAt: '2026-08-29T11:00:00.000Z',
@@ -137,7 +140,7 @@ function makeWorldwideReport(vacancies: DiscoveryVacancyAudit[]): GlobalRemoteRe
       manualOrProhibitedRegistrySources: 0,
     },
     sourceRegistry: [],
-    discoverySources: [],
+    discoverySources,
     strictMatches: [],
     manualReview: [],
     nearMisses: [],
@@ -201,6 +204,32 @@ describe('SearchPage', () => {
     expect(bridge.getReport).toHaveBeenCalledTimes(1);
     expect(bridge.runScan).not.toHaveBeenCalled();
     expect(screen.queryByText('Senior Frontend Architect')).not.toBeInTheDocument();
+  });
+
+  it('surfaces partial worldwide source health and snapshot age', async () => {
+    const warning =
+      'stale parsed snapshot reused from 2026-08-30T10:00:00.000Z after rate_limited_status';
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy()], [
+          {
+            id: 'workable_global:all-customers',
+            provider: 'workable_global',
+            url: 'https://www.workable.com/boards/workable.xml',
+            requests: 1,
+            listings: 1,
+            status: 'partial',
+            error: warning,
+          },
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+    switchMarket('worldwide');
+
+    await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
+    expect(screen.getByText(`workable_global: ${warning}`)).toBeInTheDocument();
   });
 
   it('shows the real IND sponsor verification for a Netherlands vacancy', async () => {

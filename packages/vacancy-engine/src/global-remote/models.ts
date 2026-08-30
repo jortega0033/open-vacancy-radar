@@ -137,6 +137,7 @@ export type DiscoveryProvider =
   | 'remote_frontend_jobs'
   | 'un_careers'
   | 'jobtech_sweden'
+  | 'workable_global'
   | 'adzuna'
   | 'jooble'
   | 'reed'

@@ -2,11 +2,7 @@ import type { AppConfig } from '../config.js';
 import { CrawlerHttpError, isCrawlerHttpError, redactUrl } from './errors.js';
 import type { CachedHttpResponse, HttpCache } from './http-cache.js';
 import { RequestScheduler } from './scheduler.js';
-import {
-  type DnsResolver,
-  systemDnsResolver,
-  validatePublicHttpUrl,
-} from './url-safety.js';
+import { type DnsResolver, systemDnsResolver, validatePublicHttpUrl } from './url-safety.js';
 
 const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
 const BLOCKED_HTTP_STATUSES = new Set([401, 403, 406, 407, 451]);
@@ -17,11 +13,17 @@ const SENSITIVE_REQUEST_HEADERS = [
   'proxy-authorization',
   'x-subscription-token',
 ];
-const SENSITIVE_RESPONSE_HEADERS = new Set(['set-cookie', 'www-authenticate', 'proxy-authenticate']);
+const SENSITIVE_RESPONSE_HEADERS = new Set([
+  'set-cookie',
+  'www-authenticate',
+  'proxy-authenticate',
+]);
 const TIMEOUT_ERROR = new Error('crawler request timeout');
 const CACHE_TIMEOUT_ERROR = Object.assign(new Error('crawler cache operation timeout'), {
   name: 'CacheTimeoutError',
 });
+const ABSOLUTE_MAX_STREAM_TIMEOUT_MS = 15 * 60 * 1_000;
+const ABSOLUTE_MAX_STREAM_RESPONSE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export type CacheErrorOperation = 'get' | 'set';
 
@@ -35,6 +37,10 @@ export type SafeHttpClientDependencies = {
   now?: () => number;
   /** Bounded independently because large, known public bulk feeds may use a slower persistent cache. */
   cacheTimeoutMs?: number;
+  /** Constructor-owned ceiling for exceptional streamed transfers. */
+  maxStreamTimeoutMs?: number;
+  /** Constructor-owned decoded-body ceiling for exceptional streamed transfers. */
+  maxStreamResponseBytes?: number;
   onCacheError?: (error: unknown, operation: CacheErrorOperation, safeUrl: string) => void;
   onNetworkRequest?: (safeUrl: string) => void;
 };
@@ -57,6 +63,25 @@ export type SafeHttpGetOptions = {
   headers?: HeadersInit;
   /** Optional per-request boundary; redirects outside these origins are not followed. */
   allowedOrigins?: readonly string[];
+};
+
+export type SafeHttpStreamGetOptions = SafeHttpGetOptions & {
+  /** Whole-operation deadline, including DNS, queueing, redirects, retries, and body consumption. */
+  timeoutMs: number;
+  /** Hard decoded-body limit. Required so bulk transfers are always explicitly bounded. */
+  maxResponseBytes: number;
+  /** May only reduce the constructor retry policy; use zero for feeds with long server cooldowns. */
+  maxRetries?: number;
+  /** Called synchronously while the scheduler slot is held. Throwing cancels the response body. */
+  onChunk: (chunk: Uint8Array, signal: AbortSignal) => void;
+};
+
+export type SafeHttpStreamResponse = {
+  requestedUrl: string;
+  url: string;
+  status: number;
+  headers: Readonly<Record<string, string>>;
+  bytesRead: number;
 };
 
 export type SafeHttpPostJsonOptions = SafeHttpGetOptions;
@@ -101,21 +126,41 @@ export class SafeHttpResponse {
   }
 }
 
-type HopResult =
+type HopResult<TBody> =
   | { kind: 'redirect'; status: number; location: string }
-  | { kind: 'retryable'; status: number; retryDelayMs: number; cooldownUntil?: number }
+  | {
+      kind: 'retryable';
+      status: number;
+      retryDelayMs: number;
+      serverRetryAfterMs?: number;
+      cooldownUntil?: number;
+    }
   | { kind: 'not_modified'; url: string; headers: Readonly<Record<string, string>> }
   | {
       kind: 'success';
       url: string;
       status: number;
       headers: Readonly<Record<string, string>>;
-      body: Uint8Array;
+      body: TBody;
     }
   | { kind: 'error'; status: number };
 
-type AttemptResult = Exclude<HopResult, { kind: 'redirect' }>;
+type AttemptResult<TBody> = Exclude<HopResult<TBody>, { kind: 'redirect' }>;
 type DeferredHop = { kind: 'deferred'; until: number; status: number };
+type ResponseBodyReader<TBody> = (
+  response: Response,
+  requestUrl: URL,
+  controller: AbortController,
+) => Promise<TBody>;
+
+class StreamConsumerError extends Error {
+  public readonly consumerCause: unknown;
+
+  public constructor(cause: unknown) {
+    super('stream consumer failed');
+    this.consumerCause = cause;
+  }
+}
 
 function positiveInteger(value: number, name: string, allowZero = false): number {
   const minimum = allowZero ? 0 : 1;
@@ -123,6 +168,21 @@ function positiveInteger(value: number, name: string, allowZero = false): number
     throw new RangeError(`${name} must be ${allowZero ? 'a non-negative' : 'a positive'} integer`);
   }
   return value;
+}
+
+function boundedPositiveInteger(value: number, name: string, maximum: number): number {
+  positiveInteger(value, name);
+  if (value > maximum) {
+    throw new RangeError(`${name} must not exceed ${maximum}`);
+  }
+  return value;
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    ((typeof value === 'object' && value !== null) || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 function headersToRecord(headers: Headers): Readonly<Record<string, string>> {
@@ -141,27 +201,34 @@ async function discardResponse(response: Response): Promise<void> {
   }
 }
 
+async function rejectOversizedDeclaredBody(
+  response: Response,
+  maxResponseBytes: number,
+  requestUrl: URL,
+  controller: AbortController,
+): Promise<void> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength === null || !/^\d+$/u.test(contentLength)) return;
+  const declaredSize = Number(contentLength);
+  if (declaredSize <= maxResponseBytes) return;
+  controller.abort();
+  await discardResponse(response);
+  throw new CrawlerHttpError({
+    category: 'http_error',
+    code: 'response_too_large',
+    url: requestUrl,
+    detail: `Response exceeds the ${maxResponseBytes}-byte limit`,
+    status: response.status,
+  });
+}
+
 async function readBoundedBody(
   response: Response,
   maxResponseBytes: number,
   requestUrl: URL,
   controller: AbortController,
 ): Promise<Uint8Array> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && /^\d+$/u.test(contentLength)) {
-    const declaredSize = Number(contentLength);
-    if (declaredSize > maxResponseBytes) {
-      controller.abort();
-      await discardResponse(response);
-      throw new CrawlerHttpError({
-        category: 'http_error',
-        code: 'response_too_large',
-        url: requestUrl,
-        detail: `Response exceeds the ${maxResponseBytes}-byte limit`,
-        status: response.status,
-      });
-    }
-  }
+  await rejectOversizedDeclaredBody(response, maxResponseBytes, requestUrl, controller);
 
   if (response.body === null) return new Uint8Array();
   const reader = response.body.getReader();
@@ -202,7 +269,66 @@ async function readBoundedBody(
   return body;
 }
 
-function retryAfterDelay(rawValue: string | null, now: number, capMs: number): number | undefined {
+async function consumeBoundedBody(
+  response: Response,
+  maxResponseBytes: number,
+  requestUrl: URL,
+  controller: AbortController,
+  onChunk: SafeHttpStreamGetOptions['onChunk'],
+): Promise<number> {
+  await rejectOversizedDeclaredBody(response, maxResponseBytes, requestUrl, controller);
+  if (response.body === null) return 0;
+
+  const reader = response.body.getReader();
+  let totalBytes = 0;
+  const cancelReader = async (): Promise<void> => {
+    try {
+      await reader.cancel();
+    } catch {
+      // Aborting or a consumer failure may already have errored the stream.
+    }
+  };
+  const abortListener = (): void => {
+    void cancelReader();
+  };
+  controller.signal.addEventListener('abort', abortListener, { once: true });
+
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > maxResponseBytes) {
+        throw new CrawlerHttpError({
+          category: 'http_error',
+          code: 'response_too_large',
+          url: requestUrl,
+          detail: `Response exceeds the ${maxResponseBytes}-byte limit`,
+          status: response.status,
+        });
+      }
+      try {
+        const callbackResult: unknown = onChunk(chunk.value, controller.signal);
+        if (isThenable(callbackResult)) {
+          void Promise.resolve(callbackResult).catch(() => undefined);
+          throw new TypeError('stream onChunk callback must be synchronous');
+        }
+      } catch (error) {
+        throw new StreamConsumerError(error);
+      }
+    }
+    return totalBytes;
+  } catch (error) {
+    controller.abort();
+    await cancelReader();
+    throw error;
+  } finally {
+    controller.signal.removeEventListener('abort', abortListener);
+    reader.releaseLock();
+  }
+}
+
+function parsedRetryAfter(rawValue: string | null, now: number): number | undefined {
   if (rawValue === null) return undefined;
   const trimmed = rawValue.trim();
   let milliseconds: number;
@@ -213,8 +339,12 @@ function retryAfterDelay(rawValue: string | null, now: number, capMs: number): n
     if (!Number.isFinite(date)) return undefined;
     milliseconds = Math.max(0, date - now);
   }
-  if (!Number.isFinite(milliseconds)) return capMs;
-  return Math.min(capMs, milliseconds);
+  return Number.isFinite(milliseconds) ? milliseconds : undefined;
+}
+
+function retryAfterDelay(rawValue: string | null, now: number, capMs: number): number | undefined {
+  const milliseconds = parsedRetryAfter(rawValue, now);
+  return milliseconds === undefined ? undefined : Math.min(capMs, milliseconds);
 }
 
 function cachedFinalUrl(cacheEntry: CachedHttpResponse | undefined): string | undefined {
@@ -228,17 +358,15 @@ function cachedFinalUrl(cacheEntry: CachedHttpResponse | undefined): string | un
   }
 }
 
-function normalizeAllowedOrigins(values: readonly string[] | undefined): ReadonlySet<string> | null {
+function normalizeAllowedOrigins(
+  values: readonly string[] | undefined,
+): ReadonlySet<string> | null {
   if (values === undefined) return null;
   if (values.length === 0) throw new RangeError('allowedOrigins must not be empty');
   const origins = new Set<string>();
   for (const value of values) {
     const url = new URL(value);
-    if (
-      !['http:', 'https:'].includes(url.protocol) ||
-      url.username !== '' ||
-      url.password !== ''
-    ) {
+    if (!['http:', 'https:'].includes(url.protocol) || url.username !== '' || url.password !== '') {
       throw new RangeError('allowedOrigins entries must be credential-free HTTP(S) URLs');
     }
     origins.add(url.origin);
@@ -262,6 +390,8 @@ export class SafeHttpClient {
   readonly #maxRetries: number;
   readonly #maxRedirects: number;
   readonly #maxResponseBytes: number;
+  readonly #maxStreamTimeoutMs: number;
+  readonly #maxStreamResponseBytes: number;
   readonly #baseRetryDelayMs: number;
   readonly #maxRetryDelayMs: number;
   readonly #maxRetryAfterMs: number;
@@ -297,25 +427,113 @@ export class SafeHttpClient {
       options.maxResponseBytes ?? 5 * 1024 * 1024,
       'maxResponseBytes',
     );
-    this.#baseRetryDelayMs = positiveInteger(
-      options.baseRetryDelayMs ?? 500,
-      'baseRetryDelayMs',
+    this.#maxStreamTimeoutMs = boundedPositiveInteger(
+      options.maxStreamTimeoutMs ?? Math.min(this.#timeoutMs, ABSOLUTE_MAX_STREAM_TIMEOUT_MS),
+      'maxStreamTimeoutMs',
+      ABSOLUTE_MAX_STREAM_TIMEOUT_MS,
     );
-    this.#maxRetryDelayMs = positiveInteger(
-      options.maxRetryDelayMs ?? 15_000,
-      'maxRetryDelayMs',
+    this.#maxStreamResponseBytes = boundedPositiveInteger(
+      options.maxStreamResponseBytes ??
+        Math.min(this.#maxResponseBytes, ABSOLUTE_MAX_STREAM_RESPONSE_BYTES),
+      'maxStreamResponseBytes',
+      ABSOLUTE_MAX_STREAM_RESPONSE_BYTES,
     );
-    this.#maxRetryAfterMs = positiveInteger(
-      options.maxRetryAfterMs ?? 60_000,
-      'maxRetryAfterMs',
-    );
+    this.#baseRetryDelayMs = positiveInteger(options.baseRetryDelayMs ?? 500, 'baseRetryDelayMs');
+    this.#maxRetryDelayMs = positiveInteger(options.maxRetryDelayMs ?? 15_000, 'maxRetryDelayMs');
+    this.#maxRetryAfterMs = positiveInteger(options.maxRetryAfterMs ?? 60_000, 'maxRetryAfterMs');
     const userAgent = options.userAgent.trim();
     if (userAgent.length < 10) throw new RangeError('userAgent must be descriptive');
     this.#userAgent = userAgent;
   }
 
-  public async get(input: string | URL, options: SafeHttpGetOptions = {}): Promise<SafeHttpResponse> {
+  public async get(
+    input: string | URL,
+    options: SafeHttpGetOptions = {},
+  ): Promise<SafeHttpResponse> {
     return this.#request(input, 'GET', undefined, options, true);
+  }
+
+  /**
+   * Streams an uncached GET through the same URL, redirect, scheduling, retry, and status policy
+   * as buffered requests. A 304 is returned to the caller because this path never owns raw-body
+   * cache state. The scheduler slot remains held until every chunk callback completes.
+   */
+  public async streamGet(
+    input: string | URL,
+    options: SafeHttpStreamGetOptions,
+  ): Promise<SafeHttpStreamResponse> {
+    const timeoutMs = boundedPositiveInteger(
+      options.timeoutMs,
+      'timeoutMs',
+      this.#maxStreamTimeoutMs,
+    );
+    const maxResponseBytes = boundedPositiveInteger(
+      options.maxResponseBytes,
+      'maxResponseBytes',
+      this.#maxStreamResponseBytes,
+    );
+    const maxRetries = positiveInteger(options.maxRetries ?? this.#maxRetries, 'maxRetries', true);
+    if (maxRetries > this.#maxRetries) {
+      throw new RangeError(`maxRetries must not exceed ${this.#maxRetries}`);
+    }
+    const deadline = this.#now() + timeoutMs;
+    const requestedUrl = await this.#awaitBeforeDeadline(
+      validatePublicHttpUrl(input, this.#resolver),
+      deadline,
+      input,
+      timeoutMs,
+    );
+    const allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins);
+    if (allowedOrigins !== null && !allowedOrigins.has(requestedUrl.origin)) {
+      throw new CrawlerHttpError({
+        category: 'unsafe_url',
+        code: 'disallowed_redirect_origin',
+        url: requestedUrl,
+        detail: 'Request URL is outside the configured origin boundary',
+      });
+    }
+
+    const result = await this.#executeWithRetries(
+      requestedUrl,
+      options.headers,
+      undefined,
+      deadline,
+      allowedOrigins,
+      'GET',
+      undefined,
+      async (response, requestUrl, controller) => {
+        if (response.status !== 200) {
+          await discardResponse(response);
+          throw this.#statusError(requestUrl, response.status);
+        }
+        return consumeBoundedBody(
+          response,
+          maxResponseBytes,
+          requestUrl,
+          controller,
+          options.onChunk,
+        );
+      },
+      timeoutMs,
+      maxRetries,
+    );
+
+    if (result.kind === 'not_modified') {
+      return {
+        requestedUrl: requestedUrl.href,
+        url: result.url,
+        status: 304,
+        headers: result.headers,
+        bytesRead: 0,
+      };
+    }
+    return {
+      requestedUrl: requestedUrl.href,
+      url: result.url,
+      status: result.status,
+      headers: result.headers,
+      bytesRead: result.body,
+    };
   }
 
   /**
@@ -340,13 +558,7 @@ export class SafeHttpClient {
     const headers = new Headers(options.headers);
     headers.set('content-type', 'application/json');
     headers.set('accept', headers.get('accept') ?? 'application/json');
-    return this.#request(
-      input,
-      'POST',
-      serializedBody,
-      { ...options, headers },
-      false,
-    );
+    return this.#request(input, 'POST', serializedBody, { ...options, headers }, false);
   }
 
   async #request(
@@ -375,32 +587,95 @@ export class SafeHttpClient {
     const cached = useCache ? await this.#readCache(requestKey) : undefined;
     const deadline = this.#now() + this.#queueTimeoutMs;
 
-    for (let retry = 0; retry <= this.#maxRetries; retry += 1) {
+    const result = await this.#executeWithRetries(
+      requestedUrl,
+      options.headers,
+      cached,
+      deadline,
+      allowedOrigins,
+      method,
+      requestBody,
+      (response, requestUrl, controller) =>
+        readBoundedBody(response, this.#maxResponseBytes, requestUrl, controller),
+      this.#timeoutMs,
+    );
+
+    if (result.kind === 'not_modified') {
+      const reusable =
+        cached !== undefined && cachedFinalUrl(cached) === result.url ? cached : undefined;
+      if (reusable === undefined) {
+        throw new CrawlerHttpError({
+          category: 'http_error',
+          code: 'unexpected_not_modified',
+          url: result.url,
+          detail: 'Received 304 without a reusable cached response',
+          status: 304,
+        });
+      }
+      const refreshed = this.#refreshCachedEntry(reusable, result);
+      if (useCache) await this.#writeCache(requestKey, refreshed);
+      return this.#responseFromCache(requestKey, refreshed);
+    }
+
+    const cacheEntry = this.#cacheEntryFromSuccess(result);
+    if (useCache) await this.#writeCache(requestKey, cacheEntry);
+    return new SafeHttpResponse({
+      requestedUrl: requestKey,
+      url: result.url,
+      status: result.status,
+      headers: result.headers,
+      body: result.body,
+      fromCache: false,
+      revalidated: false,
+    });
+  }
+
+  async #executeWithRetries<TBody>(
+    requestedUrl: URL,
+    inputHeaders: HeadersInit | undefined,
+    cached: CachedHttpResponse | undefined,
+    deadline: number,
+    allowedOrigins: ReadonlySet<string> | null,
+    method: SafeHttpMethod,
+    requestBody: string | undefined,
+    readBody: ResponseBodyReader<TBody>,
+    requestTimeoutMs: number,
+    maxRetries = this.#maxRetries,
+  ): Promise<Exclude<AttemptResult<TBody>, { kind: 'retryable' } | { kind: 'error' }>> {
+    for (let retry = 0; retry <= maxRetries; retry += 1) {
       const initialUrl =
         retry === 0
           ? requestedUrl
           : await this.#awaitBeforeDeadline(
               validatePublicHttpUrl(requestedUrl, this.#resolver),
-              Math.min(deadline, this.#now() + this.#timeoutMs),
+              Math.min(deadline, this.#now() + requestTimeoutMs),
               requestedUrl,
+              requestTimeoutMs,
             );
       const result = await this.#executeAttempt(
         initialUrl,
-        options.headers,
+        inputHeaders,
         cached,
         deadline,
         retry,
         allowedOrigins,
         method,
         requestBody,
+        readBody,
+        requestTimeoutMs,
       );
 
       if (result.kind === 'retryable') {
-        if (retry < this.#maxRetries) {
+        if (retry < maxRetries) {
           if (result.retryDelayMs >= deadline - this.#now()) {
-            throw this.#statusError(requestedUrl, result.status);
+            throw this.#statusError(requestedUrl, result.status, result.serverRetryAfterMs);
           }
-          await this.#sleepBeforeDeadline(result.retryDelayMs, deadline, requestedUrl);
+          await this.#sleepBeforeDeadline(
+            result.retryDelayMs,
+            deadline,
+            requestedUrl,
+            requestTimeoutMs,
+          );
           if (
             result.cooldownUntil !== undefined &&
             this.#domainCooldownUntil.get(requestedUrl.hostname)?.until === result.cooldownUntil
@@ -409,45 +684,17 @@ export class SafeHttpClient {
           }
           continue;
         }
-        throw this.#statusError(requestedUrl, result.status);
+        throw this.#statusError(requestedUrl, result.status, result.serverRetryAfterMs);
       }
 
       if (result.kind === 'error') throw this.#statusError(requestedUrl, result.status);
-
-      if (result.kind === 'not_modified') {
-        const reusable =
-          cached !== undefined && cachedFinalUrl(cached) === result.url ? cached : undefined;
-        if (reusable === undefined) {
-          throw new CrawlerHttpError({
-            category: 'http_error',
-            code: 'unexpected_not_modified',
-            url: result.url,
-            detail: 'Received 304 without a reusable cached response',
-            status: 304,
-          });
-        }
-        const refreshed = this.#refreshCachedEntry(reusable, result);
-        if (useCache) await this.#writeCache(requestKey, refreshed);
-        return this.#responseFromCache(requestKey, refreshed);
-      }
-
-      const cacheEntry = this.#cacheEntryFromSuccess(result);
-      if (useCache) await this.#writeCache(requestKey, cacheEntry);
-      return new SafeHttpResponse({
-        requestedUrl: requestKey,
-        url: result.url,
-        status: result.status,
-        headers: result.headers,
-        body: result.body,
-        fromCache: false,
-        revalidated: false,
-      });
+      return result;
     }
 
     throw new Error('Unreachable retry state');
   }
 
-  async #executeAttempt(
+  async #executeAttempt<TBody>(
     initialUrl: URL,
     inputHeaders: HeadersInit | undefined,
     cached: CachedHttpResponse | undefined,
@@ -456,11 +703,16 @@ export class SafeHttpClient {
     allowedOrigins: ReadonlySet<string> | null,
     method: SafeHttpMethod,
     requestBody: string | undefined,
-  ): Promise<AttemptResult> {
+    readBody: ResponseBodyReader<TBody>,
+    requestTimeoutMs: number,
+  ): Promise<AttemptResult<TBody>> {
     let currentUrl = initialUrl;
     let redirectCount = 0;
     const redirectHeaders = new Headers(inputHeaders);
-    redirectHeaders.set('accept', redirectHeaders.get('accept') ?? 'application/json,text/html;q=0.9,*/*;q=0.8');
+    redirectHeaders.set(
+      'accept',
+      redirectHeaders.get('accept') ?? 'application/json,text/html;q=0.9,*/*;q=0.8',
+    );
     redirectHeaders.set('user-agent', this.#userAgent);
     const expectedCachedUrl = cachedFinalUrl(cached);
 
@@ -480,6 +732,8 @@ export class SafeHttpClient {
         retryIndex,
         method,
         requestBody,
+        readBody,
+        requestTimeoutMs,
       );
       if (result.kind !== 'redirect') return result;
 
@@ -528,8 +782,9 @@ export class SafeHttpClient {
 
       const validatedTarget = await this.#awaitBeforeDeadline(
         validatePublicHttpUrl(redirectTarget, this.#resolver),
-        Math.min(deadline, this.#now() + this.#timeoutMs),
+        Math.min(deadline, this.#now() + requestTimeoutMs),
         redirectTarget,
+        requestTimeoutMs,
       );
       if (validatedTarget.origin !== currentUrl.origin) {
         for (const header of SENSITIVE_REQUEST_HEADERS) redirectHeaders.delete(header);
@@ -539,147 +794,147 @@ export class SafeHttpClient {
     }
   }
 
-  async #networkHop(
+  async #networkHop<TBody>(
     url: URL,
     headers: Headers,
     deadline: number,
     retryIndex: number,
     method: SafeHttpMethod,
     requestBody: string | undefined,
-  ): Promise<HopResult> {
+    readBody: ResponseBodyReader<TBody>,
+    requestTimeoutMs: number,
+  ): Promise<HopResult<TBody>> {
     const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
     for (;;) {
-      const scheduled = this.#scheduler.run<HopResult | DeferredHop>(hostname, async () => {
-      const cooldown = this.#domainCooldownUntil.get(hostname);
-      if (cooldown !== undefined) {
-        if (cooldown.until > this.#now()) {
-          return { kind: 'deferred', until: cooldown.until, status: cooldown.status };
+      const scheduled = this.#scheduler.run<HopResult<TBody> | DeferredHop>(hostname, async () => {
+        const cooldown = this.#domainCooldownUntil.get(hostname);
+        if (cooldown !== undefined) {
+          if (cooldown.until > this.#now()) {
+            return { kind: 'deferred', until: cooldown.until, status: cooldown.status };
+          }
+          if (this.#domainCooldownUntil.get(hostname)?.until === cooldown.until) {
+            this.#domainCooldownUntil.delete(hostname);
+          }
         }
-        if (this.#domainCooldownUntil.get(hostname)?.until === cooldown.until) {
-          this.#domainCooldownUntil.delete(hostname);
-        }
-      }
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const remainingMs = Math.min(deadline - this.#now(), this.#timeoutMs);
-      if (remainingMs <= 0) throw this.#timeoutError(url);
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(TIMEOUT_ERROR);
-          controller.abort();
-        }, remainingMs);
-      });
-
-      const operation = (async (): Promise<HopResult> => {
-        try {
-          this.#onNetworkRequest?.(redactUrl(url));
-        } catch {
-          // Telemetry must not make a source request fail.
-        }
-        const response = await this.#fetch(url, {
-          method,
-          headers,
-          ...(requestBody === undefined ? {} : { body: requestBody }),
-          redirect: 'manual',
-          signal: controller.signal,
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const remainingMs = Math.min(deadline - this.#now(), requestTimeoutMs);
+        if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
+        const timeout = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(TIMEOUT_ERROR);
+            controller.abort();
+          }, remainingMs);
         });
 
-        if (REDIRECT_HTTP_STATUSES.has(response.status)) {
-          const location = response.headers.get('location');
-          await discardResponse(response);
-          if (location === null || location.trim().length === 0) {
-            throw new CrawlerHttpError({
-              category: 'http_error',
-              code: 'invalid_redirect',
-              url,
-              detail: 'Redirect response is missing a Location header',
-              status: response.status,
-            });
+        const operation = (async (): Promise<HopResult<TBody>> => {
+          try {
+            this.#onNetworkRequest?.(redactUrl(url));
+          } catch {
+            // Telemetry must not make a source request fail.
           }
-          return { kind: 'redirect', status: response.status, location };
-        }
+          const response = await this.#fetch(url, {
+            method,
+            headers,
+            ...(requestBody === undefined ? {} : { body: requestBody }),
+            redirect: 'manual',
+            signal: controller.signal,
+          });
 
-        if (response.status === 304) {
-          const responseHeaders = headersToRecord(response.headers);
-          await discardResponse(response);
-          return { kind: 'not_modified', url: url.href, headers: responseHeaders };
-        }
-
-        if (response.status === 429 || TRANSIENT_HTTP_STATUSES.has(response.status)) {
-          const retryAfter = response.headers.get('retry-after');
-          const explicitRetryDelayMs = retryAfterDelay(
-            retryAfter,
-            this.#now(),
-            this.#maxRetryAfterMs,
-          );
-          const retryDelayMs = explicitRetryDelayMs ?? this.#retryDelay(null, retryIndex);
-          let cooldownUntil: number | undefined;
-          if (response.status === 429 || explicitRetryDelayMs !== undefined) {
-            cooldownUntil = this.#now() + retryDelayMs;
-            const existingCooldown = this.#domainCooldownUntil.get(hostname);
-            if (existingCooldown === undefined || existingCooldown.until <= cooldownUntil) {
-              this.#domainCooldownUntil.set(hostname, {
-                until: cooldownUntil,
+          if (REDIRECT_HTTP_STATUSES.has(response.status)) {
+            const location = response.headers.get('location');
+            await discardResponse(response);
+            if (location === null || location.trim().length === 0) {
+              throw new CrawlerHttpError({
+                category: 'http_error',
+                code: 'invalid_redirect',
+                url,
+                detail: 'Redirect response is missing a Location header',
                 status: response.status,
               });
             }
+            return { kind: 'redirect', status: response.status, location };
           }
-          await discardResponse(response);
+
+          if (response.status === 304) {
+            const responseHeaders = headersToRecord(response.headers);
+            await discardResponse(response);
+            return { kind: 'not_modified', url: url.href, headers: responseHeaders };
+          }
+
+          if (response.status === 429 || TRANSIENT_HTTP_STATUSES.has(response.status)) {
+            const retryAfter = response.headers.get('retry-after');
+            const serverRetryAfterMs = parsedRetryAfter(retryAfter, this.#now());
+            const explicitRetryDelayMs = retryAfterDelay(
+              retryAfter,
+              this.#now(),
+              this.#maxRetryAfterMs,
+            );
+            const retryDelayMs = explicitRetryDelayMs ?? this.#retryDelay(null, retryIndex);
+            let cooldownUntil: number | undefined;
+            if (response.status === 429 || explicitRetryDelayMs !== undefined) {
+              cooldownUntil = this.#now() + retryDelayMs;
+              const existingCooldown = this.#domainCooldownUntil.get(hostname);
+              if (existingCooldown === undefined || existingCooldown.until <= cooldownUntil) {
+                this.#domainCooldownUntil.set(hostname, {
+                  until: cooldownUntil,
+                  status: response.status,
+                });
+              }
+            }
+            await discardResponse(response);
+            return {
+              kind: 'retryable',
+              status: response.status,
+              retryDelayMs,
+              ...(serverRetryAfterMs === undefined ? {} : { serverRetryAfterMs }),
+              ...(cooldownUntil === undefined ? {} : { cooldownUntil }),
+            };
+          }
+
+          if (!response.ok) {
+            const status = response.status;
+            await discardResponse(response);
+            return { kind: 'error', status };
+          }
+
+          const responseHeaders = headersToRecord(response.headers);
+          const responseBody = await readBody(response, url, controller);
           return {
-            kind: 'retryable',
+            kind: 'success',
+            url: url.href,
             status: response.status,
-            retryDelayMs,
-            ...(cooldownUntil === undefined ? {} : { cooldownUntil }),
+            headers: responseHeaders,
+            body: responseBody,
           };
-        }
+        })();
 
-        if (!response.ok) {
-          const status = response.status;
-          await discardResponse(response);
-          return { kind: 'error', status };
+        try {
+          return await Promise.race([operation, timeout]);
+        } catch (error) {
+          if (error === TIMEOUT_ERROR) {
+            throw this.#timeoutError(url, requestTimeoutMs);
+          }
+          if (error instanceof StreamConsumerError) throw error.consumerCause;
+          if (isCrawlerHttpError(error)) throw error;
+          throw new CrawlerHttpError({
+            category: 'network_error',
+            code: 'request_failed',
+            url,
+            detail: 'HTTP request failed',
+          });
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
         }
-
-        const responseHeaders = headersToRecord(response.headers);
-        const responseBody = await readBoundedBody(
-          response,
-          this.#maxResponseBytes,
-          url,
-          controller,
-        );
-        return {
-          kind: 'success',
-          url: url.href,
-          status: response.status,
-          headers: responseHeaders,
-          body: responseBody,
-        };
-      })();
-
-      try {
-        return await Promise.race([operation, timeout]);
-      } catch (error) {
-        if (error === TIMEOUT_ERROR) {
-          throw this.#timeoutError(url);
-        }
-        if (isCrawlerHttpError(error)) throw error;
-        throw new CrawlerHttpError({
-          category: 'network_error',
-          code: 'request_failed',
-          url,
-          detail: 'HTTP request failed',
-        });
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
       });
-      const result = await this.#awaitBeforeDeadline(scheduled, deadline, url);
+      const result = await this.#awaitBeforeDeadline(scheduled, deadline, url, requestTimeoutMs);
       if (result.kind !== 'deferred') return result;
       const delayMs = result.until - this.#now();
       if (delayMs <= 0) continue;
       if (delayMs >= deadline - this.#now()) {
         throw this.#statusError(url, result.status);
       }
-      await this.#sleepBeforeDeadline(delayMs, deadline, url);
+      await this.#sleepBeforeDeadline(delayMs, deadline, url, requestTimeoutMs);
     }
   }
 
@@ -687,9 +942,10 @@ export class SafeHttpClient {
     operation: Promise<T>,
     deadline: number,
     url: string | URL,
+    requestTimeoutMs = this.#timeoutMs,
   ): Promise<T> {
     const remainingMs = deadline - this.#now();
-    if (remainingMs <= 0) throw this.#timeoutError(url);
+    if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(TIMEOUT_ERROR), remainingMs);
@@ -697,7 +953,7 @@ export class SafeHttpClient {
     try {
       return await Promise.race([operation, timeout]);
     } catch (error) {
-      if (error === TIMEOUT_ERROR) throw this.#timeoutError(url);
+      if (error === TIMEOUT_ERROR) throw this.#timeoutError(url, requestTimeoutMs);
       throw error;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -708,37 +964,35 @@ export class SafeHttpClient {
     requestedDelayMs: number,
     deadline: number,
     url: string | URL,
+    requestTimeoutMs = this.#timeoutMs,
   ): Promise<void> {
     const remainingMs = deadline - this.#now();
-    if (remainingMs <= 0) throw this.#timeoutError(url);
+    if (remainingMs <= 0) throw this.#timeoutError(url, requestTimeoutMs);
     const boundedDelayMs = Math.min(requestedDelayMs, remainingMs);
     await this.#sleep(boundedDelayMs);
     if (requestedDelayMs >= remainingMs || this.#now() >= deadline) {
-      throw this.#timeoutError(url);
+      throw this.#timeoutError(url, requestTimeoutMs);
     }
   }
 
-  #timeoutError(url: string | URL): CrawlerHttpError {
+  #timeoutError(url: string | URL, requestTimeoutMs = this.#timeoutMs): CrawlerHttpError {
     return new CrawlerHttpError({
       category: 'timeout',
       code: 'request_timeout',
       url,
-      detail: `Request timed out after ${this.#timeoutMs}ms`,
+      detail: `Request timed out after ${requestTimeoutMs}ms`,
     });
   }
 
   #retryDelay(retryAfter: string | null, retryIndex: number): number {
     const fromHeader = retryAfterDelay(retryAfter, this.#now(), this.#maxRetryAfterMs);
     if (fromHeader !== undefined) return fromHeader;
-    const exponential = Math.min(
-      this.#maxRetryDelayMs,
-      this.#baseRetryDelayMs * 2 ** retryIndex,
-    );
+    const exponential = Math.min(this.#maxRetryDelayMs, this.#baseRetryDelayMs * 2 ** retryIndex);
     const boundedRandom = Math.max(0, Math.min(1, this.#random()));
     return Math.round(exponential * (0.8 + boundedRandom * 0.4));
   }
 
-  #statusError(url: URL, status: number): CrawlerHttpError {
+  #statusError(url: URL, status: number, retryAfterMs?: number): CrawlerHttpError {
     if (status === 429) {
       return new CrawlerHttpError({
         category: 'rate_limited',
@@ -746,6 +1000,7 @@ export class SafeHttpClient {
         url,
         detail: 'Remote server remained rate-limited after bounded retries',
         status,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       });
     }
     if (BLOCKED_HTTP_STATUSES.has(status)) {
@@ -763,6 +1018,7 @@ export class SafeHttpClient {
       url,
       detail: `Remote server returned HTTP ${status}`,
       status,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     });
   }
 
@@ -805,7 +1061,9 @@ export class SafeHttpClient {
     }
   }
 
-  #cacheEntryFromSuccess(result: Extract<AttemptResult, { kind: 'success' }>): CachedHttpResponse {
+  #cacheEntryFromSuccess(
+    result: Extract<AttemptResult<Uint8Array>, { kind: 'success' }>,
+  ): CachedHttpResponse {
     const etag = result.headers.etag;
     const lastModified = result.headers['last-modified'];
     return {
@@ -821,7 +1079,7 @@ export class SafeHttpClient {
 
   #refreshCachedEntry(
     cached: CachedHttpResponse,
-    result: Extract<AttemptResult, { kind: 'not_modified' }>,
+    result: Extract<AttemptResult<Uint8Array>, { kind: 'not_modified' }>,
   ): CachedHttpResponse {
     const headers = { ...cached.headers, ...result.headers };
     const etag = result.headers.etag ?? cached.etag;
