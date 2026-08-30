@@ -33,7 +33,10 @@ function numericAmount(raw: string, thousands: boolean): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function plainText(value: string): string {
+// Named distinctly from filtering/relevance.ts's own (regex-based) `plainText`, which is now
+// exported from this directory's barrel — keeping these two differently-behaved HTML-to-text
+// helpers under different names avoids a same-name mixup at the barrel or an import shadowing bug.
+function htmlToPlainText(value: string): string {
   return load(value).text().replace(/\s+/gu, ' ').trim();
 }
 
@@ -41,7 +44,7 @@ export function assessNetherlandsSalary(
   vacancyText: string,
   minimumMonthlyBaseEur: number,
 ): NetherlandsSalaryAssessment {
-  const text = plainText(vacancyText);
+  const text = htmlToPlainText(vacancyText);
   const monthlyCandidates: number[] = [];
   for (const match of text.matchAll(EURO_AMOUNT)) {
     const amountText = match[1] ?? match[3];
