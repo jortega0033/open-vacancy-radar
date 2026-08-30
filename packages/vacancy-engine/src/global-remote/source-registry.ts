@@ -97,6 +97,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),
     active('un_careers', 'United Nations Careers RSS', 'https://careers.un.org/jobfeed?language=en', 'rss', 'un_careers'),
     active('jobtech_sweden', 'Arbetsförmedlingen JobSearch API', 'https://jobsearch.api.jobtechdev.se/', 'api', 'jobtech_sweden', 'full_ingestion'),
+    active('workable_global', 'Workable all-customer XML feed', 'https://www.workable.com/boards/workable.xml', 'structured', 'workable_global', 'full_ingestion'),
     muse,
     adzuna,
     jooble,

@@ -130,7 +130,7 @@ describe('MCP and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(23);
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(24);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',
@@ -145,6 +145,12 @@ describe('MCP and configuration-gated discovery', () => {
       state: 'active',
       url: 'https://jobsearch.api.jobtechdev.se/',
       transport: 'api',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'workable_global')).toMatchObject({
+      state: 'active',
+      url: 'https://www.workable.com/boards/workable.xml',
+      transport: 'structured',
       ingestionMode: 'full_ingestion',
     });
     expect(registry.find((source) => source.id === 'eures')).toMatchObject({
