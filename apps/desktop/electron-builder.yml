@@ -1,26 +1,22 @@
-# electron-builder config for the AgentDock desktop shell.
+# electron-builder config for the Open Vacancy Radar desktop shell.
 #
 # appId is a placeholder reverse-DNS identifier, not a claim to own that domain — anyone forking
 # this boilerplate for real distribution should change it (and productName) to their own.
 appId: dev.agentdock.desktop
-productName: AgentDock
-copyright: Copyright © AgentDock contributors
+productName: Open Vacancy Radar
+copyright: Copyright © Open Vacancy Radar contributors
 
 directories:
   # Keep installer/unpacked-app output out of Vite's dist/ and esbuild's dist-electron/, and out
   # of the repo root's own node_modules — a dedicated top-level folder is unambiguous either way.
   output: ../../dist-packages
+  buildResources: assets/app-icons
 
-# main.js and preload.js are already self-contained bundles (vite-plugin-electron/esbuild inline
-# every dependency, including the workspace @agent-dock/shared and @agent-dock/client packages, at
-# build time — see vite.config.ts). The renderer (dist/) is a normal Vite production build, also
-# self-contained. So the packaged app needs none of node_modules at runtime. Two things enforce
-# that: this explicit "files" list (no node_modules glob at all), AND
-# react/react-dom/zod/@agent-dock/shared/@agent-dock/client living in package.json's
-# "devDependencies" rather than "dependencies" — electron-builder embeds whatever's listed under
-# "dependencies" into the package by walking node_modules itself, independently of "files", so
-# leaving them there would have silently doubled the packaged app with an unused, unbundled copy
-# of each (this was caught by inspecting a real packaged build).
+# main.js and preload.js are mostly self-contained bundles (see vite.config.ts). The renderer is a
+# normal self-contained Vite build. `better-sqlite3` is the deliberate exception: Rollup leaves the
+# native addon external, so it remains a production dependency and electron-builder includes and
+# smart-unpacks its binding. Keep the explicit files list narrow; builder's dependency walker adds
+# that one required runtime module without copying the renderer's already-bundled dependencies.
 files:
   - dist/**/*
   - dist-electron/**/*
@@ -36,6 +32,8 @@ files:
 extraResources:
   - from: ../daemon/dist
     to: daemon
+  - from: assets/app-icons/png/icon-256.png
+    to: assets/app-icons/png/icon-256.png
 
 asar: true
 
@@ -45,17 +43,20 @@ asar: true
 publish: null
 
 win:
+  executableName: Open Vacancy Radar
+  icon: open-vacancy-radar.ico
   target:
     - target: nsis
       arch: [x64]
-  # No custom icon asset exists in this repository — electron-builder falls back to its own
-  # default Electron icon. Add an `icon:` path here once a real one exists.
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: false
   createStartMenuShortcut: true
+  shortcutName: Open Vacancy Radar
+  installerIcon: open-vacancy-radar.ico
+  uninstallerIcon: open-vacancy-radar.ico
   artifactName: "${productName}-Setup-${version}.${ext}"
   # A .blockmap is only useful for differential auto-update downloads, which this project doesn't
   # have — skip generating one rather than ship a file with no purpose.

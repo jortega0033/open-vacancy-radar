@@ -365,6 +365,6 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`IND Job Radar failed: ${message}\n`);
+  process.stderr.write(`Open Vacancy Radar failed: ${message}\n`);
   process.exitCode = 1;
 });

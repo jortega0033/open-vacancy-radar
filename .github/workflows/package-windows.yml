@@ -43,14 +43,14 @@ jobs:
       - name: Verify installer was produced
         shell: pwsh
         run: |
-          $installer = Get-ChildItem -Path "dist-packages" -Filter "AgentDock-Setup-*.exe" -ErrorAction SilentlyContinue
+          $installer = Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe" -ErrorAction SilentlyContinue
           if (-not $installer) {
-            Write-Error "No NSIS installer found matching dist-packages/AgentDock-Setup-*.exe"
+            Write-Error "No NSIS installer found matching dist-packages/Open Vacancy Radar-Setup-*.exe"
             exit 1
           }
           Write-Host "Found installer: $($installer.FullName)"
 
-          $exePath = "dist-packages/win-unpacked/AgentDock.exe"
+          $exePath = "dist-packages/win-unpacked/Open Vacancy Radar.exe"
           if (-not (Test-Path $exePath)) {
             Write-Error "Unpacked executable not found at $exePath"
             exit 1
@@ -60,7 +60,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AgentDock-Windows-CI
-          path: dist-packages/AgentDock-Setup-*.exe
+          name: Open-Vacancy-Radar-Windows-CI
+          path: dist-packages/Open Vacancy Radar-Setup-*.exe
           retention-days: 7
           if-no-files-found: error

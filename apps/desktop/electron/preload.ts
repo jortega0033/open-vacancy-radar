@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
-import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import type { WorkspaceBridge } from './workspace/types.js';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
@@ -39,9 +40,26 @@ export type VacancyEngineStatus = { ready: boolean; error?: string };
  */
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
+  /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
   runScan(): Promise<GlobalRemoteReport>;
+  /**
+   * Netherlands pipeline — the IND recognised-sponsor scan. A separate pair of methods rather
+   * than a `market` argument on the two above, because the two pipelines return genuinely
+   * different report shapes (`GlobalRemoteReport` vs `JobRadarReport`) and a union-typed return
+   * would push a discriminator check into every caller for no gain.
+   */
+  getNetherlandsReport(): Promise<JobRadarReport | null>;
+  runNetherlandsScan(): Promise<JobRadarReport>;
 }
+
+/**
+ * A fourth namespace, for the user's own workspace data (saved jobs, applications, CV library,
+ * letters, settings) in a local SQLite database the main process owns. The capability list lives
+ * in `workspace/types.ts` so `src/window.d.ts` can name it without a type reference into this
+ * (Electron-importing) module; see the comment on `WorkspaceBridge` there.
+ */
+export type { WorkspaceBridge } from './workspace/types.js';
 
 export interface CvFile {
   fileName: string;
@@ -131,9 +149,94 @@ const vacancyApi: VacancyRadarBridge = {
   runScan() {
     return ipcRenderer.invoke('vacancy:run-scan');
   },
+  getNetherlandsReport() {
+    return ipcRenderer.invoke('vacancy:get-nl-report');
+  },
+  runNetherlandsScan() {
+    return ipcRenderer.invoke('vacancy:run-nl-scan');
+  },
 };
 
 contextBridge.exposeInMainWorld('vacancyRadar', vacancyApi);
+
+/**
+ * Each function names its own channel literally and forwards only the arguments that channel is
+ * documented to take — there is no `channel` parameter anywhere, so a compromised renderer cannot
+ * reach a `workspace:*` channel this list does not already grant, let alone a `daemon:*` one.
+ * Main validates every payload again on arrival (electron/workspace/validate.ts); this side is
+ * about the shape of the capability, not about trusting the renderer.
+ */
+const workspaceApi: WorkspaceBridge = {
+  getSettings() {
+    return ipcRenderer.invoke('workspace:settings:get');
+  },
+  updateSettings(patch) {
+    return ipcRenderer.invoke('workspace:settings:update', patch);
+  },
+  getCounts() {
+    return ipcRenderer.invoke('workspace:counts:get');
+  },
+
+  listSavedJobs() {
+    return ipcRenderer.invoke('workspace:saved-jobs:list');
+  },
+  createSavedJob(input) {
+    return ipcRenderer.invoke('workspace:saved-jobs:create', input);
+  },
+  updateSavedJob(id, patch) {
+    return ipcRenderer.invoke('workspace:saved-jobs:update', { id, patch });
+  },
+  deleteSavedJob(id) {
+    return ipcRenderer.invoke('workspace:saved-jobs:delete', { id });
+  },
+
+  listApplications(filter) {
+    return ipcRenderer.invoke('workspace:applications:list', { filter: filter ?? 'all' });
+  },
+  createApplication(input) {
+    return ipcRenderer.invoke('workspace:applications:create', input);
+  },
+  updateApplication(id, patch) {
+    return ipcRenderer.invoke('workspace:applications:update', { id, patch });
+  },
+  deleteApplication(id) {
+    return ipcRenderer.invoke('workspace:applications:delete', { id });
+  },
+
+  listCvDocuments() {
+    return ipcRenderer.invoke('workspace:cv-documents:list');
+  },
+  createCvDocument(input) {
+    return ipcRenderer.invoke('workspace:cv-documents:create', input);
+  },
+  updateCvDocument(id, patch) {
+    return ipcRenderer.invoke('workspace:cv-documents:update', { id, patch });
+  },
+  deleteCvDocument(id) {
+    return ipcRenderer.invoke('workspace:cv-documents:delete', { id });
+  },
+  setDefaultCvDocument(id) {
+    return ipcRenderer.invoke('workspace:cv-documents:set-default', { id });
+  },
+
+  listLetters() {
+    return ipcRenderer.invoke('workspace:letters:list');
+  },
+  createLetter(input) {
+    return ipcRenderer.invoke('workspace:letters:create', input);
+  },
+  updateLetter(id, patch) {
+    return ipcRenderer.invoke('workspace:letters:update', { id, patch });
+  },
+  deleteLetter(id) {
+    return ipcRenderer.invoke('workspace:letters:delete', { id });
+  },
+  duplicateLetter(id) {
+    return ipcRenderer.invoke('workspace:letters:duplicate', { id });
+  },
+};
+
+contextBridge.exposeInMainWorld('workspace', workspaceApi);
 
 /**
  * Rebuilt field by field rather than passed through, on the same principle as `toDaemonStatus`:
@@ -161,3 +264,23 @@ const cvApi: CvBridge = {
 };
 
 contextBridge.exposeInMainWorld('cv', cvApi);
+
+/**
+ * A fifth, single-capability namespace for the Settings page's "launch at login" toggle. Kept off
+ * `WorkspaceBridge` on purpose: that bridge is the SQLite workspace contract (asserted
+ * exhaustively in tests as "exactly these functions"), while this one call is OS integration with
+ * no database involvement. The boolean is coerced with `=== true` so nothing but a literal
+ * boolean ever reaches the channel, and the promise resolves to void — main returns nothing worth
+ * forwarding.
+ */
+export interface SystemBridge {
+  setLaunchAtLogin(enabled: boolean): Promise<void>;
+}
+
+const systemApi: SystemBridge = {
+  async setLaunchAtLogin(enabled) {
+    await ipcRenderer.invoke('system:set-login-item', enabled === true);
+  },
+};
+
+contextBridge.exposeInMainWorld('system', systemApi);

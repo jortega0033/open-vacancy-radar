@@ -73,6 +73,8 @@ function installBridge(overrides: Partial<VacancyRadarBridge> = {}): VacancyRada
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
     getReport: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),
+    getNetherlandsReport: vi.fn().mockResolvedValue(null),
+    runNetherlandsScan: vi.fn(),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;
@@ -91,6 +93,15 @@ describe('VacancyLeadsPanel', () => {
     await waitFor(() => expect(screen.getByText(/no scan has been run yet/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /run scan/i })).toBeInTheDocument();
     expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('empty-search');
+  });
+
+  it('uses the no-results illustration when a completed scan contains no vacancies', async () => {
+    installBridge({ getReport: vi.fn().mockResolvedValue(makeReport([])) });
+    render(<VacancyLeadsPanel />);
+
+    await waitFor(() => expect(screen.getByText(/no vacancies in the latest scan/i)).toBeInTheDocument());
+    expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('no-results');
   });
 
   it('renders the vacancy list immediately when a report is already hydrated', async () => {
@@ -173,5 +184,6 @@ describe('VacancyLeadsPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/no vacancies match that search/i)).toBeInTheDocument());
     expect(screen.queryByText(/no scan has been run yet/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('no-results');
   });
 });

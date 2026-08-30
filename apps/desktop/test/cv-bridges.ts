@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import type { AgentEvent, ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import type { AgentDockBridge, CvBridge } from '../src/window.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
+import { installWorkspaceBridge } from './workspace-bridge.js';
 
 /**
  * Shared bridge stubs for the CV-assistant tests, following the same approach as App.test.tsx:
@@ -72,6 +73,10 @@ export function installBridges(
   const target = window as unknown as { agentDock: AgentDockBridge; cv: CvBridge };
   target.agentDock = agentDock;
   target.cv = cv;
+  // The CV assistant now also offers "save to CV library", which goes through `window.workspace`.
+  // Installed here so every CV test renders against a complete set of bridges rather than
+  // depending on which of them a given component happens to touch on mount.
+  installWorkspaceBridge();
 
   return {
     agentDock,

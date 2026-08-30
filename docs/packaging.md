@@ -43,8 +43,8 @@ unpacked, useful for a quick check without a full package step.
 
 ```
 dist-packages/
-  win-unpacked/                       the unpacked app (AgentDock.exe + resources/)
-  AgentDock-Setup-<version>.exe       the NSIS installer
+  win-unpacked/                                  the unpacked app (Open Vacancy Radar.exe + resources/)
+  Open Vacancy Radar-Setup-<version>.exe         the NSIS installer
 ```
 
 `directories.output: ../../dist-packages` in `electron-builder.yml` deliberately keeps installer
@@ -52,13 +52,32 @@ output at the repo root, out of both `apps/desktop/dist/` (Vite) and `dist-elect
 vite-plugin-electron) — installer output never mixes with plain build artifacts. `dist-packages/` is
 gitignored.
 
+## Product and icon resources
+
+`productName` and the Windows executable name are `Open Vacancy Radar`. The executable, NSIS
+installer and NSIS uninstaller use
+`apps/desktop/assets/app-icons/open-vacancy-radar.ico`. The Start Menu shortcut keeps the existing
+enabled policy and inherits the executable icon; the desktop shortcut remains disabled.
+
+The window icon follows two explicit paths:
+
+- development/unpacked: `app.getAppPath()/assets/app-icons/png/icon-256.png`
+- packaged: `process.resourcesPath/assets/app-icons/png/icon-256.png`
+
+The packaged PNG is an additive `extraResources` entry outside `app.asar`; the daemon entry below
+remains unchanged. The resolver returns no icon option when the file is missing instead of crashing
+startup, while Windows executable branding still comes from electron-builder's ICO resource.
+
 ## Runtime layout once packaged
 
 ```
-AgentDock.exe                    (Electron; renderer + main process live in resources/app.asar)
+Open Vacancy Radar.exe           (Electron; renderer + main process live in resources/app.asar)
 resources/
-  app.asar                       renderer (dist/) + main + preload — no node_modules needed,
-                                  everything is bundled at build time (see above)
+  app.asar                       renderer (dist/) + main + preload + better-sqlite3 JavaScript
+  app.asar.unpacked/
+    node_modules/better-sqlite3/ native binding smart-unpacked by electron-builder
+  assets/app-icons/png/
+    icon-256.png                 packaged-safe BrowserWindow icon
   daemon/
     index.js                     the daemon's own esbuild bundle, unmodified from apps/daemon/dist/
 ```
@@ -92,15 +111,15 @@ exactly the class of bug this function's test coverage exists to catch.
 
 ## What electron-builder treats as a runtime dependency
 
-`react`, `react-dom`, `zod`, and `@agent-dock/shared`/`@agent-dock/client` are all fully inlined
-into `dist/` and `dist-electron/main.js` at build time (Vite for the renderer, esbuild via
-vite-plugin-electron for main) — none of them are read from `node_modules` once built. They live in
-`package.json`'s `devDependencies`, not `dependencies`, specifically so electron-builder's automatic
-production-dependency resolution (which inspects `dependencies` and copies the matching
-`node_modules` trees into the package independently of the `files` config) doesn't embed a second,
-unused, unbundled copy of each. This was caught by unpacking a real built `app.asar` and finding
-`node_modules/@agent-dock/shared` inside it despite an explicit `files` list that excluded
-`node_modules` entirely.
+`react`, `react-dom`, `zod`, and `@agent-dock/shared`/`@agent-dock/client` are fully inlined into
+`dist/` and `dist-electron/main.js` (Vite for the renderer, vite-plugin-electron for main). They stay
+in `devDependencies`, avoiding a second unbundled copy in `app.asar`.
+
+`better-sqlite3` is different: `vite.config.ts` deliberately externalizes the native addon, so it is
+a production `dependency`. Electron-builder's dependency walker includes its JavaScript and
+smart-unpacks the Electron-x64 native binding even though the explicit `files` list has no broad
+`node_modules` glob. An installed launch—not merely an unpacked launch beside the repository—is the
+required proof, because repository-level `node_modules` can otherwise mask a missing packaged addon.
 
 ## Start Menu and single-instance behavior
 
@@ -116,7 +135,7 @@ running left the process count and the daemon's port unchanged.
 
 ## Unsigned installer and SmartScreen
 
-The NSIS installer and the packaged `AgentDock.exe` are unsigned — electron-builder's log shows
+The NSIS installer and the packaged `Open Vacancy Radar.exe` are unsigned — electron-builder's log shows
 signing steps being skipped for lack of a certificate. **Expect Windows SmartScreen to warn on
 first run** ("Windows protected your PC" / unknown publisher) — that's expected behavior for an
 unsigned OSS boilerplate build, not a packaging bug. Code signing was explicitly out of scope for
@@ -143,8 +162,8 @@ as signing/notarization.
 
 If you touched anything under `apps/desktop/electron/` (main process, preload, or
 `electron-builder.yml`), `pnpm build` and `pnpm typecheck` alone won't catch every packaging-mode
-failure mode — the three real bugs documented above (`resolveDaemonEntry`'s asar boundary, the
-`devDependencies`-vs-`dependencies` duplication, and the shutdown-path crash in
+failure mode — the real bugs documented above (`resolveDaemonEntry`'s asar boundary, bundled versus
+native dependency ownership, and the shutdown-path crash in
 [architecture.md](architecture.md)) were each only caught by actually running `pnpm package:win` and
 launching the result. Run it and confirm the app launches from
-`dist-packages/win-unpacked/AgentDock.exe` before considering the change done.
+`dist-packages/win-unpacked/Open Vacancy Radar.exe` before considering the change done.

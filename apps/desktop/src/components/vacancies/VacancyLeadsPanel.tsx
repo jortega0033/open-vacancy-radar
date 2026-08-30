@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
+import { EmptyState } from '../shell/index.js';
 import { RoleSearchBox } from './RoleSearchBox.js';
 import { VacancyList } from './VacancyList.js';
 
@@ -125,8 +127,12 @@ export function VacancyLeadsPanel({ onSelectVacancy, selectedVacancyKey }: Vacan
       {loadError && <div className="alert alert-error mt-4">{loadError}</div>}
 
       {engineState === 'ready' && !report && !isScanning && (
-        <div className="rounded-box mt-4 border border-base-300 p-6 text-center text-sm text-base-content/60">
-          No scan has been run yet in this session. Use "Run scan" above to discover vacancies.
+        <div className="mt-4">
+          <EmptyState
+            illustration={emptySearchIllustration}
+            title="No search yet"
+            description={'No scan has been run yet in this session. Use "Run scan" above to discover vacancies.'}
+          />
         </div>
       )}
 

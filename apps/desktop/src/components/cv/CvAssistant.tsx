@@ -3,6 +3,7 @@ import type { ProviderStatus } from '@agent-dock/shared';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
+import { SaveCvToLibrary } from './SaveCvToLibrary.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -60,6 +61,11 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
       )}
 
       <CvUpload cv={cv} onCvChange={setCv} />
+
+      {/* The upload above stays usable for a single unsaved gap analysis; this is the opt-in
+          "keep this one" path into the CV library. Keyed by file name + length so replacing the
+          CV resets the button rather than leaving it reading "Saved to library". */}
+      {cv && <SaveCvToLibrary key={`${cv.fileName}:${cv.text.length}`} cv={cv} />}
 
       {vacancy && (
         <div className="rounded-box border border-base-300 p-4 text-sm">

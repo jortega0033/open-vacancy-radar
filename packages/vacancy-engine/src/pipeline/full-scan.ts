@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config.js';
@@ -255,6 +257,7 @@ export async function finishScanAndPublishReport(
   scanRunId: string,
   report: JobRadarReport,
   dependencies: ReportPublicationDependencies = {},
+  writeOptions: { projectRoot?: string } = {},
 ): Promise<Awaited<ReturnType<typeof writeReportFiles>>> {
   const finish = dependencies.finish ?? finishScanRun;
   const write = dependencies.write ?? writeReportFiles;
@@ -262,20 +265,39 @@ export async function finishScanAndPublishReport(
     throw new Error('A running scan cannot publish a final report');
   }
   await finish(database, scanRunId, report.scanStatus, report.statistics);
-  return write(report);
+  return write(report, writeOptions);
+}
+
+/**
+ * Where `config/candidate-profile-v1.json` is read from and where `reports/` is written.
+ *
+ * Defaults to `process.cwd()`, which is correct for the CLI and preserves every existing
+ * caller's behavior. A host process that embeds this engine (the Electron main process) has a
+ * cwd with nothing to do with the engine's checked-in configuration, so it passes an explicit
+ * root — exactly the `projectRoot` parameter `runGlobalRemoteScan` already takes.
+ */
+export type EndToEndScanOptions = {
+  projectRoot?: string;
+};
+
+function candidateProfilePathFor(projectRoot: string | undefined): string | undefined {
+  return projectRoot === undefined ? undefined : path.join(projectRoot, 'config', 'candidate-profile-v1.json');
 }
 
 async function runUnlockedEndToEndScan(
   database: Database,
   config: AppConfig,
   logger: Logger,
+  options: EndToEndScanOptions = {},
 ): Promise<{
   scanRunId: string;
   reportFiles: Awaited<ReturnType<typeof writeReportFiles>>;
+  report: JobRadarReport;
   statistics: ReportStatistics;
   status: VacancyScanWorkflowResult['status'];
 }> {
   const fullScanStartedAt = Date.now();
+  const profilePath = candidateProfilePathFor(options.projectRoot);
   const scanRunId = await startScanRun(database, 'scan', false);
   let fallbackStatistics = reportStatisticsForVacancyScan({
     status: 'failed',
@@ -349,9 +371,16 @@ async function runUnlockedEndToEndScan(
       minimumScore: config.reportMinScore,
       maximumPostingAgeDays: config.maxPostingAgeDays,
       statistics: fallbackStatistics,
+      ...(profilePath === undefined ? {} : { profilePath }),
     });
     stage = 'scan_finalization_and_report_publication';
-    const reportFiles = await finishScanAndPublishReport(database, scanRunId, report);
+    const reportFiles = await finishScanAndPublishReport(
+      database,
+      scanRunId,
+      report,
+      {},
+      options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot },
+    );
     logger.info(
       {
         scanRunId,
@@ -362,11 +391,16 @@ async function runUnlockedEndToEndScan(
         relevantVacancies: report.statistics.relevantVacancies,
         latestHtml: reportFiles.latestHtml,
       },
-      'End-to-end IND Job Radar scan completed',
+      'End-to-end Open Vacancy Radar scan completed',
     );
     return {
       scanRunId,
       reportFiles,
+      // The report object itself, not just the files it was written to: an embedding host (the
+      // Electron main process) has to hand this straight to a renderer that cannot read the
+      // filesystem, and re-deriving it with a second `generateJobRadarReport` call would both
+      // duplicate the work and risk a different answer from a concurrently-mutated database.
+      report,
       statistics: report.statistics,
       status: scanStatus,
     };
@@ -411,9 +445,10 @@ export async function runEndToEndScan(
   config: AppConfig,
   logger: Logger,
   scanLock: ScanLock,
+  options: EndToEndScanOptions = {},
 ): Promise<EndToEndScanCommandResult> {
   const outcome = await withScanAdvisoryTryLock(scanLock, async () =>
-    runUnlockedEndToEndScan(database, config, logger),
+    runUnlockedEndToEndScan(database, config, logger, options),
   );
 
   if (!outcome.acquired) {

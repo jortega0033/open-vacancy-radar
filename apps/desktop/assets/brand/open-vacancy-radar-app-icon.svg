@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Open Vacancy Radar application icon</title>
+  <desc id="desc">An open radar signal with a discovered vacancy point.</desc>
+  <rect x="48" y="48" width="928" height="928" rx="220" fill="#141414"/>
+  <circle cx="512" cy="512" r="282" fill="none" stroke="#FFFFFF" stroke-width="72" stroke-linecap="round" stroke-dasharray="1370 402" transform="rotate(-43 512 512)"/>
+  <circle cx="512" cy="512" r="157" fill="none" stroke="#FFFFFF" stroke-width="62" stroke-linecap="round" stroke-dasharray="742 245" transform="rotate(-43 512 512)"/>
+  <circle cx="512" cy="512" r="55" fill="#FFFFFF"/>
+  <rect x="735" y="238" width="104" height="104" rx="27" fill="#FFFFFF"/>
+</svg>

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentSession, ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { App } from '../src/App.js';
 import type { AgentDockBridge, DaemonStatus } from '../src/window.js';
+import { installVacancyRadarBridge, installWorkspaceBridge } from './workspace-bridge.js';
 
 const TEST_CAPABILITIES: ProviderCapabilities = {
   resume: true,
@@ -43,8 +44,22 @@ function installBridge(overrides: Partial<AgentDockBridge> = {}): AgentDockBridg
   return bridge;
 }
 
+/**
+ * The Providers list and the Run panel now live on the "AI Runtime" destination of the app shell
+ * rather than on the one long page the app used to be, so every test that exercises them opens
+ * that destination first. Everything they assert about that UI is unchanged — the point of the
+ * shell pass was to move this functionality, not to alter it.
+ */
+function renderAppOnRuntimePage() {
+  const result = render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: 'AI Runtime' }));
+  return result;
+}
+
 beforeEach(() => {
   installBridge();
+  installWorkspaceBridge();
+  installVacancyRadarBridge();
 });
 
 afterEach(() => {
@@ -64,17 +79,23 @@ describe('App', () => {
 
     render(<App />);
     expect(screen.getByText(/connecting to local daemon/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'AI Runtime' }));
+    expect(screen.queryByText('AI runtime unavailable')).not.toBeInTheDocument();
 
     statusCallback?.({ state: 'unavailable', error: 'daemon process exited unexpectedly (code 1, signal null)' });
 
     await waitFor(() => expect(screen.getByText(/daemon unavailable/i)).toBeInTheDocument());
     expect(screen.getByText(/exited unexpectedly/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'AI runtime unavailable' })).toBeInTheDocument();
+    expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain(
+      'runtime-unavailable',
+    );
   });
 
   it('lists providers and disables Run until a working directory and prompt are filled in', async () => {
     installBridge({ listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED, CODEX_NOT_INSTALLED]) });
 
-    render(<App />);
+    renderAppOnRuntimePage();
 
     await waitFor(() => expect(screen.getByText('Installed: No')).toBeInTheDocument()); // codex
 
@@ -112,7 +133,7 @@ describe('App', () => {
       }),
     });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('/path/to/project'), { target: { value: '/tmp/project' } });
@@ -148,7 +169,7 @@ describe('App', () => {
       }),
     });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText('/path/to/project'), { target: { value: '/tmp/project' } });
     fireEvent.change(screen.getByRole('textbox', { name: /prompt/i }), { target: { value: 'do something' } });
@@ -172,7 +193,7 @@ describe('App', () => {
     };
     const bridge = installBridge({ createSession: vi.fn().mockResolvedValue(session) });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('/path/to/project'), { target: { value: '/tmp/project' } });
@@ -200,7 +221,7 @@ describe('App', () => {
       createSession: vi.fn().mockResolvedValue(session),
     });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
     expect(screen.getByRole('combobox', { name: /model/i })).toBeInTheDocument();
 
@@ -226,7 +247,7 @@ describe('App', () => {
     };
     const bridge = installBridge({ createSession: vi.fn().mockResolvedValue(session) });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
 
     fireEvent.change(screen.getByRole('combobox', { name: /model/i }), { target: { value: 'fable' } });
@@ -245,7 +266,7 @@ describe('App', () => {
   it('surfaces a rejected createSession call as a form error instead of crashing', async () => {
     installBridge({ createSession: vi.fn().mockRejectedValue(new Error('daemon is not ready yet')) });
 
-    render(<App />);
+    renderAppOnRuntimePage();
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText('/path/to/project'), { target: { value: '/tmp/project' } });
     fireEvent.change(screen.getByRole('textbox', { name: /prompt/i }), { target: { value: 'do something' } });

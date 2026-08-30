@@ -29,6 +29,14 @@ function clamp(text: string, limit: number): string {
 }
 
 /**
+ * Re-exported under a module-qualified name for the Letters feature, which builds its own
+ * document prompt (four document types × four tones × three lengths) but must bound its inputs
+ * with exactly the same rule this module uses. Additive: nothing here changes for existing
+ * callers of `buildGapAnalysisPrompt` / `buildCoverLetterPrompt`.
+ */
+export { clamp as clampPromptText };
+
+/**
  * Renders one untrusted single-line vacancy field.
  *
  * `title`, `company`, `location` and `url` are scraped from third-party job feeds — they are
@@ -91,7 +99,7 @@ export function formatVacancy(vacancy: VacancyLead): string {
  * allowlist, `cwd` is an empty app-owned scratch directory (main.ts's `ensureAiWorkspaceDir`), and
  * the run is non-interactive so a tool needing permission is denied rather than prompted.
  */
-const GROUNDING_RULES = [
+export const GROUNDING_RULES = [
   'Work only from the vacancy and CV text below. Do not use any tools, do not read or write any files, and do not search the web.',
   'Never invent an employer, job title, date, degree, certification, technology or metric that is not in the CV.',
   'Where the posting is thin, say what is unknown rather than assuming it.',

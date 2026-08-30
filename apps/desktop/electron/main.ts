@@ -10,16 +10,38 @@ import { AgentDockClient } from '@agent-dock/client';
 import {
   createDatabaseClient,
   createLogger,
+  createScanLock,
   loadConfig,
   migrateDatabase,
+  runEndToEndScan,
   runGlobalRemoteScan,
   type Database,
   type GlobalRemoteReport,
+  type JobRadarReport,
+  type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
+import { resolveWindowIcon } from './resolve-window-icon.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
+import { createScanGuard, SCAN_BUSY_OTHER_PROCESS } from './scan-guard.js';
+import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
+import * as workspace from './workspace/repository.js';
+import {
+  parseApplicationFilter,
+  parseApplicationInput,
+  parseApplicationPatch,
+  parseCvDocumentInput,
+  parseCvDocumentPatch,
+  parseIdAndPatch,
+  parseIdEnvelope,
+  parseLetterInput,
+  parseLetterPatch,
+  parseSavedJobInput,
+  parseSavedJobPatch,
+  parseSettingsPatch,
+} from './workspace/validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -48,8 +70,22 @@ let activeStreamAbort: AbortController | undefined;
 
 let vacancyDb: Database | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
+let vacancyScanLock: ScanLock | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
-let vacancyScanInFlight = false;
+let latestNetherlandsReport: JobRadarReport | undefined;
+
+/**
+ * One guard for *both* scan kinds, not one per kind — the two pipelines write the same engine
+ * database, so running them together is exactly as damaging as running two of either. See
+ * electron/scan-guard.ts for why the in-process half and the cross-process advisory lock are both
+ * needed.
+ */
+const runExclusiveScan = createScanGuard(() => vacancyScanLock);
+
+let workspaceDb: WorkspaceDb | undefined;
+let workspaceInit: Promise<WorkspaceDb> | undefined;
+/** Closed on quit so the WAL is checkpointed rather than left for the next launch to recover. */
+let closeWorkspaceDb: (() => void) | undefined;
 
 /**
  * Where `config/global-remote-profile-v1.json` and `reports/global-remote/*` live for the vendored
@@ -74,13 +110,15 @@ async function ensureVacancyEngine(): Promise<Database> {
   // migration must join that run rather than start a second `createDatabaseClient` + `migrateDatabase`
   // against the same SQLite file.
   vacancyEngineInit ??= (async () => {
-    const config = loadConfig(
-      { ...process.env, DATABASE_PATH: 'vacancy-engine.db', HTTP_CACHE_DIR: '.cache/http' },
-      app.getPath('userData'),
-    );
+    const config = vacancyEngineConfig();
     const { db } = createDatabaseClient(config.databasePath);
     await migrateDatabase(db);
     vacancyDb = db;
+    // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
+    // sidecar SQLite file keyed to this database path, so it is meaningful across processes
+    // (a `pnpm vacancies:scan` run against the same userData database, a second app instance
+    // that somehow got past the single-instance lock) — not just within this one.
+    vacancyScanLock = createScanLock(config.databasePath);
     return db;
   })();
 
@@ -88,6 +126,36 @@ async function ensureVacancyEngine(): Promise<Database> {
     return await vacancyEngineInit;
   } catch (error) {
     vacancyEngineInit = undefined; // a later call retries rather than replaying the failure forever
+    throw error;
+  }
+}
+
+function vacancyEngineConfig() {
+  return loadConfig(
+    { ...process.env, DATABASE_PATH: 'vacancy-engine.db', HTTP_CACHE_DIR: '.cache/http' },
+    app.getPath('userData'),
+  );
+}
+
+/**
+ * Opens the personal-workspace database, on the same lazy-init-once contract as
+ * `ensureVacancyEngine` above and for the same reasons — `app.whenReady` pre-warms it while the
+ * window is being created, so a renderer call arriving mid-migration joins that run instead of
+ * starting a second `migrate()` against the same SQLite file.
+ */
+async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
+  if (workspaceDb) return workspaceDb;
+  workspaceInit ??= (async () => {
+    const { db, close } = createWorkspaceDb(app.getPath('userData'));
+    workspaceDb = db;
+    closeWorkspaceDb = close;
+    return db;
+  })();
+
+  try {
+    return await workspaceInit;
+  } catch (error) {
+    workspaceInit = undefined;
     throw error;
   }
 }
@@ -239,9 +307,16 @@ function openExternalIfSafe(url: string): void {
 }
 
 function createWindow(): void {
+  const icon = resolveWindowIcon({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
+    ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -379,21 +454,158 @@ ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?:
 ipcMain.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
 
 ipcMain.handle('vacancy:run-scan', async (): Promise<GlobalRemoteReport> => {
-  if (vacancyScanInFlight) throw new Error('a vacancy scan is already running');
-  vacancyScanInFlight = true;
-  try {
-    const db = await ensureVacancyEngine();
-    const config = loadConfig(
-      { ...process.env, DATABASE_PATH: 'vacancy-engine.db', HTTP_CACHE_DIR: '.cache/http' },
-      app.getPath('userData'),
-    );
-    const projectRoot = vacancyEngineProjectRoot();
-    const result = await runGlobalRemoteScan(db, config, createLogger(config), projectRoot);
-    latestVacancyReport = result.report;
-    return result.report;
-  } finally {
-    vacancyScanInFlight = false;
-  }
+  const db = await ensureVacancyEngine();
+  return runExclusiveScan(
+    async () => {
+      const config = vacancyEngineConfig();
+      const result = await runGlobalRemoteScan(db, config, createLogger(config), vacancyEngineProjectRoot());
+      latestVacancyReport = result.report;
+      return result.report;
+    },
+    { takeAdvisoryLock: true },
+  );
+});
+
+/**
+ * The Netherlands half of the Search page: the IND recognised-sponsor pipeline, exposed on the
+ * same two-channel shape as the global-remote pair above (`get-*` reads whatever the last run
+ * produced without triggering network activity; `run-*` performs the scan).
+ *
+ * `runEndToEndScan` takes the engine's advisory lock itself and answers
+ * `{ status: 'skipped', reason: 'already-running' }` rather than throwing when it cannot get it,
+ * so that outcome is translated into the same error message `vacancy:run-scan` uses — from the
+ * renderer's point of view "another scan is running" is one condition, not two.
+ */
+ipcMain.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
+
+ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
+  const db = await ensureVacancyEngine();
+  const lock = vacancyScanLock;
+  if (!lock) throw new Error('vacancy engine is not initialized');
+
+  return runExclusiveScan(
+    async () => {
+      const config = vacancyEngineConfig();
+      const result = await runEndToEndScan(db, config, createLogger(config), lock, {
+        // Same dev-mode caveat as `vacancyEngineProjectRoot` itself: this is where the engine
+        // reads `config/candidate-profile-v1.json` and writes `reports/`.
+        projectRoot: vacancyEngineProjectRoot(),
+      });
+      if (result.status === 'skipped') throw new Error(SCAN_BUSY_OTHER_PROCESS);
+      latestNetherlandsReport = result.report;
+      return result.report;
+    },
+    { takeAdvisoryLock: false },
+  );
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Personal workspace (saved jobs, applications, CV library, letters, settings).
+ *
+ * One channel per verb per entity, exactly like the `daemon:*` / `cv:*` handlers above: there is
+ * no `workspace:query(sql)`, no `workspace:invoke(table, verb)`, and no channel that takes a
+ * table name. Every payload is parsed by an allow-listing validator (workspace/validate.ts)
+ * before it reaches Drizzle, and every response is a record built field by field in
+ * workspace/repository.ts, so a column added to the schema is not automatically published to the
+ * renderer.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+ipcMain.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
+
+ipcMain.handle('workspace:settings:update', async (_event, input: unknown) =>
+  workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input)),
+);
+
+/** Badge counts for the sidebar — a dedicated read so the shell never has to fetch three lists. */
+ipcMain.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
+
+ipcMain.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
+
+ipcMain.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
+  workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+);
+
+ipcMain.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
+  const { id, patch } = parseIdAndPatch(input);
+  return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+});
+
+ipcMain.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
+  workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+ipcMain.handle('workspace:applications:list', async (_event, input: unknown) =>
+  workspace.listApplications(await ensureWorkspaceDb(), parseApplicationFilter(input)),
+);
+
+ipcMain.handle('workspace:applications:create', async (_event, input: unknown) =>
+  workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+);
+
+ipcMain.handle('workspace:applications:update', async (_event, input: unknown) => {
+  const { id, patch } = parseIdAndPatch(input);
+  return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+});
+
+ipcMain.handle('workspace:applications:delete', async (_event, input: unknown) =>
+  workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+ipcMain.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
+
+ipcMain.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
+  workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+);
+
+ipcMain.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
+  const { id, patch } = parseIdAndPatch(input);
+  return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+});
+
+ipcMain.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
+  workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+ipcMain.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
+  workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+ipcMain.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
+
+ipcMain.handle('workspace:letters:create', async (_event, input: unknown) =>
+  workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+);
+
+ipcMain.handle('workspace:letters:update', async (_event, input: unknown) => {
+  const { id, patch } = parseIdAndPatch(input);
+  return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+});
+
+ipcMain.handle('workspace:letters:delete', async (_event, input: unknown) =>
+  workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+ipcMain.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
+  workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * System integration for the Settings page. One narrow verb: mirror the persisted
+ * "launch at login" preference into the OS login-item registration. The renderer sends a boolean
+ * and nothing else — no app path, no arguments — so this can never register an arbitrary
+ * executable. The OS keeps its own persistent record (registry key on Windows, login item on
+ * macOS), so applying it once at toggle time is sufficient; no startup re-sync is needed.
+ * Skipped in dev because `app.setLoginItemSettings` would register the bare Electron binary,
+ * not this app — the preference still persists in settings and applies in packaged builds.
+ * ---------------------------------------------------------------------------------------------
+ */
+ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
+  if (typeof input !== 'boolean') throw new Error('"enabled" must be a boolean');
+  if (!app.isPackaged) return;
+  app.setLoginItemSettings({ openAtLogin: input });
 });
 
 if (gotSingleInstanceLock) {
@@ -410,6 +622,9 @@ if (gotSingleInstanceLock) {
     // this same initialization. Swallowed here so an engine problem never becomes an unhandled
     // rejection during startup.
     ensureVacancyEngine().catch(() => {});
+    // Same deal for the workspace database: the first `workspace:*` call awaits this very
+    // promise, so a failure here surfaces as that call rejecting with the real reason.
+    ensureWorkspaceDb().catch(() => {});
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -418,6 +633,14 @@ if (gotSingleInstanceLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  // Separate from the daemon shutdown below on purpose: `will-quit` always fires, whereas the
+  // `before-quit` handler returns early when there is no daemon child to stop. Closing the SQLite
+  // connection checkpoints its WAL, so the next launch opens a clean file instead of recovering.
+  app.on('will-quit', () => {
+    closeWorkspaceDb?.();
+    closeWorkspaceDb = undefined;
   });
 
   let shuttingDown = false;

@@ -1,8 +1,8 @@
 {
   "name": "@agent-dock/desktop",
   "version": "0.1.0",
-  "description": "AgentDock desktop client — Electron + React demo for the AgentDock boilerplate",
-  "author": "AgentDock contributors",
+  "description": "Open Vacancy Radar desktop application",
+  "author": "Open Vacancy Radar contributors",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
@@ -13,12 +13,18 @@
     "test": "vitest run",
     "package": "electron-builder",
     "package:win": "electron-builder --win nsis",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "workspace:db:generate": "drizzle-kit generate --config drizzle.workspace.config.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@agent-dock/client": "workspace:*",
     "@agent-dock/shared": "workspace:*",
     "@electron/rebuild": "^3.7.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "drizzle-kit": "^0.31.10",
     "@open-vacancy-radar/vacancy-engine": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^6.6.3",
@@ -26,8 +32,8 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "better-sqlite3": "^13.0.3",
     "daisyui": "^5.7.22",
+    "drizzle-orm": "^0.45.2",
     "electron": "^44.0.0",
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",

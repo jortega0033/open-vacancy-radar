@@ -1,17 +1,22 @@
-# Agent Dock
+# Open Vacancy Radar
 
-A reusable **Electron + local-daemon boilerplate** for desktop applications that want to run
-prompts through AI agent CLIs the user has already installed and authenticated — starting with
+An open-source, local-first Electron workspace for discovering vacancies, evaluating employers and
+preparing applications. It uses the reusable AgentDock runtime to run prompts through AI agent
+CLIs already installed and authenticated on the user's computer — starting with
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex) — without the application ever touching the user's
-credentials.
+[Codex](https://github.com/openai/codex) — without handling the user's credentials.
+
+![Open Vacancy Radar search workspace](docs/images/social/readme-hero.webp)
+
+_Reference interface shown with sample data; production behavior comes from the Electron source in
+this repository, not the bundled prototype used to prepare the image._
 
 ## What this is
 
-A **Bring Your Own Subscription** foundation: if a user already has `claude` or `codex` installed
-and logged in on their machine, an app built on this boilerplate can run prompts through those
-CLIs using the user's existing session. The installed CLI stays the sole authentication and
-provider boundary; this project never sees a password, token, or API key.
+A desktop product on a **Bring Your Own Subscription** foundation: if a user already has `claude`
+or `codex` installed and logged in, Open Vacancy Radar can use that existing session for local AI
+workflows. The installed CLI stays the sole authentication and provider boundary; this project
+never sees a password, token or API key.
 
 ```
 Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──▶ Local Daemon (Fastify, protocol v1)
@@ -48,15 +53,15 @@ See [docs/architecture.md](docs/architecture.md) for the full breakdown, and
   binary using its own login state. Nothing here reads, copies, or reverse-engineers credential storage.
 - **Not** a token extractor or an API proxy — this project never makes a direct Anthropic/OpenAI API
   call and never asks a user for an API key in CLI mode.
-- **Not** a finished AI product — there is no chat history database, no accounts, no cloud backend,
-  no specific end-user workflow. It's infrastructure for you to build on.
+- **Not** a hosted job portal or cloud account service — application data stays in the local
+  desktop workspace, and the AI runtime remains provider-neutral infrastructure.
 - **Not** a replacement for Claude Code or Codex — it's a thin, provider-neutral shell around them.
 
 ## Repository layout
 
 ```
 apps/
-  desktop/        Electron + React demo client (secure defaults, no provider-specific logic)
+  desktop/        Open Vacancy Radar Electron + React application
   daemon/         Standalone local Node.js service (Fastify), runnable without Electron
 packages/
   agent-runtime/  Provider-neutral runtime: process management, adapters, normalized events
@@ -144,8 +149,8 @@ pnpm package:win   # pnpm build, then electron-builder --win nsis
 
 Produces, under `dist-packages/` at the repo root:
 
-- `dist-packages/win-unpacked/` — the unpacked app (`AgentDock.exe` + `resources/`)
-- `dist-packages/AgentDock-Setup-<version>.exe` — the NSIS installer
+- `dist-packages/win-unpacked/` — the unpacked app (`Open Vacancy Radar.exe` + `resources/`)
+- `dist-packages/Open Vacancy Radar-Setup-<version>.exe` — the NSIS installer
 
 `pnpm package` (no `:win`) runs `electron-builder` for whatever platform you're on; today that's
 only meaningfully tested on Windows. Both commands are non-interactive and safe to run from a clean
@@ -196,9 +201,8 @@ contract suite, register it. No daemon, client, or desktop changes required.
 
 ## Building your own product with AgentDock
 
-This repo's `apps/desktop` is a demo, not a product — it exists to prove the daemon and client
-work end to end, with no chat history, accounts, or specific workflow of its own. To build a real
-product on top of it:
+Open Vacancy Radar is the product layer built on AgentDock's reusable daemon and client packages.
+To build a different product on the same foundation:
 
 1. **Fork the repo** and treat `apps/desktop` as a starting point to replace, not extend in place
    — keep `packages/shared`, `packages/agent-runtime`, `packages/client`, and `apps/daemon`
@@ -230,6 +234,7 @@ product on top of it:
 - [docs/daemon.md](docs/daemon.md) — running the daemon standalone, routes, session lifecycle, discovery file
 - [docs/electron.md](docs/electron.md) — the renderer/main/daemon boundary, IPC bridge, where to safely add native functionality
 - [docs/packaging.md](docs/packaging.md) — electron-builder/NSIS specifics, verified commands, platform support
+- [docs/assets.md](docs/assets.md) — brand sources, icon generation, renderer mapping and rebranding
 - [docs/troubleshooting.md](docs/troubleshooting.md) — common problems and how to diagnose them
 - [SECURITY.md](SECURITY.md) — the daemon's threat model and local-auth mechanism
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow and checklist

@@ -2,7 +2,7 @@
   "name": "agent-dock",
   "private": true,
   "version": "0.1.0",
-  "description": "Boilerplate for desktop AI apps that bring their own Claude Code / Codex CLI subscription",
+  "description": "Open Vacancy Radar desktop job-search workspace built on the AgentDock local runtime",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -18,7 +18,9 @@
     "test": "pnpm -r --filter=./packages/* --filter=./apps/* run test",
     "typecheck": "pnpm -r run typecheck",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "assets:generate": "python scripts/assets/generate_assets.py",
+    "assets:validate": "python scripts/assets/validate_assets.py"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

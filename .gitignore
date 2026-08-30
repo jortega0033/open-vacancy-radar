@@ -10,6 +10,9 @@ coverage/
 .env.local
 *.tsbuildinfo
 .vite/
+.venv-assets/
+__pycache__/
+*.py[cod]
 
 # Embedded SQLite databases (including WAL/shm sidecars) and scan lock files
 .data/

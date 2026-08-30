@@ -1,4 +1,6 @@
 import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
+import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
+import { EmptyState } from '../shell/index.js';
 import { VacancyCard } from './VacancyCard.js';
 
 export function VacancyList({
@@ -16,8 +18,16 @@ export function VacancyList({
 }) {
   if (vacancies.length === 0) {
     return (
-      <div className="rounded-box mt-3 border border-base-300 p-4 text-sm text-base-content/60">
-        {hasUnfilteredResults ? 'No vacancies match that search.' : 'No vacancies in the latest scan.'}
+      <div className="mt-3">
+        <EmptyState
+          illustration={noResultsIllustration}
+          title={hasUnfilteredResults ? 'No vacancies match that search' : 'No vacancies in the latest scan'}
+          description={
+            hasUnfilteredResults
+              ? 'Try a different role or broader keywords.'
+              : 'The completed scan did not return any vacancies.'
+          }
+        />
       </div>
     );
   }

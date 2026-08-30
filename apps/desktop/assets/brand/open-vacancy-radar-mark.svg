@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Open Vacancy Radar mark</title>
+  <desc id="desc">An open radar ring and discovered vacancy point.</desc>
+  <circle cx="30" cy="34" r="19" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-dasharray="91 29" transform="rotate(-48 30 34)"/>
+  <circle cx="30" cy="34" r="4.5" fill="currentColor"/>
+  <rect x="45" y="11" width="10" height="10" rx="2.7" fill="currentColor"/>
+</svg>

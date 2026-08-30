@@ -12,9 +12,9 @@ const { invoke, on, removeListener } = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
-// preload.ts exposes two independent namespaces (`agentDock` and `vacancyRadar`) via two separate
-// exposeInMainWorld calls — keyed by name so loading one doesn't clobber the other, the way a
-// single shared `exposedApi` variable would.
+// preload.ts exposes four independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`)
+// via four separate exposeInMainWorld calls — keyed by name so loading one doesn't clobber the
+// other, the way a single shared `exposedApi` variable would.
 let exposedApis: Record<string, Record<string, unknown>>;
 
 vi.mock('electron', () => ({
@@ -125,9 +125,11 @@ describe('electron/preload.ts — real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts — vacancyRadar bridge', () => {
-  it('exposes exactly the three documented capability functions and nothing else', async () => {
+  it('exposes exactly the five documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
-    expect(Object.keys(api).sort()).toEqual(['getReport', 'getStatus', 'runScan'].sort());
+    expect(Object.keys(api).sort()).toEqual(
+      ['getReport', 'getStatus', 'runScan', 'getNetherlandsReport', 'runNetherlandsScan'].sort(),
+    );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
@@ -155,6 +157,116 @@ describe('electron/preload.ts — vacancyRadar bridge', () => {
     await (api.runScan as () => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan');
+  });
+
+  it('keeps the Netherlands scan on its own two channels, distinct from the global-remote pair', async () => {
+    // The two pipelines are different scans over different sources producing different report
+    // shapes. If either of these ever invoked a `vacancy:*-scan` channel belonging to the other,
+    // the Search page would silently show worldwide results under a Netherlands heading.
+    invoke.mockResolvedValue(null);
+    let api = await loadPreload('vacancyRadar');
+    await (api.getNetherlandsReport as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:get-nl-report');
+
+    invoke.mockReset();
+    invoke.mockResolvedValue({ runId: 'nl-run-1' });
+    api = await loadPreload('vacancyRadar');
+    await (api.runNetherlandsScan as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-nl-scan');
+  });
+});
+
+describe('electron/preload.ts — workspace bridge', () => {
+  const EXPECTED_CAPABILITIES = [
+    'getSettings',
+    'updateSettings',
+    'getCounts',
+    'listSavedJobs',
+    'createSavedJob',
+    'updateSavedJob',
+    'deleteSavedJob',
+    'listApplications',
+    'createApplication',
+    'updateApplication',
+    'deleteApplication',
+    'listCvDocuments',
+    'createCvDocument',
+    'updateCvDocument',
+    'deleteCvDocument',
+    'setDefaultCvDocument',
+    'listLetters',
+    'createLetter',
+    'updateLetter',
+    'deleteLetter',
+    'duplicateLetter',
+  ];
+
+  it('exposes exactly the twenty-one documented capability functions and nothing else', async () => {
+    const api = await loadPreload('workspace');
+    expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('exposes no generic IPC passthrough — no channel argument anywhere in the namespace', async () => {
+    const api = await loadPreload('workspace');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+    expect(api.query).toBeUndefined();
+    expect(api.exec).toBeUndefined();
+  });
+
+  it('maps every capability to exactly one hard-coded workspace: channel', async () => {
+    // The table is the contract. A capability that reached a channel outside `workspace:` — or a
+    // second channel — would widen what a compromised renderer can do, so it is asserted
+    // exhaustively rather than sampled.
+    const cases: [name: string, channel: string, call: (fn: never) => Promise<unknown>][] = [
+      ['getSettings', 'workspace:settings:get', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['getCounts', 'workspace:counts:get', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['listSavedJobs', 'workspace:saved-jobs:list', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['listCvDocuments', 'workspace:cv-documents:list', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['listLetters', 'workspace:letters:list', (fn: never) => (fn as () => Promise<unknown>)()],
+    ];
+
+    for (const [name, channel, call] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(null);
+      const api = await loadPreload('workspace');
+      await call(api[name] as never);
+      expect(invoke, name).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0]?.[0], name).toBe(channel);
+    }
+  });
+
+  it('wraps id-and-patch verbs in a { id, patch } envelope rather than passing positional values', async () => {
+    invoke.mockResolvedValue({ id: 'job-1' });
+    const api = await loadPreload('workspace');
+    await (api.updateSavedJob as (id: string, patch: unknown) => Promise<unknown>)('job-1', { notes: 'hi' });
+    expect(invoke).toHaveBeenCalledWith('workspace:saved-jobs:update', { id: 'job-1', patch: { notes: 'hi' } });
+  });
+
+  it('wraps id-only verbs in a { id } envelope', async () => {
+    invoke.mockResolvedValue({ deleted: true });
+    let api = await loadPreload('workspace');
+    await (api.deleteApplication as (id: string) => Promise<unknown>)('app-9');
+    expect(invoke).toHaveBeenCalledWith('workspace:applications:delete', { id: 'app-9' });
+
+    invoke.mockReset();
+    invoke.mockResolvedValue([]);
+    api = await loadPreload('workspace');
+    await (api.setDefaultCvDocument as (id: string) => Promise<unknown>)('cv-3');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:set-default', { id: 'cv-3' });
+  });
+
+  it('defaults the applications filter to "all" instead of sending undefined', async () => {
+    invoke.mockResolvedValue([]);
+    const api = await loadPreload('workspace');
+    await (api.listApplications as (filter?: string) => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledWith('workspace:applications:list', { filter: 'all' });
   });
 });
 

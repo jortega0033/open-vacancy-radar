@@ -1,0 +1,322 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SettingsPage } from '../../../src/components/settings/index.js';
+import type {
+  ApplicationRecord,
+  AppSettingsPatch,
+  AppSettingsRecord,
+  CvDocumentRecord,
+  LetterRecord,
+  SavedJobRecord,
+} from '../../../src/window.js';
+import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+
+/**
+ * `updateSettings` here answers like the real repository: the stored record with the patch
+ * merged in. The shared bridge default (always `DEFAULT_SETTINGS`) would make the page appear to
+ * revert every change, because SettingsPage adopts the resolved record as truth.
+ */
+function mergingUpdateSettings(base: AppSettingsRecord = DEFAULT_SETTINGS) {
+  return vi.fn(async (patch: AppSettingsPatch): Promise<AppSettingsRecord> => ({ ...base, ...patch }));
+}
+
+function setup(overrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
+  const system = installSystemBridge();
+  const bridge = installWorkspaceBridge({ updateSettings: mergingUpdateSettings(), ...overrides });
+  return { bridge, system };
+}
+
+function makeCv(id: string, name: string): CvDocumentRecord {
+  return {
+    id,
+    name,
+    kind: 'uploaded',
+    targetRole: '',
+    text: '',
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    isDefault: false,
+    uploadedAt: '2026-08-01T10:00:00.000Z',
+    updatedAt: '2026-08-01T10:00:00.000Z',
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.documentElement.removeAttribute('data-theme');
+  document.documentElement.removeAttribute('data-density');
+});
+
+describe('SettingsPage', () => {
+  it('loads settings on mount and populates the form without saving anything', async () => {
+    const { bridge } = setup({
+      getSettings: vi.fn().mockResolvedValue({
+        ...DEFAULT_SETTINGS,
+        startPage: 'applications',
+        theme: 'dark',
+        defaultMarket: 'worldwide',
+        defaultLocation: 'Amsterdam',
+        sponsorOnlyDefault: false,
+        launchAtLogin: true,
+      } satisfies AppSettingsRecord),
+    });
+
+    render(<SettingsPage />);
+
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toHaveValue('applications'));
+    expect(screen.getByLabelText('Theme')).toHaveValue('dark');
+    expect(screen.getByLabelText('Default market')).toHaveValue('worldwide');
+    expect(screen.getByLabelText('Default location')).toHaveValue('Amsterdam');
+    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'IND sponsor verification' })).toBeChecked();
+
+    // Load must never autosave.
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('renders exactly the five sections — no fake per-source discovery toggles', async () => {
+    setup();
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(['Settings', 'General', 'Search defaults', 'Documents', 'Applications', 'Data management']);
+  });
+
+  it('offers exactly the two real markets, never a country list', async () => {
+    setup();
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Default market');
+
+    const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    expect(values).toEqual(['netherlands', 'worldwide']);
+  });
+
+  it('autosaves a changed field with a patch containing only that field, and shows "Saved" only after the IPC call resolves', async () => {
+    let resolveSave!: (record: AppSettingsRecord) => void;
+    const updateSettings = vi.fn().mockImplementation(
+      () => new Promise<AppSettingsRecord>((resolve) => { resolveSave = resolve; }),
+    );
+    setup({ updateSettings });
+
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Start page');
+
+    fireEvent.change(select, { target: { value: 'saved' } });
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith({ startPage: 'saved' });
+    // Not optimistic: no confirmation while the call is still in flight.
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSave({ ...DEFAULT_SETTINGS, startPage: 'saved' });
+    });
+
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+    expect(screen.getByText('Saved')).toHaveAttribute('role', 'status');
+  });
+
+  it('applies a theme change to the document immediately, before persistence resolves', async () => {
+    const updateSettings = vi.fn().mockImplementation(() => new Promise<AppSettingsRecord>(() => {}));
+    setup({ updateSettings });
+
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Theme');
+
+    fireEvent.change(select, { target: { value: 'dark' } });
+
+    // applyTheme ran synchronously with the change, while updateSettings is still pending.
+    expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
+    expect(updateSettings).toHaveBeenCalledWith({ theme: 'dark' });
+  });
+
+  it('applies a density change to the document immediately and persists it', async () => {
+    const { bridge } = setup();
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Density');
+
+    fireEvent.change(select, { target: { value: 'compact' } });
+
+    expect(document.documentElement.getAttribute('data-density')).toBe('compact');
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ density: 'compact' }));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+  });
+
+  it('reverts the field, theme included, when the save fails', async () => {
+    const updateSettings = vi.fn().mockRejectedValue(new Error('database unreachable'));
+    setup({ updateSettings });
+
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Theme');
+
+    fireEvent.change(select, { target: { value: 'dark' } });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/database unreachable/));
+    expect(screen.getByLabelText('Theme')).toHaveValue('system');
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull();
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+  });
+
+  it('persists launch-at-login and mirrors it into the OS via window.system', async () => {
+    const { bridge, system } = setup();
+    render(<SettingsPage />);
+    const toggle = await screen.findByRole('switch', { name: 'Launch at login' });
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ launchAtLogin: true }));
+    await waitFor(() => expect(system.setLaunchAtLogin).toHaveBeenCalledWith(true));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+  });
+
+  it('keeps the persisted value but reports honestly when the OS login-item call fails', async () => {
+    const { bridge } = setup();
+    installSystemBridge({ setLaunchAtLogin: vi.fn().mockRejectedValue(new Error('registry denied')) });
+
+    render(<SettingsPage />);
+    const toggle = await screen.findByRole('switch', { name: 'Launch at login' });
+
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/login item could not be updated.*registry denied/i),
+    );
+    // The preference row itself did save; the toggle stays on rather than silently reverting.
+    expect(bridge.updateSettings).toHaveBeenCalledWith({ launchAtLogin: true });
+    expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+  });
+
+  it('saves the default location on blur, and only when it actually changed', async () => {
+    const { bridge } = setup();
+    render(<SettingsPage />);
+    const input = await screen.findByLabelText('Default location');
+
+    fireEvent.blur(input); // unchanged — no save
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: 'Amsterdam' } });
+    expect(bridge.updateSettings).not.toHaveBeenCalled(); // not per keystroke
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Amsterdam' }));
+    expect(bridge.updateSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists the CV library in the default-CV select and saves the chosen id', async () => {
+    const { bridge } = setup({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV'), makeCv('cv-2', 'Angular CV')]),
+    });
+
+    render(<SettingsPage />);
+    const select = await screen.findByLabelText('Default CV');
+    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3));
+
+    fireEvent.change(select, { target: { value: 'cv-2' } });
+
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultCvId: 'cv-2' }));
+  });
+
+  it('disables the default-CV select and says so when the library is empty', async () => {
+    setup({ listCvDocuments: vi.fn().mockResolvedValue([]) });
+    render(<SettingsPage />);
+
+    const select = await screen.findByLabelText('Default CV');
+    expect(select).toBeDisabled();
+    expect(screen.getByText(/no cvs in the library yet/i)).toBeInTheDocument();
+  });
+
+  it('resets settings to schema defaults after confirmation, re-applying theme and density', async () => {
+    const { bridge, system } = setup({
+      getSettings: vi.fn().mockResolvedValue({
+        ...DEFAULT_SETTINGS,
+        theme: 'dark',
+        density: 'compact',
+        launchAtLogin: true,
+      } satisfies AppSettingsRecord),
+    });
+
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('dark'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /reset settings/i }));
+
+    await waitFor(() =>
+      expect(bridge.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          launchAtLogin: false,
+          startPage: 'search',
+          theme: 'system',
+          density: 'comfortable',
+          defaultMarket: 'netherlands',
+          defaultCvId: null,
+          confirmApplicationDelete: true,
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('system'));
+    expect(document.documentElement.getAttribute('data-theme')).toBeNull();
+    expect(document.documentElement.getAttribute('data-density')).toBeNull();
+    await waitFor(() => expect(system.setLaunchAtLogin).toHaveBeenCalledWith(false));
+    expect(await screen.findByText('Settings reset')).toBeInTheDocument();
+
+    // Data is untouched by this reset.
+    expect(bridge.deleteSavedJob).not.toHaveBeenCalled();
+    expect(bridge.deleteApplication).not.toHaveBeenCalled();
+    expect(bridge.deleteCvDocument).not.toHaveBeenCalled();
+    expect(bridge.deleteLetter).not.toHaveBeenCalled();
+  });
+
+  it('reset application data deletes every row through the existing IPC verbs, then restores defaults', async () => {
+    const { bridge } = setup({
+      listApplications: vi.fn().mockResolvedValue([{ id: 'app-1' } as ApplicationRecord, { id: 'app-2' } as ApplicationRecord]),
+      listSavedJobs: vi.fn().mockResolvedValue([{ id: 'job-1' } as SavedJobRecord]),
+      listLetters: vi.fn().mockResolvedValue([{ id: 'letter-1' } as LetterRecord]),
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV')]),
+    });
+
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
+
+    await waitFor(() => expect(screen.getByText('Application data reset')).toBeInTheDocument());
+    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-1');
+    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-2');
+    expect(bridge.deleteSavedJob).toHaveBeenCalledWith('job-1');
+    expect(bridge.deleteLetter).toHaveBeenCalledWith('letter-1');
+    expect(bridge.deleteCvDocument).toHaveBeenCalledWith('cv-1');
+    expect(bridge.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'system', defaultCvId: null }));
+  });
+
+  it('cancelling a reset confirmation deletes nothing and saves nothing', async () => {
+    const { bridge } = setup({
+      listApplications: vi.fn().mockResolvedValue([{ id: 'app-1' } as ApplicationRecord]),
+    });
+
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(bridge.deleteApplication).not.toHaveBeenCalled();
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a settings load failure without crashing', async () => {
+    setup({ getSettings: vi.fn().mockRejectedValue(new Error('database unreachable')) });
+    render(<SettingsPage />);
+
+    await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
+    expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument();
+  });
+});

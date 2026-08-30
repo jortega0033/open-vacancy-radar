@@ -1,0 +1,1684 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+<template id="__bundler_thumbnail" data-bg-color="#ffffff">
+  <svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+    <rect x="60" y="60" width="120" height="120" rx="26" fill="#141414"></rect>
+    <circle cx="120" cy="120" r="26" fill="none" stroke="#ffffff" stroke-width="9"></circle>
+    <circle cx="120" cy="120" r="5" fill="#ffffff"></circle>
+  </svg>
+</template>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--bg:#fff;--panel:#fafafa;--panel2:#fbfbfb;--txt:#141414;--t2:#555;--t3:#999;--t4:#b3b3b3;--bd:#e7e7e7;--bd2:#ececec;--bd3:#f2f2f2;--bd4:#f4f4f4;--in-bd:#d6d6d6;--chip-bd:#e5e5e5;--chip2-bd:#e0e0e0;--hov:#f0f0f0;--sel:#eeeeee;--pri:#141414;--pri-t:#fff;--pri-h:#333;--ok:#15803d;--warn:#b45309;--warn-t:#8a5a12;--warn-bg:#fdfaf5;--warn-bd:#e6d9c8;--danger:#b91c1c;--doc:#f7f7f6;--scrim:rgba(0,0,0,0.32);--rowpad:11px}
+[data-ovr="dark"]{--bg:#181818;--panel:#1e1e1e;--panel2:#1b1b1b;--txt:#ececec;--t2:#b0b0b0;--t3:#808080;--t4:#5e5e5e;--bd:#2e2e2e;--bd2:#2a2a2a;--bd3:#262626;--bd4:#232323;--in-bd:#3d3d3d;--chip-bd:#353535;--chip2-bd:#383838;--hov:#252525;--sel:#2d2d2d;--pri:#ececec;--pri-t:#181818;--pri-h:#fff;--ok:#4cae6e;--warn:#cf8b2e;--warn-t:#d8a558;--warn-bg:#241d10;--warn-bd:#3d3320;--danger:#e05252;--doc:#141414;--scrim:rgba(0,0,0,0.55)}
+[data-dens="Compact"]{--rowpad:7px}
+body{margin:0;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#141414;background:#fff;-webkit-font-smoothing:antialiased}
+a{color:var(--txt)}a:hover{color:var(--t2)}
+button{font-family:inherit}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,[role="switch"]:focus-visible{outline:2px solid var(--txt);outline-offset:-1px}
+@keyframes spin{to{transform:rotate(360deg)}}
+::selection{background:rgba(128,128,128,0.3)}
+</style>
+</helmet>
+<div data-ovr="{{ themeAttr }}" data-dens="{{ densAttr }}" style="display:flex;height:100vh;overflow:hidden;font-size:14px;background:var(--bg);color:var(--txt)" data-screen-label="Open Vacancy Radar">
+  <div style="{{ sidebarStyle }}">
+    <div style="{{ brandStyle }}">
+      <div style="width:22px;height:22px;background:var(--pri);border-radius:5px;display:flex;align-items:center;justify-content:center;flex:none"><div style="width:7px;height:7px;border:1.5px solid var(--pri-t);border-radius:50%"></div></div>
+      <sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="font-size:13px;font-weight:600;letter-spacing:-0.01em;white-space:nowrap">Open Vacancy Radar</span></sc-if>
+      <button onClick="{{ toggleSidebar }}" aria-label="{{ toggleLabel }}" title="{{ toggleLabel }}" style="{{ toggleBtnStyle }}" style-hover="background:var(--hov)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="{{ toggleIconStyle }}"><polyline points="14 6 8 12 14 18"></polyline><line x1="17" y1="6" x2="17" y2="18"></line></svg></button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;padding:2px 8px">
+      <button onClick="{{ goSearch }}" style="{{ navSearch }}" aria-label="Search" title="Search" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">Search</span></sc-if></button>
+      <button onClick="{{ goSaved }}" style="{{ navSaved }}" aria-label="Saved Jobs" title="Saved Jobs" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><path d="M6 3h12v18l-6-4-6 4z"></path></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">Saved Jobs</span><span style="margin-left:auto;font-size:11px;color:var(--t3)">{{ savedCount }}</span></sc-if></button>
+      <button onClick="{{ goApps }}" style="{{ navApps }}" aria-label="Applications" title="Applications" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="14" y2="18"></line></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">Applications</span><span style="margin-left:auto;font-size:11px;color:var(--t3)">{{ appsCount }}</span></sc-if></button>
+      <button onClick="{{ goCV }}" style="{{ navCV }}" aria-label="CV" title="CV" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><path d="M6 2h9l4 4v16H6z"></path><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="15" y2="17"></line></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">CV</span></sc-if></button>
+      <button onClick="{{ goLetters }}" style="{{ navLetters }}" aria-label="Letters" title="Letters" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><rect x="3" y="5" width="18" height="14" rx="1"></rect><path d="M3 7l9 6 9-6"></path></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">Letters</span><span style="margin-left:auto;font-size:11px;color:var(--t3)">{{ lettersCount }}</span></sc-if></button>
+    </div>
+    <div style="height:1px;background:var(--bd);margin:10px 12px"></div>
+    <div style="display:flex;flex-direction:column;gap:2px;padding:0 8px">
+      <button onClick="{{ goRuntime }}" style="{{ navRuntime }}" aria-label="AI Runtime" title="AI Runtime" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><rect x="5" y="5" width="14" height="14" rx="1.5"></rect><rect x="9.5" y="9.5" width="5" height="5"></rect></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">AI Runtime</span></sc-if></button>
+      <button onClick="{{ goSettings }}" style="{{ navSettings }}" aria-label="Settings" title="Settings" style-hover="background:var(--hov)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><line x1="4" y1="7" x2="20" y2="7"></line><circle cx="9" cy="7" r="2.5" fill="var(--panel)"></circle><line x1="4" y1="16" x2="20" y2="16"></line><circle cx="15" cy="16" r="2.5" fill="var(--panel)"></circle></svg><sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}"><span style="white-space:nowrap">Settings</span></sc-if></button>
+    </div>
+    <div style="flex:1"></div>
+    <div style="{{ sbBottomStyle }}">
+      <div style="position:relative;flex:none">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--sel);color:var(--t2);font-size:10.5px;font-weight:600;display:flex;align-items:center;justify-content:center" title="Jake Ortega (local profile)">JO</div>
+        <span style="position:absolute;right:-1px;bottom:-1px;width:8px;height:8px;border-radius:50%;background:var(--ok);border:2px solid var(--panel)" title="AI runtime ready"></span>
+      </div>
+      <sc-if value="{{ sbExpanded }}" hint-placeholder-val="{{ true }}">
+        <div style="min-width:0">
+          <div style="font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Jake Ortega</div>
+          <div style="font-size:11px;color:var(--t3);white-space:nowrap">{{ runtimeName }} ready · v0.5.0</div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="flex:none;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--bd2)">
+      <div style="display:flex;align-items:baseline;gap:10px;min-width:0">
+        <div style="font-size:15px;font-weight:600;letter-spacing:-0.01em;white-space:nowrap">{{ headerTitle }}</div>
+        <div style="font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ headerSub }}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;font-size:12px;color:var(--t2);flex:none">
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok);display:inline-block"></span><span style="font-weight:500">{{ runtimeName }}</span><span style="color:var(--t4)">Ready</span></div>
+        <div style="color:var(--t4)">Local data · no cloud sync</div>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <sc-if value="{{ isSearch }}" hint-placeholder-val="{{ true }}"><div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Search"><div style="flex:none;padding:14px 20px 12px;border-bottom:1px solid var(--bd2)">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input value="{{ query }}" onChange="{{ onQuery }}" onKeyDown="{{ onQueryKey }}" placeholder="Role or keywords, e.g. Frontend Engineer" aria-label="Role or keywords" style="flex:1;min-width:200px;max-width:380px;box-sizing:border-box;padding:8px 12px;font-size:13.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" style-focus="border-color:var(--txt)" />
+    <select value="{{ market }}" onChange="{{ onMarket }}" aria-label="Market" style="padding:8px 28px 8px 11px;font-size:12.5px;color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 10px center;font-family:inherit;cursor:pointer">
+      <sc-for list="{{ marketOpts }}" as="m" hint-placeholder-count="3"><option value="{{ m.v }}">{{ m.v }}</option></sc-for>
+    </select>
+    <input value="{{ locFilter }}" onChange="{{ onLoc }}" onKeyDown="{{ onQueryKey }}" placeholder="City or region" aria-label="City or region" style="width:160px;box-sizing:border-box;padding:8px 12px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" style-focus="border-color:var(--txt)" />
+    <button onClick="{{ doSearch }}" style="padding:8px 16px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:13px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">Search</button>
+    <sc-if value="{{ isNL }}" hint-placeholder-val="{{ true }}">
+    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--t2);margin-left:8px;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" checked="{{ sponsorOnly }}" onChange="{{ toggleSponsor }}" style="accent-color:var(--pri);width:14px;height:14px;margin:0" />
+      IND-recognized sponsors only
+    </label>
+    </sc-if>
+  </div>
+  <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center">
+    <select name="fArr" value="{{ fArr }}" onChange="{{ onFilt }}" aria-label="Arrangement" style="padding:5px 26px 5px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Any arrangement</option><option>Remote</option><option>Hybrid</option><option>On-site</option></select>
+    <select name="fExp" value="{{ fExp }}" onChange="{{ onFilt }}" aria-label="Experience level" style="padding:5px 26px 5px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Any experience</option><option>Senior</option><option>Medior</option></select>
+    <select name="fPosted" value="{{ fPosted }}" onChange="{{ onFilt }}" aria-label="Posted within" style="padding:5px 26px 5px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Posted: any time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+    <select name="fSource" value="{{ fSource }}" onChange="{{ onFilt }}" aria-label="Job source" style="padding:5px 26px 5px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="All">All sources</option><sc-for list="{{ sourceOpts }}" as="s" hint-placeholder-count="3"><option value="{{ s.v }}">{{ s.v }}</option></sc-for></select>
+    <select name="fEmp" value="{{ fEmp }}" onChange="{{ onFilt }}" aria-label="Employment type" style="padding:5px 26px 5px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Any employment</option><option>Permanent</option><option>Contract</option></select>
+    <span style="font-size:11.5px;color:var(--t3);border:1px solid var(--bd2);border-radius:5px;padding:3px 8px">Currency: {{ currencyLabel }}</span>
+    <button onClick="{{ clearFilters }}" style="background:none;border:none;padding:4px 8px;font-size:12px;color:var(--t3);cursor:pointer;border-radius:4px" style-hover="color:var(--txt)">Clear filters</button>
+  </div>
+</div>
+<sc-if value="{{ showPreSearch }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;display:flex;align-items:center;justify-content:center">
+  <div style="text-align:center;max-width:400px">
+    <div style="width:40px;height:40px;border:1px solid var(--chip2-bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--t3)" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg></div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">Search vacancies</div>
+    <div style="font-size:12.5px;color:var(--t3);line-height:1.55">Enter a role above to search vacancies from your configured job sources. For jobs in the Netherlands, each employer is checked against the IND public register of recognized sponsors.</div>
+  </div>
+</div>
+</sc-if>
+<sc-if value="{{ searching }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;display:flex;align-items:center;justify-content:center">
+  <div style="text-align:center">
+    <div style="width:18px;height:18px;border:2px solid var(--bd);border-top-color:var(--txt);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 12px"></div>
+    <div style="font-size:13px;color:var(--t2)">{{ searchPhase }}</div>
+  </div>
+</div>
+</sc-if>
+<sc-if value="{{ showSearchError }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;display:flex;align-items:center;justify-content:center">
+  <div style="max-width:400px;border:1px solid var(--warn-bd);background:var(--warn-bg);border-radius:8px;padding:18px 20px">
+    <div style="font-size:13.5px;font-weight:600;margin-bottom:6px;color:var(--warn-t)">Job search failed</div>
+    <div style="font-size:12.5px;color:var(--t2);line-height:1.55;margin-bottom:12px">One or more job sources did not respond. Results may be incomplete. Employer verification is unaffected.</div>
+    <button onClick="{{ doSearch }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Retry search</button>
+  </div>
+</div>
+</sc-if>
+<sc-if value="{{ showResults }}" hint-placeholder-val="{{ false }}">
+<div style="flex:1;min-height:0;display:flex">
+  <div style="width:38%;min-width:320px;max-width:460px;border-right:1px solid var(--bd2);overflow-y:auto">
+    <div style="padding:9px 16px;font-size:11.5px;color:var(--t3);border-bottom:1px solid var(--bd3);position:sticky;top:0;background:var(--bg);z-index:1">{{ resultSummary }}</div>
+    <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:36px 20px;text-align:center">
+        <div style="font-size:13px;font-weight:600;margin-bottom:5px">No vacancies found</div>
+        <div style="font-size:12px;color:var(--t3);line-height:1.5">{{ noResultsMsg }}</div>
+      </div>
+    </sc-if>
+    <sc-for list="{{ results }}" as="job" hint-placeholder-count="5">
+      <div onClick="{{ job.onClick }}" style="{{ job.rowStyle }}" style-hover="background:var(--panel)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+          <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.005em">{{ job.title }}</div>
+          <div style="font-size:12px;font-weight:600;color:var(--t2);flex:none">{{ job.matchPct }}</div>
+        </div>
+        <div style="font-size:12px;color:var(--t3);margin-top:2px">{{ job.company }} · {{ job.place }} · {{ job.arrangement }}</div>
+        <div style="font-size:12.5px;color:var(--t2);margin-top:3px">{{ job.salary }}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:7px">
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:500;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px"><span style="{{ job.dotStyle }}"></span>{{ job.verLabel }}</div>
+          <div style="font-size:11px;color:var(--t4)">{{ job.savedMark }}{{ job.posted }} · {{ job.source }}</div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+  <div style="flex:1;min-width:0;overflow-y:auto">
+    <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ true }}">
+    <div style="padding:22px 28px 40px;max-width:780px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:19px;font-weight:650;letter-spacing:-0.015em">{{ selTitle }}</div>
+          <div style="font-size:13.5px;color:var(--t2);margin-top:3px;font-weight:500">{{ selCompany }}</div>
+          <div style="font-size:12.5px;color:var(--t3);margin-top:5px">{{ selPlace }} · {{ selArrangement }} · {{ selSalary }}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex:none;flex-wrap:wrap">
+          <button onClick="{{ saveJob }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">{{ saveLabel }}</button>
+          <button onClick="{{ createAppFromVac }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Create Application</button>
+          <button onClick="{{ openLetterForJob }}" style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">Generate Letter</button>
+          <button onClick="{{ onOpenExternal }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Open Job</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:18px">
+        <div style="border:1px solid var(--bd);border-radius:7px;padding:12px 14px">
+          <div style="font-size:10.5px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em">Employer Verification</div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:7px"><span style="{{ selVerDot }}"></span><span style="font-size:13.5px;font-weight:600">{{ selVerLabel }}</span></div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.4">{{ selVerNote }}</div>
+        </div>
+        <div style="border:1px solid var(--bd);border-radius:7px;padding:12px 14px">
+          <div style="font-size:10.5px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em">CV Match</div>
+          <div style="font-size:13.5px;font-weight:600;margin-top:7px">{{ selMatch }}</div>
+          <div style="height:3px;background:var(--bd2);border-radius:2px;margin-top:7px;overflow:hidden"><div style="{{ selMatchBar }}"></div></div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:5px">{{ selMatchLabel }} · vs {{ defaultCvName }}</div>
+        </div>
+        <div style="border:1px solid var(--bd);border-radius:7px;padding:12px 14px">
+          <sc-if value="{{ selIsNL }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:10.5px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em">Work Permit Fit</div>
+            <div style="font-size:13.5px;font-weight:600;margin-top:7px">{{ selPermit }}</div>
+            <div style="font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.4">Indicative only — not immigration advice.</div>
+          </sc-if>
+          <sc-if value="{{ selNotNL }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:10.5px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em">Vacancy Source</div>
+            <div style="font-size:13.5px;font-weight:600;margin-top:7px">{{ selSource }}</div>
+            <div style="font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.4">Posted {{ selPosted }}</div>
+          </sc-if>
+        </div>
+      </div>
+      <div style="margin-top:26px">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2)">Overview</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px;margin-top:4px">
+          <sc-for list="{{ overviewPairs }}" as="o" hint-placeholder-count="8">
+            <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd4);font-size:12.5px"><span style="color:var(--t3);flex:none">{{ o.k }}</span><span style="font-weight:500;text-align:right">{{ o.v }}</span></div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="margin-top:26px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:1px solid var(--bd2)">
+          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2)">Why this matches you</div>
+          <div style="font-size:11px;color:var(--t4)">Analyzed against {{ defaultCvName }}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--ok);margin-bottom:8px">Strong matches</div>
+            <sc-for list="{{ strongList }}" as="s" hint-placeholder-count="3">
+              <div style="display:flex;gap:8px;font-size:12.5px;color:var(--txt);padding:3px 0;line-height:1.4"><span style="color:var(--ok);flex:none">✓</span>{{ s.t }}</div>
+            </sc-for>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--warn-t);margin-bottom:8px">Potential gaps</div>
+            <sc-for list="{{ gapList }}" as="g" hint-placeholder-count="2">
+              <div style="display:flex;gap:8px;font-size:12.5px;color:var(--txt);padding:3px 0;line-height:1.4"><span style="color:var(--warn);flex:none">△</span>{{ g.t }}</div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:26px">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2)">Job description</div>
+        <sc-for list="{{ descParas }}" as="p" hint-placeholder-count="3">
+          <p style="font-size:13px;line-height:1.65;color:var(--txt);margin:12px 0 0">{{ p.t }}</p>
+        </sc-for>
+      </div>
+      <div style="margin-top:26px">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2)">Employer verification &amp; sources</div>
+        <sc-if value="{{ selIsNL }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px;margin-top:4px">
+            <sc-for list="{{ verifPairs }}" as="o" hint-placeholder-count="4">
+              <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--bd4);font-size:12.5px"><span style="color:var(--t3);flex:none">{{ o.k }}</span><span style="font-weight:500;text-align:right">{{ o.v }}</span></div>
+            </sc-for>
+          </div>
+          <button onClick="{{ toggleVerif }}" style="margin-top:12px;padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">{{ verifBtnLabel }}</button>
+          <sc-if value="{{ verifOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:12px;border:1px solid var(--bd);border-radius:7px;padding:14px 16px;background:var(--panel2)">
+            <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">Verification details</div>
+            <div style="display:grid;grid-template-columns:160px 1fr;gap:7px 12px;font-size:12.5px">
+              <sc-for list="{{ verifDetailPairs }}" as="o" hint-placeholder-count="6"><span style="color:var(--t3)">{{ o.k }}</span><span>{{ o.v }}</span></sc-for>
+            </div>
+            <div style="font-size:11.5px;color:var(--t3);margin-top:10px;line-height:1.5">A vacancy's company name may differ from the registered legal entity. When the match is not exact, manual review is recommended before relying on sponsorship status. Demo data — no live registry query.</div>
+          </div>
+          </sc-if>
+        </div>
+        </sc-if>
+        <sc-if value="{{ selNotNL }}" hint-placeholder-val="{{ false }}">
+        <div style="margin-top:12px;border:1px solid var(--bd);border-radius:7px;padding:14px 16px;background:var(--panel2)">
+          <div style="font-size:12.5px;font-weight:600;margin-bottom:5px">Market-specific employer verification is not configured for {{ selMarket }}.</div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.55">You can still search vacancies, compare them against your CV, save opportunities, generate letters, and track applications. Vacancy source: {{ selSource }}.</div>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+</div>
+</sc-if></div></sc-if>
+      <sc-if value="{{ isSaved }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Saved Jobs"><div style="flex:none;display:flex;gap:8px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--bd2)">
+  <input value="{{ savedQ }}" onChange="{{ onSavedQ }}" placeholder="Filter by role or company" aria-label="Filter saved jobs" style="width:240px;box-sizing:border-box;padding:7px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" style-focus="border-color:var(--txt)" />
+  <select value="{{ savedFilter }}" onChange="{{ onSavedFilter }}" aria-label="Filter by status" style="padding:7px 26px 7px 10px;font-size:12px;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="All">All statuses</option><sc-for list="{{ savedStatusOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.v }}</option></sc-for></select>
+  <div style="flex:1"></div>
+  <button onClick="{{ addSaved }}" style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">Add job manually</button>
+</div>
+<div style="flex:1;min-height:0;overflow-y:auto">
+<sc-if value="{{ savedEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="height:100%;display:flex;align-items:center;justify-content:center">
+  <div style="text-align:center;max-width:360px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">No saved jobs</div>
+    <div style="font-size:12.5px;color:var(--t3);line-height:1.55;margin-bottom:14px">Save vacancies from Search, or add one manually to compare opportunities and prepare applications.</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button onClick="{{ goSearch }}" style="padding:7px 14px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer">Search jobs</button>
+      <button onClick="{{ addSaved }}" style="padding:7px 14px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer">Add manually</button>
+    </div>
+  </div>
+</div>
+</sc-if>
+<sc-if value="{{ savedNotEmpty }}" hint-placeholder-val="{{ true }}">
+<table style="width:100%;border-collapse:collapse">
+  <thead><tr>
+    <sc-for list="{{ savedCols }}" as="c" hint-placeholder-count="9"><th style="text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--bd2);position:sticky;top:0;background:var(--bg);z-index:1;white-space:nowrap">{{ c.t }}</th></sc-for>
+  </tr></thead>
+  <tbody>
+    <sc-for list="{{ savedRows }}" as="r" hint-placeholder-count="2">
+      <tr onClick="{{ r.onRow }}" style="cursor:pointer" style-hover="background:var(--panel)">
+        <td style="padding:var(--rowpad) 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--bd3);white-space:nowrap;color:var(--txt)">{{ r.role }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ r.company }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.location }}</td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3)"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:500;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px;white-space:nowrap"><span style="{{ r.dotStyle }}"></span>{{ r.verification }}</span></td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;font-weight:600;border-bottom:1px solid var(--bd3);color:var(--txt)">{{ r.match }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.salary }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.saved }}</td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3)">
+          <select value="{{ r.status }}" onChange="{{ r.onStatus }}" onClick="{{ stop }}" aria-label="Status" style="padding:3px 22px 3px 8px;font-size:11.5px;border:1px solid var(--chip2-bd);border-radius:5px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 7px center;color:var(--t2);font-family:inherit;cursor:pointer">
+            <sc-for list="{{ savedStatusOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.v }}</option></sc-for>
+          </select>
+        </td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3);text-align:right;white-space:nowrap">
+          <button onClick="{{ r.onEdit }}" title="Edit saved job" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Edit</button>
+          <button onClick="{{ r.onDelete }}" title="Delete saved job" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t3);cursor:pointer;border-radius:4px" style-hover="color:var(--danger);text-decoration:underline">Delete</button>
+        </td>
+      </tr>
+    </sc-for>
+  </tbody>
+</table>
+</sc-if>
+</div></div></sc-if>
+      <sc-if value="{{ isApps }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Applications"><div style="flex:none;display:flex;gap:8px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--bd2)">
+  <div style="display:flex;gap:5px">
+    <sc-for list="{{ appViewOpts }}" as="v" hint-placeholder-count="3">
+      <button onClick="{{ v.onClick }}" style="{{ v.style }}" style-hover="border-color:var(--t3)">{{ v.label }}</button>
+    </sc-for>
+  </div>
+  <div style="flex:1"></div>
+  <button onClick="{{ newApp }}" style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">New application</button>
+</div>
+<div style="flex:1;min-height:0;overflow-y:auto">
+<sc-if value="{{ appsEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="height:100%;display:flex;align-items:center;justify-content:center">
+  <div style="text-align:center;max-width:360px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:6px">{{ appsEmptyTitle }}</div>
+    <div style="font-size:12.5px;color:var(--t3);line-height:1.55;margin-bottom:14px">Create an application from a search result, a saved job, or manually — then track it through the pipeline.</div>
+    <button onClick="{{ newApp }}" style="padding:7px 14px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer">New application</button>
+  </div>
+</div>
+</sc-if>
+<sc-if value="{{ appsNotEmpty }}" hint-placeholder-val="{{ true }}">
+<table style="width:100%;border-collapse:collapse">
+  <thead><tr>
+    <sc-for list="{{ appCols }}" as="c" hint-placeholder-count="10"><th style="text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--bd2);position:sticky;top:0;background:var(--bg);z-index:1;white-space:nowrap">{{ c.t }}</th></sc-for>
+  </tr></thead>
+  <tbody>
+    <sc-for list="{{ appRows }}" as="r" hint-placeholder-count="3">
+      <tr onClick="{{ r.onRow }}" style="{{ r.trStyle }}" style-hover="background:var(--panel)">
+        <td style="padding:var(--rowpad) 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--bd3);white-space:nowrap;color:var(--txt)">{{ r.role }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ r.company }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.location }}</td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3)"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:500;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px;white-space:nowrap"><span style="{{ r.dotStyle }}"></span>{{ r.verification }}</span></td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3)">
+          <select value="{{ r.status }}" onChange="{{ r.onStatus }}" onClick="{{ stop }}" aria-label="Application status" style="padding:3px 22px 3px 8px;font-size:11.5px;border:1px solid var(--chip2-bd);border-radius:5px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 7px center;color:var(--t2);font-family:inherit;cursor:pointer">
+            <sc-for list="{{ appStatusOpts }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.v }}</option></sc-for>
+          </select>
+        </td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.applied }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ r.next }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.cvName }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.letterName }}</td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3);text-align:right;white-space:nowrap">
+          <button onClick="{{ r.onEdit }}" title="Edit application" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Edit</button>
+          <button onClick="{{ r.onArchive }}" title="Archive or restore" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">{{ r.archiveLabel }}</button>
+          <button onClick="{{ r.onDelete }}" title="Delete application" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t3);cursor:pointer;border-radius:4px" style-hover="color:var(--danger);text-decoration:underline">Delete</button>
+        </td>
+      </tr>
+    </sc-for>
+  </tbody>
+</table>
+</sc-if>
+</div></div></sc-if>
+      <sc-if value="{{ isCV }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;overflow-y:auto" data-screen-label="CV"><div style="max-width:840px;padding:20px 28px 48px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div style="font-size:13px;color:var(--t2);line-height:1.55">Your CVs are used to evaluate job fit and generate application materials. Everything is processed locally.</div>
+    <div style="display:flex;gap:8px;flex:none">
+      <label style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer;display:inline-block">Upload CV<input type="file" accept=".pdf,.docx" onChange="{{ onCvFile }}" aria-label="Upload CV file" style="display:none" /></label>
+      <button onClick="{{ newCvProfile }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">New manual profile</button>
+    </div>
+  </div>
+  <sc-if value="{{ cvsEmpty }}" hint-placeholder-val="{{ false }}">
+  <div style="border:1px dashed var(--in-bd);border-radius:8px;padding:38px 24px;text-align:center;margin-top:18px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">No CV on file</div>
+    <div style="font-size:12.5px;color:var(--t3);line-height:1.7;margin-bottom:16px">Upload a PDF or DOCX, or create a manual profile, to enable:<br />job match analysis · skill comparison · tailored motivation letters</div>
+    <label style="padding:8px 16px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:inline-block">Upload CV<input type="file" accept=".pdf,.docx" onChange="{{ onCvFile }}" aria-label="Upload CV file" style="display:none" /></label>
+  </div>
+  </sc-if>
+  <sc-if value="{{ cvsNotEmpty }}" hint-placeholder-val="{{ true }}">
+  <div style="border:1px solid var(--bd);border-radius:8px;margin-top:18px;overflow:hidden">
+  <table style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <sc-for list="{{ cvCols }}" as="c" hint-placeholder-count="7"><th style="text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--bd2);background:var(--panel2);white-space:nowrap">{{ c.t }}</th></sc-for>
+    </tr></thead>
+    <tbody>
+      <sc-for list="{{ cvRows }}" as="r" hint-placeholder-count="2">
+        <tr onClick="{{ r.onRow }}" style="{{ r.trStyle }}" style-hover="background:var(--panel)">
+          <td style="padding:var(--rowpad) 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--bd3);white-space:nowrap;color:var(--txt)">{{ r.name }}</td>
+          <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.kind }}</td>
+          <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ r.targetRole }}</td>
+          <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ r.updated }}</td>
+          <td style="padding:var(--rowpad) 14px;font-size:12.5px;border-bottom:1px solid var(--bd3);white-space:nowrap"><span style="{{ r.parseStyle }}">{{ r.parse }}</span></td>
+          <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3);white-space:nowrap">
+            <button onClick="{{ r.onDefault }}" title="Set as default CV" style="{{ r.defaultStyle }}">{{ r.defaultLabel }}</button>
+          </td>
+          <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3);text-align:right;white-space:nowrap">
+            <button onClick="{{ r.onEdit }}" title="Edit parsed profile" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Edit</button>
+            <button onClick="{{ r.onDuplicate }}" title="Duplicate CV profile" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Duplicate</button>
+            <button onClick="{{ r.onDelete }}" title="Delete CV" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t3);cursor:pointer;border-radius:4px" style-hover="color:var(--danger);text-decoration:underline">Delete</button>
+          </td>
+        </tr>
+      </sc-for>
+    </tbody>
+  </table>
+  </div>
+  <sc-if value="{{ hasSelCv }}" hint-placeholder-val="{{ true }}">
+  <div style="margin-top:22px">
+    <div style="border:1px solid var(--bd);border-radius:8px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:36px;height:44px;border:1px solid var(--in-bd);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:var(--t3);flex:none">{{ selCvBadge }}</div>
+        <div>
+          <div style="font-size:13.5px;font-weight:600">{{ selCvName }}</div>
+          <div style="font-size:12px;color:var(--t3);margin-top:2px">{{ selCvMeta }} · <span style="{{ selCvParseStyle }}">{{ selCvParse }}</span></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex:none;flex-wrap:wrap">
+        <button onClick="{{ editCvProfile }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Edit profile</button>
+        <button onClick="{{ reparseCv }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Re-run parsing</button>
+        <label style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;display:inline-block">Replace file<input type="file" accept=".pdf,.docx" onChange="{{ onCvReplace }}" aria-label="Replace CV file" style="display:none" /></label>
+        <button onClick="{{ downloadCvOrig }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Download original</button>
+      </div>
+    </div>
+    <div style="margin-top:20px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;border-bottom:1px solid var(--bd2)">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2)">Parsed profile</div>
+        <div style="font-size:11px;color:var(--t4)">Extracted by {{ runtimeName }} · inspect and correct anything below</div>
+      </div>
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:0;margin-top:4px">
+        <sc-for list="{{ cvPairs }}" as="p" hint-placeholder-count="5">
+          <div style="padding:9px 0;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd4)">{{ p.k }}</div><div style="padding:9px 0;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--bd4)">{{ p.v }}</div>
+        </sc-for>
+      </div>
+      <div style="margin-top:16px">
+        <div style="font-size:12.5px;color:var(--t3);margin-bottom:8px">Primary skills</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <sc-for list="{{ cvSkills }}" as="sk" hint-placeholder-count="6">
+            <span style="font-size:12px;font-weight:500;color:var(--t2);border:1px solid var(--chip2-bd);border-radius:5px;padding:3px 9px">{{ sk.t }}</span>
+          </sc-for>
+        </div>
+      </div>
+      <button onClick="{{ toggleCvRaw }}" style="margin-top:18px;padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">{{ cvRawLabel }}</button>
+      <sc-if value="{{ cvRawOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:12px;border:1px solid var(--bd);border-radius:7px;background:var(--panel2);padding:16px 18px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7;color:var(--t2);white-space:pre-wrap">{{ cvRaw }}</div>
+      <div style="font-size:11.5px;color:var(--t3);margin-top:8px;line-height:1.5">This is exactly what was extracted and used for match analysis. Use "Edit profile" to correct anything.</div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+  </sc-if>
+</div></div></sc-if>
+      <sc-if value="{{ isLetterGen }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;display:flex" data-screen-label="Letter Generator"><div style="width:300px;flex:none;border-right:1px solid var(--bd2);overflow-y:auto;padding:20px 20px 32px">
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Job</div>
+  <select value="{{ letterJobId }}" onChange="{{ onLetterJob }}" aria-label="Job" style="width:100%;box-sizing:border-box;padding:8px 28px 8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 10px center;cursor:pointer">
+    <sc-for list="{{ jobOpts }}" as="o" hint-placeholder-count="3"><option value="{{ o.id }}">{{ o.label }}</option></sc-for>
+  </select>
+  <div style="font-size:11px;color:var(--t4);margin-top:7px">Vacancies from search and your saved jobs</div>
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin:22px 0 8px">CV</div>
+  <select value="{{ genCvId }}" onChange="{{ onGenCv }}" aria-label="CV" style="width:100%;box-sizing:border-box;padding:8px 28px 8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 10px center;cursor:pointer">
+    <sc-for list="{{ cvSelOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o.id }}">{{ o.label }}</option></sc-for>
+  </select>
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin:22px 0 8px">Document type</div>
+  <div style="display:flex;flex-direction:column;gap:5px">
+    <sc-for list="{{ typeOpts }}" as="t" hint-placeholder-count="4">
+      <button onClick="{{ t.onClick }}" style="{{ t.style }}" style-hover="border-color:var(--t3)">{{ t.label }}</button>
+    </sc-for>
+  </div>
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin:22px 0 8px">Tone</div>
+  <div style="display:flex;flex-wrap:wrap;gap:5px">
+    <sc-for list="{{ toneOpts }}" as="t" hint-placeholder-count="4">
+      <button onClick="{{ t.onClick }}" style="{{ t.style }}" style-hover="border-color:var(--t3)">{{ t.label }}</button>
+    </sc-for>
+  </div>
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin:22px 0 8px">Length</div>
+  <div style="display:flex;flex-wrap:wrap;gap:5px">
+    <sc-for list="{{ lenOpts }}" as="t" hint-placeholder-count="3">
+      <button onClick="{{ t.onClick }}" style="{{ t.style }}" style-hover="border-color:var(--t3)">{{ t.label }}</button>
+    </sc-for>
+  </div>
+  <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin:22px 0 8px">Personal instructions <span style="color:var(--t4);text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></div>
+  <textarea value="{{ letterInstr }}" onChange="{{ onInstr }}" rows="2" placeholder="e.g. mention the referral from Marta" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg);resize:vertical"></textarea>
+  <button onClick="{{ generateLetter }}" style="width:100%;margin-top:22px;padding:9px 14px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:13px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">{{ generateBtnLabel }}</button>
+  <div style="font-size:11px;color:var(--t4);margin-top:10px;line-height:1.5">Generated locally using {{ runtimeName }} through AgentDock. Nothing is sent to a letter-writing service.</div>
+</div>
+<div style="flex:1;min-width:0;background:var(--doc);overflow-y:auto;display:flex;flex-direction:column">
+  <sc-if value="{{ letterIdle }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center">
+    <div style="text-align:center;max-width:330px">
+      <div style="font-size:13.5px;font-weight:600;margin-bottom:6px">No document yet</div>
+      <div style="font-size:12.5px;color:var(--t3);line-height:1.55">Choose a job, CV and document settings, then generate. The draft is written from your parsed CV and the vacancy text, and stays editable.</div>
+    </div>
+  </div>
+  </sc-if>
+  <sc-if value="{{ generating }}" hint-placeholder-val="{{ false }}">
+  <div style="flex:1;display:flex;align-items:center;justify-content:center">
+    <div style="text-align:center">
+      <div style="width:18px;height:18px;border:2px solid var(--bd);border-top-color:var(--txt);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 12px"></div>
+      <div style="font-size:13px;color:var(--t2)">{{ genPhase }}</div>
+    </div>
+  </div>
+  </sc-if>
+  <sc-if value="{{ letterReady }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:18px 28px 40px">
+    <div style="max-width:680px;margin:0 auto 10px">
+      <input value="{{ letterTitle }}" onChange="{{ onLetterTitle }}" aria-label="Letter title" style="width:100%;box-sizing:border-box;padding:7px 11px;font-size:13px;font-weight:600;border:1px solid transparent;border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:transparent" style-focus="border-color:var(--in-bd);background:var(--bg)" style-hover="border-color:var(--bd)" />
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;max-width:680px;margin:0 auto 12px;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button onClick="{{ generateLetter }}" style="padding:6px 11px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Regenerate</button>
+        <button onClick="{{ rewriteShorter }}" style="padding:6px 10px;background:transparent;color:var(--t2);border:none;border-radius:6px;font-size:12px;cursor:pointer" style-hover="background:var(--hov)">Make shorter</button>
+        <button onClick="{{ rewriteFormal }}" style="padding:6px 10px;background:transparent;color:var(--t2);border:none;border-radius:6px;font-size:12px;cursor:pointer" style-hover="background:var(--hov)">More formal</button>
+        <button onClick="{{ rewriteNatural }}" style="padding:6px 10px;background:transparent;color:var(--t2);border:none;border-radius:6px;font-size:12px;cursor:pointer" style-hover="background:var(--hov)">More natural</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button onClick="{{ copyLetter }}" style="padding:6px 11px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">{{ copyLabel }}</button>
+        <button onClick="{{ downloadLetter }}" style="padding:6px 11px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Download .txt</button>
+        <button onClick="{{ markReady }}" style="padding:6px 11px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Mark ready</button>
+        <button onClick="{{ saveLetterDoc }}" style="padding:6px 11px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">{{ saveLetterLabel }}</button>
+      </div>
+    </div>
+    <div ref="{{ letterRef }}" style="max-width:680px;margin:0 auto;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:44px 52px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+      <sc-for list="{{ workingParas }}" as="p" hint-placeholder-count="5">
+        <p contentEditable="{{ true }}" suppressContentEditableWarning="{{ true }}" style="font-size:13.5px;line-height:1.7;color:var(--txt);margin:0 0 16px;outline:none">{{ p.t }}</p>
+      </sc-for>
+    </div>
+    <div style="max-width:680px;margin:12px auto 0;font-size:11.5px;color:var(--t3);line-height:1.6">{{ letterContext }} Review before sending — you are responsible for the final text.</div>
+  </div>
+  </sc-if>
+</div></div></sc-if>
+      <sc-if value="{{ isLetters }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;overflow-y:auto" data-screen-label="Letters"><div style="display:flex;gap:8px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--bd2)">
+  <div style="font-size:12px;color:var(--t3)">Generated and saved application documents. Open a letter to edit or regenerate it.</div>
+  <div style="flex:1"></div>
+  <button onClick="{{ newLetter }}" style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">New letter</button>
+</div>
+<sc-if value="{{ lettersEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="padding:70px 20px;text-align:center">
+  <div style="font-size:14px;font-weight:600;margin-bottom:6px">No letters yet</div>
+  <div style="font-size:12.5px;color:var(--t3);margin-bottom:14px">Generate a motivation or cover letter from a vacancy and your CV.</div>
+  <button onClick="{{ newLetter }}" style="padding:7px 14px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer">New letter</button>
+</div>
+</sc-if>
+<sc-if value="{{ lettersNotEmpty }}" hint-placeholder-val="{{ true }}">
+<table style="width:100%;border-collapse:collapse">
+  <thead><tr>
+    <sc-for list="{{ letterCols }}" as="c" hint-placeholder-count="7"><th style="text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--bd2);position:sticky;top:0;background:var(--bg);z-index:1;white-space:nowrap">{{ c.t }}</th></sc-for>
+  </tr></thead>
+  <tbody>
+    <sc-for list="{{ letterRows }}" as="l" hint-placeholder-count="3">
+      <tr onClick="{{ l.onOpen }}" style="cursor:pointer" style-hover="background:var(--panel)">
+        <td style="padding:var(--rowpad) 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--bd3);color:var(--txt)">{{ l.title }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ l.company }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3)">{{ l.role }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t2);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ l.type }}</td>
+        <td style="padding:var(--rowpad) 14px;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd3);white-space:nowrap">{{ l.updated }}</td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3)"><span style="{{ l.statusStyle }}">{{ l.status }}</span></td>
+        <td style="padding:var(--rowpad) 14px;border-bottom:1px solid var(--bd3);text-align:right;white-space:nowrap">
+          <button onClick="{{ l.onOpenBtn }}" title="Open in editor" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Open</button>
+          <button onClick="{{ l.onDuplicate }}" title="Duplicate letter" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px" style-hover="color:var(--txt);text-decoration:underline">Duplicate</button>
+          <button onClick="{{ l.onDelete }}" title="Delete letter" style="background:none;border:none;padding:3px 6px;font-size:12px;color:var(--t3);cursor:pointer;border-radius:4px" style-hover="color:var(--danger);text-decoration:underline">Delete</button>
+        </td>
+      </tr>
+    </sc-for>
+  </tbody>
+</table>
+</sc-if></div></sc-if>
+      <sc-if value="{{ isRuntime }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;overflow-y:auto" data-screen-label="AI Runtime"><div style="max-width:880px;padding:24px 28px 48px">
+  <div style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:6px">Open Vacancy Radar uses an AI CLI already installed and authenticated on this computer, through the local AgentDock runtime.</div>
+  <div style="font-size:12.5px;color:var(--t3);line-height:1.6;margin-bottom:20px">AgentDock does not read or store your Claude Code or Codex login credentials. Authentication remains managed by the installed CLI.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div style="{{ claudeCardStyle }}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:14px;font-weight:650">Claude Code</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t2)"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block"></span>Ready</div>
+      </div>
+      <div style="margin-top:14px;display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:12.5px">
+        <span style="color:var(--t3)">Installed</span><span style="font-weight:500">Yes</span>
+        <span style="color:var(--t3)">Authentication</span><span style="font-weight:500">Authenticated</span>
+        <span style="color:var(--t3)">Version</span><span style="font-weight:500">2.4.1</span>
+        <span style="color:var(--t3)">Model</span><span style="font-weight:500">CLI default</span>
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:7px">Capabilities</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Resume</span>
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Tools</span>
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Usage</span>
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Thinking</span>
+        </div>
+      </div>
+      <button onClick="{{ useClaude }}" style="{{ useClaudeStyle }}">{{ useClaudeLabel }}</button>
+    </div>
+    <div style="{{ codexCardStyle }}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:14px;font-weight:650">Codex</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t2)"><span style="{{ codexDotStyle }}"></span>{{ codexStatusLabel }}</div>
+      </div>
+      <div style="margin-top:14px;display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:12.5px">
+        <span style="color:var(--t3)">Installed</span><span style="font-weight:500">{{ codexInstalledLabel }}</span>
+        <span style="color:var(--t3)">Authentication</span><span style="font-weight:500">{{ codexAuthLabel }}</span>
+        <span style="color:var(--t3)">Version</span><span style="font-weight:500">{{ codexVersionLabel }}</span>
+        <span style="color:var(--t3)">Model</span><span style="font-weight:500">CLI default</span>
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:7px">Capabilities</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Resume</span>
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Tools</span>
+          <span style="font-size:11.5px;color:var(--t2);border:1px solid var(--chip-bd);border-radius:5px;padding:2px 8px">Usage</span>
+        </div>
+      </div>
+      <sc-if value="{{ codexBox }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:14px;border:1px solid var(--warn-bd);background:var(--warn-bg);border-radius:6px;padding:11px 13px">
+        <div style="font-size:12px;font-weight:600;color:var(--warn-t);margin-bottom:4px">{{ codexBoxTitle }}</div>
+        <div style="font-size:12px;color:var(--t2);line-height:1.5">{{ codexBoxBody }}</div>
+      </div>
+      </sc-if>
+      <button onClick="{{ useCodex }}" style="{{ useCodexStyle }}">{{ useCodexLabel }}</button>
+    </div>
+  </div>
+  <div style="margin-top:22px;border:1px solid var(--bd);border-radius:8px;padding:16px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em">Default runtime</div>
+      <div style="font-size:13.5px;font-weight:600;margin-top:5px">{{ runtimeName }}</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:3px">Model: CLI default — Open Vacancy Radar uses the model configured by the selected CLI.</div>
+    </div>
+    <button onClick="{{ verifyCli }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer;flex:none" style-hover="border-color:var(--txt)">{{ verifyLabel }}</button>
+  </div>
+  <sc-if value="{{ verifyDone }}" hint-placeholder-val="{{ false }}">
+  <div style="margin-top:10px;border:1px solid var(--bd);border-radius:8px;padding:13px 18px;font-size:12.5px;line-height:2;color:var(--txt);background:var(--panel2)">
+    <div><span style="color:var(--ok)">✓</span> Executable detected — <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px">{{ verifyBin }}</span></div>
+    <div><span style="color:var(--ok)">✓</span> Version check passed — {{ verifyVersion }}</div>
+    <div><span style="color:var(--ok)">✓</span> Authentication status available — Authenticated</div>
+  </div>
+  </sc-if>
+  <div style="margin-top:22px;font-size:11.5px;color:var(--t3);line-height:1.6;max-width:580px">Verification checks that the executable exists, responds to a version query, and reports its authentication status. It does not run a model request and does not consume usage.<br /><span style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--t4)">Electron boundary: CLI detection and verification run in the main process via fixed-capability IPC; the renderer never gets shell access.</span></div>
+</div></div></sc-if>
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}"><div style="flex:1;min-height:0;overflow-y:auto" data-screen-label="Settings"><div style="max-width:660px;padding:24px 28px 48px">
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2)">General</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Launch at login</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Launch Open Vacancy Radar when I sign in<br /><span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--t4)">Electron boundary: app.setLoginItemSettings via main-process IPC — prototype stores preference only</span></div></div>
+    <div onClick="{{ tLaunch.onClick }}" style="{{ tLaunch.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Launch at login"><div style="{{ tLaunch.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Start page</div>
+    <select name="startPage" value="{{ sStartPage }}" onChange="{{ onSetting }}" aria-label="Start page" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Search</option><option>Saved Jobs</option><option>Applications</option><option>Last opened page</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Confirm before quitting</div>
+    <div onClick="{{ tQuit.onClick }}" style="{{ tQuit.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Confirm before quitting"><div style="{{ tQuit.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Language</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Only English is currently supported</div></div>
+    <select aria-label="Language" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>English</option></select>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Appearance</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Theme</div>
+    <div style="display:flex;gap:5px"><sc-for list="{{ themeOpts }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button></sc-for></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Density</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Applies to tables and lists</div></div>
+    <div style="display:flex;gap:5px"><sc-for list="{{ densOpts }}" as="t" hint-placeholder-count="2"><button onClick="{{ t.onClick }}" style="{{ t.style }}">{{ t.label }}</button></sc-for></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Sidebar on launch</div>
+    <select name="sidebarStart" value="{{ sSidebarStart }}" onChange="{{ onSetting }}" aria-label="Sidebar on launch" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Remember last</option><option>Start expanded</option><option>Start collapsed</option></select>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Search preferences</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default market</div>
+    <select name="defMarket" value="{{ sDefMarket }}" onChange="{{ onSetting }}" aria-label="Default market" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><sc-for list="{{ marketOpts }}" as="m" hint-placeholder-count="3"><option value="{{ m.v }}">{{ m.v }}</option></sc-for></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default location</div>
+    <input name="defLocation" value="{{ sDefLocation }}" onChange="{{ onSetting }}" placeholder="e.g. Amsterdam" aria-label="Default location" style="width:180px;box-sizing:border-box;padding:6px 10px;font-size:12px;border:1px solid var(--chip2-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" />
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Preferred arrangement</div>
+    <select name="defArrangement" value="{{ sDefArrangement }}" onChange="{{ onSetting }}" aria-label="Preferred arrangement" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Any</option><option>Remote</option><option>Hybrid</option><option>On-site</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Employment type</div>
+    <select name="defEmployment" value="{{ sDefEmployment }}" onChange="{{ onSetting }}" aria-label="Employment type" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option value="Any">Any</option><option>Permanent</option><option>Contract</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Posted within</div>
+    <select name="defPosted" value="{{ sDefPosted }}" onChange="{{ onSetting }}" aria-label="Posted within" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Any time</option><option>Last 24 hours</option><option>Last 7 days</option><option>Last 30 days</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Recognized sponsors only by default</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Applies when the market is the Netherlands</div></div>
+    <div onClick="{{ tSponsor.onClick }}" style="{{ tSponsor.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Recognized sponsors only by default"><div style="{{ tSponsor.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Currency</div>
+    <div style="font-size:12px;color:var(--t3)">Automatic — follows the selected market</div>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Market integrations</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Netherlands — IND recognized sponsor verification</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Source: IND Public Register · checks employers of Netherlands vacancies</div></div>
+    <div onClick="{{ tIND.onClick }}" style="{{ tIND.track }}" role="switch" tabIndex="{{ zero }}" aria-label="IND recognized sponsor verification"><div style="{{ tIND.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Netherlands job sources</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">Configured — LinkedIn, Indeed, company career sites</div></div>
+    <span style="font-size:11.5px;font-weight:500;color:var(--ok);border:1px solid var(--chip2-bd);background:var(--panel);border-radius:5px;padding:2px 8px">Configured</span>
+  </div>
+  <div style="font-size:12px;color:var(--t3);line-height:1.6;padding:12px 0;border-bottom:1px solid var(--bd4)">No market-specific employer verification is configured for Germany, Belgium, France, the United Kingdom or the United States. Vacancy search, CV matching, letters and application tracking still work for those markets.</div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Job sources</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">LinkedIn</div>
+    <div onClick="{{ tSrcL.onClick }}" style="{{ tSrcL.track }}" role="switch" tabIndex="{{ zero }}" aria-label="LinkedIn source"><div style="{{ tSrcL.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Indeed</div>
+    <div onClick="{{ tSrcI.onClick }}" style="{{ tSrcI.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Indeed source"><div style="{{ tSrcI.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Company career sites</div>
+    <div onClick="{{ tSrcC.onClick }}" style="{{ tSrcC.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Company career sites source"><div style="{{ tSrcC.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:11.5px;color:var(--t3)">Disabled sources are hidden from search results and filters.</div>
+    <button onClick="{{ resetSources }}" style="padding:5px 10px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;cursor:pointer" style-hover="border-color:var(--txt)">Reset to defaults</button>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Documents</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default CV</div>
+    <select name="docCv" value="{{ sDocCv }}" onChange="{{ onSetting }}" aria-label="Default CV" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer;max-width:220px"><sc-for list="{{ cvOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o.id }}">{{ o.label }}</option></sc-for></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default letter type</div>
+    <select name="docType" value="{{ sDocType }}" onChange="{{ onSetting }}" aria-label="Default letter type" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Motivation Letter</option><option>Cover Letter</option><option>Short Application Message</option><option>Recruiter Message</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default tone</div>
+    <select name="docTone" value="{{ sDocTone }}" onChange="{{ onSetting }}" aria-label="Default tone" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Natural</option><option>Concise</option><option>Formal</option><option>Confident</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default length</div>
+    <select name="docLen" value="{{ sDocLen }}" onChange="{{ onSetting }}" aria-label="Default length" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Short</option><option>Standard</option><option>Detailed</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Autosave generated documents</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">New letters are saved to the Letters library as drafts</div></div>
+    <div onClick="{{ tAutosave.onClick }}" style="{{ tAutosave.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Autosave generated documents"><div style="{{ tAutosave.knob }}"></div></div>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Applications</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Default status for new applications</div>
+    <select name="appDefaultStatus" value="{{ sAppDefaultStatus }}" onChange="{{ onSetting }}" aria-label="Default application status" style="padding:6px 26px 6px 10px;font-size:12px;color:var(--txt);border:1px solid var(--chip2-bd);border-radius:6px;background:var(--bg) url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%228%22 height=%225%22><path d=%22M0 0l4 5 4-5z%22 fill=%22%23999%22/></svg>') no-repeat right 9px center;font-family:inherit;cursor:pointer"><option>Preparing</option><option>Ready to apply</option><option>Applied</option></select>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Confirm before deleting applications</div>
+    <div onClick="{{ tAppConfirm.onClick }}" style="{{ tAppConfirm.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Confirm before deleting applications"><div style="{{ tAppConfirm.knob }}"></div></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div style="font-size:13px;font-weight:500">Automatically archive rejected applications</div>
+    <div onClick="{{ tAutoArch.onClick }}" style="{{ tAutoArch.track }}" role="switch" tabIndex="{{ zero }}" aria-label="Automatically archive rejected applications"><div style="{{ tAutoArch.knob }}"></div></div>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">AI runtime</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--bd4);gap:16px">
+    <div><div style="font-size:13px;font-weight:500">Runtime provider</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px">{{ runtimeName }} · CLI default model · AgentDock local runtime</div></div>
+    <button onClick="{{ goRuntime }}" style="padding:5px 10px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;cursor:pointer" style-hover="border-color:var(--txt)">Manage in AI Runtime</button>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">Data &amp; privacy</div>
+  <div style="font-size:12.5px;color:var(--t2);line-height:1.65;padding:12px 0">Saved jobs, applications, CVs, letters and settings are stored locally on this computer. Sponsor checks query the public IND register. There is no cloud sync and no account. AI runs through the CLI you installed and authenticated yourself.</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--bd4)">
+    <button onClick="{{ exportData }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Export data (JSON)</button>
+    <label style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;display:inline-block" style-hover="border-color:var(--txt)">Import data<input type="file" accept=".json" onChange="{{ onImportFile }}" aria-label="Import data file" style="display:none" /></label>
+    <button onClick="{{ clearHistory }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Clear search history</button>
+    <button onClick="{{ restoreDemo }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Restore demo data</button>
+    <button onClick="{{ resetSettings }}" style="padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Reset settings</button>
+    <button onClick="{{ resetAllData }}" style="padding:6px 12px;background:var(--bg);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer">Reset application data</button>
+  </div>
+  <div style="font-size:10.5px;font-family:ui-monospace,Menlo,monospace;color:var(--t4);padding:10px 0;line-height:1.6">Electron boundary: export/import use native save/open dialogs in production; the prototype uses browser download/upload.</div>
+
+  <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--t2);padding-bottom:8px;border-bottom:1px solid var(--bd2);margin-top:30px">About</div>
+  <div style="display:grid;grid-template-columns:160px 1fr;gap:0;margin-top:4px">
+    <div style="padding:9px 0;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd4)">Application</div><div style="padding:9px 0;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--bd4)">Open Vacancy Radar v0.5.0</div>
+    <div style="padding:9px 0;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd4)">License</div><div style="padding:9px 0;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--bd4)">Open source · MIT</div>
+    <div style="padding:9px 0;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd4)">AI runtime</div><div style="padding:9px 0;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--bd4)">AgentDock 0.3.x (local)</div>
+    <div style="padding:9px 0;font-size:12.5px;color:var(--t3);border-bottom:1px solid var(--bd4)">Repository</div><div style="padding:9px 0;font-size:12.5px;font-weight:500;border-bottom:1px solid var(--bd4)">github.com/open-vacancy-radar (placeholder)</div>
+  </div>
+  <button onClick="{{ runDiagnostics }}" style="margin-top:14px;padding:6px 12px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Copy diagnostics</button>
+</div></div></sc-if>
+    </div>
+  </div>
+  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:60">
+    <div onClick="{{ closeDrawer }}" style="position:absolute;inset:0;background:var(--scrim)"></div>
+    <div role="dialog" aria-modal="true" style="position:absolute;top:0;right:0;bottom:0;width:400px;max-width:92vw;background:var(--bg);border-left:1px solid var(--bd);display:flex;flex-direction:column;box-shadow:-8px 0 30px rgba(0,0,0,0.15)">
+      <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--bd2)">
+        <div style="font-size:14px;font-weight:600">{{ drawerTitle }}</div>
+        <button onClick="{{ closeDrawer }}" aria-label="Close" title="Close" style="width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--t2);cursor:pointer;border-radius:6px;font-size:15px" style-hover="background:var(--hov)">✕</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:18px 20px">
+        <sc-if value="{{ drawerSaved }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Role *</label><input name="role" value="{{ dRole }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Company *</label><input name="company" value="{{ dCompany }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Market</label><select name="market" value="{{ dMarket }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><sc-for list="{{ marketOpts }}" as="m" hint-placeholder-count="3"><option value="{{ m.v }}">{{ m.v }}</option></sc-for></select></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Location</label><input name="location" value="{{ dLocation }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Salary</label><input name="salary" value="{{ dSalary }}" onChange="{{ onDraftField }}" placeholder="e.g. €5,500–€6,800 / mo" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Arrangement</label><select name="arrangement" value="{{ dArrangement }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><option>Hybrid</option><option>Remote</option><option>On-site</option></select></div>
+          </div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Source URL</label><input name="sourceUrl" value="{{ dSourceUrl }}" onChange="{{ onDraftField }}" placeholder="https://…" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Verification</label><select name="verification" value="{{ dVerification }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><option>Recognized</option><option>Possible match</option><option>Needs review</option><option>Not verified</option><option>Not recognized</option><option>Not available</option></select></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Status</label><select name="status" value="{{ dStatus }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><sc-for list="{{ savedStatusOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.v }}</option></sc-for></select></div>
+          </div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Notes</label><textarea name="notes" value="{{ dNotes }}" onChange="{{ onDraftField }}" rows="3" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg);resize:vertical"></textarea></div>
+        </sc-if>
+        <sc-if value="{{ drawerApp }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Link saved job</label><select name="savedId" value="{{ dSavedId }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><option value="">None — manual entry</option><sc-for list="{{ savedLinkOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o.id }}">{{ o.label }}</option></sc-for></select></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Role *</label><input name="role" value="{{ dRole }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Company *</label><input name="company" value="{{ dCompany }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Location</label><input name="location" value="{{ dLocation }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Market</label><select name="market" value="{{ dMarket }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><sc-for list="{{ marketOpts }}" as="m" hint-placeholder-count="3"><option value="{{ m.v }}">{{ m.v }}</option></sc-for></select></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Status</label><select name="status" value="{{ dStatus }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><sc-for list="{{ appStatusOpts }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.v }}</option></sc-for></select></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Applied date</label><input type="date" name="applied" value="{{ dApplied }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:7px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          </div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Next step</label><input name="next" value="{{ dNext }}" onChange="{{ onDraftField }}" placeholder="e.g. Technical interview · 2 Sep" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Contact person</label><input name="contact" value="{{ dContact }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">CV</label><select name="cvId" value="{{ dCvId }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><option value="">None</option><sc-for list="{{ cvOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o.id }}">{{ o.label }}</option></sc-for></select></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Letter</label><select name="letterId" value="{{ dLetterId }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;font-family:inherit;color:var(--txt);background:var(--bg)"><option value="">None</option><sc-for list="{{ letterOpts }}" as="o" hint-placeholder-count="2"><option value="{{ o.id }}">{{ o.label }}</option></sc-for></select></div>
+          </div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Notes</label><textarea name="notes" value="{{ dNotes }}" onChange="{{ onDraftField }}" rows="3" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg);resize:vertical"></textarea></div>
+        </sc-if>
+        <sc-if value="{{ drawerCv }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Name *</label><input name="name" value="{{ dName }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Target roles</label><input name="targetRole" value="{{ dTargetRole }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Profile title</label><input name="title" value="{{ dTitle }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Years of experience</label><input name="years" value="{{ dYears }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+            <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Location</label><input name="location" value="{{ dLocation }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          </div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Languages</label><input name="languages" value="{{ dLanguages }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Skills (comma-separated)</label><textarea name="skills" value="{{ dSkills }}" onChange="{{ onDraftField }}" rows="2" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg);resize:vertical"></textarea></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Work authorization</label><input name="auth" value="{{ dAuth }}" onChange="{{ onDraftField }}" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg)" /></div>
+          <div style="margin-bottom:13px"><label style="display:block;font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Profile summary</label><textarea name="summary" value="{{ dSummary }}" onChange="{{ onDraftField }}" rows="3" style="width:100%;box-sizing:border-box;padding:8px 11px;font-size:12.5px;border:1px solid var(--in-bd);border-radius:6px;outline:none;font-family:inherit;color:var(--txt);background:var(--bg);resize:vertical"></textarea></div>
+        </sc-if>
+        <sc-if value="{{ hasDrawerError }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12px;color:var(--danger);margin-top:4px">{{ drawerError }}</div>
+        </sc-if>
+      </div>
+      <div style="flex:none;display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--bd2)">
+        <button onClick="{{ closeDrawer }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Cancel</button>
+        <button onClick="{{ saveDrawer }}" style="padding:7px 13px;background:var(--pri);color:var(--pri-t);border:1px solid var(--pri);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="background:var(--pri-h)">{{ drawerSaveLabel }}</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+  <sc-if value="{{ confirmOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:70" role="dialog" aria-modal="true">
+    <div onClick="{{ closeConfirm }}" style="position:absolute;inset:0;background:var(--scrim)"></div>
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:380px;max-width:88vw;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:20px 22px;box-shadow:0 12px 40px rgba(0,0,0,0.25)">
+      <div style="font-size:14px;font-weight:600">{{ confirmTitle }}</div>
+      <div style="font-size:12.5px;color:var(--t2);line-height:1.55;margin-top:8px">{{ confirmMsg }}</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+        <button onClick="{{ closeConfirm }}" style="padding:7px 13px;background:var(--bg);color:var(--txt);border:1px solid var(--in-bd);border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer" style-hover="border-color:var(--txt)">Cancel</button>
+        <button onClick="{{ onConfirm }}" style="{{ confirmBtnStyle }}">{{ confirmLabel }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+  <sc-if value="{{ toastOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;bottom:18px;right:18px;z-index:80;background:var(--pri);color:var(--pri-t);border-radius:7px;padding:10px 14px;font-size:12.5px;display:flex;gap:14px;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.2)" role="status">
+    <span>{{ toastMsg }}</span>
+    <sc-if value="{{ toastUndo }}" hint-placeholder-val="{{ false }}"><button onClick="{{ undoLast }}" style="background:none;border:none;color:var(--pri-t);text-decoration:underline;font-size:12.5px;font-weight:600;cursor:pointer;padding:0">Undo</button></sc-if>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;demoCodexState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;ready&quot;,&quot;unauthenticated&quot;,&quot;notinstalled&quot;,&quot;unknown&quot;],&quot;default&quot;:&quot;ready&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Demo states&quot;},&quot;demoSearchError&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Demo states&quot;}}">
+class Component extends DCLogic {
+  SEEDV = 'ovr-seed-1';
+  constructor(props) {
+    super(props);
+    this.letterRef = React.createRef();
+    const seed = this.makeSeed();
+    let p = null; try { p = JSON.parse(localStorage.getItem('ovr-proto-v1')); } catch (e) {}
+    if (!p || p.seedV !== this.SEEDV) p = null;
+    const d = p ? { ...this.clone(seed), ...p, settings: { ...seed.settings, ...(p.settings || {}) } } : this.clone(seed);
+    const s = d.settings;
+    const startMap = { 'Search': 'search', 'Saved Jobs': 'saved', 'Applications': 'apps', 'Last opened page': d.lastNav || 'search' };
+    let collapsed = !!d.sidebarCollapsed;
+    if (s.sidebarStart === 'Start expanded') collapsed = false;
+    if (s.sidebarStart === 'Start collapsed') collapsed = true;
+    const defCv = d.cvs.find(c => c.isDefault) || d.cvs[0] || null;
+    this.state = {
+      settings: s, savedJobs: d.savedJobs, applications: d.applications, cvs: d.cvs, letters: d.letters,
+      provider: d.provider, nextId: d.nextId, sidebarCollapsed: collapsed,
+      nav: startMap[s.startPage] || 'search',
+      query: 'Frontend Engineer', market: s.defMarket, locFilter: s.defLocation || '',
+      sponsorOnly: !!s.sponsorDefault && s.defMarket === 'Netherlands',
+      fArr: 'Any', fExp: 'Any', fPosted: 'Any', fSource: 'All', fEmp: 'Any',
+      searching: false, searchPhase: '', searched: false, selId: null, verifOpen: false,
+      savedQ: '', savedFilter: 'All', appView: 'Active', selCvId: defCv ? defCv.id : null, cvRawOpen: false, cvParsingId: null,
+      letterJobId: 1, genCvId: defCv ? defCv.id : null, letterType: s.docType, letterTone: s.docTone, letterLen: s.docLen,
+      letterInstr: '', generating: false, genPhase: '', letterReady: false, workingParas: [], letterTitle: '', letterEditId: null, letterVacId: null,
+      verifying: false, verifyDone: false,
+      drawer: null, confirm: null, toast: null
+    };
+  }
+  clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  vacsAll() {
+    if (this._vacs) return this._vacs;
+    const NL = 'Netherlands', DE = 'Germany', UK = 'United Kingdom', US = 'United States';
+    this._vacs = [
+      { id: 1, market: NL, title: 'Senior Frontend Engineer', company: 'Northstar Robotics', entity: 'Northstar Robotics B.V.', city: 'Delft', country: NL, arrangement: 'Hybrid', salary: '€5,800–€7,100 / mo', sponsor: 'recognized', confidence: 'Exact match', match: 86, posted: '2 days ago', postedDays: 2, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'autonomous inspection robots for greenhouse agriculture', stack: 'Angular and TypeScript', lang: 'Dutch is a plus but not required; the engineering language is English.', strong: ['13+ years frontend experience', 'Angular & TypeScript', 'Design system background', 'Netherlands-based'], gaps: ['Dutch language preferred', 'Some Java on the backend'] },
+      { id: 2, market: NL, title: 'Angular Developer', company: 'CanalTech', entity: 'CanalTech Software B.V.', city: 'Utrecht', country: NL, arrangement: 'Hybrid', salary: '€5,000–€6,200 / mo', sponsor: 'recognized', confidence: 'Exact match', match: 91, posted: '1 day ago', postedDays: 1, source: 'Indeed', srcId: 'indeed', contract: 'Permanent · 36–40h', exp: 'Senior', employment: 'Permanent', blurb: 'a SaaS platform for water-management authorities', stack: 'Angular, RxJS and NgRx', lang: 'The team works in English.', strong: ['Deep Angular expertise', 'RxJS & state management', 'TypeScript', '13+ years experience'], gaps: ['Domain knowledge of water management'] },
+      { id: 3, market: NL, title: 'Staff Frontend Engineer', company: 'Delta Mobility', entity: 'Delta Mobility Group N.V.', city: 'Amsterdam', country: NL, arrangement: 'Hybrid', salary: '€7,200–€8,500 / mo', sponsor: 'possible', confidence: 'Probable — manual review', match: 78, posted: '3 days ago', postedDays: 3, source: 'Company site', srcId: 'company', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'shared-mobility software used across four European countries', stack: 'React and TypeScript at scale', lang: 'English-first engineering organisation.', strong: ['Staff-level experience', 'Frontend architecture', 'TypeScript', 'Design systems'], gaps: ['React depth vs Angular focus', 'On-call rotation'] },
+      { id: 4, market: NL, title: 'Design Systems Engineer', company: 'Polder Systems', entity: 'Polder Systems B.V.', city: 'Eindhoven', country: NL, arrangement: 'Remote (NL)', salary: '€5,500–€6,800 / mo', sponsor: 'recognized', confidence: 'Exact match', match: 88, posted: '5 days ago', postedDays: 5, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 32–40h', exp: 'Senior', employment: 'Permanent', blurb: 'developer tooling for industrial automation teams', stack: 'component libraries, tokens and accessibility', lang: 'Fully English-speaking, remote within the Netherlands.', strong: ['Design system background', 'Component API design', 'Accessibility', 'Angular & React'], gaps: ['Figma plugin development'] },
+      { id: 5, market: NL, title: 'Full Stack TypeScript Developer', company: 'Atlas Energy NL', entity: '—', city: 'Rotterdam', country: NL, arrangement: 'On-site', salary: '€5,200–€6,400 / mo', sponsor: 'notverified', confidence: 'Not yet checked', match: 72, posted: '1 week ago', postedDays: 7, source: 'Indeed', srcId: 'indeed', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'energy-trading dashboards and market integrations', stack: 'TypeScript across Node and the browser', lang: 'Dutch working proficiency preferred.', strong: ['TypeScript', 'Frontend experience', 'API integration'], gaps: ['Node backend depth', 'Dutch preferred', 'On-site only'] },
+      { id: 6, market: NL, title: 'Frontend Engineer', company: 'Brightwater Analytics', entity: 'Brightwater Analytics B.V.', city: 'The Hague', country: NL, arrangement: 'Hybrid', salary: '€4,800–€5,900 / mo', sponsor: 'recognized', confidence: 'Exact match', match: 81, posted: '4 days ago', postedDays: 4, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 40h', exp: 'Medior', employment: 'Permanent', blurb: 'compliance analytics for financial institutions', stack: 'Angular and data visualisation', lang: 'English is the working language.', strong: ['Angular', 'Data-heavy UI experience', 'TypeScript'], gaps: ['D3.js specifics', 'FinTech domain'] },
+      { id: 7, market: NL, title: 'Senior Angular Developer', company: 'Vector Logistics', entity: 'No registry entry found', city: 'Rotterdam', country: NL, arrangement: 'Hybrid', salary: '€5,600–€6,700 / mo', sponsor: 'notfound', confidence: 'No match under this name', match: 84, posted: '6 days ago', postedDays: 6, source: 'Indeed', srcId: 'indeed', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'port logistics planning software', stack: 'Angular and real-time data', lang: 'Mixed Dutch/English environment.', strong: ['Senior Angular experience', 'Real-time UI', 'TypeScript'], gaps: ['Sponsor status unclear', 'Logistics domain'] },
+      { id: 8, market: NL, title: 'Frontend Engineer (React)', company: 'Tulip Health', entity: 'Tulip Health B.V.', city: 'Amsterdam', country: NL, arrangement: 'Hybrid', salary: '€4,900–€6,000 / mo', sponsor: 'recognized', confidence: 'Exact match', match: 74, posted: '3 days ago', postedDays: 3, source: 'Company site', srcId: 'company', contract: 'Permanent · 36h', exp: 'Medior', employment: 'Permanent', blurb: 'a patient-portal platform for Dutch clinics', stack: 'React, TypeScript and accessibility', lang: 'Dutch helpful for patient-facing copy review.', strong: ['React experience', 'Accessibility', 'TypeScript'], gaps: ['Healthcare domain', 'Dutch helpful'] },
+      { id: 11, market: DE, title: 'Frontend Platform Engineer', company: 'Atlas Software GmbH', entity: '—', city: 'Berlin', country: DE, arrangement: 'Hybrid', salary: '€75,000–€90,000 / yr', sponsor: 'notavailable', confidence: '—', match: 82, posted: '2 days ago', postedDays: 2, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'developer-experience tooling for large retail platforms', stack: 'React, TypeScript and build tooling', lang: 'English-first; German helpful.', strong: ['Frontend architecture', 'TypeScript', 'Design systems'], gaps: ['Bazel build systems', 'German helpful'] },
+      { id: 12, market: DE, title: 'Senior TypeScript Engineer', company: 'Rheinwerk Digital GmbH', entity: '—', city: 'Munich', country: DE, arrangement: 'Hybrid', salary: '€80,000–€95,000 / yr', sponsor: 'notavailable', confidence: '—', match: 79, posted: '4 days ago', postedDays: 4, source: 'Indeed', srcId: 'indeed', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'digital publishing workflows', stack: 'TypeScript across the stack', lang: 'German preferred for editorial collaboration.', strong: ['TypeScript', '13+ years experience'], gaps: ['Node services depth', 'German preferred'] },
+      { id: 13, market: DE, title: 'Design Systems Engineer', company: 'Hansa Mobility', entity: '—', city: 'Hamburg', country: DE, arrangement: 'Remote (DE)', salary: '€70,000–€85,000 / yr', sponsor: 'notavailable', confidence: '—', match: 85, posted: '1 day ago', postedDays: 1, source: 'Company site', srcId: 'company', contract: 'Permanent · 38h', exp: 'Senior', employment: 'Permanent', blurb: 'ticketing apps for regional transit operators', stack: 'component libraries and accessibility', lang: 'English working language.', strong: ['Design systems', 'Accessibility', 'Angular & React'], gaps: ['Native mobile exposure'] },
+      { id: 14, market: DE, title: 'Angular Developer', company: 'Spree Analytics', entity: '—', city: 'Berlin', country: DE, arrangement: 'On-site', salary: '€65,000–€78,000 / yr', sponsor: 'notavailable', confidence: '—', match: 88, posted: '6 days ago', postedDays: 6, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 40h', exp: 'Medior', employment: 'Permanent', blurb: 'marketing analytics dashboards', stack: 'Angular and data visualisation', lang: 'German is the working language.', strong: ['Angular', 'RxJS', 'Data-heavy UI'], gaps: ['On-site only', 'German working language'] },
+      { id: 21, market: UK, title: 'Senior Frontend Engineer', company: 'Thameside Labs', entity: '—', city: 'London', country: UK, arrangement: 'Hybrid', salary: '£85,000–£100,000 / yr', sponsor: 'notavailable', confidence: '—', match: 84, posted: '3 days ago', postedDays: 3, source: 'LinkedIn', srcId: 'linkedin', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'clinical-trial management software', stack: 'React and TypeScript', lang: 'English.', strong: ['Frontend architecture', 'TypeScript', 'Accessibility'], gaps: ['React depth vs Angular focus', 'UK right-to-work not assessed'] },
+      { id: 22, market: UK, title: 'Design Systems Engineer', company: 'Northgate Digital', entity: '—', city: 'Manchester', country: UK, arrangement: 'Remote (UK)', salary: '£70,000–£85,000 / yr', sponsor: 'notavailable', confidence: '—', match: 87, posted: '2 days ago', postedDays: 2, source: 'Company site', srcId: 'company', contract: 'Permanent · 37.5h', exp: 'Senior', employment: 'Permanent', blurb: 'a public-sector design platform', stack: 'tokens, component APIs and documentation', lang: 'English.', strong: ['Design systems', 'Component API design', 'Accessibility'], gaps: ['GOV-style service patterns'] },
+      { id: 23, market: UK, title: 'Staff Frontend Engineer', company: 'Albion Health', entity: '—', city: 'London', country: UK, arrangement: 'Hybrid', salary: '£95,000–£110,000 / yr', sponsor: 'notavailable', confidence: '—', match: 76, posted: '1 week ago', postedDays: 7, source: 'Indeed', srcId: 'indeed', contract: 'Permanent · 40h', exp: 'Senior', employment: 'Permanent', blurb: 'appointment and triage tools for clinics', stack: 'React at scale', lang: 'English.', strong: ['Staff-level experience', 'TypeScript'], gaps: ['Healthcare domain', 'React depth'] },
+      { id: 31, market: US, title: 'Senior Frontend Engineer', company: 'Beacon Grid', entity: '—', city: 'New York', country: US, arrangement: 'Hybrid', salary: '$170,000–$200,000 / yr', sponsor: 'notavailable', confidence: '—', match: 83, posted: '2 days ago', postedDays: 2, source: 'LinkedIn', srcId: 'linkedin', contract: 'Full-time', exp: 'Senior', employment: 'Permanent', blurb: 'grid-monitoring software for utilities', stack: 'React and TypeScript', lang: 'English.', strong: ['Frontend architecture', 'TypeScript', 'Data-heavy UI'], gaps: ['US work authorization not assessed', 'React depth'] },
+      { id: 32, market: US, title: 'Design Systems Engineer', company: 'Copperline', entity: '—', city: 'Remote', country: US, arrangement: 'Remote (US)', salary: '$160,000–$185,000 / yr', sponsor: 'notavailable', confidence: '—', match: 86, posted: '5 days ago', postedDays: 5, source: 'Company site', srcId: 'company', contract: 'Full-time', exp: 'Senior', employment: 'Permanent', blurb: 'a design platform for fintech teams', stack: 'component libraries and theming', lang: 'English.', strong: ['Design systems', 'Component APIs', 'Accessibility'], gaps: ['US time-zone overlap', 'Visa sponsorship unclear'] },
+      { id: 33, market: US, title: 'Staff Software Engineer, Frontend', company: 'Halcyon Robotics', entity: '—', city: 'Boston', country: US, arrangement: 'On-site', salary: '$190,000–$220,000 / yr', sponsor: 'notavailable', confidence: '—', match: 75, posted: '1 week ago', postedDays: 7, source: 'Indeed', srcId: 'indeed', contract: 'Full-time', exp: 'Senior', employment: 'Permanent', blurb: 'operator consoles for warehouse robotics', stack: 'React, WebGL and real-time data', lang: 'English.', strong: ['Staff-level experience', 'Real-time UI'], gaps: ['WebGL', 'On-site relocation'] }
+    ];
+    return this._vacs;
+  }
+  vacById(id) { return this.vacsAll().find(v => v.id === id) || null; }
+
+  sponsorMap = {
+    recognized: { label: 'Recognized sponsor', short: 'Recognized', dotc: 'var(--ok)', note: 'Verified against the IND public register' },
+    possible: { label: 'Possible match', short: 'Possible match', dotc: 'var(--warn)', note: 'Possible registry match · manual review recommended' },
+    notverified: { label: 'Not verified', short: 'Not verified', dotc: 'var(--t3)', note: 'Not yet checked against the IND register' },
+    notfound: { label: 'Not found', short: 'Not found', dotc: 'var(--t3)', note: 'No registry entry found under this name — the legal entity may differ' },
+    notavailable: { label: 'Not available', short: 'Not available', dotc: 'var(--t3)', note: 'No market-specific employer verification is configured for this market' }
+  };
+  verifState(vac) {
+    if (vac.market !== 'Netherlands') return { label: 'Not available', short: 'Not available', dotc: 'var(--t3)', note: 'No market-specific employer verification is configured for ' + vac.market + '.' };
+    if (!this.state.settings.indEnabled) return { label: 'Not checked', short: 'Not checked', dotc: 'var(--t3)', note: 'IND verification is disabled in Settings → Market integrations.' };
+    return this.sponsorMap[vac.sponsor];
+  }
+  marketCurrency(m) { return { Netherlands: 'EUR (€)', Germany: 'EUR (€)', Belgium: 'EUR (€)', France: 'EUR (€)', 'United Kingdom': 'GBP (£)', 'United States': 'USD ($)' }[m] || '—'; }
+  markets = ['Netherlands', 'Germany', 'Belgium', 'France', 'United Kingdom', 'United States', 'Other'];
+
+  descParasFor(v) {
+    return [
+      `${v.company} is building ${v.blurb}. The team is based in ${v.city} and works ${v.arrangement.toLowerCase()}.`,
+      `As ${/^[aeiou]/i.test(v.title) ? 'an' : 'a'} ${v.title}, you will own key parts of the web platform: building product features, improving performance and accessibility, and raising the quality bar of the frontend codebase together with product and design.`,
+      `We are looking for someone with strong experience in ${v.stack}, a product mindset, and the ability to operate independently in a senior role. ${v.lang}`
+    ];
+  }
+
+  letterTextFor(vac, cv, type, tone, len) {
+    const skills = (cv && cv.profile && cv.profile.skills.slice(0, 3).join(', ')) || 'Angular, TypeScript and design systems';
+    if (type === 'Recruiter Message' || type === 'Short Application Message') {
+      const opener = type === 'Recruiter Message' ? 'Hi,' : 'Dear Hiring Manager,';
+      return [opener,
+        `I came across the ${vac.title} opening at ${vac.company} and would like to be considered. I bring 13+ years of frontend experience — ${skills} — and I am currently based in the Netherlands.`,
+        'Happy to share availability for a short call this week. My CV is attached.',
+        'Best regards,', 'Jake Ortega'];
+    }
+    const greeting = tone === 'Formal' ? 'Dear Sir or Madam,' : 'Dear Hiring Manager,';
+    const closing = tone === 'Formal' ? 'Yours faithfully,' : 'Kind regards,';
+    let p2 = `I am writing to apply for the ${vac.title} position at ${vac.company}. With over 13 years of frontend engineering experience — much of it in ${skills} — the role aligns closely with the work I do best.`;
+    if (tone === 'Confident') p2 += ' I am confident I can contribute from the first week.';
+    const p3 = `In recent roles I have led design-system development, built and maintained large frontend codebases, and worked closely with product and design teams to ship reliable, maintainable interfaces. ${vac.company}'s work on ${vac.blurb} is an environment where that experience is directly useful.`;
+    const p4 = 'Beyond feature work, I care about the platform underneath it: component APIs, accessibility, testing strategy and the developer experience of the codebase itself.';
+    const p5 = `I am based in the Netherlands, available for ${vac.arrangement.toLowerCase()} work, and can start on short notice. I would welcome the chance to discuss how I can contribute.`;
+    const out = [greeting, p2];
+    if (len !== 'Short' && tone !== 'Concise') out.push(p3);
+    if (len === 'Detailed') out.push(p4);
+    out.push(p5, closing, 'Jake Ortega');
+    return out;
+  }
+  letterParasFor(vacId, type, tone, len) { const v = this.vacById(vacId); return v ? this.letterTextFor(v, null, type, tone, len) : []; }
+
+  makeSeed() {
+    return {
+      seedV: this.SEEDV,
+      settings: {
+        launchLogin: true, startPage: 'Search', confirmQuit: true, language: 'English',
+        theme: 'System', density: 'Comfortable', sidebarStart: 'Remember last',
+        defMarket: 'Netherlands', defLocation: '', defArrangement: 'Any', defEmployment: 'Any', defSalary: 'Any', defPosted: 'Any time', sponsorDefault: true, indEnabled: true,
+        sources: { linkedin: true, indeed: true, company: true },
+        docCv: 1, docType: 'Motivation Letter', docTone: 'Natural', docLen: 'Standard', autosaveDocs: true,
+        appDefaultStatus: 'Preparing', appConfirmDelete: true, appAutoArchiveRejected: false
+      },
+      savedJobs: [
+        { id: 101, vacId: 3, role: 'Staff Frontend Engineer', company: 'Delta Mobility', market: 'Netherlands', location: 'Amsterdam', salary: '€7,200–€8,500 / mo', arrangement: 'Hybrid', verification: 'Possible match', match: 78, sourceUrl: 'https://careers.deltamobility.example/staff-frontend', notes: 'Referral possible via Marta.', status: 'Preparing', saved: '27 Aug' },
+        { id: 102, vacId: 4, role: 'Design Systems Engineer', company: 'Polder Systems', market: 'Netherlands', location: 'Eindhoven', salary: '€5,500–€6,800 / mo', arrangement: 'Remote (NL)', verification: 'Recognized', match: 88, sourceUrl: 'https://poldersystems.example/jobs/design-systems', notes: '', status: 'Considering', saved: '25 Aug' }
+      ],
+      applications: [
+        { id: 201, savedId: 101, role: 'Staff Frontend Engineer', company: 'Delta Mobility', location: 'Amsterdam', market: 'Netherlands', verification: 'Possible match', status: 'Interview', applied: '2026-08-21', next: 'Technical interview · 2 Sep', contact: 'M. Visser (recruiter)', cvId: 1, letterId: 301, notes: '', archived: false },
+        { id: 202, savedId: null, role: 'Angular Developer', company: 'CanalTech', location: 'Utrecht', market: 'Netherlands', verification: 'Recognized', status: 'Applied', applied: '2026-08-24', next: 'Awaiting response', contact: '', cvId: 1, letterId: 302, notes: '', archived: false },
+        { id: 203, savedId: 102, role: 'Design Systems Engineer', company: 'Polder Systems', location: 'Eindhoven', market: 'Netherlands', verification: 'Recognized', status: 'Recruiter screen', applied: '2026-08-19', next: 'Intro call · 1 Sep', contact: 'HR — S. de Jong', cvId: 2, letterId: 303, notes: '', archived: false },
+        { id: 204, savedId: null, role: 'Frontend Engineer', company: 'Brightwater Analytics', location: 'The Hague', market: 'Netherlands', verification: 'Recognized', status: 'Rejected', applied: '2026-08-11', next: '—', contact: '', cvId: 1, letterId: null, notes: 'Rejected after CV screen.', archived: true }
+      ],
+      cvs: [
+        { id: 1, name: 'Jake-Ortega-CV.pdf', kind: 'Uploaded PDF', targetRole: 'Senior Frontend / Staff roles', uploaded: '2026-08-29', updated: '2026-08-29', parse: 'Parsed', isDefault: true, profile: { title: 'Frontend / Software Engineer', years: '13+', location: 'Netherlands', languages: 'English (fluent) · Spanish (native) · Dutch (basic)', skills: ['Angular', 'TypeScript', 'JavaScript', 'React', 'Design Systems', 'Frontend Architecture', 'RxJS', 'Accessibility'], summary: 'Senior frontend engineer with design-system leadership across large product organisations.', auth: 'Requires sponsorship (NL)' } },
+        { id: 2, name: 'Frontend-2026', kind: 'Manual profile', targetRole: 'Design Systems roles', uploaded: '2026-08-18', updated: '2026-08-26', parse: 'Manual', isDefault: false, profile: { title: 'Design Systems Engineer', years: '13+', location: 'Netherlands', languages: 'English · Spanish · Dutch (basic)', skills: ['Design Systems', 'Component APIs', 'Accessibility', 'Angular', 'React', 'Documentation'], summary: 'Design-system focused profile emphasising component platform work.', auth: 'Requires sponsorship (NL)' } }
+      ],
+      letters: [
+        { id: 301, title: 'Delta Mobility — Staff Frontend Engineer', company: 'Delta Mobility', role: 'Staff Frontend Engineer', type: 'Motivation Letter', tone: 'Natural', length: 'Standard', updated: '27 Aug', status: 'Final', vacId: 3, cvId: 1, paras: this.letterParasFor(3, 'Motivation Letter', 'Natural', 'Standard') },
+        { id: 302, title: 'CanalTech — Angular Developer', company: 'CanalTech', role: 'Angular Developer', type: 'Cover Letter', tone: 'Concise', length: 'Short', updated: '24 Aug', status: 'Sent', vacId: 2, cvId: 1, paras: this.letterParasFor(2, 'Cover Letter', 'Concise', 'Short') },
+        { id: 303, title: 'Polder Systems — Design Systems Engineer', company: 'Polder Systems', role: 'Design Systems Engineer', type: 'Motivation Letter', tone: 'Natural', length: 'Standard', updated: '19 Aug', status: 'Draft', vacId: 4, cvId: 2, paras: this.letterParasFor(4, 'Motivation Letter', 'Natural', 'Standard') }
+      ],
+      provider: 'claude', sidebarCollapsed: false, lastNav: 'search', nextId: 400
+    };
+  }
+
+  persist() {
+    const s = this.state;
+    try { localStorage.setItem('ovr-proto-v1', JSON.stringify({ seedV: this.SEEDV, settings: s.settings, savedJobs: s.savedJobs, applications: s.applications, cvs: s.cvs, letters: s.letters, provider: s.provider, sidebarCollapsed: s.sidebarCollapsed, lastNav: s.nav, nextId: s.nextId })); } catch (e) {}
+  }
+  up(patch, cb) { this.setState(patch, () => { this.persist(); if (cb) cb(); }); }
+
+  timers = [];
+  later(ms, fn) { this.timers.push(setTimeout(fn, ms)); }
+  componentDidMount() {
+    this._mq = window.matchMedia('(prefers-color-scheme: dark)');
+    this._mqFn = () => this.forceUpdate();
+    if (this._mq.addEventListener) this._mq.addEventListener('change', this._mqFn);
+  }
+  componentWillUnmount() {
+    this.timers.forEach(t => clearTimeout(t));
+    if (this._mq && this._mq.removeEventListener) this._mq.removeEventListener('change', this._mqFn);
+  }
+
+  resolveTheme() {
+    const t = this.state.settings.theme;
+    if (t === 'Dark') return 'dark';
+    if (t === 'Light') return 'light';
+    return this._mq && this._mq.matches ? 'dark' : 'light';
+  }
+
+  showToast(msg, undoFn) {
+    if (this._toastT) clearTimeout(this._toastT);
+    this._undoFn = undoFn || null;
+    this.setState({ toast: { msg, hasUndo: !!undoFn } });
+    this._toastT = setTimeout(() => this.setState({ toast: null }), 3500);
+  }
+  askConfirm(cfg, fn) { this._confirmFn = fn; this.setState({ confirm: cfg }); }
+  setSetting(k, v) {
+    const extra = {};
+    if (k === 'defMarket' && this.state.searched === false) { extra.market = v; extra.sponsorOnly = this.state.settings.sponsorDefault && v === 'Netherlands'; }
+    this.up({ settings: { ...this.state.settings, [k]: v }, ...extra });
+    this.showToast('Settings saved');
+  }
+
+  dot(c) { return { width: 7, height: 7, borderRadius: '50%', background: c, display: 'inline-block', flex: 'none' }; }
+  verifDotColor(label) {
+    if (label === 'Recognized' || label === 'Recognized sponsor' || label === 'Verified') return 'var(--ok)';
+    if (label === 'Possible match' || label === 'Needs review') return 'var(--warn)';
+    return 'var(--t3)';
+  }
+  segStyle(sel, block) { return { padding: block ? '7px 11px' : '5px 11px', border: '1px solid ' + (sel ? 'var(--pri)' : 'var(--chip2-bd)'), background: sel ? 'var(--pri)' : 'var(--bg)', color: sel ? 'var(--pri-t)' : 'var(--t2)', borderRadius: 6, fontSize: 12.5, fontWeight: 500, cursor: 'pointer', userSelect: 'none', fontFamily: 'inherit' }; }
+  track(on) { return { width: 34, height: 19, borderRadius: 10, background: on ? 'var(--pri)' : 'var(--in-bd)', position: 'relative', cursor: 'pointer', flex: 'none', transition: 'background .15s' }; }
+  knob(on) { return { width: 15, height: 15, borderRadius: '50%', background: on ? 'var(--pri-t)' : 'var(--bg)', position: 'absolute', top: 2, left: on ? 17 : 2, transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }; }
+  mkTog(key, label) { const on = !!this.state.settings[key]; return { onClick: () => { this.setSetting(key, !on); }, track: { ...this.track(on) }, knob: this.knob(on), aria: label }; }
+  fmtDate(iso) { if (!iso) return '—'; const d = new Date(iso + 'T00:00:00'); if (isNaN(d)) return iso; return d.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]; }
+  takeId() { const id = this.state.nextId; return id; }
+
+  navStyle(id) {
+    const active = this.state.nav === id, col = this.state.sidebarCollapsed;
+    if (col) return { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: 8, cursor: 'pointer', border: 'none', background: active ? 'var(--sel)' : 'transparent', color: active ? 'var(--txt)' : 'var(--t2)', margin: '0 auto', padding: 0 };
+    return { display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500, width: '100%', boxSizing: 'border-box', border: 'none', textAlign: 'left', background: active ? 'var(--sel)' : 'transparent', color: active ? 'var(--txt)' : 'var(--t2)' };
+  }
+
+  shellVals() {
+    const st = this.state, col = st.sidebarCollapsed;
+    const go = id => () => this.up({ nav: id });
+    const runtimeName = st.provider === 'claude' ? 'Claude Code' : 'Codex';
+    const headerMap = {
+      search: ['Search Jobs', 'Find relevant roles, evaluate employers, and prepare applications'],
+      saved: ['Saved Jobs', st.savedJobs.length + ' saved'],
+      apps: ['Applications', st.applications.filter(a => !a.archived).length + ' active · ' + st.applications.filter(a => a.archived).length + ' archived'],
+      cv: ['CV', st.cvs.length + ' documents · used for match analysis and letters'],
+      lettergen: ['Letter', st.letterEditId ? 'Editing saved letter' : 'New document'],
+      letters: ['Letters', st.letters.length + ' documents'],
+      runtime: ['AI Runtime', 'AgentDock'],
+      settings: ['Settings', 'Saved automatically to local data']
+    };
+    return {
+      goSearch: go('search'), goSaved: go('saved'), goApps: go('apps'), goCV: go('cv'), goLetters: go('letters'), goLetterGen: go('lettergen'), goRuntime: go('runtime'), goSettings: go('settings'),
+      navSearch: this.navStyle('search'), navSaved: this.navStyle('saved'), navApps: this.navStyle('apps'), navCV: this.navStyle('cv'), navLetters: this.navStyle('letters'), navRuntime: this.navStyle('runtime'), navSettings: this.navStyle('settings'),
+      isSearch: st.nav === 'search', isSaved: st.nav === 'saved', isApps: st.nav === 'apps', isCV: st.nav === 'cv', isLetterGen: st.nav === 'lettergen', isLetters: st.nav === 'letters', isRuntime: st.nav === 'runtime', isSettings: st.nav === 'settings',
+      headerTitle: headerMap[st.nav][0], headerSub: headerMap[st.nav][1], runtimeName,
+      themeAttr: this.resolveTheme(), densAttr: st.settings.density,
+      sbExpanded: !col,
+      sidebarStyle: { width: col ? 64 : 236, flex: 'none', display: 'flex', flexDirection: 'column', background: 'var(--panel)', borderRight: '1px solid var(--bd)', transition: 'width .15s' },
+      brandStyle: col ? { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '14px 0 8px' } : { display: 'flex', alignItems: 'center', gap: 9, padding: '14px 10px 10px 14px' },
+      toggleSidebar: () => this.up({ sidebarCollapsed: !col }),
+      toggleLabel: col ? 'Expand sidebar' : 'Collapse sidebar',
+      toggleBtnStyle: col ? { width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'var(--t2)', cursor: 'pointer', borderRadius: 8 } : { marginLeft: 'auto', width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'var(--t3)', cursor: 'pointer', borderRadius: 6 },
+      toggleIconStyle: { transform: col ? 'rotate(180deg)' : 'none' },
+      sbBottomStyle: col ? { padding: '12px 0', borderTop: '1px solid var(--bd)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 } : { padding: '12px 14px', borderTop: '1px solid var(--bd)', display: 'flex', alignItems: 'center', gap: 9 },
+      savedCount: st.savedJobs.length, appsCount: st.applications.filter(a => !a.archived).length, lettersCount: st.letters.length,
+      stop: e => e.stopPropagation(),
+      toastOpen: !!st.toast, toastMsg: st.toast && st.toast.msg, toastUndo: !!(st.toast && st.toast.hasUndo),
+      undoLast: () => { if (this._undoFn) this._undoFn(); this._undoFn = null; if (this._toastT) clearTimeout(this._toastT); this.setState({ toast: null }); },
+      confirmOpen: !!st.confirm, confirmTitle: st.confirm && st.confirm.title, confirmMsg: st.confirm && st.confirm.msg,
+      confirmLabel: st.confirm ? (st.confirm.label || 'Confirm') : '',
+      confirmBtnStyle: { padding: '7px 13px', background: st.confirm && st.confirm.danger ? 'var(--danger)' : 'var(--pri)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12.5, fontWeight: 500, cursor: 'pointer' },
+      onConfirm: () => { const fn = this._confirmFn; this._confirmFn = null; this.setState({ confirm: null }, () => { if (fn) fn(); }); },
+      closeConfirm: () => { this._confirmFn = null; this.setState({ confirm: null }); }
+    };
+  }
+
+  openSavedDrawer(rec) {
+    const d = rec ? { role: rec.role, company: rec.company, market: rec.market, location: rec.location, salary: rec.salary || '', arrangement: rec.arrangement || 'Hybrid', sourceUrl: rec.sourceUrl || '', verification: rec.verification, status: rec.status, notes: rec.notes || '' }
+      : { role: '', company: '', market: this.state.settings.defMarket, location: '', salary: '', arrangement: 'Hybrid', sourceUrl: '', verification: 'Not verified', status: 'Considering', notes: '' };
+    this.setState({ drawer: { kind: 'saved', id: rec ? rec.id : null, d, error: '' } });
+  }
+  openAppDrawer(rec, prefill) {
+    const set = this.state.settings;
+    const defCv = this.state.cvs.find(c => c.id === set.docCv) || this.state.cvs.find(c => c.isDefault);
+    const d = rec ? { savedId: rec.savedId ? String(rec.savedId) : '', role: rec.role, company: rec.company, location: rec.location || '', market: rec.market, status: rec.status, applied: rec.applied || '', next: rec.next || '', contact: rec.contact || '', cvId: rec.cvId ? String(rec.cvId) : '', letterId: rec.letterId ? String(rec.letterId) : '', notes: rec.notes || '' }
+      : { savedId: '', role: '', company: '', location: '', market: set.defMarket, status: set.appDefaultStatus, applied: '2026-08-29', next: '', contact: '', cvId: defCv ? String(defCv.id) : '', letterId: '', notes: '', ...(prefill || {}) };
+    this.setState({ drawer: { kind: 'app', id: rec ? rec.id : null, d, error: '' } });
+  }
+  openCvDrawer(rec) {
+    const d = rec ? { name: rec.name, targetRole: rec.targetRole || '', title: rec.profile.title, years: rec.profile.years, location: rec.profile.location, languages: rec.profile.languages, skills: rec.profile.skills.join(', '), auth: rec.profile.auth || '', summary: rec.profile.summary || '' }
+      : { name: '', targetRole: '', title: '', years: '', location: 'Netherlands', languages: '', skills: '', auth: '', summary: '' };
+    this.setState({ drawer: { kind: 'cv', id: rec ? rec.id : null, d, error: '' } });
+  }
+  saveDrawer = () => {
+    const st = this.state, dr = st.drawer; if (!dr) return;
+    const d = dr.d;
+    if (dr.kind === 'saved') {
+      if (!d.role.trim() || !d.company.trim()) { this.setState({ drawer: { ...dr, error: 'Role and company are required.' } }); return; }
+      if (dr.id) {
+        this.up({ savedJobs: st.savedJobs.map(r => r.id === dr.id ? { ...r, ...d } : r), drawer: null });
+        this.showToast('Saved job updated');
+      } else {
+        const rec = { id: st.nextId, vacId: null, match: null, saved: 'Today', ...d };
+        this.up({ savedJobs: [...st.savedJobs, rec], nextId: st.nextId + 1, drawer: null });
+        this.showToast('Job saved');
+      }
+    } else if (dr.kind === 'app') {
+      if (!d.role.trim() || !d.company.trim()) { this.setState({ drawer: { ...dr, error: 'Role and company are required.' } }); return; }
+      const norm = { ...d, savedId: d.savedId ? Number(d.savedId) : null, cvId: d.cvId ? Number(d.cvId) : null, letterId: d.letterId ? Number(d.letterId) : null };
+      if (dr.id) {
+        this.up({ applications: st.applications.map(a => a.id === dr.id ? { ...a, ...norm } : a), drawer: null });
+        this.showToast('Application updated');
+      } else {
+        const linked = norm.savedId ? st.savedJobs.find(s2 => s2.id === norm.savedId) : null;
+        const rec = { id: st.nextId, archived: false, verification: linked ? linked.verification : (d.market === 'Netherlands' ? 'Not verified' : 'Not available'), ...norm };
+        if (d.verification) rec.verification = d.verification;
+        this.up({ applications: [...st.applications, rec], nextId: st.nextId + 1, drawer: null });
+        this.showToast('Application created');
+      }
+    } else if (dr.kind === 'cv') {
+      if (!d.name.trim()) { this.setState({ drawer: { ...dr, error: 'Name is required.' } }); return; }
+      const profile = { title: d.title, years: d.years, location: d.location, languages: d.languages, skills: d.skills.split(',').map(s2 => s2.trim()).filter(Boolean), summary: d.summary, auth: d.auth };
+      if (dr.id) {
+        this.up({ cvs: st.cvs.map(c => c.id === dr.id ? { ...c, name: d.name, targetRole: d.targetRole, updated: '2026-08-29', profile } : c), drawer: null });
+        this.showToast('CV updated');
+      } else {
+        const rec = { id: st.nextId, name: d.name, kind: 'Manual profile', targetRole: d.targetRole, uploaded: '2026-08-29', updated: '2026-08-29', parse: 'Manual', isDefault: st.cvs.length === 0, profile };
+        this.up({ cvs: [...st.cvs, rec], nextId: st.nextId + 1, drawer: null, selCvId: rec.id });
+        this.showToast('CV profile created');
+      }
+    }
+  };
+
+  visibleJobs() {
+    const s = this.state, set = s.settings;
+    let arr = this.vacsAll().filter(v => v.market === s.market);
+    this._marketEmpty = arr.length === 0;
+    arr = arr.filter(v => set.sources[v.srcId]);
+    if (s.market === 'Netherlands' && s.sponsorOnly && set.indEnabled) arr = arr.filter(v => v.sponsor === 'recognized');
+    const words = (s.query || '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    if (words.length) arr = arr.filter(v => words.some(w => v.title.toLowerCase().includes(w)));
+    const lf = (s.locFilter || '').trim().toLowerCase();
+    if (lf) arr = arr.filter(v => v.city.toLowerCase().includes(lf) || v.arrangement.toLowerCase().includes(lf));
+    if (s.fArr !== 'Any') arr = arr.filter(v => s.fArr === 'Remote' ? v.arrangement.indexOf('Remote') === 0 : v.arrangement === s.fArr);
+    if (s.fExp !== 'Any') arr = arr.filter(v => v.exp === s.fExp);
+    if (s.fPosted !== 'Any') arr = arr.filter(v => v.postedDays <= Number(s.fPosted));
+    if (s.fSource !== 'All') arr = arr.filter(v => v.source === s.fSource);
+    if (s.fEmp !== 'Any') arr = arr.filter(v => v.employment === s.fEmp);
+    return arr.slice().sort((a, b) => b.match - a.match);
+  }
+
+  doSearch = () => {
+    if (this.state.searching) return;
+    this.setState({ searching: true, searched: false, searchPhase: 'Searching vacancies…', selId: null });
+    this.later(800, () => this.setState({ searchPhase: this.state.market === 'Netherlands' ? 'Checking IND sponsor status…' : 'Collecting employer information…' }));
+    this.later(1500, () => {
+      if (this.props.demoSearchError) { this.setState({ searching: false, searched: 'error' }); return; }
+      const vis = this.visibleJobs();
+      this.setState({ searching: false, searched: true, selId: vis.length ? vis[0].id : null });
+    });
+  };
+
+  searchVals() {
+    const st = this.state, set = st.settings;
+    const vis = this.visibleJobs();
+    const sel = st.selId ? this.vacById(st.selId) : null;
+    const ver = sel ? this.verifState(sel) : null;
+    const defCv = st.cvs.find(c => c.id === set.docCv) || st.cvs.find(c => c.isDefault) || st.cvs[0] || null;
+    const savedRec = sel ? st.savedJobs.find(sj => sj.vacId === sel.id) : null;
+    const results = vis.map(v => {
+      const vv = this.verifState(v);
+      return {
+        title: v.title, company: v.company, place: v.city + ', ' + v.country, arrangement: v.arrangement, salary: v.salary,
+        matchPct: v.match + '%', verLabel: vv.short, dotStyle: this.dot(vv.dotc), posted: v.posted, source: v.source,
+        savedMark: st.savedJobs.some(sj => sj.vacId === v.id) ? 'Saved ✓ · ' : '',
+        onClick: () => this.setState({ selId: v.id, verifOpen: false }),
+        rowStyle: { padding: '12px 16px', borderBottom: '1px solid var(--bd3)', cursor: 'pointer', background: st.selId === v.id ? 'var(--sel)' : 'transparent', borderLeft: st.selId === v.id ? '2px solid var(--pri)' : '2px solid transparent' }
+      };
+    });
+    const saveJob = () => {
+      if (!sel) return;
+      if (savedRec) { this.up({ savedJobs: st.savedJobs.filter(sj => sj.vacId !== sel.id) }); this.showToast('Removed from Saved Jobs'); return; }
+      const rec = { id: st.nextId, vacId: sel.id, role: sel.title, company: sel.company, market: sel.market, location: sel.city, salary: sel.salary, arrangement: sel.arrangement, verification: ver.short, match: sel.match, sourceUrl: 'https://jobs.example/' + sel.id, notes: '', status: 'Considering', saved: 'Today' };
+      this.up({ savedJobs: [...st.savedJobs, rec], nextId: st.nextId + 1 });
+      this.showToast('Job saved');
+    };
+    return {
+      query: st.query, onQuery: e => this.setState({ query: e.target.value }), onQueryKey: e => { if (e.key === 'Enter') this.doSearch(); },
+      doSearch: this.doSearch, searching: st.searching, searchPhase: st.searchPhase,
+      market: st.market, marketOpts: this.markets.map(v => ({ v })),
+      onMarket: e => { const m = e.target.value; this.setState({ market: m, sponsorOnly: set.sponsorDefault && m === 'Netherlands', selId: null, searched: false }); },
+      locFilter: st.locFilter, onLoc: e => this.setState({ locFilter: e.target.value }),
+      isNL: st.market === 'Netherlands',
+      sponsorOnly: st.sponsorOnly,
+      toggleSponsor: () => this.setState(s2 => { const on = !s2.sponsorOnly; return { sponsorOnly: on, selId: null }; }, () => { if (st.searched === true) { const v2 = this.visibleJobs(); this.setState({ selId: v2.length ? v2[0].id : null }); } }),
+      fArr: st.fArr, fExp: st.fExp, fPosted: st.fPosted, fSource: st.fSource, fEmp: st.fEmp,
+      onFilt: e => this.setState({ [e.target.name]: e.target.value }),
+      sourceOpts: [{ v: 'LinkedIn' }, { v: 'Indeed' }, { v: 'Company site' }].filter(o => set.sources[{ LinkedIn: 'linkedin', Indeed: 'indeed', 'Company site': 'company' }[o.v]]),
+      clearFilters: () => this.setState({ fArr: 'Any', fExp: 'Any', fPosted: 'Any', fSource: 'All', fEmp: 'Any', locFilter: '', sponsorOnly: set.sponsorDefault && st.market === 'Netherlands' }),
+      currencyLabel: this.marketCurrency(st.market),
+      showPreSearch: !st.searching && st.searched === false,
+      showSearchError: !st.searching && st.searched === 'error',
+      showResults: !st.searching && st.searched === true,
+      noResults: vis.length === 0,
+      noResultsMsg: this._marketEmpty ? 'No vacancies in the demo dataset for ' + st.market + '. Demo data is available for the Netherlands, Germany, the United Kingdom and the United States.' : 'Try broadening the role keywords or clearing filters.',
+      results,
+      resultSummary: vis.length + ' vacancies · sorted by CV match · ' + (st.market === 'Netherlands' && set.indEnabled ? 'IND sponsor status checked 29 Aug 2026' : 'no market verification for ' + st.market),
+      hasSelection: !!sel,
+      selTitle: sel && sel.title, selCompany: sel && sel.company, selPlace: sel && (sel.city + ', ' + sel.country), selArrangement: sel && sel.arrangement, selSalary: sel && sel.salary,
+      selMarket: sel && sel.market, selSource: sel && sel.source, selPosted: sel && sel.posted,
+      selIsNL: !!(sel && sel.market === 'Netherlands'), selNotNL: !!(sel && sel.market !== 'Netherlands'),
+      selVerLabel: ver && ver.label, selVerNote: ver && ver.note, selVerDot: ver ? this.dot(ver.dotc) : {},
+      selMatch: sel && sel.match + '%',
+      selMatchLabel: sel ? (sel.match >= 85 ? 'Strong match' : sel.match >= 75 ? 'Good match' : 'Moderate match') : '',
+      selMatchBar: sel ? { width: sel.match + '%', height: '100%', background: 'var(--pri)', borderRadius: 2 } : {},
+      selPermit: sel ? (sel.sponsor === 'recognized' ? 'Likely compatible' : 'Depends on sponsor status') : '',
+      defaultCvName: defCv ? defCv.name : 'no CV on file',
+      strongList: sel ? sel.strong.map(t => ({ t })) : [], gapList: sel ? sel.gaps.map(t => ({ t })) : [],
+      descParas: sel ? this.descParasFor(sel).map(t => ({ t })) : [],
+      overviewPairs: sel ? [
+        { k: 'Role', v: sel.title }, { k: 'Company', v: sel.company },
+        { k: 'Market', v: sel.market }, { k: 'Location', v: sel.city + ', ' + sel.country },
+        { k: 'Arrangement', v: sel.arrangement }, { k: 'Salary', v: sel.salary },
+        { k: 'Contract', v: sel.contract }, { k: 'Experience', v: sel.exp },
+        { k: 'Source', v: sel.source }, { k: 'Posted', v: sel.posted }
+      ] : [],
+      verifPairs: sel ? [
+        { k: 'IND status', v: ver.label }, { k: 'Registered entity', v: sel.entity },
+        { k: 'Registry match', v: sel.confidence }, { k: 'Last checked', v: '29 Aug 2026' }
+      ] : [],
+      verifDetailPairs: sel ? [
+        { k: 'Market', v: 'Netherlands' }, { k: 'Verification type', v: 'IND recognized sponsor' },
+        { k: 'Vacancy company', v: sel.company }, { k: 'Matched legal entity', v: sel.entity },
+        { k: 'Registry result', v: ver.label }, { k: 'Match quality', v: sel.confidence },
+        { k: 'Source', v: 'IND Public Register' }, { k: 'Last checked', v: '29 August 2026' }
+      ] : [],
+      verifOpen: st.verifOpen, toggleVerif: () => this.setState(s2 => ({ verifOpen: !s2.verifOpen })),
+      verifBtnLabel: st.verifOpen ? 'Hide verification details' : 'View verification details',
+      saveJob, saveLabel: savedRec ? 'Saved ✓' : 'Save',
+      createAppFromVac: () => { if (sel) this.openAppDrawer(null, { role: sel.title, company: sel.company, location: sel.city, market: sel.market, verification: ver.short }); },
+      openLetterForJob: () => { if (sel) this.up({ nav: 'lettergen', letterJobId: sel.id, letterReady: false, letterEditId: null, workingParas: [] }); },
+      onOpenExternal: () => this.showToast('Prototype — Electron opens this via shell.openExternal')
+    };
+  }
+  savedStatusList = ['Considering', 'Preparing', 'Ready to apply', 'Applied', 'Interview', 'Offer', 'Rejected', 'Archived'];
+  appStatusList = ['Preparing', 'Ready to apply', 'Applied', 'Recruiter screen', 'Interview', 'Technical assessment', 'Final interview', 'Offer', 'Rejected', 'Withdrawn'];
+
+  deleteSaved(id) {
+    const rec = this.state.savedJobs.find(r => r.id === id);
+    this.askConfirm({ title: 'Delete saved job?', msg: `"${rec.role} — ${rec.company}" will be removed from Saved Jobs. Applications that reference it keep their own copy of the data.`, label: 'Delete', danger: true }, () => {
+      const prevSaved = this.state.savedJobs, prevApps = this.state.applications;
+      this.up({ savedJobs: prevSaved.filter(r => r.id !== id), applications: prevApps.map(a => a.savedId === id ? { ...a, savedId: null } : a) });
+      this.showToast('Saved job deleted', () => this.up({ savedJobs: prevSaved, applications: prevApps }));
+    });
+  }
+
+  savedVals() {
+    const st = this.state;
+    let rows = st.savedJobs;
+    const q = st.savedQ.trim().toLowerCase();
+    if (q) rows = rows.filter(r => r.role.toLowerCase().includes(q) || r.company.toLowerCase().includes(q));
+    if (st.savedFilter !== 'All') rows = rows.filter(r => r.status === st.savedFilter);
+    const savedRows = rows.map(r => ({
+      role: r.role, company: r.company, location: r.location + (r.market !== 'Netherlands' ? ', ' + r.market : ''), verification: r.verification,
+      dotStyle: this.dot(this.verifDotColor(r.verification)), match: r.match ? r.match + '%' : '—', salary: r.salary || '—', saved: r.saved, status: r.status,
+      onStatus: e => { e.stopPropagation(); this.up({ savedJobs: st.savedJobs.map(x => x.id === r.id ? { ...x, status: e.target.value } : x) }); this.showToast('Saved job updated'); },
+      onRow: () => this.openSavedDrawer(r),
+      onEdit: e => { e.stopPropagation(); this.openSavedDrawer(r); },
+      onDelete: e => { e.stopPropagation(); this.deleteSaved(r.id); }
+    }));
+    return {
+      savedQ: st.savedQ, onSavedQ: e => this.setState({ savedQ: e.target.value }),
+      savedFilter: st.savedFilter, onSavedFilter: e => this.setState({ savedFilter: e.target.value }),
+      savedStatusOpts: this.savedStatusList.map(v => ({ v })),
+      addSaved: () => this.openSavedDrawer(null),
+      savedCols: ['Role', 'Company', 'Location', 'Verification', 'Match', 'Salary', 'Saved', 'Status', 'Actions'].map(t => ({ t })),
+      savedRows, savedEmpty: st.savedJobs.length === 0, savedNotEmpty: st.savedJobs.length > 0
+    };
+  }
+  deleteApp(id) {
+    const doIt = () => {
+      const prev = this.state.applications;
+      this.up({ applications: prev.filter(a => a.id !== id) });
+      this.showToast('Application deleted', () => this.up({ applications: prev }));
+    };
+    if (this.state.settings.appConfirmDelete) {
+      const rec = this.state.applications.find(a => a.id === id);
+      this.askConfirm({ title: 'Delete application?', msg: `The application for "${rec.role} — ${rec.company}" will be permanently deleted. Consider archiving instead to keep the history.`, label: 'Delete', danger: true }, doIt);
+    } else doIt();
+  }
+
+  appsVals() {
+    const st = this.state;
+    let rows = st.applications;
+    if (st.appView === 'Active') rows = rows.filter(a => !a.archived);
+    if (st.appView === 'Archived') rows = rows.filter(a => a.archived);
+    const cvName = id => { const c = st.cvs.find(x => x.id === id); return c ? c.name : '—'; };
+    const ltName = id => { const l = st.letters.find(x => x.id === id); return l ? l.type : '—'; };
+    const appRows = rows.map(a => ({
+      role: a.role, company: a.company, location: a.location, verification: a.verification,
+      dotStyle: this.dot(this.verifDotColor(a.verification)),
+      status: a.status, applied: this.fmtDate(a.applied), next: a.next || '—', cvName: cvName(a.cvId), letterName: ltName(a.letterId),
+      trStyle: { cursor: 'pointer', opacity: a.archived ? 0.55 : 1 },
+      archiveLabel: a.archived ? 'Restore' : 'Archive',
+      onStatus: e => {
+        e.stopPropagation();
+        const v = e.target.value;
+        const autoArch = v === 'Rejected' && st.settings.appAutoArchiveRejected;
+        this.up({ applications: st.applications.map(x => x.id === a.id ? { ...x, status: v, archived: autoArch ? true : x.archived } : x) });
+        this.showToast(autoArch ? 'Application updated · auto-archived (Rejected)' : 'Application updated');
+      },
+      onRow: () => this.openAppDrawer(a),
+      onEdit: e => { e.stopPropagation(); this.openAppDrawer(a); },
+      onArchive: e => { e.stopPropagation(); this.up({ applications: st.applications.map(x => x.id === a.id ? { ...x, archived: !a.archived } : x) }); this.showToast(a.archived ? 'Application restored' : 'Application archived'); },
+      onDelete: e => { e.stopPropagation(); this.deleteApp(a.id); }
+    }));
+    return {
+      appViewOpts: ['Active', 'Archived', 'All'].map(label => ({ label, onClick: () => this.setState({ appView: label }), style: this.segStyle(st.appView === label) })),
+      newApp: () => this.openAppDrawer(null),
+      appCols: ['Role', 'Company', 'Location', 'Verification', 'Status', 'Applied', 'Next step', 'CV', 'Letter', 'Actions'].map(t => ({ t })),
+      appStatusOpts: this.appStatusList.map(v => ({ v })),
+      appRows, appsEmpty: rows.length === 0, appsNotEmpty: rows.length > 0,
+      appsEmptyTitle: st.appView === 'Archived' ? 'No archived applications' : 'No applications yet'
+    };
+  }
+  genericProfile() {
+    return { title: 'Frontend / Software Engineer', years: '13+', location: 'Netherlands', languages: 'English (fluent) · Spanish (native) · Dutch (basic)', skills: ['Angular', 'TypeScript', 'JavaScript', 'React', 'Design Systems', 'Frontend Architecture'], summary: 'Parsed from uploaded file (mocked extraction).', auth: 'Requires sponsorship (NL)' };
+  }
+  deleteCv(id) {
+    const st = this.state, cv = st.cvs.find(c => c.id === id);
+    const used = st.applications.filter(a => a.cvId === id).length;
+    const msg = (used ? `"${cv.name}" is attached to ${used} application${used > 1 ? 's' : ''}; those references will be cleared. ` : `"${cv.name}" will be permanently deleted. `) + (cv.isDefault ? 'It is the default CV — another CV will become the default.' : '');
+    this.askConfirm({ title: 'Delete CV?', msg, label: 'Delete', danger: true }, () => {
+      let cvs = st.cvs.filter(c => c.id !== id);
+      if (cv.isDefault && cvs.length) cvs = cvs.map((c, i) => i === 0 ? { ...c, isDefault: true } : c);
+      this.up({ cvs, applications: st.applications.map(a => a.cvId === id ? { ...a, cvId: null } : a), selCvId: cvs.length ? cvs[0].id : null });
+      this.showToast('CV deleted');
+    });
+  }
+  mockParse(id, doneMsg) {
+    this.setState({ cvParsingId: id });
+    this.later(1400, () => {
+      this.up({ cvs: this.state.cvs.map(c => c.id === id ? { ...c, parse: 'Parsed', updated: '2026-08-29', profile: c.profile.title ? c.profile : this.genericProfile() } : c), cvParsingId: null });
+      this.showToast(doneMsg);
+    });
+  }
+  cvVals() {
+    const st = this.state;
+    const sel = st.cvs.find(c => c.id === st.selCvId) || st.cvs[0] || null;
+    const parsing = sel && st.cvParsingId === sel.id;
+    const cvRows = st.cvs.map(c => ({
+      name: c.name, kind: c.kind, targetRole: c.targetRole || '—', updated: this.fmtDate(c.updated),
+      parse: st.cvParsingId === c.id ? 'Parsing…' : c.parse,
+      parseStyle: { color: c.parse === 'Parsed' ? 'var(--ok)' : 'var(--t2)', fontWeight: 500 },
+      trStyle: { cursor: 'pointer', background: sel && sel.id === c.id ? 'var(--sel)' : 'transparent' },
+      defaultLabel: c.isDefault ? '✓ Default' : 'Set default',
+      defaultStyle: c.isDefault ? { background: 'none', border: 'none', padding: '3px 6px', fontSize: 12, color: 'var(--txt)', fontWeight: 600, cursor: 'default' } : { background: 'none', border: 'none', padding: '3px 6px', fontSize: 12, color: 'var(--t3)', cursor: 'pointer', textDecoration: 'underline' },
+      onDefault: e => { e.stopPropagation(); if (c.isDefault) return; this.up({ cvs: st.cvs.map(x => ({ ...x, isDefault: x.id === c.id })), settings: { ...st.settings, docCv: c.id } }); this.showToast('Default CV updated'); },
+      onRow: () => this.setState({ selCvId: c.id, cvRawOpen: false }),
+      onEdit: e => { e.stopPropagation(); this.openCvDrawer(c); },
+      onDuplicate: e => { e.stopPropagation(); const copy = { ...this.clone(c), id: st.nextId, name: c.name + ' (copy)', isDefault: false, updated: '2026-08-29' }; this.up({ cvs: [...st.cvs, copy], nextId: st.nextId + 1, selCvId: copy.id }); this.showToast('CV duplicated'); },
+      onDelete: e => { e.stopPropagation(); this.deleteCv(c.id); }
+    }));
+    const raw = sel ? ['name: ' + sel.name, 'target_roles: ' + (sel.targetRole || '—'), 'title: ' + sel.profile.title, 'years_experience: ' + sel.profile.years, 'location: ' + sel.profile.location, 'work_authorization: ' + (sel.profile.auth || '—'), 'languages: ' + sel.profile.languages, 'skills:', ...sel.profile.skills.map(s2 => '  - ' + s2), 'summary: ' + (sel.profile.summary || '—')].join('\n') : '';
+    return {
+      onCvFile: e => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        const id = st.nextId;
+        const rec = { id, name: f.name, kind: f.name.toLowerCase().endsWith('.docx') ? 'Uploaded DOCX' : 'Uploaded PDF', targetRole: '', uploaded: '2026-08-29', updated: '2026-08-29', parse: 'Parsing…', isDefault: st.cvs.length === 0, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } };
+        this.up({ cvs: [...st.cvs, rec], nextId: id + 1, selCvId: id });
+        this.mockParse(id, 'CV uploaded and parsed');
+        e.target.value = '';
+      },
+      newCvProfile: () => this.openCvDrawer(null),
+      cvsEmpty: st.cvs.length === 0, cvsNotEmpty: st.cvs.length > 0,
+      cvCols: ['Name', 'Kind', 'Target roles', 'Updated', 'Parse', 'Default', 'Actions'].map(t => ({ t })),
+      cvRows,
+      hasSelCv: !!sel,
+      selCvName: sel && sel.name, selCvBadge: sel ? (sel.kind === 'Manual profile' ? 'CV' : sel.kind.replace('Uploaded ', '')) : '',
+      selCvMeta: sel && (sel.kind + ' · uploaded ' + this.fmtDate(sel.uploaded) + ' · updated ' + this.fmtDate(sel.updated)),
+      selCvParse: parsing ? 'Parsing…' : (sel && (sel.parse === 'Parsed' ? 'Parsed successfully ✓' : sel.parse)),
+      selCvParseStyle: { color: parsing ? 'var(--t2)' : 'var(--ok)', fontWeight: 500 },
+      editCvProfile: () => sel && this.openCvDrawer(sel),
+      reparseCv: () => sel && this.mockParse(sel.id, 'CV re-parsed'),
+      onCvReplace: e => {
+        const f = e.target.files && e.target.files[0]; if (!f || !sel) return;
+        this.up({ cvs: st.cvs.map(c => c.id === sel.id ? { ...c, name: f.name, kind: f.name.toLowerCase().endsWith('.docx') ? 'Uploaded DOCX' : 'Uploaded PDF', uploaded: '2026-08-29', parse: 'Parsing…' } : c) });
+        this.mockParse(sel.id, 'CV replaced and re-parsed');
+        e.target.value = '';
+      },
+      downloadCvOrig: () => this.showToast('Prototype — Electron saves the original file via a native dialog'),
+      cvPairs: sel ? [
+        { k: 'Profile', v: sel.profile.title || '—' }, { k: 'Experience', v: sel.profile.years ? sel.profile.years + ' years' : '—' },
+        { k: 'Current location', v: sel.profile.location || '—' }, { k: 'Work authorization', v: sel.profile.auth || '—' },
+        { k: 'Languages', v: sel.profile.languages || '—' }, { k: 'Target roles', v: sel.targetRole || '—' },
+        { k: 'Summary', v: sel.profile.summary || '—' }
+      ] : [],
+      cvSkills: sel ? sel.profile.skills.map(t => ({ t })) : [],
+      cvRawOpen: st.cvRawOpen, toggleCvRaw: () => this.setState(s2 => ({ cvRawOpen: !s2.cvRawOpen })),
+      cvRawLabel: st.cvRawOpen ? 'Hide parsed data' : 'Review parsed data',
+      cvRaw: raw
+    };
+  }
+  readDocParas() {
+    const el = this.letterRef.current;
+    if (!el) return this.state.workingParas.map(p => p.t || p);
+    return Array.from(el.querySelectorAll('p')).map(p => p.innerText.trim()).filter(Boolean);
+  }
+  persistLetter(paras, statusOverride) {
+    const st = this.state;
+    const vac = this.vacById(st.letterJobId);
+    const title = st.letterTitle || (vac ? vac.company + ' — ' + vac.title : 'Untitled letter');
+    if (st.letterEditId) {
+      this.up({ letters: st.letters.map(l => l.id === st.letterEditId ? { ...l, title, paras, type: st.letterType, tone: st.letterTone, length: st.letterLen, updated: 'Today', status: statusOverride || l.status, vacId: st.letterJobId, cvId: st.genCvId } : l) });
+      return st.letterEditId;
+    }
+    const id = st.nextId;
+    const rec = { id, title, company: vac ? vac.company : '', role: vac ? vac.title : '', type: st.letterType, tone: st.letterTone, length: st.letterLen, updated: 'Today', status: statusOverride || 'Draft', vacId: st.letterJobId, cvId: st.genCvId, paras };
+    this.up({ letters: [rec, ...st.letters], nextId: id + 1, letterEditId: id });
+    return id;
+  }
+  letterVals() {
+    const st = this.state, set = st.settings;
+    const vac = this.vacById(st.letterJobId) || this.vacsAll()[0];
+    const cv = st.cvs.find(c => c.id === st.genCvId) || null;
+    const seg = (list, key, block) => list.map(label => ({ label, onClick: () => this.setState({ [key]: label }), style: { ...this.segStyle(st[key] === label, block), textAlign: 'left' } }));
+    const rewrite = (phase, fn) => {
+      const current = this.readDocParas();
+      this.setState({ generating: true, letterReady: false, genPhase: phase });
+      this.later(700, () => this.setState({ generating: false, letterReady: true, workingParas: fn(current).map(t => ({ t })) }));
+    };
+    return {
+      letterJobId: st.letterJobId,
+      onLetterJob: e => this.setState({ letterJobId: Number(e.target.value), letterReady: false, letterEditId: null, workingParas: [] }),
+      jobOpts: this.vacsAll().map(v => ({ id: v.id, label: v.title + ' — ' + v.company })),
+      genCvId: st.genCvId || '', onGenCv: e => this.setState({ genCvId: Number(e.target.value) }),
+      cvSelOpts: st.cvs.map(c => ({ id: c.id, label: c.name + (c.isDefault ? ' (default)' : '') })),
+      typeOpts: seg(['Motivation Letter', 'Cover Letter', 'Short Application Message', 'Recruiter Message'], 'letterType', true),
+      toneOpts: seg(['Natural', 'Concise', 'Formal', 'Confident'], 'letterTone'),
+      lenOpts: seg(['Short', 'Standard', 'Detailed'], 'letterLen'),
+      letterInstr: st.letterInstr, onInstr: e => this.setState({ letterInstr: e.target.value }),
+      generateBtnLabel: st.letterReady ? 'Regenerate' : 'Generate',
+      generateLetter: () => {
+        if (st.generating) return;
+        if (!cv) { this.showToast('Add a CV first — the letter is drafted from it'); return; }
+        this.setState({ generating: true, letterReady: false, genPhase: 'Generating ' + st.letterType.toLowerCase() + '…' });
+        this.later(1500, () => {
+          const paras = this.letterTextFor(vac, cv, this.state.letterType, this.state.letterTone, this.state.letterLen);
+          const title = vac.company + ' — ' + vac.title;
+          this.setState({ generating: false, letterReady: true, workingParas: paras.map(t => ({ t })), letterTitle: title, copied: false }, () => {
+            if (this.state.settings.autosaveDocs && !this.state.letterEditId) { this.persistLetter(paras); this.showToast('Letter generated · saved as draft'); }
+          });
+        });
+      },
+      letterIdle: !st.generating && !st.letterReady, generating: st.generating, genPhase: st.genPhase, letterReady: st.letterReady,
+      workingParas: st.workingParas,
+      letterTitle: st.letterTitle, onLetterTitle: e => this.setState({ letterTitle: e.target.value }),
+      letterRef: this.letterRef,
+      rewriteShorter: () => rewrite('Rewriting — shorter…', ps => ps.length > 4 ? ps.filter((p, i) => i !== 2) : ps),
+      rewriteFormal: () => rewrite('Rewriting — more formal…', ps => ps.map(p => p === 'Dear Hiring Manager,' ? 'Dear Sir or Madam,' : p === 'Kind regards,' || p === 'Best regards,' ? 'Yours faithfully,' : p)),
+      rewriteNatural: () => rewrite('Rewriting — more natural…', ps => ps.map(p => p === 'Dear Sir or Madam,' ? 'Dear Hiring Manager,' : p === 'Yours faithfully,' ? 'Kind regards,' : p)),
+      copyLetter: () => { const t = this.readDocParas().join('\n\n'); try { navigator.clipboard.writeText(t); } catch (e) {} this.showToast('Letter copied to clipboard'); },
+      copyLabel: 'Copy',
+      downloadLetter: () => {
+        const t = this.readDocParas().join('\n\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([t], { type: 'text/plain' }));
+        a.download = (st.letterTitle || 'letter').replace(/[^\w\- ]+/g, '') + '.txt';
+        a.click(); URL.revokeObjectURL(a.href);
+        this.showToast('Downloaded as .txt');
+      },
+      saveLetterDoc: () => { const paras = this.readDocParas(); this.setState({ workingParas: paras.map(t => ({ t })) }, () => { this.persistLetter(paras); this.showToast('Letter saved'); }); },
+      saveLetterLabel: st.letterEditId ? 'Save' : 'Save to Letters',
+      markReady: () => { const paras = this.readDocParas(); this.setState({ workingParas: paras.map(t => ({ t })) }, () => { this.persistLetter(paras, 'Ready'); this.showToast('Letter marked ready'); }); },
+      letterContext: 'Generated using ' + (st.provider === 'claude' ? 'Claude Code' : 'Codex') + ' · Based on ' + (cv ? cv.name : 'no CV') + ' and the ' + (vac ? vac.title + ' (' + vac.company + ')' : '') + ' vacancy.' + (st.letterInstr.trim() ? ' Personal instructions applied.' : '')
+    };
+  }
+  openLetter(l) {
+    this.up({ nav: 'lettergen', letterEditId: l.id, letterJobId: l.vacId || this.state.letterJobId, genCvId: l.cvId || this.state.genCvId, letterType: l.type, letterTone: l.tone || 'Natural', letterLen: l.length || 'Standard', workingParas: l.paras.map(t => ({ t })), letterTitle: l.title, letterReady: true, generating: false });
+  }
+  deleteLetter(id) {
+    const rec = this.state.letters.find(l => l.id === id);
+    this.askConfirm({ title: 'Delete letter?', msg: `"${rec.title}" will be permanently deleted. Applications that reference it will lose the link.`, label: 'Delete', danger: true }, () => {
+      const prevL = this.state.letters, prevA = this.state.applications;
+      this.up({ letters: prevL.filter(l => l.id !== id), applications: prevA.map(a => a.letterId === id ? { ...a, letterId: null } : a), letterEditId: this.state.letterEditId === id ? null : this.state.letterEditId });
+      this.showToast('Letter deleted', () => this.up({ letters: prevL, applications: prevA }));
+    });
+  }
+  lettersVals() {
+    const st = this.state;
+    const chip = s2 => ({ fontSize: 11.5, fontWeight: 500, color: s2 === 'Ready' || s2 === 'Final' || s2 === 'Sent' ? 'var(--ok)' : 'var(--t2)', border: '1px solid var(--chip2-bd)', background: 'var(--panel)', borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap' });
+    const letterRows = st.letters.map(l => ({
+      title: l.title, company: l.company || '—', role: l.role || '—', type: l.type, updated: l.updated, status: l.status, statusStyle: chip(l.status),
+      onOpen: () => this.openLetter(l),
+      onOpenBtn: e => { e.stopPropagation(); this.openLetter(l); },
+      onDuplicate: e => { e.stopPropagation(); const copy = { ...this.clone(l), id: st.nextId, title: l.title + ' (copy)', status: 'Draft', updated: 'Today' }; this.up({ letters: [copy, ...st.letters], nextId: st.nextId + 1 }); this.showToast('Letter duplicated'); },
+      onDelete: e => { e.stopPropagation(); this.deleteLetter(l.id); }
+    }));
+    return {
+      newLetter: () => this.up({ nav: 'lettergen', letterEditId: null, letterReady: false, workingParas: [], generating: false }),
+      letterCols: ['Title', 'Company', 'Role', 'Type', 'Updated', 'Status', 'Actions'].map(t => ({ t })),
+      letterRows, lettersEmpty: st.letters.length === 0, lettersNotEmpty: st.letters.length > 0
+    };
+  }
+  runtimeVals() {
+    const st = this.state;
+    const cs = this.props.demoCodexState || 'ready';
+    const codexOk = cs === 'ready' || cs === 'unknown';
+    const cardStyle = active => ({ border: '1px solid ' + (active ? 'var(--pri)' : 'var(--bd)'), borderRadius: 8, padding: '16px 18px', background: 'var(--bg)' });
+    const useBtn = (active, disabled) => ({ marginTop: 16, padding: '7px 13px', width: '100%', background: active || disabled ? 'var(--panel)' : 'var(--pri)', color: active ? 'var(--t2)' : disabled ? 'var(--t4)' : 'var(--pri-t)', border: '1px solid ' + (active || disabled ? 'var(--chip2-bd)' : 'var(--pri)'), borderRadius: 6, fontSize: 12.5, fontWeight: 500, cursor: active || disabled ? 'default' : 'pointer' });
+    const boxes = {
+      unauthenticated: ['Codex was found but authentication could not be verified.', 'Run codex auth status in your terminal and try again.'],
+      notinstalled: ['Codex CLI is not installed on this computer.', 'Install the Codex CLI and it will appear here automatically. No configuration is stored by Open Vacancy Radar.'],
+      unknown: ['Codex did not report its authentication status.', 'You can still select it as the runtime; runs may fail if the CLI is not authenticated.']
+    };
+    return {
+      claudeCardStyle: cardStyle(st.provider === 'claude'), codexCardStyle: cardStyle(st.provider === 'codex'),
+      useClaude: () => { if (st.provider !== 'claude') { this.up({ provider: 'claude', verifyDone: false }); this.showToast('Default runtime: Claude Code'); } },
+      useCodex: () => { if (codexOk && st.provider !== 'codex') { this.up({ provider: 'codex', verifyDone: false }); this.showToast('Default runtime: Codex'); } },
+      useClaudeStyle: useBtn(st.provider === 'claude', false),
+      useCodexStyle: useBtn(st.provider === 'codex', !codexOk),
+      useClaudeLabel: st.provider === 'claude' ? 'Default runtime ✓' : 'Use Claude Code',
+      useCodexLabel: !codexOk ? (cs === 'notinstalled' ? 'Not installed' : 'Verify authentication first') : (st.provider === 'codex' ? 'Default runtime ✓' : 'Use Codex'),
+      codexDotStyle: this.dot(cs === 'ready' ? 'var(--ok)' : cs === 'notinstalled' ? 'var(--t3)' : 'var(--warn)'),
+      codexStatusLabel: { ready: 'Ready', unauthenticated: 'Needs verification', notinstalled: 'Not installed', unknown: 'Auth status unknown' }[cs],
+      codexInstalledLabel: cs === 'notinstalled' ? 'No' : 'Yes',
+      codexAuthLabel: { ready: 'Authenticated', unauthenticated: 'Could not verify', notinstalled: '—', unknown: 'Unknown' }[cs],
+      codexVersionLabel: cs === 'notinstalled' ? '—' : '1.9.0',
+      codexBox: cs !== 'ready', codexBoxTitle: boxes[cs] ? boxes[cs][0] : '', codexBoxBody: boxes[cs] ? boxes[cs][1] : '',
+      verifyCli: () => { if (st.verifying) return; this.setState({ verifying: true, verifyDone: false }); this.later(1300, () => this.setState({ verifying: false, verifyDone: true })); },
+      verifyLabel: st.verifying ? 'Checking ' + (st.provider === 'claude' ? 'Claude Code' : 'Codex') + '…' : 'Verify CLI',
+      verifyDone: st.verifyDone,
+      verifyBin: st.provider === 'claude' ? '/usr/local/bin/claude' : '/usr/local/bin/codex',
+      verifyVersion: st.provider === 'claude' ? '2.4.1' : '1.9.0'
+    };
+  }
+  settingsVals() {
+    const st = this.state, set = st.settings;
+    const srcTog = key => {
+      const on = !!set.sources[key];
+      return { onClick: () => { this.up({ settings: { ...set, sources: { ...set.sources, [key]: !on } } }); this.showToast('Settings saved'); }, track: this.track(on), knob: this.knob(on) };
+    };
+    const postedMap = { 'Any time': 'Any', 'Last 24 hours': '1', 'Last 7 days': '7', 'Last 30 days': '30' };
+    return {
+      zero: 0,
+      onSetting: e => {
+        const { name, value } = e.target;
+        const v = name === 'docCv' ? Number(value) : value;
+        const extra = {};
+        if (name === 'defArrangement') extra.fArr = value;
+        if (name === 'defEmployment') extra.fEmp = value;
+        if (name === 'defPosted') extra.fPosted = postedMap[value] || 'Any';
+        if (name === 'defLocation' && st.searched === false) extra.locFilter = value;
+        this.up({ settings: { ...set, [name]: v }, ...extra });
+        this.showToast('Settings saved');
+      },
+      sStartPage: set.startPage, sSidebarStart: set.sidebarStart,
+      sDefMarket: set.defMarket, sDefLocation: set.defLocation, sDefArrangement: set.defArrangement, sDefEmployment: set.defEmployment, sDefPosted: set.defPosted,
+      sDocCv: String(set.docCv || ''), sDocType: set.docType, sDocTone: set.docTone, sDocLen: set.docLen, sAppDefaultStatus: set.appDefaultStatus,
+      themeOpts: ['Light', 'Dark', 'System'].map(label => ({ label, onClick: () => this.setSetting('theme', label), style: this.segStyle(set.theme === label) })),
+      densOpts: ['Comfortable', 'Compact'].map(label => ({ label, onClick: () => this.setSetting('density', label), style: this.segStyle(set.density === label) })),
+      tLaunch: this.mkTog('launchLogin'), tQuit: this.mkTog('confirmQuit'), tSponsor: this.mkTog('sponsorDefault'), tIND: this.mkTog('indEnabled'),
+      tAutosave: this.mkTog('autosaveDocs'), tAppConfirm: this.mkTog('appConfirmDelete'), tAutoArch: this.mkTog('appAutoArchiveRejected'),
+      tSrcL: srcTog('linkedin'), tSrcI: srcTog('indeed'), tSrcC: srcTog('company'),
+      resetSources: () => { this.up({ settings: { ...set, sources: { linkedin: true, indeed: true, company: true }, indEnabled: true } }); this.showToast('Sources reset to defaults'); },
+      exportData: () => {
+        const data = { seedV: this.SEEDV, settings: set, savedJobs: st.savedJobs, applications: st.applications, cvs: st.cvs, letters: st.letters, provider: st.provider };
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+        a.download = 'open-vacancy-radar-data.json'; a.click(); URL.revokeObjectURL(a.href);
+        this.showToast('Data exported');
+      },
+      onImportFile: e => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        const r = new FileReader();
+        r.onload = () => {
+          try {
+            const d = JSON.parse(r.result);
+            if (!d || !d.settings || !Array.isArray(d.cvs)) throw new Error('bad');
+            this.up({ settings: { ...this.makeSeed().settings, ...d.settings }, savedJobs: d.savedJobs || [], applications: d.applications || [], cvs: d.cvs, letters: d.letters || [], provider: d.provider || 'claude' });
+            this.showToast('Data imported');
+          } catch (err) { this.showToast('Import failed — not a valid export file'); }
+        };
+        r.readAsText(f); e.target.value = '';
+      },
+      clearHistory: () => { this.setState({ query: '', searched: false, selId: null, locFilter: '' }); this.showToast('Search history cleared'); },
+      restoreDemo: () => this.askConfirm({ title: 'Restore demo data?', msg: 'Saved jobs, applications, CVs and letters will be replaced with the original demo dataset. Settings are kept.', label: 'Restore' }, () => {
+        const seed = this.clone(this.makeSeed());
+        this.up({ savedJobs: seed.savedJobs, applications: seed.applications, cvs: seed.cvs, letters: seed.letters, nextId: seed.nextId, selCvId: seed.cvs[0].id, letterEditId: null, letterReady: false, workingParas: [] });
+        this.showToast('Demo data restored');
+      }),
+      resetSettings: () => this.askConfirm({ title: 'Reset settings?', msg: 'All settings return to their defaults. Your saved jobs, applications, CVs and letters are kept.', label: 'Reset' }, () => {
+        this.up({ settings: this.clone(this.makeSeed().settings) });
+        this.showToast('Settings reset to defaults');
+      }),
+      resetAllData: () => this.askConfirm({ title: 'Reset application data?', msg: 'Everything — settings, saved jobs, applications, CVs and letters — will be reset to the initial demo state. This cannot be undone.', label: 'Reset everything', danger: true }, () => {
+        const seed = this.clone(this.makeSeed());
+        this.up({ settings: seed.settings, savedJobs: seed.savedJobs, applications: seed.applications, cvs: seed.cvs, letters: seed.letters, provider: seed.provider, nextId: seed.nextId, sidebarCollapsed: false, selCvId: seed.cvs[0].id, market: seed.settings.defMarket, sponsorOnly: seed.settings.sponsorDefault, query: 'Frontend Engineer', searched: false, selId: null, letterEditId: null, letterReady: false, workingParas: [] });
+        this.showToast('Application data reset');
+      }),
+      runDiagnostics: () => this.showToast('Diagnostics copied to clipboard')
+    };
+  }
+  overlayVals() {
+    const st = this.state, dr = st.drawer, d = dr ? dr.d : {};
+    const titles = { saved: dr && dr.id ? 'Edit saved job' : 'Add saved job', app: dr && dr.id ? 'Edit application' : 'New application', cv: dr && dr.id ? 'Edit CV profile' : 'New CV profile' };
+    return {
+      drawerOpen: !!dr, drawerTitle: dr ? titles[dr.kind] : '',
+      drawerSaved: !!dr && dr.kind === 'saved', drawerApp: !!dr && dr.kind === 'app', drawerCv: !!dr && dr.kind === 'cv',
+      drawerError: dr && dr.error, hasDrawerError: !!(dr && dr.error),
+      drawerSaveLabel: dr && dr.id ? 'Save changes' : 'Create',
+      closeDrawer: () => this.setState({ drawer: null }),
+      saveDrawer: this.saveDrawer,
+      onDraftField: e => {
+        const { name, value } = e.target;
+        this.setState(s2 => {
+          const nd = { ...s2.drawer.d, [name]: value };
+          if (name === 'savedId' && value) {
+            const sj = s2.savedJobs.find(x => x.id === Number(value));
+            if (sj) { nd.role = sj.role; nd.company = sj.company; nd.location = sj.location; nd.market = sj.market; nd.verification = sj.verification; }
+          }
+          return { drawer: { ...s2.drawer, d: nd, error: '' } };
+        });
+      },
+      dRole: d.role || '', dCompany: d.company || '', dMarket: d.market || 'Netherlands', dLocation: d.location || '', dSalary: d.salary || '', dArrangement: d.arrangement || 'Hybrid', dSourceUrl: d.sourceUrl || '', dVerification: d.verification || 'Not verified', dStatus: d.status || '', dNotes: d.notes || '',
+      dSavedId: d.savedId || '', dApplied: d.applied || '', dNext: d.next || '', dContact: d.contact || '', dCvId: d.cvId || '', dLetterId: d.letterId || '',
+      dName: d.name || '', dTargetRole: d.targetRole || '', dTitle: d.title || '', dYears: d.years || '', dLanguages: d.languages || '', dSkills: d.skills || '', dAuth: d.auth || '', dSummary: d.summary || '',
+      savedLinkOpts: st.savedJobs.map(s2 => ({ id: String(s2.id), label: s2.role + ' — ' + s2.company })),
+      cvOpts: st.cvs.map(c => ({ id: String(c.id), label: c.name })),
+      letterOpts: st.letters.map(l => ({ id: String(l.id), label: l.title }))
+    };
+  }
+
+  renderVals() {
+    return Object.assign({}, this.shellVals(), this.searchVals(), this.savedVals(), this.appsVals(), this.cvVals(), this.letterVals(), this.lettersVals(), this.runtimeVals(), this.settingsVals(), this.overlayVals());
+  }
+}
+</script>
+</body>
+</html>

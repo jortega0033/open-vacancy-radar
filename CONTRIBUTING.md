@@ -1,6 +1,7 @@
 # Contributing
 
-Thanks for considering a contribution to Agent Dock. This is boilerplate meant to be forked and
+Thanks for considering a contribution to Open Vacancy Radar. Its local AI runtime is based on
+AgentDock and is designed to be forked and
 extended, so contributions here should stay in that spirit: keep the core small, provider-neutral,
 and easy for someone else to reason about after forking it.
 
@@ -59,7 +60,7 @@ pnpm audit       # electron-builder's own build-time deps are a known, documente
 
 If you touched anything under `apps/desktop/electron/` (main process, preload, or packaging
 config), also run `pnpm package:win` (Windows) and confirm the app still launches from
-`dist-packages/win-unpacked/AgentDock.exe` — packaging has its own failure modes that `pnpm build`
+`dist-packages/win-unpacked/Open Vacancy Radar.exe` — packaging has its own failure modes that `pnpm build`
 alone won't catch (see [docs/packaging.md#verifying-a-packaging-sensitive-change](docs/packaging.md#verifying-a-packaging-sensitive-change)
 for real ones this project already hit).
 
