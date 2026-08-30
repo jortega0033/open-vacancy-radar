@@ -20,8 +20,12 @@ await build({
   packages: 'bundle',
   loader: { '.node': 'file' },
   banner: {
-    // Some bundled CJS dependencies call require() at runtime; under an ESM output there is no
-    // ambient `require`, so this is the standard esbuild shim for node+esm bundles.
-    js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+    // Some bundled CJS dependencies call require(), __filename, or __dirname at runtime (e.g.
+    // @napi-rs/keyring calls createRequire(__filename) to load its native binding); under an ESM
+    // output none of the three exist ambiently, so this is the standard esbuild shim for
+    // node+esm bundles. Every bundled module shares one __filename/__dirname (the bundle's own),
+    // not each original source file's — irrelevant here since callers only need a real path to
+    // resolve requires/assets relative to, not their original module's specific location.
+    js: "import { createRequire as __createRequire } from 'node:module'; import { fileURLToPath as __fileURLToPath } from 'node:url'; import { dirname as __dirnameOf } from 'node:path'; const require = __createRequire(import.meta.url); const __filename = __fileURLToPath(import.meta.url); const __dirname = __dirnameOf(__filename);",
   },
 });
