@@ -1,17 +1,5 @@
+import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from '../../../electron/workspace/cv-profile-schema.js';
 import type { CvProfile } from '../../window.js';
-
-/**
- * Mirrors `LIMITS` in `apps/desktop/electron/workspace/validate.ts` — the actual save-time bound —
- * so an oversized AI answer is trimmed to something `Save` will accept instead of sailing through
- * this coercion untouched and only failing later, as a raw length error disconnected from the
- * "Parse with AI" click that caused it. Duplicated rather than imported: this module runs in the
- * renderer bundle, `validate.ts` in the main-process one.
- */
-const SHORT_FIELD_LIMIT = 512;
-const SUMMARY_LIMIT = 20_000;
-const MAX_SKILLS = 200;
-
-const SHORT_FIELD_KEYS = ['title', 'years', 'location', 'languages', 'auth'] as const;
 
 /**
  * The model is asked for a bare JSON object but coding-agent CLIs habitually wrap answers in a
@@ -37,9 +25,9 @@ function skillsField(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const skills = value
     .filter((entry): entry is string => typeof entry === 'string')
-    .map((entry) => entry.trim().slice(0, SHORT_FIELD_LIMIT))
+    .map((entry) => entry.trim().slice(0, CV_PROFILE_LIMITS.shortField))
     .filter((entry) => entry.length > 0)
-    .slice(0, MAX_SKILLS);
+    .slice(0, CV_PROFILE_LIMITS.skills);
   return skills.length > 0 ? skills : undefined;
 }
 
@@ -54,11 +42,11 @@ export function toPartialCvProfile(value: unknown): Partial<CvProfile> {
   const record = value as Record<string, unknown>;
   const profile: Partial<CvProfile> = {};
 
-  for (const key of SHORT_FIELD_KEYS) {
-    const field = stringField(record[key], SHORT_FIELD_LIMIT);
+  for (const key of CV_PROFILE_SHORT_FIELDS) {
+    const field = stringField(record[key], CV_PROFILE_LIMITS.shortField);
     if (field) profile[key] = field;
   }
-  const summary = stringField(record.summary, SUMMARY_LIMIT);
+  const summary = stringField(record.summary, CV_PROFILE_LIMITS.summary);
   if (summary) profile.summary = summary;
   const skills = skillsField(record.skills);
   if (skills) profile.skills = skills;

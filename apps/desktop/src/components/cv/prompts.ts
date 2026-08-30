@@ -1,3 +1,4 @@
+import { CV_PROFILE_FIELD_DESCRIPTIONS, CV_PROFILE_FIELD_ORDER } from '../../../electron/workspace/cv-profile-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -141,6 +142,16 @@ ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
  * review and edit before it touches the workspace, so an over-eager or wrong guess here costs a
  * glance, not silently-corrupted profile data.
  */
+/** `{"title": string, ..., "skills": string[], ...}` — generated from the shared schema so this
+ * can never describe a field `CV_PROFILE_FIELD_ORDER` doesn't declare, or omit one it does. */
+function cvProfileJsonShape(): string {
+  return `{${CV_PROFILE_FIELD_ORDER.map((key) => `"${key}": ${key === 'skills' ? 'string[]' : 'string'}`).join(', ')}}`;
+}
+
+function cvProfileFieldBullets(): string {
+  return CV_PROFILE_FIELD_ORDER.map((key) => `- "${key}": ${CV_PROFILE_FIELD_DESCRIPTIONS[key]}`).join('\n');
+}
+
 export function buildCvParsePrompt(fileName: string, text: string): string {
   return `You extract structured fields from one candidate's CV text. Read the CV below and reply with a single JSON object only — no Markdown code fence, no commentary before or after it.
 
@@ -148,15 +159,9 @@ ${GROUNDING_RULES}
 Never invent a value: if a field is not stated or cannot be inferred from the CV text, use an empty string ("") or an empty array ([]) for it — do not guess.
 
 Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
-{"title": string, "years": string, "location": string, "languages": string, "skills": string[], "summary": string, "auth": string}
+${cvProfileJsonShape()}
 
-- "title": the candidate's current or most recent job title.
-- "years": years of relevant professional experience, as a short phrase (e.g. "5 years").
-- "location": the candidate's stated location or timezone.
-- "languages": spoken/written languages with proficiency if stated (e.g. "Dutch (B2), English (native)").
-- "skills": an array of concrete technical skills actually named in the CV (technologies, frameworks, tools).
-- "summary": a 2-3 sentence neutral summary of the candidate's background, drawn only from the CV text.
-- "auth": work authorization / visa status if the CV states it, otherwise "".
+${cvProfileFieldBullets()}
 
 === CANDIDATE CV (${field(fileName)}) ===
 ${clamp(text, MAX_CV_PROMPT_CHARS)}`;
