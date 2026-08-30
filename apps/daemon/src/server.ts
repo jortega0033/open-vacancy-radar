@@ -5,12 +5,15 @@ import { registerHealthRoute } from './routes/health.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import type { SessionManager } from './session-manager.js';
+import { registerMcpRoutes } from './routes/mcp.js';
+import type { McpConnectionManager } from './mcp/manager.js';
 
 export interface BuildServerOptions {
   registry: ProviderRegistry;
   sessionManager: SessionManager;
   token: string;
   logger: Logger;
+  mcpManager?: McpConnectionManager;
 }
 
 /**
@@ -58,6 +61,7 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
   registerHealthRoute(app, startedAt);
   registerProviderRoutes(app, opts.registry);
   registerSessionRoutes(app, opts.sessionManager, opts.registry);
+  if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
     // Fastify's own body-parsing errors (malformed JSON, payload-too-large, ...) carry a real

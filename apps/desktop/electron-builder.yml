@@ -27,8 +27,8 @@ files:
 # so it can't just live inside main.js. It's shipped as an extraResource (outside app.asar
 # entirely) rather than relying on Electron's asar-aware fs patching, since spawning a *new*
 # process against a path inside an asar archive is exactly the kind of "works by accident"
-# behavior this project avoids — apps/daemon/dist/index.js is already a single self-contained
-# esbuild bundle (see apps/daemon/scripts/build.mjs), so nothing else needs to come with it.
+# behavior this project avoids. apps/daemon/dist contains the esbuild bundle and any native
+# runtime assets (currently the OS credential-store binding), so the directory moves as one unit.
 extraResources:
   - from: ../daemon/dist
     to: daemon
