@@ -1,5 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { CvDocumentRecord, CvProfile } from '../../window.js';
+import { buildCvParsePrompt } from '../cv/prompts.js';
+import { useAgentRun } from '../cv/useAgentRun.js';
+import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 
 /**
@@ -64,11 +67,48 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [parseNotice, setParseNotice] = useState<string>();
+  const [parseError, setParseError] = useState<string>();
 
   const isEdit = mode === 'edit';
+  const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
+
+  const parseRun = useAgentRun();
+  const parseAppliedRef = useRef(false);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Applies the AI's fields to the form exactly once per run, the moment that run completes —
+  // never automatically saved, so a wrong or thin answer costs the user a glance, not their data.
+  useEffect(() => {
+    if (parseRun.status !== 'completed' || parseAppliedRef.current) return;
+    parseAppliedRef.current = true;
+    try {
+      const parsed = parseCvAiResponse(parseRun.text);
+      setForm((prev) => ({
+        ...prev,
+        title: parsed.title ?? prev.title,
+        years: parsed.years ?? prev.years,
+        location: parsed.location ?? prev.location,
+        languages: parsed.languages ?? prev.languages,
+        skillsText: parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+        summary: parsed.summary ?? prev.summary,
+        auth: parsed.auth ?? prev.auth,
+      }));
+      setParseNotice('Filled in from your CV — review before saving.');
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'could not read the AI response');
+    }
+  }, [parseRun.status, parseRun.text]);
+
+  function handleParseWithAi() {
+    if (!record || !canParseWithAi) return;
+    parseAppliedRef.current = false;
+    setParseNotice(undefined);
+    setParseError(undefined);
+    void parseRun.start(buildCvParsePrompt(record.name, record.text));
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -128,6 +168,35 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
         <form className="flex flex-1 flex-col overflow-y-auto" onSubmit={handleSubmit}>
           <div className="flex-1 space-y-3 px-5 py-4">
+            {canParseWithAi && (
+              <div className="rounded-box border border-base-300 bg-base-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleParseWithAi}
+                    disabled={submitting || parseRun.isBusy}
+                  >
+                    {parseRun.isBusy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    Parse with AI
+                  </button>
+                  <span className="text-xs text-base-content/60">
+                    Reads the extracted text and fills in the fields below for you to review.
+                  </span>
+                </div>
+                {parseNotice && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    {parseNotice}
+                  </p>
+                )}
+                {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {parseError ?? parseRun.error}
+                  </p>
+                )}
+              </div>
+            )}
+
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Name *

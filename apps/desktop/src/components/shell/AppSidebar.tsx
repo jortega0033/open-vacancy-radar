@@ -1,4 +1,4 @@
-import { CaretLeft } from '@phosphor-icons/react';
+import { CaretLeft, User } from '@phosphor-icons/react';
 import type { WorkspaceCounts } from '../../window.js';
 import { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 import { NavIcon } from './NavIcon.js';
@@ -72,8 +72,8 @@ export function AppSidebar({
         className={`border-t border-base-300 ${collapsed ? 'flex flex-col items-center gap-1.5 py-3' : 'flex items-center gap-2 px-3.5 py-3'}`}
       >
         <div className="relative flex-none">
-          <div className="flex size-7 items-center justify-center rounded-full bg-base-300 text-xs font-semibold text-base-content/70">
-            JO
+          <div className="flex size-7 items-center justify-center rounded-full bg-base-300 text-base-content/70">
+            <User size={15} weight="bold" aria-hidden="true" />
           </div>
           <span
             className={`absolute right-0 bottom-0 size-2 rounded-full border-2 border-base-200 ${runtimeReady ? 'bg-success' : 'bg-base-content/30'}`}
