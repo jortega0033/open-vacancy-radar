@@ -1,63 +1,19 @@
 {
   "profileVersion": "candidate-profile-v3",
-  "candidateName": "Example Candidate",
-  "currentRole": "Frontend Engineer",
-  "location": "Netherlands",
-  "experienceYears": 5,
-  "strongestSkills": [
-    "TypeScript",
-    "JavaScript",
-    "React",
-    "HTML",
-    "CSS",
-    "accessibility",
-    "frontend architecture"
-  ],
-  "additionalSkills": [
-    "Node.js",
-    "SQL",
-    "Docker"
-  ],
-  "targetRoles": [
-    "Frontend Engineer",
-    "Frontend Developer",
-    "UI Engineer"
-  ],
-  "consideredRoles": [
-    "Senior Frontend Engineer",
-    "Web UI Engineer"
-  ],
-  "excludedRoleFamilies": [
-    "backend-only",
-    "embedded",
-    "firmware",
-    "industrial controls",
-    "mechanical",
-    "electrical",
-    "data science",
-    "data engineering",
-    "machine learning research",
-    "ERP consulting",
-    "implementation consulting",
-    "DevOps-only",
-    "SRE-only",
-    "cybersecurity-only",
-    "QA-only",
-    "management-only",
-    "product management",
-    "project management",
-    "support",
-    "sales",
-    "marketing",
-    "HR",
-    "finance",
-    "operations"
-  ],
+  "candidateName": "",
+  "currentRole": "",
+  "location": "",
+  "experienceYears": 0,
+  "strongestSkills": [],
+  "additionalSkills": [],
+  "targetRoles": [],
+  "consideredRoles": [],
+  "excludedRoleFamilies": [],
   "constraints": {
     "professionalLanguage": "English",
     "dutchRequired": false,
-    "primaryCountry": "Netherlands",
+    "primaryCountry": "",
     "allowRemoteEuSupportingNetherlands": true,
-    "minimumMonthlyBaseEur": 4000
+    "minimumMonthlyBaseEur": 0
   }
 }

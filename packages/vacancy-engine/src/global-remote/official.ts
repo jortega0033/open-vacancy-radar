@@ -119,7 +119,7 @@ function auditFromVacancy(
   state: OfficialSourceState,
   requestCount: number,
   httpStatus: number | null,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
   extraEvidence: string[] = [],
 ): OfficialVacancyAudit {
   const hash = vacancy === null ? null : createVacancyContentHash(vacancy);
@@ -163,7 +163,7 @@ function errorAudit(
   source: GlobalRemoteSource,
   error: unknown,
   requestCount: number,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
 ): OfficialVacancyAudit {
   const failure = errorState(error);
   const audit = auditFromVacancy(

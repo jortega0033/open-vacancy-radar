@@ -48,7 +48,7 @@ export function classifyDiscoveryVacancy(input: {
   title: string;
   location: string;
   annualizedMinimumUsd: number | null;
-  minimumAnnualBaseUsd: number;
+  minimumAnnualBaseUsd: number | null;
   description?: string | null;
 }): { decision: DiscoveryDecision; reasons: string[] } {
   if (NON_VACANCY.test(`${input.title}\n${input.description ?? ''}`)) {
@@ -69,7 +69,7 @@ export function classifyDiscoveryVacancy(input: {
       reasons: ['No deterministic USD annual base floor can be established from discovery metadata.'],
     };
   }
-  if (input.annualizedMinimumUsd < input.minimumAnnualBaseUsd) {
+  if (input.minimumAnnualBaseUsd !== null && input.annualizedMinimumUsd < input.minimumAnnualBaseUsd) {
     return {
       decision: 'salary_below_threshold',
       reasons: [`Advertised minimum is $${Math.round(input.annualizedMinimumUsd).toLocaleString('en-US')}.`],
@@ -86,7 +86,7 @@ export function evaluateOfficialReview(input: {
   state: OfficialSourceState;
   currentTitle: string;
   contentHash: string | null;
-  minimumAnnualBaseUsd: number;
+  minimumAnnualBaseUsd: number | null;
 }): { decision: GlobalRemoteDecision; reasons: string[] } {
   const { source } = input;
   if (input.state === 'blocked') {
@@ -135,7 +135,10 @@ export function evaluateOfficialReview(input: {
   if (source.review.minimumAnnualBaseUsd === null) {
     return { decision: 'salary_unknown', reasons: ['Official source does not advertise a base-pay floor.'] };
   }
-  if (source.review.minimumAnnualBaseUsd < input.minimumAnnualBaseUsd) {
+  if (
+    input.minimumAnnualBaseUsd !== null &&
+    source.review.minimumAnnualBaseUsd < input.minimumAnnualBaseUsd
+  ) {
     return {
       decision: 'salary_below_threshold',
       reasons: [`Outside-US base floor is $${source.review.minimumAnnualBaseUsd.toLocaleString('en-US')}.`],

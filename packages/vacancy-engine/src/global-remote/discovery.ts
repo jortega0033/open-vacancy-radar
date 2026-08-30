@@ -39,7 +39,9 @@ async function discoverHimalayas(
       for (let page = 1; page <= config.discovery.himalayasMaxPagesPerQuery; page += 1) {
         const url = new URL('https://himalayas.app/jobs/api/search');
         url.searchParams.set('q', query);
-        url.searchParams.set('country', config.discovery.himalayasCountry);
+        if (config.discovery.himalayasCountry) {
+          url.searchParams.set('country', config.discovery.himalayasCountry);
+        }
         url.searchParams.set('sort', 'salaryDesc');
         url.searchParams.set('page', String(page));
         lastUrl = url.toString();

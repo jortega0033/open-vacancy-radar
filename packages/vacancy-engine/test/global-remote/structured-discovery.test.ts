@@ -14,6 +14,7 @@ const config: GlobalRemoteConfig = {
   version: 'test',
   minimumAnnualBaseUsd: 100_000,
   discovery: {
+    roleQuery: 'frontend',
     himalayasQueries: ['frontend'],
     himalayasCountry: 'NL',
     himalayasMaxPagesPerQuery: 1,
@@ -164,5 +165,34 @@ describe('structured global-remote discovery', () => {
       .toMatchObject({ status: 'blocked', requests: 1, listings: 0 });
     expect(result.sources.filter((source) => source.provider !== 'freehire')
       .every((source) => source.status === 'success')).toBe(true);
+  });
+
+  it('omits the role-query parameter entirely when no default role is configured, rather than sending an empty string', async () => {
+    const unconfigured: GlobalRemoteConfig = {
+      ...config,
+      minimumAnnualBaseUsd: null,
+      discovery: { ...config.discovery, roleQuery: '' },
+    };
+    const routes = new Map<string, string | AtsHttpResponse>([
+      [
+        'https://freehire.me/api/v1/jobs/search?work_mode=remote&regions=global%2Ceu&salary_currency=USD&reality=fresh&posted_within_days=30&sort=posted_at&order=desc&limit=2',
+        JSON.stringify({ data: [], meta: { total: 0, limit: 2, offset: 0 } }),
+      ],
+      [
+        'https://api.jobopportunitiesapi.org/public/jobs?remote_confirmed=true&require_fields=salary&limit=2',
+        JSON.stringify({ data: [], has_more: false }),
+      ],
+      [REMOTE_LANDERS_URL, JSON.stringify({ total: 0, page: 1, limit: 100, count: 0, jobs: [] })],
+      [
+        'https://jobgether.com/astroapi/ai/jobs.json?remoteType=full-remote&includeHybrid=false&currency=USD&sort=date&page=1&limit=25',
+        JSON.stringify({ jobs: [], pagination: { page: 1, limit: 25, hasMore: false } }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const result = await runStructuredDiscovery(http, unconfigured);
+
+    expect(result.sources.every((source) => source.status === 'success')).toBe(true);
+    expect(http.requestedUrls.some((url) => url.includes('frontend'))).toBe(false);
   });
 });

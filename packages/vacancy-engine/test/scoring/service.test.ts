@@ -145,6 +145,7 @@ describe('persisted deterministic scoring service', () => {
     expect(first).toEqual({
       candidateProfileVersion: profile.profileVersion,
       scoringVersion: DETERMINISTIC_SCORING_VERSION,
+      profileConfigured: true,
       activeVacancies: 2,
       cacheHits: 0,
       computed: 2,
@@ -167,6 +168,31 @@ describe('persisted deterministic scoring service', () => {
     const second = await scoreActiveVacancies(repository, profile, { scoredAt });
     expect(second).toMatchObject({ activeVacancies: 2, cacheHits: 2, computed: 0, persisted: 0 });
     expect(repository.writes).toHaveLength(1);
+  });
+
+  it('skips scoring entirely for an unconfigured profile, without writing a degenerate score for every vacancy', async () => {
+    const unconfigured: CandidateProfile = {
+      ...profile,
+      targetRoles: [],
+      strongestSkills: [],
+    };
+    const repository = new MemoryScoringRepository([
+      scorable('angular', 'hash-angular-v1', 'Software Engineer', 'Build Angular UI.'),
+    ]);
+
+    const result = await scoreActiveVacancies(repository, unconfigured);
+
+    expect(result).toEqual({
+      candidateProfileVersion: unconfigured.profileVersion,
+      scoringVersion: DETERMINISTIC_SCORING_VERSION,
+      profileConfigured: false,
+      activeVacancies: 1,
+      cacheHits: 0,
+      computed: 0,
+      persisted: 0,
+      relevantComputed: 0,
+    });
+    expect(repository.writes).toHaveLength(0);
   });
 
   it('recomputes only the vacancy whose content hash changed', async () => {
@@ -253,6 +279,9 @@ describe('persisted deterministic scoring service', () => {
     expect(result).toEqual({
       candidateProfileVersion: 'candidate-profile-v3',
       scoringVersion: DETERMINISTIC_SCORING_VERSION,
+      // The shipped default candidate-profile-v1.json ships fully empty (no role, skills, salary,
+      // or country default) -- see PR #56 -- so the real config file is genuinely unconfigured.
+      profileConfigured: false,
       activeVacancies: 0,
       cacheHits: 0,
       computed: 0,

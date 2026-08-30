@@ -71,11 +71,13 @@ async function discoverFreehire(
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
   const url = new URL('https://freehire.me/api/v1/jobs/search');
-  url.searchParams.set('category', 'frontend');
+  if (config.discovery.roleQuery) url.searchParams.set('category', config.discovery.roleQuery);
   url.searchParams.set('work_mode', 'remote');
   url.searchParams.set('regions', 'global,eu');
   url.searchParams.set('salary_currency', 'USD');
-  url.searchParams.set('salary_min', String(config.minimumAnnualBaseUsd));
+  if (config.minimumAnnualBaseUsd !== null) {
+    url.searchParams.set('salary_min', String(config.minimumAnnualBaseUsd));
+  }
   url.searchParams.set('reality', 'fresh');
   url.searchParams.set('posted_within_days', '30');
   url.searchParams.set('sort', 'posted_at');
@@ -151,7 +153,7 @@ async function discoverJobOpportunities(
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
   const url = new URL('https://api.jobopportunitiesapi.org/public/jobs');
-  url.searchParams.set('q', 'frontend');
+  if (config.discovery.roleQuery) url.searchParams.set('q', config.discovery.roleQuery);
   url.searchParams.set('remote_confirmed', 'true');
   url.searchParams.set('require_fields', 'salary');
   url.searchParams.set('limit', String(config.discovery.jobOpportunitiesLimit));
@@ -308,10 +310,12 @@ async function discoverJobgether(
   try {
     for (let page = 1; page <= config.discovery.jobgetherMaxPages; page += 1) {
       const url = new URL('https://jobgether.com/astroapi/ai/jobs.json');
-      url.searchParams.set('keyword', 'frontend');
+      if (config.discovery.roleQuery) url.searchParams.set('keyword', config.discovery.roleQuery);
       url.searchParams.set('remoteType', 'full-remote');
       url.searchParams.set('includeHybrid', 'false');
-      url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      if (config.minimumAnnualBaseUsd !== null) {
+        url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      }
       url.searchParams.set('currency', 'USD');
       url.searchParams.set('sort', 'date');
       url.searchParams.set('page', String(page));

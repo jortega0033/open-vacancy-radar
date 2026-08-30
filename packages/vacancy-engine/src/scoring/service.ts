@@ -1,5 +1,5 @@
 import type { CandidateProfile } from '../candidate/profile.js';
-import { loadCandidateProfile } from '../candidate/profile.js';
+import { isCandidateProfileConfigured, loadCandidateProfile } from '../candidate/profile.js';
 import type { Database } from '../db/client.js';
 import { DETERMINISTIC_SCORING_VERSION, scoreVacancy } from '../filtering/index.js';
 import {
@@ -12,6 +12,8 @@ import {
 export type DeterministicScoringResult = {
   candidateProfileVersion: string;
   scoringVersion: string;
+  /** False when the candidate profile has no target roles and no strongest skills configured. */
+  profileConfigured: boolean;
   activeVacancies: number;
   cacheHits: number;
   computed: number;
@@ -37,6 +39,25 @@ export async function scoreActiveVacancies(
   options: ScoreActiveVacanciesOptions = {},
 ): Promise<DeterministicScoringResult> {
   const activeVacancies = await repository.listActiveVacancies();
+
+  if (!isCandidateProfileConfigured(profile)) {
+    // No target roles, no strongest skills: every dimension of scoreVacancy would be scoring
+    // against an absence rather than a real preference, producing a plausible-looking number that
+    // means nothing. Skip scoring outright rather than caching a degenerate score for every
+    // vacancy — the report layer surfaces `profileConfigured: false` and shows unscored results
+    // instead of an empty "nothing matched" list.
+    return {
+      candidateProfileVersion: profile.profileVersion,
+      scoringVersion: DETERMINISTIC_SCORING_VERSION,
+      profileConfigured: false,
+      activeVacancies: activeVacancies.length,
+      cacheHits: 0,
+      computed: 0,
+      persisted: 0,
+      relevantComputed: 0,
+    };
+  }
+
   const identities = activeVacancies.map((vacancy) => ({
     vacancyId: vacancy.id,
     contentHash: vacancy.contentHash,
@@ -72,6 +93,7 @@ export async function scoreActiveVacancies(
   return {
     candidateProfileVersion: profile.profileVersion,
     scoringVersion: DETERMINISTIC_SCORING_VERSION,
+    profileConfigured: true,
     activeVacancies: activeVacancies.length,
     cacheHits: activeVacancies.length - records.length,
     computed: records.length,

@@ -1,13 +1,10 @@
 {
   "version": "global-remote-frontend-v1",
-  "minimumAnnualBaseUsd": 100000,
+  "minimumAnnualBaseUsd": null,
   "discovery": {
-    "himalayasQueries": [
-      "frontend",
-      "angular",
-      "ui engineer"
-    ],
-    "himalayasCountry": "NL",
+    "roleQuery": "",
+    "himalayasQueries": [],
+    "himalayasCountry": "",
     "himalayasMaxPagesPerQuery": 10,
     "jobicyCount": 100,
     "freehireLimit": 100,
@@ -18,8 +15,8 @@
     "jobRemotelyMaxPages": 3,
     "arbeitnowMaxPages": 5,
     "diceMaxPages": 2,
-    "remooteRoleTitle": "frontend",
-    "remooteCountry": "Netherlands",
+    "remooteRoleTitle": "",
+    "remooteCountry": "",
     "remooteLimit": 10,
     "museEnabled": true,
     "museMaxPages": 6

@@ -10,6 +10,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'NL',
       himalayasMaxPagesPerQuery: 1,
