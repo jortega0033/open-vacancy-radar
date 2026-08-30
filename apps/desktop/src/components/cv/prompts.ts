@@ -133,6 +133,35 @@ ${formatVacancy(vacancy)}
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
+/**
+ * Asks the model to read raw CV text and return the same fields `CvDrawer` collects by hand
+ * (title, years, location, languages, skills, summary, auth) as one JSON object, so an uploaded CV
+ * can prefill that form instead of the user retyping everything from their own document. The result
+ * is never saved directly — the caller always routes it back through the drawer for the user to
+ * review and edit before it touches the workspace, so an over-eager or wrong guess here costs a
+ * glance, not silently-corrupted profile data.
+ */
+export function buildCvParsePrompt(fileName: string, text: string): string {
+  return `You extract structured fields from one candidate's CV text. Read the CV below and reply with a single JSON object only — no Markdown code fence, no commentary before or after it.
+
+${GROUNDING_RULES}
+Never invent a value: if a field is not stated or cannot be inferred from the CV text, use an empty string ("") or an empty array ([]) for it — do not guess.
+
+Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
+{"title": string, "years": string, "location": string, "languages": string, "skills": string[], "summary": string, "auth": string}
+
+- "title": the candidate's current or most recent job title.
+- "years": years of relevant professional experience, as a short phrase (e.g. "5 years").
+- "location": the candidate's stated location or timezone.
+- "languages": spoken/written languages with proficiency if stated (e.g. "Dutch (B2), English (native)").
+- "skills": an array of concrete technical skills actually named in the CV (technologies, frameworks, tools).
+- "summary": a 2-3 sentence neutral summary of the candidate's background, drawn only from the CV text.
+- "auth": work authorization / visa status if the CV states it, otherwise "".
+
+=== CANDIDATE CV (${field(fileName)}) ===
+${clamp(text, MAX_CV_PROMPT_CHARS)}`;
+}
+
 export function buildCoverLetterPrompt(cv: CvDocument, vacancy: VacancyLead): string {
   return `You are helping a candidate write a motivation letter (cover letter) for one specific vacancy, using their real CV.
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCoverLetterPrompt,
+  buildCvParsePrompt,
   buildGapAnalysisPrompt,
   formatVacancy,
   MAX_CV_PROMPT_CHARS,
@@ -109,5 +110,15 @@ describe('prompt builders', () => {
     expect(prompt).toContain('Dear hiring team,');
     expect(prompt).toContain('[Your Name]');
     expect(prompt).toContain('250-350 words');
+  });
+
+  it('asks the CV parser for the exact JSON shape CvDrawer collects, and forbids guessing', () => {
+    const prompt = buildCvParsePrompt(CV.fileName, CV.text);
+    expect(prompt).toContain(
+      '{"title": string, "years": string, "location": string, "languages": string, "skills": string[], "summary": string, "auth": string}',
+    );
+    expect(prompt).toContain('do not guess');
+    expect(prompt).toContain('no Markdown code fence');
+    expect(prompt).toContain(CV.text);
   });
 });

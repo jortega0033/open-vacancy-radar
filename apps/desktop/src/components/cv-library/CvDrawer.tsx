@@ -1,5 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { CvDocumentRecord, CvProfile } from '../../window.js';
+import { buildCvParsePrompt } from '../cv/prompts.js';
+import { useAgentRun } from '../cv/useAgentRun.js';
+import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 
 /**
@@ -64,11 +67,60 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [parseError, setParseError] = useState<string>();
 
   const isEdit = mode === 'edit';
+  const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
+
+  // `chunkSeparator: ''` — the parsed response must be byte-exact JSON, not prose, so chunks are
+  // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
+  const parseRun = useAgentRun({ chunkSeparator: '' });
+  const parseAppliedRef = useRef(false);
+  const parseSucceeded = parseRun.status === 'completed' && !parseError;
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Applies the AI's fields to the form exactly once per run, the moment that run completes —
+  // never automatically saved, so a wrong or thin answer costs the user a glance, not their data.
+  useEffect(() => {
+    if (parseRun.status !== 'completed' || parseAppliedRef.current) return;
+    parseAppliedRef.current = true;
+    try {
+      const parsed = parseCvAiResponse(parseRun.text);
+      setForm((prev) => ({
+        ...prev,
+        title: parsed.title ?? prev.title,
+        years: parsed.years ?? prev.years,
+        location: parsed.location ?? prev.location,
+        languages: parsed.languages ?? prev.languages,
+        skillsText: parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+        summary: parsed.summary ?? prev.summary,
+        auth: parsed.auth ?? prev.auth,
+      }));
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'could not read the AI response');
+    }
+  }, [parseRun.status, parseRun.text]);
+
+  // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
+  // it's still running — otherwise the daemon session keeps running unobserved until it times out.
+  // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
+  // this must run its cleanup only on actual unmount, reading whatever the latest run was.
+  const parseRunRef = useRef(parseRun);
+  parseRunRef.current = parseRun;
+  useEffect(() => {
+    return () => {
+      if (parseRunRef.current.isBusy) void parseRunRef.current.cancel();
+    };
+  }, []);
+
+  function handleParseWithAi() {
+    if (!record || !canParseWithAi) return;
+    parseAppliedRef.current = false;
+    setParseError(undefined);
+    void parseRun.start(buildCvParsePrompt(record.name, record.text));
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -128,6 +180,44 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
         <form className="flex flex-1 flex-col overflow-y-auto" onSubmit={handleSubmit}>
           <div className="flex-1 space-y-3 px-5 py-4">
+            {canParseWithAi && (
+              <div className="rounded-box border border-base-300 bg-base-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleParseWithAi}
+                    disabled={submitting || parseRun.isBusy}
+                  >
+                    {parseRun.isBusy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    Parse with AI
+                  </button>
+                  {parseRun.isBusy && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void parseRun.cancel()}
+                    >
+                      Stop
+                    </button>
+                  )}
+                  <span className="text-xs text-base-content/60">
+                    Reads the extracted text and fills in the fields below for you to review.
+                  </span>
+                </div>
+                {parseSucceeded && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    Filled in from your CV — review before saving.
+                  </p>
+                )}
+                {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {parseError ?? parseRun.error}
+                  </p>
+                )}
+              </div>
+            )}
+
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Name *

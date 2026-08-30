@@ -1,8 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AgentEvent } from '@agent-dock/shared';
+import type { AgentDockBridge } from '../../../src/window.js';
 import { CvLibraryPage } from '../../../src/components/cv-library/index.js';
 import type { CvBridge, CvDocumentRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
+
+type EmitEvent = (sessionId: string, event: AgentEvent) => void;
 
 function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
   return {
@@ -19,6 +23,41 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
   };
 }
 
+/**
+ * `CvDrawer` now always mounts `useAgentRun` (the "Parse with AI" action), which subscribes to
+ * `window.agentDock.onSessionEvent` on every render regardless of whether that action is visible —
+ * so every test that opens the drawer needs this stub present, not just ones that click it.
+ */
+function installAgentDockBridge(): EmitEvent {
+  const listeners: EmitEvent[] = [];
+  const bridge: AgentDockBridge = {
+    getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    onDaemonStatus: vi.fn().mockReturnValue(() => {}),
+    listProviders: vi.fn().mockResolvedValue([]),
+    createSession: vi.fn().mockResolvedValue({
+      id: 'sess-cv-parse-1',
+      provider: 'claude',
+      cwd: '/userData/ai-workspace',
+      prompt: 'ignored',
+      status: 'starting',
+      startedAt: new Date().toISOString(),
+    }),
+    cancelSession: vi.fn().mockResolvedValue(undefined),
+    onSessionEvent: vi.fn((cb: EmitEvent) => {
+      listeners.push(cb);
+      return () => {
+        const index = listeners.indexOf(cb);
+        if (index >= 0) listeners.splice(index, 1);
+      };
+    }),
+    selectDirectory: vi.fn(),
+  };
+  (window as unknown as { agentDock: AgentDockBridge }).agentDock = bridge;
+  return (sessionId, event) => {
+    for (const listener of [...listeners]) listener(sessionId, event);
+  };
+}
+
 function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
   const bridge: CvBridge = {
     selectAndRead: vi.fn().mockResolvedValue(null),
@@ -26,6 +65,7 @@ function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
     ...overrides,
   };
   (window as unknown as { cv: CvBridge }).cv = bridge;
+  installAgentDockBridge();
   return bridge;
 }
 
@@ -147,6 +187,100 @@ describe('CvLibraryPage', () => {
     await waitFor(() => expect(updateCvDocument).toHaveBeenCalledTimes(1));
     expect(updateCvDocument).toHaveBeenCalledWith('edit-1', expect.objectContaining({ name: 'Renamed CV' }));
     await waitFor(() => expect(screen.getByText('Renamed CV')).toBeInTheDocument());
+  });
+
+  it('fills the drawer fields from the AI CV-parse response, for review before saving', async () => {
+    const record = makeCv({
+      id: 'parse-1',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Five years. Amsterdam.',
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    const emit = installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+
+    emit('sess-cv-parse-1', {
+      type: 'assistant.message',
+      text: JSON.stringify({
+        title: 'Frontend Engineer',
+        years: '5 years',
+        location: 'Amsterdam',
+        languages: 'English (native)',
+        skills: ['React', 'TypeScript'],
+        summary: 'Frontend engineer with five years of experience.',
+        auth: '',
+      }),
+    });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    await waitFor(() =>
+      expect(within(dialog).getByText(/filled in from your cv/i)).toBeInTheDocument(),
+    );
+    expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Frontend Engineer');
+    expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
+    expect(within(dialog).getByLabelText(/location/i)).toHaveValue('Amsterdam');
+    expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript');
+  });
+
+  it('surfaces a malformed AI CV-parse response as an error, leaving the form untouched', async () => {
+    const record = makeCv({ id: 'parse-2', name: 'Uploaded CV', kind: 'uploaded', text: 'Some CV text.' });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    const emit = installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+
+    emit('sess-cv-parse-1', { type: 'assistant.message', text: 'not json at all' });
+    emit('sess-cv-parse-1', { type: 'session.completed' });
+
+    expect(await within(dialog).findByText(/not valid json/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/title/i)).toHaveValue('');
+  });
+
+  it('cancels an in-flight AI parse when the drawer is closed before it completes', async () => {
+    const record = makeCv({ id: 'parse-3', name: 'Uploaded CV', kind: 'uploaded', text: 'Some CV text.' });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+
+    // Closing the drawer while the parse is still streaming must cancel the daemon session —
+    // otherwise it keeps running unobserved (see CvDrawer's unmount-cancel effect).
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => expect(bridge.cancelSession).toHaveBeenCalledWith('sess-cv-parse-1'));
+    expect(screen.queryByRole('dialog', { name: /edit cv/i })).not.toBeInTheDocument();
   });
 
   it('sets a CV as default and updates the list from the returned array', async () => {
