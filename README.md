@@ -4,9 +4,9 @@ An open-source, local-first Electron desktop app for discovering frontend-develo
 tracking applications, and preparing CVs and cover letters. It uses no external database, no cloud
 account, and no API key held by this project. Application data lives in an embedded SQLite
 workspace on the user's own machine; AI features run through the reusable AgentDock runtime, which
-drives AI agent CLIs already installed and authenticated on the user's computer, starting with
+drives AI agent CLIs already installed and authenticated on the user's computer (starting with
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex), without this project ever receiving a password, token, or
+[Codex](https://github.com/openai/codex)), without this project ever receiving a password, token, or
 API key.
 
 ![Open Vacancy Radar search workspace](docs/images/social/readme-hero.webp)

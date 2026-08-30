@@ -1,6 +1,6 @@
 # Security
 
-The daemon can invoke local coding agents that read and write files and run shell
+The daemon can invoke powerful local coding agents that read and write files and run shell
 commands. This document states exactly what AgentDock defends against, how, and what's explicitly
 out of scope, so a fork of this boilerplate can reason about its own trust boundary instead of
 inheriting one on faith. It has been through an adversarial audit (reproducing attacks against a

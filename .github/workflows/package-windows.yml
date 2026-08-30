@@ -41,7 +41,7 @@ jobs:
         run: pnpm package:win
 
       # `pnpm package:win` can exit 0 without electron-builder actually having produced an
-      # installer (e.g. a silently-skipped target), fail the job explicitly rather than trust
+      # installer (e.g. a silently-skipped target), so fail the job explicitly rather than trust
       # the exit code alone.
       - name: Verify installer was produced
         shell: pwsh

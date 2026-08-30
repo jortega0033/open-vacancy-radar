@@ -169,8 +169,8 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
               {rows.map((letter) => (
                 <tr key={letter.id} className="ovr-row hover:bg-base-200">
                   <td className="font-medium">{letter.title}</td>
-                  <td className="text-base-content/80">{letter.company || '-'}</td>
-                  <td className="text-base-content/80">{letter.role || '-'}</td>
+                  <td className="text-base-content/80">{letter.company || '—'}</td>
+                  <td className="text-base-content/80">{letter.role || '—'}</td>
                   <td className="whitespace-nowrap text-base-content/70">
                     {labelFor(LETTER_TYPE_OPTIONS, letter.type)}
                   </td>
