@@ -122,7 +122,7 @@ describe('workspace input validation — bounds', () => {
         kind: 'manual',
         profile: { skills: new Array(CV_PROFILE_LIMITS.skills + 1).fill('x') },
       }),
-    ).toThrow(/at most 200 entries/);
+    ).toThrow(new RegExp(`at most ${CV_PROFILE_LIMITS.skills} entries`));
     expect(() => parseCvDocumentInput({ name: 'CV', kind: 'manual', profile: { skills: [{ not: 'a string' }] } })).toThrow(
       /profile\.skills\[0\]" must be a string/,
     );
