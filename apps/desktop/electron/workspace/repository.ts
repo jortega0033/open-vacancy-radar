@@ -431,6 +431,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     defaultApplicationStatus: row.defaultApplicationStatus,
     confirmApplicationDelete: row.confirmApplicationDelete,
     autoArchiveRejected: row.autoArchiveRejected,
+    defaultProvider: row.defaultProvider,
   };
 }
 

@@ -41,6 +41,10 @@ export type ThemePreference = 'light' | 'dark' | 'system';
 export type DensityPreference = 'comfortable' | 'compact';
 export type SidebarStartPreference = 'expanded' | 'collapsed' | 'remember_last';
 
+/** Which installed CLI AI features (gap analysis, letters) run through. Matches `ProviderId` in
+ * `@agent-dock/shared`, spelled out locally for the same reason every other enum here is. */
+export type DefaultAiProvider = 'claude' | 'codex';
+
 export interface CvProfile {
   title: string;
   years: string;
@@ -203,6 +207,7 @@ export interface AppSettingsRecord {
   defaultApplicationStatus: ApplicationStatus;
   confirmApplicationDelete: boolean;
   autoArchiveRejected: boolean;
+  defaultProvider: DefaultAiProvider;
 }
 
 export type AppSettingsPatch = Partial<AppSettingsRecord>;

@@ -612,6 +612,10 @@ ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
   app.setLoginItemSettings({ openAtLogin: input });
 });
 
+/** Reads `package.json`'s `version` via Electron's own resolution — never a hand-maintained
+ * string the Settings page's About section could drift from. */
+ipcMain.handle('system:get-app-version', (): string => app.getVersion());
+
 if (gotSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!mainWindow) return;

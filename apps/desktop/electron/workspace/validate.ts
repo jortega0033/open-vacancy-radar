@@ -27,6 +27,7 @@ import type {
   CvDocumentPatch,
   CvKind,
   CvProfile,
+  DefaultAiProvider,
   DensityPreference,
   LetterInput,
   LetterLength,
@@ -161,6 +162,7 @@ export const START_PAGES: readonly StartPage[] = ['search', 'saved', 'applicatio
 export const THEMES: readonly ThemePreference[] = ['light', 'dark', 'system'];
 export const DENSITIES: readonly DensityPreference[] = ['comfortable', 'compact'];
 export const SIDEBAR_STARTS: readonly SidebarStartPreference[] = ['expanded', 'collapsed', 'remember_last'];
+export const DEFAULT_PROVIDERS: readonly DefaultAiProvider[] = ['claude', 'codex'];
 /** Values `lastOpenedPage` may hold — the renderer's nav ids, not the `startPage` enum. */
 export const NAV_PAGES = ['search', 'saved', 'applications', 'cv', 'letters', 'runtime', 'settings'] as const;
 
@@ -370,5 +372,6 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   );
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
+  patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
   return out;
 }

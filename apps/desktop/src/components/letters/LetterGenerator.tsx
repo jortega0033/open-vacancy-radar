@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ProviderId } from '@agent-dock/shared';
 import type {
   CvDocumentRecord,
   LetterInput,
@@ -88,6 +89,7 @@ export function LetterGenerator({
   const [length, setLength] = useState<LetterLength>(letter?.length ?? 'standard');
   const [status, setStatus] = useState<LetterStatus>(letter?.status ?? 'draft');
   const [instructions, setInstructions] = useState('');
+  const [provider, setProvider] = useState<ProviderId>('claude');
 
   const [title, setTitle] = useState(letter?.title ?? '');
   // A title the user typed is theirs; only an untouched one keeps tracking the type and company.
@@ -160,6 +162,23 @@ export function LetterGenerator({
       cancelled = true;
     };
   }, [letter]);
+
+  // Which CLI a generation runs through is a runtime preference, not a per-document style choice
+  // like tone/type/length, so it is read for every letter — new or existing — not gated on `!letter`.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const settings = await window.workspace.getSettings();
+        if (!cancelled) setProvider(settings.defaultProvider);
+      } catch {
+        // the useState default ('claude') is already sensible
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Once the library lands, settle on a CV: whatever was already chosen if it still exists, else
   // the library's default, else the first one.
@@ -258,8 +277,11 @@ export function LetterGenerator({
     setSaveState('idle');
     setSaveError(undefined);
     runSeq.current += 1;
-    void run.start(buildLetterPrompt(cvDocument, lead, { type, tone, length, instructions }), model ? { model } : {});
-  }, [cvDocument, lead, type, tone, length, instructions, model, run]);
+    void run.start(buildLetterPrompt(cvDocument, lead, { type, tone, length, instructions }), {
+      ...(model ? { model } : {}),
+      provider,
+    });
+  }, [cvDocument, lead, type, tone, length, instructions, model, provider, run]);
 
   const handleGenerate = useCallback(() => {
     // Replacing text the user has edited but not saved is the one destructive thing this screen

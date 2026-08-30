@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentEvent, ProviderId, ProviderStatus } from '@agent-dock/shared';
+import type { ProviderId } from '@agent-dock/shared';
 import type { WorkspaceCounts } from './window.js';
-import runtimeUnavailableIllustration from '../assets/illustrations/runtime-unavailable.svg?no-inline';
-import { ProviderPanel } from './components/ProviderPanel.js';
-import { EventLog } from './components/EventLog.js';
+import { PROVIDER_LABEL } from './provider-labels.js';
 import { SearchPage } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
 import { LettersPage } from './components/letters/index.js';
+import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage } from './components/settings/index.js';
 import {
   AppSidebar,
   EMPTY_COUNTS,
-  EmptyState,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -22,27 +20,8 @@ import {
 import { applyDensity, applyTheme } from './theme.js';
 
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
-type RunStatus = 'idle' | 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
-
-// Status styling for a run: monochrome by design. A session that finished is not "good" and a
-// cancelled one is not "bad" — those are lifecycle states, not outcomes, so they are expressed
-// through contrast and weight. The three real state hues in the token set (success/warning/error)
-// are reserved for things that genuinely are good or bad; see DESIGN-TOKENS.md.
-const RUN_STATUS_BADGE_CLASS: Record<RunStatus, string> = {
-  idle: 'badge badge-ghost font-mono align-middle',
-  starting: 'badge badge-outline font-mono align-middle',
-  running: 'badge badge-outline font-mono align-middle',
-  completed: 'badge badge-neutral font-mono align-middle',
-  failed: 'badge badge-outline border-2 font-mono font-bold align-middle',
-  cancelled: 'badge badge-ghost font-mono align-middle opacity-60',
-};
-
-const PROVIDER_LABEL: Record<ProviderId, string> = {
-  claude: 'Claude Code',
-  codex: 'Codex',
-};
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
@@ -52,22 +31,12 @@ export function App() {
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
 
-  const [providers, setProviders] = useState<ProviderStatus[]>();
-  const [providersError, setProvidersError] = useState<string>();
+  // The provider AI features (gap analysis, letters) currently run through — a persisted setting
+  // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
+  // and header labels need it; RuntimePage owns the actual read/write of the setting and reports
+  // changes back up via `onDefaultProviderChanged` so this label updates without a re-fetch.
+  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
 
-  const [provider, setProvider] = useState<ProviderId>('claude');
-  const [model, setModel] = useState<string>('');
-  const [cwd, setCwd] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [formError, setFormError] = useState<string>();
-
-  const [runStatus, setRunStatus] = useState<RunStatus>('idle');
-  const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [sessionId, setSessionId] = useState<string>();
-  // Mirrors `sessionId` so the onSessionEvent subscription (set up once, below) always filters
-  // against the current session without needing to resubscribe — a stale closure here would
-  // silently drop events for a session started after the initial subscription.
-  const sessionIdRef = useRef<string>();
   // Settings hydration is async, so the user can already have clicked a nav item by the time it
   // lands. Restoring the remembered start page at that point would yank them off the page they
   // deliberately opened, so hydration only ever sets the page if nothing else has.
@@ -86,6 +55,7 @@ export function App() {
 
         applyTheme(settings.theme);
         applyDensity(settings.density);
+        setDefaultProvider(settings.defaultProvider);
 
         if (settings.sidebarStart === 'expanded') setSidebarCollapsed(false);
         else if (settings.sidebarStart === 'collapsed') setSidebarCollapsed(true);
@@ -166,75 +136,6 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (daemonState !== 'ready') return;
-    window.agentDock
-      .listProviders()
-      .then(setProviders)
-      .catch((err: Error) => setProvidersError(err.message));
-  }, [daemonState]);
-
-  // One subscription for the whole component lifetime; events are filtered to the session this
-  // render currently cares about. main.ts only ever streams one session at a time in this demo.
-  useEffect(() => {
-    return window.agentDock.onSessionEvent((eventSessionId, event) => {
-      if (sessionIdRef.current !== eventSessionId) return;
-      setEvents((prev) => [...prev, event]);
-      if (event.type === 'session.completed') setRunStatus('completed');
-      else if (event.type === 'session.failed') setRunStatus('failed');
-      else if (event.type === 'session.cancelled') setRunStatus('cancelled');
-    });
-  }, []);
-
-  const handleRun = useCallback(async () => {
-    setFormError(undefined);
-
-    if (!cwd.trim()) {
-      setFormError('working directory is required');
-      return;
-    }
-    if (!prompt.trim()) {
-      setFormError('prompt is required');
-      return;
-    }
-
-    setEvents([]);
-    setRunStatus('starting');
-
-    try {
-      const session = await window.agentDock.createSession({
-        provider,
-        cwd,
-        prompt,
-        ...(model ? { model } : {}),
-      });
-      sessionIdRef.current = session.id;
-      setSessionId(session.id);
-      setRunStatus('running');
-    } catch (err) {
-      setRunStatus('failed');
-      setFormError(err instanceof Error ? err.message : 'failed to start session');
-    }
-  }, [provider, model, cwd, prompt]);
-
-  const handleCancel = useCallback(async () => {
-    if (!sessionId) return;
-    try {
-      await window.agentDock.cancelSession(sessionId);
-    } catch {
-      // the session-event stream will still reflect the true terminal state
-    }
-  }, [sessionId]);
-
-  const isRunning = runStatus === 'starting' || runStatus === 'running';
-  const selectedProviderStatus = providers?.find((p) => p.id === provider);
-  const canRun =
-    daemonState === 'ready' &&
-    !!selectedProviderStatus?.installed &&
-    !isRunning &&
-    cwd.trim().length > 0 &&
-    prompt.trim().length > 0;
-
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
@@ -245,7 +146,7 @@ export function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
-        runtimeLabel={PROVIDER_LABEL[provider]}
+        runtimeLabel={PROVIDER_LABEL[defaultProvider]}
         runtimeReady={daemonState === 'ready'}
       />
 
@@ -253,7 +154,7 @@ export function App() {
         <WorkspaceHeader
           title={title}
           subtitle={subtitle}
-          runtimeLabel={PROVIDER_LABEL[provider]}
+          runtimeLabel={PROVIDER_LABEL[defaultProvider]}
           runtimeState={daemonState}
         />
 
@@ -270,116 +171,15 @@ export function App() {
           {nav === 'applications' && <ApplicationsPage />}
           {nav === 'cv' && <CvLibraryPage />}
           {nav === 'letters' && <LettersPage onLettersChanged={refreshCounts} />}
-          {nav === 'settings' && <SettingsPage />}
+          {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
 
           {nav === 'runtime' && (
-            <div className="mx-auto max-w-3xl">
-              {daemonState === 'unavailable' && (
-                <EmptyState
-                  illustration={runtimeUnavailableIllustration}
-                  title="AI runtime unavailable"
-                  description="The local runtime is not available. AI-assisted actions remain disabled until it starts."
-                />
-              )}
-              {daemonState === 'ready' && (
-                <>
-                  <section>
-                    <h2 className="text-lg font-semibold">Providers</h2>
-                    {providersError && <div className="alert alert-error mt-3">{providersError}</div>}
-                    {providers && <ProviderPanel providers={providers} />}
-                  </section>
-
-                  <section className="mt-8 border-t border-base-300 pt-5">
-                    <h2 className="text-lg font-semibold">Run</h2>
-                    <label className="mt-4 mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Provider</span>
-                      <select
-                        className="select w-full"
-                        value={provider}
-                        onChange={(e) => {
-                          setProvider(e.target.value as ProviderId);
-                          setModel('');
-                        }}
-                        disabled={isRunning}
-                      >
-                        <option value="claude">Claude Code</option>
-                        <option value="codex">Codex</option>
-                      </select>
-                    </label>
-
-                    {!!selectedProviderStatus?.availableModels?.length && (
-                      <label className="mb-4 block">
-                        <span className="mb-1 block text-sm font-medium">Model</span>
-                        <select className="select w-full" value={model} onChange={(e) => setModel(e.target.value)} disabled={isRunning}>
-                          <option value="">Provider default</option>
-                          {selectedProviderStatus.availableModels.map((id) => (
-                            <option key={id} value={id}>
-                              {id}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    <label className="mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Working directory</span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          className="input flex-1"
-                          type="text"
-                          value={cwd}
-                          onChange={(e) => setCwd(e.target.value)}
-                          placeholder="/path/to/project"
-                          disabled={isRunning}
-                        />
-                        <button
-                          className="btn"
-                          type="button"
-                          disabled={isRunning}
-                          onClick={async () => {
-                            const dir = await window.agentDock.selectDirectory();
-                            if (dir) setCwd(dir);
-                          }}
-                        >
-                          Browse
-                        </button>
-                      </div>
-                    </label>
-
-                    <label className="mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Prompt</span>
-                      <textarea
-                        className="textarea w-full"
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        rows={4}
-                        disabled={isRunning}
-                      />
-                    </label>
-
-                    {formError && <div className="alert alert-error my-3">{formError}</div>}
-
-                    <div className="mt-2 flex items-center gap-2">
-                      <button className="btn btn-primary" type="button" onClick={handleRun} disabled={!canRun}>
-                        Run
-                      </button>
-                      <button className="btn btn-outline" type="button" onClick={handleCancel} disabled={runStatus !== 'running'}>
-                        Cancel
-                      </button>
-                    </div>
-                  </section>
-
-                  <section className="mt-8 border-t border-base-300 pt-5">
-                    <h2 className="text-lg font-semibold">
-                      Session status: <span className={RUN_STATUS_BADGE_CLASS[runStatus]}>{runStatus}</span>
-                    </h2>
-                    <EventLog events={events} />
-                  </section>
-                </>
-              )}
-            </div>
+            <RuntimePage
+              daemonState={daemonState}
+              {...(daemonError ? { daemonError } : {})}
+              onDefaultProviderChanged={setDefaultProvider}
+            />
           )}
-
         </main>
       </div>
     </div>
