@@ -1,0 +1,33 @@
+{
+  "status": "ok",
+  "data": {
+    "jobs": [
+      {
+        "id": 12347,
+        "title": "Frontend Engineer",
+        "company": {
+          "id": 502,
+          "title": "Example Labs"
+        },
+        "salary": null,
+        "location": null,
+        "skills": ["TypeScript"],
+        "seniority_level": null,
+        "employment_type": "full-time",
+        "posted_at": "2026-08-29T12:00:00Z",
+        "updated_or_last_seen_at": "2026-08-30T12:00:00Z",
+        "remoote_url": "https://remoote.app/jobs/12347-frontend-engineer",
+        "summary": null,
+        "requirements_excerpt": null,
+        "responsibilities_excerpt": null
+      }
+    ],
+    "result_count": 1,
+    "total_available": 1
+  },
+  "limits": {
+    "requested_limit": 10,
+    "applied_limit": 10,
+    "max_public_results": 10
+  }
+}

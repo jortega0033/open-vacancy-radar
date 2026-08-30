@@ -52,6 +52,9 @@ export const globalRemoteConfigSchema = z.object({
     jobRemotelyMaxPages: z.number().int().min(1).max(10),
     arbeitnowMaxPages: z.number().int().min(1).max(10),
     diceMaxPages: z.number().int().min(1).max(5).default(2),
+    remooteRoleTitle: z.string().trim().min(1).max(200).default('frontend'),
+    remooteCountry: z.string().trim().min(2).max(100).default('Netherlands'),
+    remooteLimit: z.number().int().min(1).max(10).default(10),
     museEnabled: z.boolean().default(false),
     museMaxPages: z.number().int().min(1).max(10).default(6),
     adzunaAppId: z.string().default(''),
@@ -132,6 +135,7 @@ export type DiscoveryProvider =
   | 'real_work_from_anywhere'
   | 'devitjobs_uk'
   | 'dice'
+  | 'remoote'
   | 'the_muse'
   | 'jobspresso'
   | 'remote_frontend_jobs'

@@ -18,6 +18,9 @@
     "jobRemotelyMaxPages": 3,
     "arbeitnowMaxPages": 5,
     "diceMaxPages": 2,
+    "remooteRoleTitle": "frontend",
+    "remooteCountry": "Netherlands",
+    "remooteLimit": 10,
     "museEnabled": true,
     "museMaxPages": 6
   },

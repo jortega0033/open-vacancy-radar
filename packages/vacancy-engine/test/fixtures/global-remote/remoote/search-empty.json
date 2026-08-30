@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "data": {
+    "jobs": [],
+    "result_count": 0,
+    "total_available": 0,
+    "search_url": "https://remoote.app/remote-working?query=frontend"
+  },
+  "limits": {
+    "requested_limit": 10,
+    "applied_limit": 10,
+    "max_public_results": 10
+  }
+}

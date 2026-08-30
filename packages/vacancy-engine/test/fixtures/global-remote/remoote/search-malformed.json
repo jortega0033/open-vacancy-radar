@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "data": {
+    "jobs": "not-an-array"
+  },
+  "limits": {
+    "requested_limit": 10,
+    "applied_limit": 10,
+    "max_public_results": 10
+  }
+}

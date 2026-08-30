@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { runAdditionalDiscovery } from '../../src/global-remote/additional-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import { REMOOTE_SEARCH_URL } from '../../src/global-remote/remoote-discovery.js';
 import { globalRemoteSourceRegistry } from '../../src/global-remote/source-registry.js';
 import { FixtureHttpClient, jsonPostFixtureKey } from '../ats/helpers.js';
 
@@ -25,6 +26,9 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       jobRemotelyMaxPages: 1,
       arbeitnowMaxPages: 1,
       diceMaxPages: 1,
+      remooteRoleTitle: 'frontend',
+      remooteCountry: 'Netherlands',
+      remooteLimit: 10,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -65,7 +69,24 @@ function diceSse(data: unknown[]): string {
   })}\n\n`;
 }
 
-describe('MCP and configuration-gated discovery', () => {
+function remooteBody(): unknown {
+  return {
+    role_title: 'frontend',
+    country: 'Netherlands',
+    salary_required: false,
+    limit: 10,
+  };
+}
+
+function emptyRemooteSearch(): string {
+  return JSON.stringify({
+    status: 'ok',
+    data: { jobs: [], result_count: 0, total_available: 0 },
+    limits: { requested_limit: 10, applied_limit: 10, max_public_results: 10 },
+  });
+}
+
+describe('Additional public and configuration-gated discovery', () => {
   it('uses the sanctioned Dice MCP endpoint with explicit MCP headers', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([{
@@ -79,12 +100,17 @@ describe('MCP and configuration-gated discovery', () => {
         workplaceTypes: ['Remote'],
         employmentType: ['Full-time'],
       }])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
     ]);
     const http = new FixtureHttpClient(routes);
 
     const result = await runAdditionalDiscovery(http, profile());
 
-    expect(result.sources).toEqual([expect.objectContaining({ provider: 'dice', status: 'success', listings: 1 })]);
+    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'remoote']);
+    expect(result.sources.find((source) => source.provider === 'dice')).toMatchObject({
+      status: 'success',
+      listings: 1,
+    });
     expect(result.vacancies[0]).toMatchObject({
       provider: 'dice',
       company: 'Dice Co',
@@ -100,6 +126,7 @@ describe('MCP and configuration-gated discovery', () => {
   it('runs The Muse only after the project profile explicitly enables it', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
       [MUSE_URL, JSON.stringify({
         page: 1,
         page_count: 1,
@@ -117,7 +144,7 @@ describe('MCP and configuration-gated discovery', () => {
 
     const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
 
-    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'the_muse']);
+    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'remoote', 'the_muse']);
     expect(result.vacancies).toEqual([expect.objectContaining({ provider: 'the_muse', company: 'Muse Co' })]);
   });
 
@@ -130,7 +157,7 @@ describe('MCP and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(24);
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(25);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',
@@ -152,6 +179,12 @@ describe('MCP and configuration-gated discovery', () => {
       url: 'https://www.workable.com/boards/workable.xml',
       transport: 'structured',
       ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'remoote')).toMatchObject({
+      state: 'active',
+      transport: 'api',
+      ingestionMode: 'linked_index',
+      adapter: 'active',
     });
     expect(registry.find((source) => source.id === 'eures')).toMatchObject({
       state: 'prohibited',
