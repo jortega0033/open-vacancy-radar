@@ -136,6 +136,38 @@ header, so it can't pass the token check either. **Verified**: a simulated cross
 POST (`Content-Type: text/plain`, no auth header, `Origin: http://evil.example`) to `POST /sessions`
 was rejected before session creation, by the Origin check specifically.
 
+## Three separate kinds of credential, not one
+
+This project handles three distinct things that all sound like "authentication" but protect
+different boundaries, are stored differently, and never mix:
+
+1. **The daemon token above** — authenticates the local HTTP protocol between Electron's main
+   process and the daemon. Random per launch, never persisted, never touches an AI provider or a
+   job source. This is the only credential this codebase itself generates.
+2. **Claude/Codex CLI authentication** — entirely out of this project's hands. The daemon spawns
+   the user's already-installed `claude`/`codex` binary as a child process and reads its stdout; it
+   never sees, stores, or forwards whatever login state that CLI already holds (its own OS keychain
+   entry, config file, or session token — this project doesn't know or care which). Logging in and
+   out happens directly with the CLI (`claude auth login` / `codex login`), never through this app.
+   See [What this is not](README.md#what-this-is-not).
+3. **Optional MCP job-source credentials** — a user can connect an MCP-based job-source provider
+   (see [docs/mcp-source-policy.md](docs/mcp-source-policy.md)) that needs its own API key or token,
+   unrelated to either of the above. That credential is written through `PUT
+   /mcp/providers/:providerId/credential` (bearer-token-protected, like every other route) and
+   stored via `apps/daemon/src/mcp/credential-store.ts`, which delegates to the OS's native
+   credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret Service —
+   through `@napi-rs/keyring`, under a service name namespaced to this app
+   (`open-vacancy-radar.mcp`). No route ever reads a stored credential back out: the daemon can set
+   one, delete one, and report a provider's connection *status* (connected/not), but there is no API
+   that returns the credential value itself once it's been written.
+
+Losing the daemon token exposes only the local AgentDock protocol (see the CSRF analysis above).
+Losing a CLI's own login state is a threat model that CLI's own security documentation owns, not
+this one. Losing an MCP credential exposes only that one provider's account, and only if an
+attacker already has OS-user-level access to read that user's own credential store — a strictly
+higher bar than reading this project's own files, since it means they could already read the
+daemon's discovery-file token directly.
+
 ## Origin validation
 
 `apps/daemon/src/server.ts` also validates the `Origin` header independently of the token, and

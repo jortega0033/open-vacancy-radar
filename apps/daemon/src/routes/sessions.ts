@@ -9,6 +9,14 @@ export function registerSessionRoutes(
   sessionManager: SessionManager,
   registry: ProviderRegistry,
 ): void {
+  // CodeQL flags this handler's existsSync/statSync call as missing rate limiting
+  // (js/missing-rate-limiting). Dismissed rather than fixed: the daemon binds to 127.0.0.1 only,
+  // every request requires the per-launch bearer token from the discovery file (SECURITY.md#local-auth-token),
+  // and there is exactly one legitimate caller — the desktop app's own Electron main process. Reaching
+  // this route at all already requires the same trust level needed to spawn arbitrary local coding
+  // agents through every other route here, so a request-rate limit would add a dependency and a new
+  // way for the desktop app's own legitimate rapid session creation to fail, for no realistic
+  // attacker this authentication boundary doesn't already stop.
   app.post('/sessions', async (req, reply) => {
     const parsed = createSessionRequestSchema.safeParse(req.body);
     if (!parsed.success) {

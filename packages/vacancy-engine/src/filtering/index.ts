@@ -3,6 +3,7 @@ export {
   RELEVANCE_THRESHOLD,
   detectDutchRequirement,
   isDeterministicallyRelevant,
+  plainText,
   scoreVacancy,
   type DutchRequirementAssessment,
 } from './relevance.js';

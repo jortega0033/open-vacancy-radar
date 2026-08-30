@@ -97,6 +97,26 @@ If you changed anything under `apps/desktop/electron/` or `electron-builder.yml`
 alone was never sufficient to catch a packaging-mode-only bug; you need to actually run
 `pnpm package:win` and launch `dist-packages/win-unpacked/Open Vacancy Radar.exe`.
 
+## Backing up and restoring your workspace
+
+There is currently no built-in export, backup, or restore feature. All personal data lives in
+plain SQLite files under Electron's per-user data directory (`app.getPath('userData')` — on
+Windows, `%APPDATA%\Open Vacancy Radar\`); see [privacy.md](privacy.md#what-is-stored-and-where)
+for exactly what each file holds.
+
+**To back up**: close the app, then copy `workspace.db` (your saved jobs, applications, CV
+library, and letters — the file worth backing up) somewhere safe. `vacancy-engine.db` is a
+disposable cache of public vacancy data and doesn't need backing up.
+
+**To restore**: close the app, replace `workspace.db` in the userData directory with your backup
+copy, then relaunch. There is no in-app restore flow or format migration for a backup taken from
+an older version — if the schema has changed since your backup, this is unverified and may not
+work.
+
+**Moving to a new machine**: install the app, then copy your backed-up `workspace.db` into the new
+machine's userData directory before first launch (or after, replacing the fresh empty one, with
+the app closed).
+
 ## Testing without a real Claude/Codex account
 
 You don't need one. The test suite never calls a real provider CLI or spends real API credit (see

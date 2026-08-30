@@ -20,16 +20,20 @@ install`, with no code signing configured: there's nothing to sign with in this 
 ## What `pnpm build` produces (the prerequisite step)
 
 - `packages/shared/dist/`, `packages/agent-runtime/dist/`: compiled library output (plain `tsc`)
-- `apps/daemon/dist/index.js`: the daemon bundled by **esbuild** into one self-contained file,
-  every dependency inlined (including the two packages above and `fastify`/`zod`), required so it
-  can run under plain `node`, with no workspace resolution or `tsx`, once packaged. `tsc` alone
-  can't produce this: `packages/shared` and `packages/agent-runtime` intentionally publish
-  TypeScript source (their `package.json` `main` points at `src/index.ts`, not a built `dist/`) so
+- `apps/daemon/dist/`: the daemon bundled by **esbuild** into `index.js`, every JavaScript
+  dependency inlined (including the two packages above and `fastify`/`zod`), required so it can run
+  under plain `node`, with no workspace resolution or `tsx`, once packaged. `tsc` alone can't
+  produce this: `packages/shared` and `packages/agent-runtime` intentionally publish TypeScript
+  source (their `package.json` `main` points at `src/index.ts`, not a built `dist/`) so
   `tsx`/Vite/Vitest get live source with no separate build step in dev, but that means a plain
   `node dist/index.js` with no loader can't resolve them through a bare package specifier. This
   was an actual bug, not a theoretical risk: caught by running the packaged-mode code path
   (`node dist/index.js`) and hitting `ERR_MODULE_NOT_FOUND` (see
-  `apps/daemon/scripts/build.mjs` for the fix).
+  `apps/daemon/scripts/build.mjs` for the fix). `dist/` is not *only* `index.js`, though: the one
+  native addon in the dependency tree (`@napi-rs/keyring`, used for optional MCP job-source
+  credentials — see [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one))
+  can't be inlined by esbuild, so it ships as a sibling `keyring.<platform>.node` file that
+  `extraResources` copies alongside `index.js` as one unit (see `apps/desktop/electron-builder.yml`).
 - `apps/desktop/dist/`: the Vite production build of the React renderer
 - `apps/desktop/dist-electron/main.js`, `preload.js`: the Electron main process and preload
   script, each bundled to a single file (`main.js` inlines `@agent-dock/client`,

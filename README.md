@@ -179,9 +179,11 @@ These four also run in CI on every push and pull request, plus a separate Window
 `pnpm build` compiles every package in dependency order and produces:
 
 - `packages/shared/dist/`, `packages/agent-runtime/dist/`: compiled library output
-- `apps/daemon/dist/index.js`: the daemon bundled by esbuild into **one self-contained file**
-  (every dependency inlined, including the two packages above), required so it can run under
-  plain `node`, with no workspace resolution or `tsx`, once packaged. See
+- `apps/daemon/dist/`: the daemon bundled by esbuild into `index.js` (every dependency inlined,
+  including the two packages above, except native addons — see below), required so it can run
+  under plain `node`, with no workspace resolution or `tsx`, once packaged. `dist/` also carries
+  `keyring.<platform>.node`, the one native module (`@napi-rs/keyring`, used only for optional MCP
+  job-source credentials) esbuild cannot inline, so it ships as a sibling asset instead. See
   [docs/architecture.md](docs/architecture.md#daemon-discovery-and-lifecycle) for why this needed
   fixing, not just adding.
 - `apps/desktop/dist/`: the Vite production build of the React renderer

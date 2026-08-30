@@ -366,3 +366,36 @@ describe('AgentDockClient: SSE event streaming', () => {
     expect(collected).toEqual([]);
   });
 });
+
+describe('AgentDockClient: baseUrl normalization (CodeQL js/polynomial-redos regression)', () => {
+  it('strips exactly the trailing slashes, however many, without a regex', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = new AgentDockClient({ baseUrl: `${BASE_URL}///`, token: TOKEN, fetch: fetchImpl });
+    await client.health();
+    expect(fetchImpl).toHaveBeenCalledWith(`${BASE_URL}/health`);
+  });
+
+  it('leaves a baseUrl with no trailing slash untouched', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = new AgentDockClient({ baseUrl: BASE_URL, token: TOKEN, fetch: fetchImpl });
+    await client.health();
+    expect(fetchImpl).toHaveBeenCalledWith(`${BASE_URL}/health`);
+  });
+
+  it('completes instantly even on a pathologically long run of trailing slashes', () => {
+    // The regex this replaced (`/\/+$/`) is exactly the quantifier-at-anchor shape CodeQL's
+    // polynomial-ReDoS query flags on unbounded input. A backward character scan can't backtrack at
+    // all, so this input size finishing well under the test timeout is itself the regression proof.
+    const pathological = `${BASE_URL}${'/'.repeat(200_000)}`;
+    const start = performance.now();
+    const client = new AgentDockClient({ baseUrl: pathological, token: TOKEN, fetch: vi.fn() });
+    expect(performance.now() - start).toBeLessThan(50);
+    expect(client).toBeInstanceOf(AgentDockClient);
+  });
+});
