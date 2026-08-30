@@ -1,0 +1,91 @@
+name: Job source integration
+description: Propose a lawful vacancy API, feed, ATS, dataset, or permitted career-site source
+title: 'Source: '
+labels:
+  - 'area: scraping'
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open Vacancy Radar defaults to integrating useful lawful sources. Complete the access review below so implementation can proceed without guessing about permission or safety.
+
+  - type: input
+    id: source
+    attributes:
+      label: Source and operator
+      placeholder: Workable — Workable Technology Limited
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Expected user impact
+      description: Estimate unique current vacancies, countries, occupations, and overlap with existing sources.
+    validations:
+      required: true
+
+  - type: textarea
+    id: interface
+    attributes:
+      label: Public interface and documentation
+      description: Link operator-controlled API/feed/ATS documentation and provide non-secret example URLs and response shape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: permission
+    attributes:
+      label: Terms, licence, and automation permission
+      description: Link applicable terms, data licence, robots policy, or operator statement permitting the proposed use. Say explicitly when a document does not exist.
+    validations:
+      required: true
+
+  - type: textarea
+    id: access
+    attributes:
+      label: Authentication and access controls
+      description: State whether credentials, partner approval, login, CAPTCHA, WAF, paywall, or geographic restrictions exist. Never paste credentials or cookies.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ingestion_mode
+    attributes:
+      label: Lawful ingestion mode
+      description: Choose the broadest mode supported by the evidence above. Unclear republication rights should use linked index, not hard stop.
+      options:
+        - Full ingestion — explicit reuse or open-data permission
+        - Linked index — public interface, no prohibition, factual metadata and canonical link only
+        - Hard stop — explicit prohibition or concrete access/legal boundary
+    validations:
+      required: true
+
+  - type: textarea
+    id: operations
+    attributes:
+      label: Rate, attribution, retention, and takedown requirements
+      description: Include quotas, Retry-After behavior, sync frequency, required backlinks/credit, deletion handling, and a takedown contact or process.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Proposed implementation
+      description: Identify the existing adapter/discovery seam, request bound, pagination, deduplication key, completeness semantics, and hermetic fixtures.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Safety boundary
+      options:
+        - label: This proposal does not require bypassing authentication, access controls, CAPTCHA/WAF/IP blocks, paywalls, or an explicit automation prohibition.
+          required: true
+        - label: The connector will preserve direct application URLs and source attribution.
+          required: true
+        - label: Normal tests will use fixtures and make no live external requests.
+          required: true

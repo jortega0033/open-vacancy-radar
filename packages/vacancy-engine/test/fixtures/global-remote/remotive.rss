@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Remotive Remote Jobs RSS Feed</title>
+    <link>https://remotive.com/remote-jobs</link>
+    <item>
+      <title>Senior Frontend Engineer</title>
+      <jobId>2091000</jobId>
+      <company>Remotive Co</company>
+      <location>Worldwide</location>
+      <type>full_time</type>
+      <guid isPermaLink="false">https://remotive.com/remote-jobs/software-development/senior-frontend-engineer-2091000</guid>
+      <link>https://remotive.com/remote-jobs/software-development/senior-frontend-engineer-2091000</link>
+      <dc:creator>Remotive Co</dc:creator>
+      <description><![CDATA[<p>Build accessible interfaces. Annual base salary $150,000 per year.</p>]]></description>
+    </item>
+  </channel>
+</rss>

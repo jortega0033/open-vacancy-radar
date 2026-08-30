@@ -3,7 +3,16 @@ import type { AtsProvider } from '../domain/models.js';
 export type DetectedAtsSource = {
   provider: Extract<
     AtsProvider,
-    'ashby' | 'greenhouse' | 'lever' | 'recruitee' | 'teamtailor' | 'smartrecruiters' | 'workday'
+    | 'ashby'
+    | 'greenhouse'
+    | 'lever'
+    | 'personio'
+    | 'recruitee'
+    | 'smartrecruiters'
+    | 'successfactors'
+    | 'teamtailor'
+    | 'workable'
+    | 'workday'
   >;
   boardIdentifier: string;
   baseUrl: string;
@@ -44,9 +53,7 @@ function pathSegmentAfter(url: URL, marker: string): string | null {
 function decodedPathSegment(value: string): string | null {
   try {
     const decoded = decodeURIComponent(value).trim();
-    return /^[a-z0-9](?:[a-z0-9._-]{0,198}[a-z0-9])?$/iu.test(decoded)
-      ? decoded
-      : null;
+    return /^[a-z0-9](?:[a-z0-9._-]{0,198}[a-z0-9])?$/iu.test(decoded) ? decoded : null;
   } catch {
     return null;
   }
@@ -60,12 +67,7 @@ function normalizedWorkdayLocale(value: string): string | null {
 /** Parses an observed public Workday board without guessing a tenant, shard, or site. */
 export function parseWorkdayBoard(input: string): WorkdayBoard | null {
   const url = parseUrl(input);
-  if (
-    url?.protocol !== 'https:' ||
-    url.username !== '' ||
-    url.password !== '' ||
-    url.port !== ''
-  ) {
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
     return null;
   }
   const hostname = url.hostname.toLowerCase();
@@ -80,10 +82,7 @@ export function parseWorkdayBoard(input: string): WorkdayBoard | null {
   const segments = url.pathname.split('/').filter(Boolean);
   let locale: string | null = null;
   let rawSite: string | undefined;
-  if (
-    segments[0]?.toLowerCase() === 'wday' &&
-    segments[1]?.toLowerCase() === 'cxs'
-  ) {
+  if (segments[0]?.toLowerCase() === 'wday' && segments[1]?.toLowerCase() === 'cxs') {
     const pathTenant = segments[2]?.toLowerCase();
     if (pathTenant !== tenant) return null;
     rawSite = segments[3];
@@ -122,9 +121,10 @@ export function detectGreenhouseSource(input: string): DetectedAtsSource | null 
     boardIdentifier = pathSegmentAfter(url, 'boards');
   } else if (hostname === 'job-boards.greenhouse.io' || hostname === 'boards.greenhouse.io') {
     const queryIdentifier = url.searchParams.get('for')?.trim();
-    boardIdentifier = queryIdentifier === undefined || queryIdentifier.length === 0
-      ? firstPathSegment(url)
-      : queryIdentifier;
+    boardIdentifier =
+      queryIdentifier === undefined || queryIdentifier.length === 0
+        ? firstPathSegment(url)
+        : queryIdentifier;
   }
   return boardIdentifier === null
     ? null
@@ -135,11 +135,12 @@ export function detectAshbySource(input: string): DetectedAtsSource | null {
   const url = parseUrl(input);
   if (url === null) return null;
   const hostname = url.hostname.toLowerCase();
-  const boardIdentifier = hostname === 'jobs.ashbyhq.com'
-    ? firstPathSegment(url)
-    : hostname === 'api.ashbyhq.com'
-      ? pathSegmentAfter(url, 'job-board')
-      : null;
+  const boardIdentifier =
+    hostname === 'jobs.ashbyhq.com'
+      ? firstPathSegment(url)
+      : hostname === 'api.ashbyhq.com'
+        ? pathSegmentAfter(url, 'job-board')
+        : null;
   return boardIdentifier === null
     ? null
     : { provider: 'ashby', boardIdentifier, baseUrl: url.origin };
@@ -149,11 +150,14 @@ export function detectLeverSource(input: string): DetectedAtsSource | null {
   const url = parseUrl(input);
   if (url === null) return null;
   const hostname = url.hostname.toLowerCase();
-  if (!['jobs.lever.co', 'jobs.eu.lever.co', 'api.lever.co', 'api.eu.lever.co'].includes(hostname)) {
+  if (
+    !['jobs.lever.co', 'jobs.eu.lever.co', 'api.lever.co', 'api.eu.lever.co'].includes(hostname)
+  ) {
     return null;
   }
-  const boardIdentifier =
-    hostname.startsWith('api.') ? pathSegmentAfter(url, 'postings') : firstPathSegment(url);
+  const boardIdentifier = hostname.startsWith('api.')
+    ? pathSegmentAfter(url, 'postings')
+    : firstPathSegment(url);
   return boardIdentifier === null
     ? null
     : { provider: 'lever', boardIdentifier, baseUrl: url.origin };
@@ -170,11 +174,68 @@ export function detectRecruiteeSource(input: string): DetectedAtsSource | null {
   return { provider: 'recruitee', boardIdentifier, baseUrl: url.origin };
 }
 
+export function detectPersonioSource(input: string): DetectedAtsSource | null {
+  const url = parseUrl(input);
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
+    return null;
+  }
+  const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.jobs\.personio\.(?:de|com)$/u.exec(
+    url.hostname.toLowerCase(),
+  );
+  const boardIdentifier = match?.[1];
+  return boardIdentifier === undefined
+    ? null
+    : { provider: 'personio', boardIdentifier, baseUrl: url.origin };
+}
+
+export function detectWorkableSource(input: string): DetectedAtsSource | null {
+  const url = parseUrl(input);
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
+    return null;
+  }
+  const hostname = url.hostname.toLowerCase();
+  const legacyHostMatch = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.workable\.com$/u.exec(hostname);
+  const rawIdentifier =
+    hostname === 'apply.workable.com'
+      ? firstPathSegment(url)
+      : hostname === 'www.workable.com'
+        ? pathSegmentAfter(url, 'accounts')
+        : (legacyHostMatch?.[1] ?? null);
+  if (rawIdentifier === null || rawIdentifier.toLowerCase() === 'j') return null;
+  const boardIdentifier = decodedPathSegment(rawIdentifier);
+  return boardIdentifier === null
+    ? null
+    : {
+        provider: 'workable',
+        boardIdentifier,
+        baseUrl: `https://apply.workable.com/${encodeURIComponent(boardIdentifier)}`,
+      };
+}
+
+/** Custom domains require an observed sitemap; job-shaped links alone remain manual review. */
+export function detectSuccessFactorsSource(input: string): DetectedAtsSource | null {
+  const url = parseUrl(input);
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
+    return null;
+  }
+  const hostname = url.hostname.toLowerCase();
+  const recognizedHost = /(?:^|\.)(?:successfactors\.(?:com|eu)|successfactorsjobs\.com)$/u.test(
+    hostname,
+  );
+  if (!recognizedHost && url.pathname !== '/job_sitemap.xml') return null;
+  return {
+    provider: 'successfactors',
+    boardIdentifier: hostname,
+    baseUrl: `${url.origin}/`,
+  };
+}
+
 export function detectTeamtailorSource(input: string): DetectedAtsSource | null {
   const url = parseUrl(input);
   if (!url?.hostname.toLowerCase().endsWith('.teamtailor.com')) return null;
   const path = url.pathname.replace(/\/+$/u, '');
-  if (!path.toLowerCase().endsWith('/jobs') && !path.toLowerCase().endsWith('/jobs.rss')) return null;
+  if (!path.toLowerCase().endsWith('/jobs') && !path.toLowerCase().endsWith('/jobs.rss'))
+    return null;
   url.pathname = path.toLowerCase().endsWith('.rss') ? path : `${path}.rss`;
   url.search = '';
   url.hash = '';
@@ -188,7 +249,10 @@ export function detectSmartRecruitersSource(input: string): DetectedAtsSource | 
   let boardIdentifier: string | null = null;
   if (hostname === 'api.smartrecruiters.com') {
     boardIdentifier = pathSegmentAfter(url, 'companies');
-  } else if (hostname === 'careers.smartrecruiters.com' || hostname === 'jobs.smartrecruiters.com') {
+  } else if (
+    hostname === 'careers.smartrecruiters.com' ||
+    hostname === 'jobs.smartrecruiters.com'
+  ) {
     boardIdentifier = firstPathSegment(url);
   }
   return boardIdentifier === null
@@ -212,9 +276,12 @@ export function detectAtsSource(input: string): DetectedAtsSource | null {
     detectAshbySource(input) ??
     detectGreenhouseSource(input) ??
     detectLeverSource(input) ??
+    detectPersonioSource(input) ??
     detectRecruiteeSource(input) ??
     detectTeamtailorSource(input) ??
     detectSmartRecruitersSource(input) ??
+    detectSuccessFactorsSource(input) ??
+    detectWorkableSource(input) ??
     detectWorkdaySource(input)
   );
 }

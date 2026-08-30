@@ -22,7 +22,13 @@ const CAREER_TOKENS = new Set([
   'werkenbij',
 ]);
 const CAREER_PHRASES = ['join us', 'work with us', 'werken bij'] as const;
-const LISTING_SUFFIXES = new Set(['jobs', 'open positions', 'openings', 'opportunities', 'vacancies']);
+const LISTING_SUFFIXES = new Set([
+  'jobs',
+  'open positions',
+  'openings',
+  'opportunities',
+  'vacancies',
+]);
 const LOGIN_TOKENS = new Set([
   'account',
   'apply',
@@ -56,11 +62,7 @@ const PROVIDER_RESERVED_IDENTIFIERS = new Set([
   'www',
 ]);
 
-type DiscoveryStatus =
-  | 'careers_found'
-  | 'no_public_careers'
-  | 'unsupported'
-  | 'manual_review';
+type DiscoveryStatus = 'careers_found' | 'no_public_careers' | 'unsupported' | 'manual_review';
 
 export type OfficialSiteDiscoveryResult = {
   status: DiscoveryStatus;
@@ -103,7 +105,9 @@ type DetectionSummary =
 
 function responseHeader(response: AtsHttpResponse, name: string): string | null {
   const expected = name.toLowerCase();
-  return Object.entries(response.headers).find(([key]) => key.toLowerCase() === expected)?.[1] ?? null;
+  return (
+    Object.entries(response.headers).find(([key]) => key.toLowerCase() === expected)?.[1] ?? null
+  );
 }
 
 function requireSafeFinalUrl(response: AtsHttpResponse, context: string): URL {
@@ -245,11 +249,17 @@ function isPlausibleDetectedSource(link: PageLink, source: DetectedAtsSource): b
     }
     case 'lever':
       return !PROVIDER_RESERVED_IDENTIFIERS.has(identifier);
+    case 'personio':
+      return !PROVIDER_RESERVED_IDENTIFIERS.has(identifier) && !hostname.startsWith('www.');
     case 'recruitee':
       return !new Set(['api', 'auth', 'docs', 'help', 'support', 'www']).has(identifier);
     case 'teamtailor':
       return hostname !== 'www.teamtailor.com' && !hostname.startsWith('www.');
     case 'smartrecruiters':
+      return !PROVIDER_RESERVED_IDENTIFIERS.has(identifier);
+    case 'successfactors':
+      return identifier === hostname && identifier.includes('.');
+    case 'workable':
       return !PROVIDER_RESERVED_IDENTIFIERS.has(identifier);
     case 'workday':
       return !PROVIDER_RESERVED_IDENTIFIERS.has(identifier);
@@ -265,8 +275,8 @@ function detectedSources(links: readonly PageLink[]): DetectionSummary {
     observations.push({ link, source });
     const normalizedIdentifier = source.boardIdentifier.trim().toLowerCase();
     const identity =
-      source.provider === 'workday'
-        ? `workday:${new URL(source.baseUrl).hostname.toLowerCase()}:${normalizedIdentifier}`
+      source.provider === 'workday' || source.provider === 'personio'
+        ? `${source.provider}:${new URL(source.baseUrl).hostname.toLowerCase()}:${normalizedIdentifier}`
         : `${source.provider}:${normalizedIdentifier}`;
     if (!byBoard.has(identity)) byBoard.set(identity, { link, source });
   }
@@ -275,15 +285,6 @@ function detectedSources(links: readonly PageLink[]): DetectionSummary {
   const detected = [...byBoard.values()][0];
   if (detected === undefined) return { kind: 'none', observations };
   return { kind: 'one', detected, observations };
-}
-
-function experimentalProvider(url: URL): 'personio' | 'successfactors' | null {
-  const hostname = url.hostname.toLowerCase();
-  if (hostname.includes('personio.')) return 'personio';
-  if (hostname.includes('successfactors.') || hostname.includes('successfactorsjobs.')) {
-    return 'successfactors';
-  }
-  return null;
 }
 
 function normalizedPath(url: URL): string {
@@ -414,39 +415,6 @@ function detectedResult(
   return null;
 }
 
-function unsupportedCareersLink(
-  links: readonly PageLink[],
-  pagesInspected: 1 | 2,
-): OfficialSiteDiscoveryResult | null {
-  const candidates = links
-    .filter((link) => containsCareerSignal(`${link.text} ${link.url.pathname}`))
-    .map((link) => ({ link, provider: experimentalProvider(link.url) }))
-    .filter(
-      (entry): entry is { link: PageLink; provider: 'personio' | 'successfactors' } =>
-        entry.provider !== null,
-    )
-    .sort((left, right) => left.link.url.toString().localeCompare(right.link.url.toString()));
-  const candidate = candidates[0];
-  if (candidate === undefined) return null;
-  return {
-    status: 'unsupported',
-    pagesInspected,
-    careersUrl: candidate.link.url.toString(),
-    provider: candidate.provider,
-    sourceBaseUrl: null,
-    boardIdentifier: null,
-    diagnostic: 'Careers link uses a provider without a production adapter',
-    observations: candidates.map(({ link, provider: observedProvider }) => ({
-      provider: observedProvider,
-      boardIdentifier: null,
-      sourceBaseUrl: null,
-      observedUrl: link.url.toString(),
-      observedOnPage: link.observedOnPage,
-      element: link.kind,
-    })),
-  };
-}
-
 /**
  * Inspects at most two HTML pages: the evidence-backed official URL and, when
  * explicitly linked on the exact same origin, one careers page. Outbound ATS
@@ -480,21 +448,16 @@ export async function inspectOfficialCompanySite(
   });
   const homepageUrl = requireSafeFinalUrl(homepageResponse, 'official homepage');
   if (homepageUrl.origin !== requestedUrl.origin) {
-    return manualReview(
-      'Official URL redirected outside its exact origin boundary',
-      null,
-      1,
-      [
-        {
-          provider: null,
-          boardIdentifier: null,
-          sourceBaseUrl: null,
-          observedUrl: homepageUrl.toString(),
-          observedOnPage: requestedUrl.toString(),
-          element: 'page',
-        },
-      ],
-    );
+    return manualReview('Official URL redirected outside its exact origin boundary', null, 1, [
+      {
+        provider: null,
+        boardIdentifier: null,
+        sourceBaseUrl: null,
+        observedUrl: homepageUrl.toString(),
+        observedOnPage: requestedUrl.toString(),
+        element: 'page',
+      },
+    ]);
   }
   requireHtmlBody(homepageResponse, 'official homepage');
 
@@ -510,9 +473,6 @@ export async function inspectOfficialCompanySite(
   const homepageObservations = [homepageReference, ...homepageLinks];
   const directResult = detectedResult(detectedSources(homepageObservations), 1);
   if (directResult !== null) return directResult;
-
-  const unsupported = unsupportedCareersLink(homepageObservations, 1);
-  if (unsupported !== null) return unsupported;
 
   if (containsCareerSignal(homepageUrl.pathname)) {
     return careersPageResult(homepageResponse.body, homepageUrl, 1);
@@ -586,9 +546,6 @@ export async function inspectOfficialCompanySite(
   const careersLinks = collectPageLinks(careersResponse.body, careersFinalUrl);
   const careersResult = detectedResult(detectedSources(careersLinks), 2);
   if (careersResult !== null) return careersResult;
-
-  const linkedUnsupported = unsupportedCareersLink(careersLinks, 2);
-  if (linkedUnsupported !== null) return linkedUnsupported;
 
   return careersPageResult(careersResponse.body, careersFinalUrl, 2);
 }

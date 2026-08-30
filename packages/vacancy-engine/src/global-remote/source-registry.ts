@@ -6,20 +6,22 @@ const active = (
   url: string,
   transport: SourceRegistryEntry['transport'],
   provider: NonNullable<SourceRegistryEntry['provider']>,
+  ingestionMode: SourceRegistryEntry['ingestionMode'] = 'linked_index',
 ): SourceRegistryEntry => ({
   id,
   name,
   url,
   transport,
   state: 'active',
+  ingestionMode,
   provider,
   adapter: 'active',
   reason: 'Enabled deterministic adapter using a public API, structured endpoint, RSS feed, or MCP endpoint.',
 });
 
 const entry = (
-  value: Omit<SourceRegistryEntry, 'adapter'> & { adapter?: SourceRegistryEntry['adapter'] },
-): SourceRegistryEntry => ({ adapter: 'none', ...value });
+  value: Omit<SourceRegistryEntry, 'adapter' | 'ingestionMode'> & { adapter?: SourceRegistryEntry['adapter']; ingestionMode?: SourceRegistryEntry['ingestionMode'] },
+): SourceRegistryEntry => ({ adapter: 'none', ingestionMode: 'disabled', ...value });
 
 const gated = (
   id: string,
@@ -33,6 +35,7 @@ const gated = (
   url,
   transport: 'api',
   state: 'configuration_required',
+  ingestionMode: 'disabled',
   provider,
   adapter: 'ready',
   reason: `Adapter is implemented but disabled until ${configuredReason} ${configuredReason.includes(' and ') ? 'are' : 'is'} explicitly configured for this project.`,
@@ -71,17 +74,17 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     : gated('jobspipe', 'JobsPipe Search API', 'https://docs.jobspipe.dev/api-reference/jobs-search', 'jobspipe', 'JOBSPIPE_API_KEY (credit-metered)');
 
   return [
-    active('himalayas', 'Himalayas Remote Jobs API', 'https://himalayas.app/docs/remote-jobs-api', 'api', 'himalayas'),
-    active('jobicy', 'Jobicy Remote Jobs API', 'https://jobicy.com/jobs-rss-feed', 'api', 'jobicy'),
-    active('remotive', 'Remotive Remote Jobs API', 'https://github.com/remotive-com/remote-jobs-api', 'api', 'remotive'),
+    active('himalayas', 'Himalayas Remote Jobs API', 'https://himalayas.app/docs/remote-jobs-api', 'api', 'himalayas', 'full_ingestion'),
+    active('jobicy', 'Jobicy Remote Jobs API', 'https://jobicy.com/jobs-rss-feed', 'api', 'jobicy', 'full_ingestion'),
+    active('remotive', 'Remotive Remote Jobs RSS Feed', 'https://remotive.com/remote-jobs/feed', 'rss', 'remotive', 'full_ingestion'),
     active('freehire', 'Freehire API', 'https://freehire.me/docs/api', 'api', 'freehire'),
     active('job_opportunities', 'Job Opportunities API', 'https://jobopportunitiesapi.org/docs/endpoints/public', 'api', 'job_opportunities'),
     active('remote_landers', 'Remote Landers API', 'https://remotelanders.com/api', 'api', 'remote_landers'),
     active('jobgether', 'Jobgether Job Search API', 'https://jobgether.com/developers', 'api', 'jobgether'),
-    active('we_work_remotely', 'We Work Remotely RSS', 'https://weworkremotely.com/remote-job-rss-feed', 'rss', 'we_work_remotely'),
+    active('we_work_remotely', 'We Work Remotely RSS', 'https://weworkremotely.com/remote-job-rss-feed', 'rss', 'we_work_remotely', 'full_ingestion'),
     active('remote_first_jobs', 'Remote First Jobs API', 'https://remotefirstjobs.com/jobs-api', 'api', 'remote_first_jobs'),
     active('job_remotely', 'JobRemotely API', 'https://jobremotely.io/developers', 'api', 'job_remotely'),
-    active('remote_ok', 'Remote OK API', 'https://remoteok.com/api', 'api', 'remote_ok'),
+    active('remote_ok', 'Remote OK API', 'https://remoteok.com/api', 'api', 'remote_ok', 'full_ingestion'),
     active('arbeitnow', 'Arbeitnow Job Board API', 'https://www.arbeitnow.com/blog/job-board-api', 'api', 'arbeitnow'),
     active('startup_jobs', 'Startup Jobs RSS', 'https://startup.jobs/api', 'rss', 'startup_jobs'),
     active('devitjobs_nl', 'DevITJobs Netherlands RSS', 'https://devitjobs.nl/rss', 'rss', 'devitjobs_nl'),
@@ -92,6 +95,8 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('dice', 'Dice MCP Job Search', 'https://www.dice.com/career-advice/how-to-connect-the-dice-mcp-server-to-your-ai-assistant', 'mcp', 'dice'),
     active('jobspresso', 'Jobspresso Job Feed', 'https://jobspresso.co/?feed=job_feed', 'rss', 'jobspresso'),
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),
+    active('un_careers', 'United Nations Careers RSS', 'https://careers.un.org/jobfeed?language=en', 'rss', 'un_careers'),
+    active('jobtech_sweden', 'Arbetsförmedlingen JobSearch API', 'https://jobsearch.api.jobtechdev.se/', 'api', 'jobtech_sweden', 'full_ingestion'),
     muse,
     adzuna,
     jooble,
@@ -104,7 +109,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     entry({ id: 'glassdoor_partner', name: 'Glassdoor Partner API', url: 'https://www.glassdoor.com/developer/index.htm', transport: 'api', state: 'partner_required', provider: null, reason: 'No general public vacancy API; an approved partner agreement is required.' }),
     entry({ id: 'talroo', name: 'Talroo Publisher API', url: 'https://www.talroo.com/publishers/', transport: 'api', state: 'partner_required', provider: null, reason: 'Publisher approval and partner credentials are required.' }),
     entry({ id: 'ziprecruiter', name: 'ZipRecruiter MCP', url: 'https://api.ziprecruiter.com/mcp/docs', transport: 'mcp', state: 'blocked', provider: null, reason: 'Direct deterministic requests currently receive HTTP 403 from Cloudflare; recorded without bypass attempts.' }),
-    entry({ id: 'eures', name: 'EURES / European Job Days', url: 'https://eures.europa.eu/index_en', transport: 'none', state: 'manual_only', provider: null, reason: 'No stable sanctioned vacancy endpoint was verified for this pipeline.' }),
+    entry({ id: 'eures', name: 'EURES / European Job Days', url: 'https://eures.europa.eu/data-protection-statements/data-protection-statement-and-specific-terms-and-conditions-use-eures-portal-services_en', transport: 'none', state: 'prohibited', provider: null, reason: 'EURES job-search terms prohibit automated or manual extraction for further processing or republication; do not ingest without recognized partner access.' }),
     entry({ id: 'wellfound', name: 'Wellfound', url: 'https://wellfound.com/jobs', transport: 'none', state: 'manual_only', provider: null, reason: 'No verified public job-search API/feed suitable for deterministic production retrieval.' }),
     entry({ id: 'welcome_to_the_jungle', name: 'Welcome to the Jungle', url: 'https://www.welcometothejungle.com/en/jobs', transport: 'none', state: 'manual_only', provider: null, reason: 'No verified public job-search API/feed suitable for deterministic production retrieval.' }),
     entry({ id: 'built_in', name: 'Built In', url: 'https://builtin.com/jobs', transport: 'none', state: 'manual_only', provider: null, reason: 'No verified public job-search API/feed suitable for deterministic production retrieval.' }),

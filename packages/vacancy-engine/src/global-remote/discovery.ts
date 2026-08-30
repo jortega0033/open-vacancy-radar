@@ -2,6 +2,7 @@ import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
 import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runFeedDiscovery } from './feed-discovery.js';
+import { runJobtechDiscovery } from './jobtech-discovery.js';
 import { runKeyedDiscovery } from './keyed-discovery.js';
 import {
   discoveryAudit,
@@ -9,7 +10,6 @@ import {
   identifier,
   locations,
   numberValue,
-  parseSalaryText,
   parsedRoot,
   record,
   sourceFailure,
@@ -138,58 +138,16 @@ async function discoverJobicy(
   }
 }
 
-async function discoverRemotive(
-  http: AtsHttpClient,
-  config: GlobalRemoteConfig,
-): Promise<DiscoveryRun> {
-  const url = 'https://remotive.com/api/remote-jobs?search=frontend';
-  try {
-    const root = parsedRoot(await http.get(url), 'remotive');
-    if (!Array.isArray(root.jobs)) throw new AtsResponseError('remotive', 'jobs is not an array');
-    const vacancies = root.jobs.flatMap((raw): DiscoveryVacancyAudit[] => {
-      const job = record(raw);
-      const title = stringValue(job?.title);
-      const company = stringValue(job?.company_name);
-      const urlValue = httpUrl(job?.url); // http(s) only — see discoverHimalayas above
-      if (job === null || title === null || company === null || urlValue === null) return [];
-      const salary = parseSalaryText(stringValue(job.salary));
-      return [discoveryAudit({
-        key: `remotive:${identifier(job.id, urlValue)}`,
-        provider: 'remotive',
-        company,
-        title,
-        url: urlValue,
-        location: stringValue(job.candidate_required_location) ?? 'Unknown',
-        employmentType: stringValue(job.job_type),
-        currency: salary.currency,
-        salaryPeriod: salary.period,
-        advertisedMinimum: salary.minimum,
-        raw,
-        minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
-      })];
-    });
-    return {
-      sources: [{ id: 'remotive:frontend', provider: 'remotive', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
-      vacancies,
-    };
-  } catch (error) {
-    return {
-      sources: [{ id: 'remotive:frontend', provider: 'remotive', url, requests: 0, listings: 0, ...sourceFailure(error) }],
-      vacancies: [],
-    };
-  }
-}
-
 export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const [himalayas, jobicy, remotive, structured, feeds, additional, keyed] = await Promise.all([
+  const [himalayas, jobicy, structured, feeds, jobtech, additional, keyed] = await Promise.all([
     discoverHimalayas(http, config),
     discoverJobicy(http, config),
-    discoverRemotive(http, config),
     runStructuredDiscovery(http, config),
     runFeedDiscovery(http, config),
+    runJobtechDiscovery(http, config),
     runAdditionalDiscovery(http, config),
     runKeyedDiscovery(http, config),
   ]);
@@ -197,18 +155,18 @@ export async function runGlobalRemoteDiscovery(
     sources: [
       ...himalayas.sources,
       ...jobicy.sources,
-      ...remotive.sources,
       ...structured.sources,
       ...feeds.sources,
+      ...jobtech.sources,
       ...additional.sources,
       ...keyed.sources,
     ],
     vacancies: [
       ...himalayas.vacancies,
       ...jobicy.vacancies,
-      ...remotive.vacancies,
       ...structured.vacancies,
       ...feeds.vacancies,
+      ...jobtech.vacancies,
       ...additional.vacancies,
       ...keyed.vacancies,
     ],

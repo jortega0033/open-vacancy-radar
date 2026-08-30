@@ -9,9 +9,12 @@ import {
   CompanySiteJsonLdAdapter,
   GreenhouseAdapter,
   LeverAdapter,
+  PersonioAdapter,
   RecruiteeAdapter,
   SmartRecruitersAdapter,
+  SuccessFactorsAdapter,
   TeamtailorAdapter,
+  WorkableAdapter,
   WorkdayAdapter,
   type AtsHttpClient,
 } from '../ats/index.js';
@@ -69,9 +72,7 @@ type NormalizedVacancyScanScope = {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-export function normalizeVacancyScanScope(
-  scope: VacancyScanScope,
-): NormalizedVacancyScanScope {
+export function normalizeVacancyScanScope(scope: VacancyScanScope): NormalizedVacancyScanScope {
   const provider = atsProviderSchema.parse(scope.provider);
   if (
     !Number.isInteger(scope.limit) ||
@@ -192,10 +193,7 @@ function createStatistics(sourceCount: number): MutableStatistics {
   };
 }
 
-export function createVacancyAdapter(
-  provider: string,
-  http: AtsHttpClient,
-): VacancyAdapter | null {
+export function createVacancyAdapter(provider: string, http: AtsHttpClient): VacancyAdapter | null {
   switch (provider) {
     case 'ashby':
       return new AshbyAdapter(http);
@@ -203,12 +201,18 @@ export function createVacancyAdapter(
       return new GreenhouseAdapter(http);
     case 'lever':
       return new LeverAdapter(http);
+    case 'personio':
+      return new PersonioAdapter(http);
     case 'teamtailor':
       return new TeamtailorAdapter(http);
     case 'recruitee':
       return new RecruiteeAdapter(http);
     case 'smartrecruiters':
       return new SmartRecruitersAdapter(http);
+    case 'successfactors':
+      return new SuccessFactorsAdapter(http);
+    case 'workable':
+      return new WorkableAdapter(http);
     case 'workday':
       return new WorkdayAdapter(http);
     case 'json_ld':

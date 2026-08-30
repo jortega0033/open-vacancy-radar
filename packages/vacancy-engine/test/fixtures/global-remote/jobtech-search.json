@@ -1,0 +1,94 @@
+{
+  "total": {
+    "value": 3
+  },
+  "hits": [
+    {
+      "id": "jobtech-frontend-1",
+      "headline": "Senior Frontend Engineer",
+      "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/jobtech-frontend-1",
+      "application_deadline": "2099-12-31",
+      "description": {
+        "text": "Build accessible browser experiences for a product team with remote or partly remote work."
+      },
+      "employment_type": {
+        "label": "Permanent employment"
+      },
+      "salary_description": "Salary by agreement",
+      "employer": {
+        "name": "Nordic Product AB",
+        "phone_number": "+46 8 555 0100",
+        "email": "private-employer@example.invalid"
+      },
+      "application_details": {
+        "url": "https://careers.example.se/jobs/frontend-engineer",
+        "email": "private-applicant-contact@example.invalid"
+      },
+      "workplace_address": {
+        "city": "Stockholm",
+        "municipality": "Stockholm",
+        "region": "Stockholms län",
+        "country": "Sweden"
+      },
+      "application_contacts": [
+        {
+          "name": "Private Recruiter",
+          "email": "private-recruiter@example.invalid",
+          "telephone": "+46 70 555 0100"
+        }
+      ],
+      "removed": false,
+      "removed_date": null
+    },
+    {
+      "id": "jobtech-backend-1",
+      "headline": "Backend Engineer",
+      "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/jobtech-backend-1",
+      "application_deadline": "2099-12-31",
+      "description": {
+        "text": "Maintain APIs for a remote product team."
+      },
+      "employment_type": {
+        "label": "Permanent employment"
+      },
+      "salary_description": null,
+      "employer": {
+        "name": "Service Platform AB"
+      },
+      "application_details": {
+        "url": null
+      },
+      "workplace_address": {
+        "city": "Gothenburg",
+        "municipality": "Gothenburg",
+        "region": "Västra Götalands län",
+        "country": "Sweden"
+      },
+      "removed": false,
+      "removed_date": null
+    },
+    {
+      "id": "jobtech-removed-1",
+      "headline": "Frontend Developer",
+      "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/jobtech-removed-1",
+      "application_deadline": "2024-01-01",
+      "description": {
+        "text": "Closed role."
+      },
+      "employment_type": {
+        "label": "Permanent employment"
+      },
+      "employer": {
+        "name": "Closed Company AB"
+      },
+      "application_details": {
+        "url": "https://closed.example.se/jobs/frontend"
+      },
+      "workplace_address": {
+        "country": "Sweden"
+      },
+      "removed": true,
+      "removed_date": "2024-01-02T08:00:00Z"
+    }
+  ]
+}

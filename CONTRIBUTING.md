@@ -35,6 +35,16 @@ See [docs/architecture.md](docs/architecture.md) for the full picture, and
 management) → `apps/daemon` (HTTP+SSE server) → `apps/desktop` (Electron+React demo client).
 Dependencies only flow in that direction.
 
+### Job source contributions
+
+The default product decision is to integrate lawful public vacancy sources. Follow the
+[job source policy](docs/job-source-policy.md): prefer official APIs and feeds, keep all requests
+behind the existing safe HTTP boundary, preserve direct application URLs and attribution, and add
+hermetic fixtures for complete and failure outcomes. Source complexity can affect sequencing; it
+does not justify permanently dropping useful coverage. Permission uncertainty limits a connector to
+the factual linked-index mode; authentication or access-control bypass and explicit automation or
+licensing prohibitions are stop conditions.
+
 ## Architecture rules
 
 These aren't style preferences — breaking them tends to break the security model or the layering

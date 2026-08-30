@@ -27,6 +27,20 @@ describe('automatic discovery source canonicalization', () => {
   it.each([
     [
       {
+        provider: 'ashby',
+        careersUrl: 'https://jobs.ashbyhq.com/Acme/role-id',
+        boardIdentifier: 'Acme',
+      },
+      {
+        provider: 'ashby',
+        sourceType: 'public_ats_api',
+        baseUrl: 'https://jobs.ashbyhq.com/Acme',
+        boardIdentifier: 'Acme',
+        canonicalKey: 'ashby:acme',
+      },
+    ],
+    [
+      {
         provider: 'greenhouse',
         careersUrl: 'https://job-boards.greenhouse.io/Acme/jobs/123',
         boardIdentifier: 'Acme',
@@ -51,6 +65,20 @@ describe('automatic discovery source canonicalization', () => {
         baseUrl: 'https://jobs.eu.lever.co/Acme',
         boardIdentifier: 'Acme',
         canonicalKey: 'lever:eu:acme',
+      },
+    ],
+    [
+      {
+        provider: 'personio',
+        careersUrl: 'https://acme.jobs.personio.com/job/123',
+        boardIdentifier: 'acme',
+      },
+      {
+        provider: 'personio',
+        sourceType: 'public_xml',
+        baseUrl: 'https://acme.jobs.personio.com',
+        boardIdentifier: 'acme',
+        canonicalKey: 'personio:acme.jobs.personio.com:acme',
       },
     ],
     [
@@ -110,6 +138,34 @@ describe('automatic discovery source canonicalization', () => {
         canonicalKey: 'workday:acme.wd5.myworkdayjobs.com:external',
       },
     ],
+    [
+      {
+        provider: 'successfactors',
+        careersUrl: 'https://career5.successfactors.eu/job/Frontend-Engineer/100283-en_GB/',
+        boardIdentifier: 'career5.successfactors.eu',
+      },
+      {
+        provider: 'successfactors',
+        sourceType: 'public_xml',
+        baseUrl: 'https://career5.successfactors.eu/',
+        boardIdentifier: 'career5.successfactors.eu',
+        canonicalKey: 'successfactors:career5.successfactors.eu',
+      },
+    ],
+    [
+      {
+        provider: 'workable',
+        careersUrl: 'https://apply.workable.com/Acme/j/ABC123/',
+        boardIdentifier: 'Acme',
+      },
+      {
+        provider: 'workable',
+        sourceType: 'public_ats_api',
+        baseUrl: 'https://apply.workable.com/Acme',
+        boardIdentifier: 'Acme',
+        canonicalKey: 'workable:acme',
+      },
+    ],
   ])('canonicalizes a guarded $provider observation', (input, expected) => {
     expect(canonicalizeSupportedDiscoverySource(input)).toEqual(expected);
   });
@@ -130,6 +186,15 @@ describe('automatic discovery source canonicalization', () => {
           provider: 'lever',
           careersUrl: 'https://jobs.lever.co/privacy',
           boardIdentifier: 'privacy',
+        }),
+      'manual_review',
+    );
+    expectBoundary(
+      () =>
+        canonicalizeSupportedDiscoverySource({
+          provider: 'successfactors',
+          careersUrl: 'https://jobs.example.com/job/Frontend-Engineer/100283-en_GB/',
+          boardIdentifier: 'jobs.example.com',
         }),
       'manual_review',
     );
@@ -163,9 +228,7 @@ function state(): PromotionDiscoveryState {
   };
 }
 
-function attempt(
-  overrides: Partial<PromotionAttemptEvidence> = {},
-): PromotionAttemptEvidence {
+function attempt(overrides: Partial<PromotionAttemptEvidence> = {}): PromotionAttemptEvidence {
   return {
     id: 'attempt-1',
     outcome: 'careers_found',
@@ -246,10 +309,7 @@ describe('promotion provenance', () => {
       observedOnPage: 'https://acme.example/careers',
       element: 'anchor',
     });
-    expectBoundary(
-      () => validatePromotionProvenance(state(), ambiguousAttempt),
-      'manual_review',
-    );
+    expectBoundary(() => validatePromotionProvenance(state(), ambiguousAttempt), 'manual_review');
   });
 });
 

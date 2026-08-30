@@ -31,6 +31,28 @@ export function canonicalKeyForCatalogSource(source: {
 }): string | null {
   const identifier = source.boardIdentifier?.trim();
   if (!identifier?.length) return null;
+  if (source.provider === 'successfactors') {
+    try {
+      const url = new URL(source.baseUrl);
+      const hostname = url.hostname.toLowerCase();
+      if (
+        url.protocol !== 'https:' ||
+        url.username !== '' ||
+        url.password !== '' ||
+        url.port !== '' ||
+        url.pathname !== '/' ||
+        url.search !== '' ||
+        url.hash !== '' ||
+        identifier !== identifier.toLowerCase() ||
+        identifier !== hostname
+      ) {
+        return null;
+      }
+      return `successfactors:${hostname}`;
+    } catch {
+      return null;
+    }
+  }
   const detectedFromIdentifier = source.provider === 'recruitee'
     ? detectAtsSource(identifier)
     : null;
@@ -63,6 +85,8 @@ export function canonicalKeyForCatalogSource(source: {
   })();
   if (normalizedConfigured.length === 0 || normalizedConfigured !== normalizedDetected) return null;
   switch (source.provider) {
+    case 'ashby':
+      return `ashby:${normalizedConfigured}`;
     case 'greenhouse':
       return `greenhouse:${normalizedConfigured}`;
     case 'lever': {
@@ -73,6 +97,14 @@ export function canonicalKeyForCatalogSource(source: {
         return null;
       }
       return `lever:${region}:${normalizedConfigured}`;
+    }
+    case 'personio': {
+      try {
+        const hostname = new URL(source.baseUrl).hostname.toLowerCase();
+        return `personio:${hostname}:${normalizedConfigured}`;
+      } catch {
+        return null;
+      }
     }
     case 'recruitee':
       return `recruitee:${normalizedConfigured}`;
@@ -85,6 +117,8 @@ export function canonicalKeyForCatalogSource(source: {
     }
     case 'smartrecruiters':
       return `smartrecruiters:${normalizedConfigured}`;
+    case 'workable':
+      return `workable:${normalizedConfigured}`;
     case 'workday': {
       try {
         const hostname = new URL(source.baseUrl).hostname.toLowerCase();

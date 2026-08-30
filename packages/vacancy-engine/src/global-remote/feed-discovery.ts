@@ -32,14 +32,17 @@ type RssItem = {
   fields: Record<string, string[]>;
 };
 
+type RssParseResult = { items: RssItem[]; invalidCount: number };
+
 function decodedText(html: string): string {
   return load(html).text().replace(/\s+/gu, ' ').trim();
 }
 
-function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
+function parseRss(response: AtsHttpResponse, provider: Provider): RssParseResult {
   requireSuccessfulResponse(provider, response);
   const $ = load(response.body, { xmlMode: true });
   const items: RssItem[] = [];
+  let invalidCount = 0;
   $('item').each((_index, element) => {
     const fields: Record<string, string[]> = {};
     $(element).children().each((_childIndex, child) => {
@@ -51,7 +54,10 @@ function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
     });
     const title = fields.title?.[0];
     const link = httpUrl(fields.link?.[0]);
-    if (title === undefined || link === null) return;
+    if (title === undefined || link === null) {
+      invalidCount += 1;
+      return;
+    }
     items.push({
       title,
       link,
@@ -63,7 +69,7 @@ function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
   if ($('channel').length === 0) {
     throw new AtsResponseError(provider, 'invalid RSS document');
   }
-  return items;
+  return { items, invalidCount };
 }
 
 function companyColonTitle(value: string): { company: string; title: string } {
@@ -105,6 +111,34 @@ function devItTitle(value: string): { company: string; title: string } {
   return { company: match[2].trim(), title: match[1].trim() };
 }
 
+const UN_CAREERS_METADATA_LABELS = [
+  'Level',
+  'Job ID',
+  'Job Network',
+  'Job Family',
+  'Department/Office',
+  'Duty Station',
+  'Staffing Exercise',
+  'Posted Date',
+  'Deadline',
+] as const;
+
+function regularExpressionLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function unCareersMetadata(description: string): Record<string, string | null> {
+  const boundary = UN_CAREERS_METADATA_LABELS.map(regularExpressionLiteral).join('|');
+  return Object.fromEntries(UN_CAREERS_METADATA_LABELS.map((label) => {
+    const match = new RegExp(
+      `(?:^|\\s)${regularExpressionLiteral(label)}\\s*:\\s*(.*?)(?=\\s+(?:${boundary})\\s*:|$)`,
+      'iu',
+    ).exec(description);
+    const value = match?.[1]?.trim();
+    return [label, value === undefined || value.length === 0 ? null : value];
+  }));
+}
+
 async function discoverRss(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
@@ -116,10 +150,15 @@ async function discoverRss(
   },
 ): Promise<DiscoveryRun> {
   try {
-    const items = parseRss(await http.get(options.url), options.provider);
-    const vacancies = items.flatMap((item) => {
+    const parsed = parseRss(await http.get(options.url), options.provider);
+    let invalidCount = parsed.invalidCount;
+    const vacancies = parsed.items.flatMap((item) => {
       const normalized = options.normalize(item);
-      return normalized === null ? [] : [normalized];
+      if (normalized === null) {
+        invalidCount += 1;
+        return [];
+      }
+      return [normalized];
     });
     return {
       sources: [{
@@ -128,8 +167,10 @@ async function discoverRss(
         url: options.url,
         requests: 1,
         listings: vacancies.length,
-        status: 'success',
-        error: null,
+        status: invalidCount > 0 ? 'partial' : 'success',
+        error: invalidCount > 0
+          ? `Dropped ${invalidCount} malformed or unsupported RSS item(s).`
+          : null,
       }],
       vacancies,
     };
@@ -175,6 +216,73 @@ async function discoverWeWorkRemotely(
         advertisedMinimum: salary.minimum,
         description: item.description,
         raw: item,
+        minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
+      });
+    },
+  });
+}
+
+async function discoverRemotive(
+  http: AtsHttpClient,
+  config: GlobalRemoteConfig,
+): Promise<DiscoveryRun> {
+  const url = 'https://remotive.com/remote-jobs/feed';
+  return discoverRss(http, config, {
+    provider: 'remotive',
+    id: 'remotive:all-jobs',
+    url,
+    normalize(item) {
+      const company = item.fields.company?.[0]
+        ?? item.fields['dc:creator']?.[0]
+        ?? 'Unspecified employer';
+      const salary = parseSalaryText(`${item.title} ${item.description}`);
+      return discoveryAudit({
+        key: `remotive:${item.fields.jobid?.[0] ?? item.guid}`,
+        provider: 'remotive',
+        company,
+        title: item.title,
+        url: item.link,
+        location: item.fields.location?.[0] ?? 'Remote (eligibility unspecified)',
+        employmentType: item.fields.type?.[0] ?? null,
+        currency: salary.currency,
+        salaryPeriod: salary.period,
+        advertisedMinimum: salary.minimum,
+        description: item.description,
+        raw: item,
+        minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
+      });
+    },
+  });
+}
+
+async function discoverUnCareers(
+  http: AtsHttpClient,
+  config: GlobalRemoteConfig,
+): Promise<DiscoveryRun> {
+  const url = 'https://careers.un.org/jobfeed?language=en';
+  return discoverRss(http, config, {
+    provider: 'un_careers',
+    id: 'un_careers:english',
+    url,
+    normalize(item) {
+      const metadata = unCareersMetadata(item.description);
+      return discoveryAudit({
+        key: `un_careers:${metadata['Job ID'] ?? item.guid}`,
+        provider: 'un_careers',
+        company: 'United Nations',
+        title: item.title,
+        url: item.link,
+        location: metadata['Duty Station'] ?? 'Unknown',
+        employmentType: null,
+        currency: null,
+        salaryPeriod: null,
+        advertisedMinimum: null,
+        raw: {
+          title: item.title,
+          link: item.link,
+          guid: item.guid,
+          metadata,
+        },
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
     },
@@ -742,6 +850,7 @@ export async function runFeedDiscovery(
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
   const runs = await Promise.all([
+    discoverRemotive(http, config),
     discoverWeWorkRemotely(http, config),
     discoverRemoteFirstJobs(http, config),
     discoverJobRemotely(http, config),
@@ -755,6 +864,7 @@ export async function runFeedDiscovery(
     discoverDevItJobsUk(http, config),
     discoverJobspresso(http, config),
     discoverRemoteFrontendJobs(http, config),
+    discoverUnCareers(http, config),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),
