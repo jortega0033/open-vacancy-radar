@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -51,6 +51,14 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Electron's default `app.getPath('userData')` etc. derive from `app.getName()`, which falls back
+// to package.json's `name` field (`@agent-dock/desktop`, an internal workspace name) when nothing
+// sets it explicitly. Left unset, every user-data path (workspace/vacancy-engine databases, the
+// Chromium profile) would live under a directory named after that internal package rather than
+// the product name shown everywhere else (the installer, the window title, the docs). Must run
+// before any `app.getPath(...)` call below, so it comes first, right after `app` becomes usable.
+app.setName('Open Vacancy Radar');
+
 // Two AgentDock windows would each spawn their own daemon sidecar and race over the same
 // discovery file (the daemon's own single-instance guard, see SECURITY.md, would make the
 // second one fail to start), rather than let that surface as a confusing "daemon unavailable"
@@ -95,13 +103,44 @@ let closeWorkspaceDb: (() => void) | undefined;
 
 /**
  * Where `config/global-remote-profile-v1.json` and `reports/global-remote/*` live for the vendored
- * engine. Dev-mode only: this assumes the monorepo layout (`apps/desktop/dist-electron` three
- * levels under the repo root, next to `packages/vacancy-engine`) and will need a real resolution
- * strategy (bundling the engine's `config/` as a packaged resource and moving `reports/` under
- * `app.getPath('userData')`) before this app is ever built with `electron-builder`.
+ * engine, in dev/unpacked mode: the monorepo layout (`apps/desktop/dist-electron` three levels
+ * under the repo root, next to `packages/vacancy-engine`).
  */
 function vacancyEngineProjectRoot(): string {
   return join(__dirname, '..', '..', '..', 'packages', 'vacancy-engine');
+}
+
+/** Read-only migration SQL, shipped as an extraResource (see electron-builder.yml). */
+function vacancyEngineMigrationsFolder(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'vacancy-engine', 'drizzle')
+    : join(vacancyEngineProjectRoot(), 'drizzle');
+}
+
+let vacancyEngineDataRootInit: Promise<string> | undefined;
+
+/**
+ * Where the engine reads `config/*.json` (including `company-domain-candidates-v1.json`, which it
+ * also *writes* back to across scans — not purely static input) and writes `reports/`/`.data/`.
+ * Once packaged, `resourcesPath` isn't guaranteed writable and isn't the project source tree, so
+ * this resolves to a `vacancy-engine` subdirectory under the same per-user app-data directory the
+ * database itself lives in, seeded on first run from the read-only `config/` shipped as an
+ * extraResource. Idempotent and safe to call on every launch: only copies `config/` files that
+ * don't already exist at the destination, so an update-carried-forward `company-domain-candidates-v1.json`
+ * from a previous run is never overwritten by the packaged default.
+ */
+async function vacancyEngineDataRoot(): Promise<string> {
+  if (!app.isPackaged) return vacancyEngineProjectRoot();
+  vacancyEngineDataRootInit ??= (async () => {
+    const root = join(app.getPath('userData'), 'vacancy-engine');
+    const configDir = join(root, 'config');
+    if (!existsSync(configDir)) {
+      await mkdir(configDir, { recursive: true });
+      await cp(join(process.resourcesPath, 'vacancy-engine', 'config'), configDir, { recursive: true });
+    }
+    return root;
+  })();
+  return vacancyEngineDataRootInit;
 }
 
 /**
@@ -120,9 +159,8 @@ async function ensureVacancyEngine(): Promise<Database> {
     const { db } = createDatabaseClient(config.databasePath);
     // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
     // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
-    // Electron actually launches. Resolve it against the same dev-mode project root used for
-    // `config/` and `reports/` below instead of relying on cwd.
-    await migrateDatabase(db, join(vacancyEngineProjectRoot(), 'drizzle'));
+    // Electron actually launches. Resolve it explicitly instead of relying on cwd.
+    await migrateDatabase(db, vacancyEngineMigrationsFolder());
     vacancyDb = db;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
     // sidecar SQLite file keyed to this database path, so it is meaningful across processes
@@ -544,7 +582,7 @@ ipcMain.handle('vacancy:run-scan', async (): Promise<GlobalRemoteReport> => {
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
-      const result = await runGlobalRemoteScan(db, config, createLogger(config), vacancyEngineProjectRoot());
+      const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot());
       latestVacancyReport = result.report;
       return result.report;
     },
@@ -573,9 +611,8 @@ ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
     async () => {
       const config = vacancyEngineConfig();
       const result = await runEndToEndScan(db, config, createLogger(config), lock, {
-        // Same dev-mode caveat as `vacancyEngineProjectRoot` itself: this is where the engine
-        // reads `config/candidate-profile-v1.json` and writes `reports/`.
-        projectRoot: vacancyEngineProjectRoot(),
+        // This is where the engine reads `config/candidate-profile-v1.json` and writes `reports/`.
+        projectRoot: await vacancyEngineDataRoot(),
       });
       if (result.status === 'skipped') throw new Error(SCAN_BUSY_OTHER_PROCESS);
       latestNetherlandsReport = result.report;

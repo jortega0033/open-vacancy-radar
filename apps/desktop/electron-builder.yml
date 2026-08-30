@@ -34,6 +34,17 @@ extraResources:
     to: daemon
   - from: assets/app-icons/png/icon-256.png
     to: assets/app-icons/png/icon-256.png
+  # Read-only inputs the vendored vacancy-engine needs at runtime but that live outside its own
+  # compiled dist/ (drizzle-orm migrations are plain SQL, not TypeScript, and config/ is JSON):
+  # migrateDatabase() and the scan pipeline resolve these from process.resourcesPath once packaged
+  # (see vacancyEngineMigrationsFolder/vacancyEngineDataRoot in electron/main.ts). config/ is only
+  # ever read from here to seed each user's own writable copy under app.getPath('userData') on
+  # first run — one of its files (company-domain-candidates-v1.json) gets written back to across
+  # scans, so the packaged copy itself is never mutated in place.
+  - from: ../../packages/vacancy-engine/drizzle
+    to: vacancy-engine/drizzle
+  - from: ../../packages/vacancy-engine/config
+    to: vacancy-engine/config
 
 asar: true
 
