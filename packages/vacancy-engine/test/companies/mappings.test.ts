@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  companyMappingFileSchema,
-  loadCompanyMappings,
-} from '../../src/companies/mappings.js';
+import { companyMappingFileSchema, loadCompanyMappings } from '../../src/companies/mappings.js';
 import { canonicalKeyForCatalogSource } from '../../src/companies/repository.js';
 
 describe('verified company mapping configuration', () => {
@@ -11,7 +8,9 @@ describe('verified company mapping configuration', () => {
     const file = await loadCompanyMappings();
     expect(file.mappings.length).toBeGreaterThanOrEqual(9);
     expect(new Set(file.mappings.map((mapping) => mapping.domain)).size).toBe(file.mappings.length);
-    expect(file.mappings.find((mapping) => mapping.brandName === 'Leaseweb')?.sponsors).toHaveLength(3);
+    expect(
+      file.mappings.find((mapping) => mapping.brandName === 'Leaseweb')?.sponsors,
+    ).toHaveLength(3);
     const bitvavo = file.mappings.find((mapping) => mapping.brandName === 'Bitvavo');
     expect(bitvavo?.scanEnabled).toBe(false);
     expect(bitvavo?.careerSources[0]?.status).toBe('manual_review');
@@ -81,6 +80,53 @@ describe('verified company mapping configuration', () => {
 });
 
 describe('canonicalKeyForCatalogSource', () => {
+  it.each([
+    [
+      {
+        provider: 'ashby',
+        baseUrl: 'https://jobs.ashbyhq.com/Acme',
+        boardIdentifier: 'Acme',
+      },
+      'ashby:acme',
+    ],
+    [
+      {
+        provider: 'personio',
+        baseUrl: 'https://acme.jobs.personio.de',
+        boardIdentifier: 'acme',
+      },
+      'personio:acme.jobs.personio.de:acme',
+    ],
+    [
+      {
+        provider: 'successfactors',
+        baseUrl: 'https://jobs.tetrapak.com/',
+        boardIdentifier: 'jobs.tetrapak.com',
+      },
+      'successfactors:jobs.tetrapak.com',
+    ],
+    [
+      {
+        provider: 'workable',
+        baseUrl: 'https://apply.workable.com/Acme',
+        boardIdentifier: 'Acme',
+      },
+      'workable:acme',
+    ],
+  ])('derives a guarded canonical key for $0.provider', (source, expected) => {
+    expect(canonicalKeyForCatalogSource(source)).toBe(expected);
+  });
+
+  it('rejects mismatched SuccessFactors origin identifiers', () => {
+    expect(
+      canonicalKeyForCatalogSource({
+        provider: 'successfactors',
+        baseUrl: 'https://jobs.tetrapak.com/',
+        boardIdentifier: 'outside.example',
+      }),
+    ).toBeNull();
+  });
+
   it('derives a Recruitee key from an exact feed URL behind a custom careers domain', () => {
     expect(
       canonicalKeyForCatalogSource({

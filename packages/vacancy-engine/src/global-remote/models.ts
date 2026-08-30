@@ -5,7 +5,19 @@ const reviewAnswerSchema = z.enum(['yes', 'no', 'uncertain']);
 export const globalRemoteSourceSchema = z.object({
   id: z.string().min(1),
   company: z.string().min(1),
-  provider: z.enum(['ashby', 'greenhouse', 'lever', 'recruitee', 'html']),
+  provider: z.enum([
+    'ashby',
+    'greenhouse',
+    'lever',
+    'personio',
+    'recruitee',
+    'smartrecruiters',
+    'successfactors',
+    'teamtailor',
+    'workable',
+    'workday',
+    'html',
+  ]),
   boardIdentifier: z.string().min(1).nullable(),
   externalId: z.string().min(1),
   expectedTitle: z.string().min(1),
@@ -123,6 +135,8 @@ export type DiscoveryProvider =
   | 'the_muse'
   | 'jobspresso'
   | 'remote_frontend_jobs'
+  | 'un_careers'
+  | 'jobtech_sweden'
   | 'adzuna'
   | 'jooble'
   | 'reed'
@@ -168,12 +182,15 @@ export type SourceRegistryState =
   | 'blocked'
   | 'prohibited';
 
+export type SourceIngestionMode = 'full_ingestion' | 'linked_index' | 'disabled';
+
 export type SourceRegistryEntry = {
   id: string;
   name: string;
   url: string;
   transport: 'api' | 'rss' | 'mcp' | 'structured' | 'none';
   state: SourceRegistryState;
+  ingestionMode: SourceIngestionMode;
   provider: DiscoveryProvider | null;
   adapter: 'active' | 'ready' | 'none';
   reason: string;

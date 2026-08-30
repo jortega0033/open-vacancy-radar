@@ -69,7 +69,7 @@ function registryRows(sources: readonly SourceRegistryEntry[]): string {
     <tr>
       <td>${link(source.url, source.name)}<br><small>${escapeHtml(source.id)}</small></td>
       <td>${escapeHtml(source.transport)} · adapter ${escapeHtml(source.adapter)}</td>
-      <td><code>${escapeHtml(source.state)}</code></td>
+      <td><code>${escapeHtml(source.state)}</code><br>${escapeHtml(source.ingestionMode)}</td>
       <td>${escapeHtml(source.reason)}</td>
     </tr>`).join('')}</tbody></table>`;
 }

@@ -22,3 +22,4 @@
 - [ ] No credentials, tokens, personal application data, CV contents, private paths, or sensitive logs are included.
 - [ ] Breaking changes and migration steps are clearly called out.
 - [ ] I reviewed the contribution and security guidance.
+- [ ] Job-source changes follow [the job source policy](../docs/job-source-policy.md), including access evidence, request bounds, attribution, and stop conditions.

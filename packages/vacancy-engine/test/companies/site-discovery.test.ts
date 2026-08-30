@@ -44,6 +44,41 @@ describe('official company-site discovery', () => {
     });
   });
 
+  it.each([
+    ['personio', 'https://acme.jobs.personio.de/job/123', 'https://acme.jobs.personio.de', 'acme'],
+    [
+      'workable',
+      'https://apply.workable.com/acme/j/ABC123/',
+      'https://apply.workable.com/acme',
+      'acme',
+    ],
+    [
+      'successfactors',
+      'https://career5.successfactors.eu/job/Frontend-Engineer/100283-en_GB/',
+      'https://career5.successfactors.eu/',
+      'career5.successfactors.eu',
+    ],
+  ])(
+    'recognizes an exact %s tenant observation without fetching it',
+    async (provider, sourceUrl, sourceBaseUrl, boardIdentifier) => {
+      const http = new FixtureHttpClient(
+        new Map([[officialUrl, `<a href="${sourceUrl}">Open positions</a>`]]),
+      );
+
+      const result = await inspectOfficialCompanySite(http, officialUrl);
+
+      expect(result).toMatchObject({
+        status: 'careers_found',
+        pagesInspected: 1,
+        careersUrl: sourceUrl,
+        provider,
+        sourceBaseUrl,
+        boardIdentifier,
+      });
+      expect(http.requestedUrls).toEqual([officialUrl]);
+    },
+  );
+
   it('recognizes an exact Workday tenant board observation without fetching it', async () => {
     const workdayUrl =
       'https://acme.wd5.myworkdayjobs.com/en-US/External/job/Amsterdam/Angular-Developer_JR-123';
@@ -75,22 +110,13 @@ describe('official company-site discovery', () => {
   });
 
   it.each([
-    [
-      'generic host',
-      'https://www.myworkdayjobs.com/en-US/External',
-    ],
-    [
-      'reserved board identifier',
-      'https://acme.wd5.myworkdayjobs.com/en-US/jobs',
-    ],
+    ['generic host', 'https://www.myworkdayjobs.com/en-US/External'],
+    ['reserved board identifier', 'https://acme.wd5.myworkdayjobs.com/en-US/jobs'],
     [
       'tenant-mismatched CXS route',
       'https://acme.wd5.myworkdayjobs.com/wday/cxs/other/External/jobs',
     ],
-    [
-      'credential-bearing URL',
-      'https://user:secret@acme.wd5.myworkdayjobs.com/en-US/External',
-    ],
+    ['credential-bearing URL', 'https://user:secret@acme.wd5.myworkdayjobs.com/en-US/External'],
   ])('does not recognize a Workday-shaped %s', async (_case, workdayUrl) => {
     const http = new FixtureHttpClient(
       new Map([[officialUrl, `<a href="${workdayUrl}">Workday portal</a>`]]),
@@ -234,7 +260,9 @@ describe('official company-site discovery', () => {
 
   it('returns manual review for exact-origin boundary escapes on either page', async () => {
     const homepageRedirect = new FixtureHttpClient(
-      new Map([[officialUrl, response('https://www.acme.example/', '<a href="/careers">Jobs</a>')]]),
+      new Map([
+        [officialUrl, response('https://www.acme.example/', '<a href="/careers">Jobs</a>')],
+      ]),
     );
     const homepageResult = await inspectOfficialCompanySite(homepageRedirect, officialUrl);
     expect(homepageResult).toMatchObject({

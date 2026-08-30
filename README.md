@@ -31,6 +31,12 @@ nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for t
 vendored from the standalone `ind-job-radar` CLI project and ported from PostgreSQL to an embedded
 `better-sqlite3` database so the desktop app needs no external services at all.
 
+Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
+broadest mode its evidence supports. Complexity changes sequencing, not the commitment to cover it.
+Unclear republication rights use a factual linked index; explicit prohibitions, authentication or
+partner boundaries, and technical access controls hard-stop ingestion. See
+[the job source policy](docs/job-source-policy.md).
+
 On top of that, the desktop app is a full personal tracker:
 
 - **Search** — run either pipeline on demand, save leads, or open the CV assistant on any result.

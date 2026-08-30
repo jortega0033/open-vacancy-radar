@@ -125,7 +125,33 @@ describe('MCP and configuration-gated discovery', () => {
     const registry = globalRemoteSourceRegistry(profile());
 
     expect(registry.length).toBeGreaterThanOrEqual(30);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(21);
+    expect(registry.every((source) =>
+      source.state === 'active'
+        ? source.ingestionMode !== 'disabled'
+        : source.ingestionMode === 'disabled',
+    )).toBe(true);
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(23);
+    expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
+      transport: 'rss',
+      url: 'https://remotive.com/remote-jobs/feed',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'un_careers')).toMatchObject({
+      state: 'active',
+      transport: 'rss',
+      ingestionMode: 'linked_index',
+    });
+    expect(registry.find((source) => source.id === 'jobtech_sweden')).toMatchObject({
+      state: 'active',
+      url: 'https://jobsearch.api.jobtechdev.se/',
+      transport: 'api',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'eures')).toMatchObject({
+      state: 'prohibited',
+      adapter: 'none',
+      ingestionMode: 'disabled',
+    });
     expect(registry.find((source) => source.id === 'the_muse')).toMatchObject({
       state: 'configuration_required',
       adapter: 'ready',

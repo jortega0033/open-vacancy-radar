@@ -5,7 +5,14 @@ import {
   AtsResponseError,
   GreenhouseAdapter,
   LeverAdapter,
+  PersonioAdapter,
   RecruiteeAdapter,
+  SmartRecruitersAdapter,
+  SuccessFactorsAdapter,
+  TeamtailorAdapter,
+  WorkableAdapter,
+  WorkdayAdapter,
+  detectAtsSource,
   requireSuccessfulResponse,
   type AtsHttpClient,
 } from '../ats/index.js';
@@ -42,20 +49,45 @@ function adapterFor(source: GlobalRemoteSource, http: AtsHttpClient): VacancyAda
       return new GreenhouseAdapter(http);
     case 'lever':
       return new LeverAdapter(http);
+    case 'personio':
+      return new PersonioAdapter(http);
     case 'recruitee':
       return new RecruiteeAdapter(http);
+    case 'smartrecruiters':
+      return new SmartRecruitersAdapter(http);
+    case 'successfactors':
+      return new SuccessFactorsAdapter(http);
+    case 'teamtailor':
+      return new TeamtailorAdapter(http);
+    case 'workable':
+      return new WorkableAdapter(http);
+    case 'workday':
+      return new WorkdayAdapter(http);
     case 'html':
       return null;
   }
 }
 
 function descriptor(source: GlobalRemoteSource): CareerSourceDescriptor {
+  const detected = source.provider === 'html' ? null : detectAtsSource(source.url);
+  const reviewedSuccessFactorsOrigin = (() => {
+    if (source.provider !== 'successfactors' || source.boardIdentifier === null) return null;
+    const url = new URL(source.url);
+    return url.protocol === 'https:'
+      && url.username === ''
+      && url.password === ''
+      && url.port === ''
+      && url.hostname.toLowerCase() === source.boardIdentifier.toLowerCase()
+      ? `${url.origin}/`
+      : null;
+  })();
   return {
     id: source.id,
     companyId: source.id,
     companyName: source.company,
     provider: source.provider === 'html' ? 'html' : source.provider,
-    baseUrl: source.url,
+    baseUrl: reviewedSuccessFactorsOrigin
+      ?? (detected?.provider === source.provider ? detected.baseUrl : source.url),
     boardIdentifier: source.boardIdentifier,
     lifecycleAuthoritative: true,
   };
@@ -232,6 +264,17 @@ export async function runOfficialGlobalRemoteSources(
       return errorAudit(source, scan.error, 1, config.minimumAnnualBaseUsd);
     }
     const vacancy = scan.result.vacancies.find((item) => item.externalId === source.externalId) ?? null;
+    if (vacancy === null && !scan.result.complete) {
+      return auditFromVacancy(
+        source,
+        null,
+        'error',
+        0,
+        200,
+        config.minimumAnnualBaseUsd,
+        ['Board scan was incomplete, so absence cannot prove this vacancy is inactive.'],
+      );
+    }
     return auditFromVacancy(
       source,
       vacancy,

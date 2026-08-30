@@ -8,6 +8,7 @@ export const atsProviderSchema = z.enum([
   'teamtailor',
   'smartrecruiters',
   'personio',
+  'workable',
   'workday',
   'successfactors',
   'json_ld',

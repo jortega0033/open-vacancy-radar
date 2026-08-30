@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+  <channel>
+    <title>United Nations Job Openings</title>
+    <link>https://careers.un.org</link>
+    <item>
+      <title><![CDATA[FRONTEND DEVELOPER]]></title>
+      <link>https://careers.un.org/jobSearchDescription/283900?language=en</link>
+      <guid>https://careers.un.org/jobSearchDescription/283900?language=en</guid>
+      <description><![CDATA[
+        Level : P-3 <br>
+        Job ID : 283900 <br>
+        Job Network : Information and Telecommunication Technology <br>
+        Job Family : Information Systems and Technology <br>
+        Department/Office : Office of Information and Communications Technology <br>
+        Duty Station : REMOTE <br>
+        Staffing Exercise : undefined <br>
+        Posted Date : 08/29/2026 00:00:00 AM (New York time) <br>
+        Deadline : 09/15/2026 23:59:59 PM (New York time)
+      ]]></description>
+    </item>
+  </channel>
+</rss>

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { AtsHttpResponse } from '../../src/ats/http.js';
@@ -6,6 +9,7 @@ import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
 import { FixtureHttpClient } from '../ats/helpers.js';
 
 const WWR_URL = 'https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss';
+const REMOTIVE_URL = 'https://remotive.com/remote-jobs/feed';
 const REMOTE_FIRST_URL = 'https://remotefirstjobs.com/api/search-jobs?query=frontend&page=0';
 const JOB_REMOTELY_URL = 'https://jobremotely.io/api/v1/jobs?search=frontend&salaryMin=100000&sort=newest&page=1&limit=50';
 const REMOTE_OK_URL = 'https://remoteok.com/api';
@@ -18,6 +22,7 @@ const REAL_WORK_URL = 'https://www.realworkfromanywhere.com/remote-frontend-jobs
 const DEVITJOBS_UK_URL = 'https://devitjobs.uk/rss';
 const JOBSPRESSO_URL = 'https://jobspresso.co/?feed=job_feed';
 const REMOTE_FRONTEND_JOBS_URL = 'https://www.remotefrontendjobs.com/feed.xml';
+const UN_CAREERS_URL = 'https://careers.un.org/jobfeed?language=en';
 
 const config: GlobalRemoteConfig = {
   version: 'test',
@@ -51,8 +56,13 @@ function rss(item: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Jobs</title>${item}</channel></rss>`;
 }
 
+function fixture(name: string): string {
+  return readFileSync(path.resolve(process.cwd(), 'test/fixtures/global-remote', name), 'utf8');
+}
+
 function routes(): Map<string, string | AtsHttpResponse> {
   return new Map([
+    [REMOTIVE_URL, fixture('remotive.rss')],
     [WWR_URL, rss(`<item>
       <title>Acme: Senior Frontend Engineer</title>
       <region>Anywhere in the World</region><type>Full-Time</type>
@@ -163,14 +173,16 @@ function routes(): Map<string, string | AtsHttpResponse> {
       <description><![CDATA[React role paying $150,000 annually.]]></description>
       <guid>rfj-1</guid><link>https://www.remotefrontendjobs.com/rfj-1</link>
     </item>`)],
+    [UN_CAREERS_URL, fixture('un-careers.rss')],
   ]);
 }
 
 describe('credential-free JSON and RSS discovery feeds', () => {
-  it('normalizes all thirteen credential-free providers without upgrading aggregator claims', async () => {
+  it('normalizes all fifteen credential-free providers without upgrading aggregator claims', async () => {
     const result = await runFeedDiscovery(new FixtureHttpClient(routes()), config);
 
     expect(result.sources.map((source) => source.provider)).toEqual([
+      'remotive',
       'we_work_remotely',
       'remote_first_jobs',
       'job_remotely',
@@ -184,11 +196,18 @@ describe('credential-free JSON and RSS discovery feeds', () => {
       'devitjobs_uk',
       'jobspresso',
       'remote_frontend_jobs',
+      'un_careers',
     ]);
     expect(result.sources.every((source) => source.status === 'success')).toBe(true);
-    expect(result.vacancies).toHaveLength(13);
+    expect(result.vacancies).toHaveLength(15);
     expect(result.vacancies.filter((vacancy) => vacancy.decision === 'official_review_candidate'))
-      .toHaveLength(8);
+      .toHaveLength(9);
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'remotive'))
+      .toMatchObject({
+        key: 'remotive:2091000',
+        company: 'Remotive Co',
+        url: 'https://remotive.com/remote-jobs/software-development/senior-frontend-engineer-2091000',
+      });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_remotely'))
       .toMatchObject({ company: 'Unspecified employer (JobRemotely)' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'startup_jobs'))
@@ -207,6 +226,15 @@ describe('credential-free JSON and RSS discovery feeds', () => {
       .toMatchObject({ company: 'Presso Co', location: 'Worldwide', decision: 'official_review_candidate' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_frontend_jobs'))
       .toMatchObject({ company: 'Frontend Jobs Co', location: 'Worldwide', decision: 'official_review_candidate' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'un_careers'))
+      .toMatchObject({
+        key: 'un_careers:283900',
+        company: 'United Nations',
+        location: 'REMOTE',
+        url: 'https://careers.un.org/jobSearchDescription/283900?language=en',
+      });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'un_careers'))
+      .not.toHaveProperty('description');
   });
 
   it('records a blocked feed and continues every other provider', async () => {
@@ -224,6 +252,27 @@ describe('credential-free JSON and RSS discovery feeds', () => {
       .toMatchObject({ status: 'blocked', requests: 1, listings: 0 });
     expect(result.sources.filter((source) => source.provider !== 'remote_ok')
       .every((source) => source.status === 'success')).toBe(true);
-    expect(result.vacancies).toHaveLength(12);
+    expect(result.vacancies).toHaveLength(14);
+  });
+
+  it('reports malformed RSS items as partial while preserving valid vacancies', async () => {
+    const fixtureRoutes = routes();
+    const original = fixtureRoutes.get(WWR_URL);
+    expect(typeof original).toBe('string');
+    if (typeof original !== 'string') return;
+    fixtureRoutes.set(
+      WWR_URL,
+      original.replace('</channel>', '<item><title>Missing link</title></item></channel>'),
+    );
+
+    const result = await runFeedDiscovery(new FixtureHttpClient(fixtureRoutes), config);
+
+    expect(result.sources.find((source) => source.provider === 'we_work_remotely'))
+      .toMatchObject({
+        status: 'partial',
+        listings: 1,
+        error: 'Dropped 1 malformed or unsupported RSS item(s).',
+      });
+    expect(result.vacancies).toHaveLength(15);
   });
 });

@@ -44,16 +44,19 @@ const RESERVED_BOARD_IDENTIFIERS = new Set([
 ]);
 
 export const PROMOTABLE_DISCOVERY_PROVIDERS = [
+  'ashby',
   'greenhouse',
   'lever',
+  'personio',
   'recruitee',
   'teamtailor',
   'smartrecruiters',
+  'successfactors',
+  'workable',
   'workday',
 ] as const;
 
-export type PromotableDiscoveryProvider =
-  (typeof PROMOTABLE_DISCOVERY_PROVIDERS)[number];
+export type PromotableDiscoveryProvider = (typeof PROMOTABLE_DISCOVERY_PROVIDERS)[number];
 
 const promotableProviders = new Set<string>(PROMOTABLE_DISCOVERY_PROVIDERS);
 
@@ -220,6 +223,16 @@ export function canonicalizeSupportedDiscoverySource(input: {
   }
 
   switch (provider) {
+    case 'ashby': {
+      const boardIdentifier = requireIdentifierToken(provider, detected.boardIdentifier);
+      return {
+        provider,
+        sourceType: 'public_ats_api',
+        baseUrl: `https://jobs.ashbyhq.com/${encodedPathSegment(boardIdentifier)}`,
+        boardIdentifier,
+        canonicalKey: `ashby:${boardIdentifier.toLowerCase()}`,
+      };
+    }
     case 'greenhouse': {
       const boardIdentifier = requireIdentifierToken(provider, detected.boardIdentifier);
       return {
@@ -243,8 +256,25 @@ export function canonicalizeSupportedDiscoverySource(input: {
         canonicalKey: `lever:${region}:${boardIdentifier.toLowerCase()}`,
       };
     }
+    case 'personio': {
+      const boardIdentifier = requireIdentifierToken(
+        provider,
+        detected.boardIdentifier,
+      ).toLowerCase();
+      const hostname = new URL(detected.baseUrl).hostname.toLowerCase();
+      return {
+        provider,
+        sourceType: 'public_xml',
+        baseUrl: detected.baseUrl,
+        boardIdentifier,
+        canonicalKey: `personio:${hostname}:${boardIdentifier}`,
+      };
+    }
     case 'recruitee': {
-      const boardIdentifier = requireIdentifierToken(provider, detected.boardIdentifier).toLowerCase();
+      const boardIdentifier = requireIdentifierToken(
+        provider,
+        detected.boardIdentifier,
+      ).toLowerCase();
       return {
         provider,
         sourceType: 'public_xml',
@@ -279,6 +309,33 @@ export function canonicalizeSupportedDiscoverySource(input: {
         baseUrl: `https://jobs.smartrecruiters.com/${encodedPathSegment(boardIdentifier)}`,
         boardIdentifier,
         canonicalKey: `smartrecruiters:${boardIdentifier.toLowerCase()}`,
+      };
+    }
+    case 'successfactors': {
+      const hostname = new URL(detected.baseUrl).hostname.toLowerCase();
+      const boardIdentifier = requireIdentifierToken(
+        provider,
+        detected.boardIdentifier,
+      ).toLowerCase();
+      if (boardIdentifier !== hostname) {
+        manualReview('SuccessFactors board identifier must match its exact career-site hostname');
+      }
+      return {
+        provider,
+        sourceType: 'public_xml',
+        baseUrl: `${new URL(detected.baseUrl).origin}/`,
+        boardIdentifier,
+        canonicalKey: `successfactors:${hostname}`,
+      };
+    }
+    case 'workable': {
+      const boardIdentifier = requireIdentifierToken(provider, detected.boardIdentifier);
+      return {
+        provider,
+        sourceType: 'public_ats_api',
+        baseUrl: `https://apply.workable.com/${encodedPathSegment(boardIdentifier)}`,
+        boardIdentifier,
+        canonicalKey: `workable:${boardIdentifier.toLowerCase()}`,
       };
     }
     case 'workday': {
@@ -612,9 +669,7 @@ async function promoteOne(
       .select({ companyId: companySponsors.companyId })
       .from(companySponsors)
       .where(eq(companySponsors.sponsorId, current.sponsorId));
-    if (
-      linkedCompanies.some((link) => link.companyId !== existingCompany?.id)
-    ) {
+    if (linkedCompanies.some((link) => link.companyId !== existingCompany?.id)) {
       manualReview('Sponsor is already linked to a different company identity');
     }
 
@@ -728,7 +783,8 @@ async function promoteOne(
           updatedAt: now,
         })
         .returning({ id: careerSources.id });
-      if (created === undefined) throw new Error('Dynamic career source insert did not return an id');
+      if (created === undefined)
+        throw new Error('Dynamic career source insert did not return an id');
       careerSourceId = created.id;
     } else {
       careerSourceId = existingSourceId;
@@ -757,7 +813,8 @@ async function promoteOne(
         provider: canonical.provider,
         sourceBaseUrl: canonical.baseUrl,
         boardIdentifier: canonical.boardIdentifier,
-        diagnostic: 'Career source promoted from exact official-site evidence; awaiting source scan',
+        diagnostic:
+          'Career source promoted from exact official-site evidence; awaiting source scan',
         updatedAt: now,
       })
       .where(eq(sponsorDiscovery.sponsorId, current.sponsorId));
@@ -782,15 +839,16 @@ export async function promoteDiscoveredCareerSources(
 ): Promise<DiscoveryPromotionResult> {
   const limit = options.limit ?? PROMOTION_BATCH_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > PROMOTION_BATCH_LIMIT) {
-    throw new RangeError(`Promotion limit must be an integer from 1 through ${PROMOTION_BATCH_LIMIT}`);
+    throw new RangeError(
+      `Promotion limit must be an integer from 1 through ${PROMOTION_BATCH_LIMIT}`,
+    );
   }
   const now = options.now ?? new Date();
   if (options.provider !== undefined && !promotableProviders.has(options.provider)) {
     throw new Error(`Provider ${options.provider} cannot be promoted automatically`);
   }
-  const sponsorIds = options.sponsorIds === undefined
-    ? undefined
-    : [...new Set(options.sponsorIds)];
+  const sponsorIds =
+    options.sponsorIds === undefined ? undefined : [...new Set(options.sponsorIds)];
   if (sponsorIds !== undefined && sponsorIds.length > limit) {
     throw new RangeError('Promotion scope cannot contain more sponsor ids than its limit');
   }
@@ -927,11 +985,7 @@ export async function promoteDiscoveredCareerSources(
 }
 
 export type ReconciledDiscoveryStatus =
-  | 'active'
-  | 'blocked'
-  | 'error'
-  | 'unsupported'
-  | 'manual_review';
+  'active' | 'blocked' | 'error' | 'unsupported' | 'manual_review';
 
 export function discoveryStatusForSourceOutcome(
   outcome: typeof scanSourceOutcomes.$inferSelect.status,
