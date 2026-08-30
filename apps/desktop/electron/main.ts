@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -434,6 +434,62 @@ ipcMain.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => 
   const filePath = result.filePaths[0];
   if (result.canceled || !filePath) return null;
   return readCvFile(filePath);
+});
+
+interface SaveFileFilter {
+  name: string;
+  extensions: string[];
+}
+
+interface SaveFileInput {
+  suggestedName: string;
+  data: string;
+  encoding: 'utf8' | 'base64';
+  filters: SaveFileFilter[];
+}
+
+/** Generous for a one-page letter (even a real .docx/.pdf), still a finite bound on what the
+ * renderer can make main write to disk. */
+const MAX_EXPORT_BYTES = 20_000_000;
+
+function assertSaveFileInput(input: unknown): asserts input is SaveFileInput {
+  if (typeof input !== 'object' || input === null) throw new Error('invalid export request');
+  const { suggestedName, data, encoding, filters } = input as Record<string, unknown>;
+  if (typeof suggestedName !== 'string' || !suggestedName.trim()) {
+    throw new Error('"suggestedName" is required');
+  }
+  if (typeof data !== 'string') throw new Error('"data" must be a string');
+  if (encoding !== 'utf8' && encoding !== 'base64') throw new Error('"encoding" must be "utf8" or "base64"');
+  if (!Array.isArray(filters) || filters.length === 0) throw new Error('"filters" is required');
+  for (const filter of filters) {
+    if (typeof filter !== 'object' || filter === null) throw new Error('invalid filter');
+    const { name, extensions } = filter as Record<string, unknown>;
+    const validExtensions = Array.isArray(extensions) && extensions.every((ext) => typeof ext === 'string');
+    if (typeof name !== 'string' || !validExtensions) throw new Error('invalid filter');
+  }
+}
+
+/**
+ * Saves already-finished file bytes to a user-chosen path via the native save dialog. The
+ * renderer builds the actual export content — plain markdown text, or a real .docx/.pdf buffer via
+ * the `docx`/`jspdf` packages — and hands it across as one payload; main only ever names a path and
+ * writes bytes, never generates document content itself.
+ */
+ipcMain.handle('system:save-file', async (_event, input: unknown): Promise<{ saved: boolean; path?: string }> => {
+  assertSaveFileInput(input);
+  if (!mainWindow) return { saved: false };
+  const buffer = Buffer.from(input.data, input.encoding);
+  if (buffer.byteLength > MAX_EXPORT_BYTES) throw new Error('export is too large');
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export letter',
+    defaultPath: input.suggestedName,
+    filters: input.filters,
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
 });
 
 /**
