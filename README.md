@@ -79,8 +79,6 @@ See [docs/architecture.md](docs/architecture.md) for the full breakdown, and
 - **Want to contribute to this repo?** [DEVELOPMENT.md](DEVELOPMENT.md) — setup, an "I want to
   change X" map of the codebase, and the common architectural rules that keep the security model
   intact.
-- **Want to build your own product on top of AgentDock?** [Building your own product](#building-your-own-product-with-agentdock)
-  below.
 - **Want to add a provider (a third CLI besides Claude/Codex)?**
   [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider) — self-
   contained, no daemon/client/desktop changes required.
@@ -252,31 +250,6 @@ can `catch` and branch on `instanceof` instead of parsing error strings. See
 See [docs/providers.md](docs/providers.md#adding-a-new-provider) — it's meant to be: implement one
 adapter, declare its capabilities, write its parser + tests, run it against the shared provider
 contract suite, register it. No daemon, client, or desktop changes required.
-
-## Building your own product with AgentDock
-
-Open Vacancy Radar is the product layer built on AgentDock's reusable daemon and client packages.
-To build a different product on the same foundation:
-
-1. **Fork the repo** and treat `apps/desktop` as a starting point to replace, not extend in place
-   — keep `packages/shared`, `packages/agent-runtime`, `packages/client`, and `apps/daemon`
-   largely as-is; your own product's UI and any product-specific logic (persistence, accounts,
-   a specific end-user workflow) belongs in your own app, not upstream in these packages.
-2. **Talk to the daemon the same way this repo does** — through `@agent-dock/client` from a trusted
-   process (Electron main, a Node backend, a CLI), never from a browser/renderer context. See
-   [SECURITY.md](SECURITY.md#renderer-never-talks-to-the-daemon-directly) for why that boundary is
-   load-bearing, not optional, if your product also runs in a browser-based renderer.
-3. **Add product-specific persistence in your own layer**, not in `SessionStore` — this project's
-   `MemorySessionStore` is deliberately ephemeral (see
-   [docs/daemon.md#session-lifecycle-sessionmanager-sessionstore](docs/daemon.md#session-lifecycle-sessionmanager-sessionstore)).
-   If you need session history to survive a restart, that's a product concern to build in your own
-   app (e.g. by storing `AgentEventEnvelope`s as your product receives them over SSE), not something
-   to retrofit into the daemon.
-4. **Add a provider if you need one AgentDock doesn't ship** — see
-   [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider).
-5. **Package it as your own app** — update `appId`, `productName`, and add an icon in
-   `apps/desktop/electron-builder.yml` (see [docs/packaging.md](docs/packaging.md)); the daemon and
-   client packages need no changes to ship under a different product name.
 
 ## Documentation
 
