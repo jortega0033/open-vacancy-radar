@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { AgentRunStatus } from './useAgentRun.js';
 
 /**
- * The streaming answer surface, shared by both AI features. Structured like EventLog: a bordered,
- * fixed-height, scrolling region with `role="log"` so a screen reader announces additions, rather
- * than a growing block that pushes the buttons off-screen mid-answer.
+ * The streaming answer surface, shared by both AI features: a bordered, fixed-height, scrolling
+ * region with `role="log"` so a screen reader announces additions, rather than a growing block
+ * that pushes the buttons off-screen mid-answer.
  *
  * Every state is explicit and named — idle, working, streaming-but-not-done, done, failed,
  * cancelled — because "nothing visibly happening" is indistinguishable from "hung" otherwise.

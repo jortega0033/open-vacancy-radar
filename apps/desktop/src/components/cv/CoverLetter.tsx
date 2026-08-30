@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ProviderId } from '@agent-dock/shared';
 import { AiOutput } from './AiOutput.js';
 import { buildCoverLetterPrompt } from './prompts.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
@@ -9,6 +10,8 @@ export interface CoverLetterProps {
   vacancy: VacancyLead | null;
   /** Optional provider model id (e.g. 'sonnet'); omitted means the CLI's own default. */
   model?: string;
+  /** Which installed CLI to run through; omitted means Claude Code. */
+  provider?: ProviderId;
 }
 
 type CopyState = 'idle' | 'copied' | 'failed';
@@ -23,7 +26,7 @@ const COPY_FEEDBACK_MS = 2_000;
  * is independent, so a bad one can simply be discarded, and no conversation state has to be kept
  * alive between them.
  */
-export function CoverLetter({ cv, vacancy, model }: CoverLetterProps) {
+export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) {
   const run = useAgentRun();
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
@@ -43,8 +46,11 @@ export function CoverLetter({ cv, vacancy, model }: CoverLetterProps) {
     if (!cv || !vacancy) return;
     setCopyState('idle');
     setCopyError(undefined);
-    void run.start(buildCoverLetterPrompt(cv, vacancy), model ? { model } : {});
-  }, [cv, vacancy, model, run]);
+    void run.start(buildCoverLetterPrompt(cv, vacancy), {
+      ...(model ? { model } : {}),
+      ...(provider ? { provider } : {}),
+    });
+  }, [cv, vacancy, model, provider, run]);
 
   const handleCopy = useCallback(async () => {
     if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);

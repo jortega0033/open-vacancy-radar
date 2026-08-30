@@ -46,6 +46,9 @@ export interface CvBridge {
 /** Mirror of `SystemBridge` in electron/preload.ts — OS login-item integration for Settings. */
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
+  /** `app.getVersion()` — reads `package.json`'s `version`, so the About section can never drift
+   * from what actually shipped. */
+  getAppVersion(): Promise<string>;
 }
 
 /**

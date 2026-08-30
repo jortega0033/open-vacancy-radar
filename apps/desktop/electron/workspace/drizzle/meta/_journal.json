@@ -8,6 +8,13 @@
       "when": 1788040783658,
       "tag": "0000_familiar_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788082564345,
+      "tag": "0001_misty_hobgoblin",
+      "breakpoints": true
     }
   ]
 }
