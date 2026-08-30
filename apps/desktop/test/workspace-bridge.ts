@@ -73,11 +73,12 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
   return bridge;
 }
 
-/** Stub for the single-capability `window.system` bridge (Settings page's launch-at-login). */
+/** Stub for the `window.system` bridge: OS login-item, app version, and native save-file dialog. */
 export function installSystemBridge(overrides: Partial<SystemBridge> = {}): SystemBridge {
   const bridge: SystemBridge = {
     setLaunchAtLogin: vi.fn().mockResolvedValue(undefined),
     getAppVersion: vi.fn().mockResolvedValue('0.0.0-test'),
+    saveFile: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\export.txt' }),
     ...overrides,
   };
   (window as unknown as { system: SystemBridge }).system = bridge;
