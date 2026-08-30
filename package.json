@@ -45,7 +45,11 @@
     "overrides": {
       "vite": "^6.0.7",
       "@types/node": "^22.10.5",
-      "tar": "^7.5.18"
+      "tar": "^7.5.18",
+      "esbuild": "^0.25.0",
+      "electron-builder-squirrel-windows": "^26.15.3",
+      "app-builder-lib": "^26.15.3",
+      "builder-util-runtime": "^9.7.0"
     }
   }
 }

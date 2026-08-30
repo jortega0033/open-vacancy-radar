@@ -36,7 +36,7 @@
     "daisyui": "^5.7.22",
     "drizzle-orm": "^0.45.2",
     "electron": "^44.0.0",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.15.3",
     "jsdom": "^25.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
