@@ -7,6 +7,7 @@ import type {
 } from '@open-vacancy-radar/vacancy-engine';
 import type { Market } from '../../window.js';
 import type { VacancyLead } from '../cv/types.js';
+import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 
 /**
  * Normalisation layer between the two *genuinely different* scan pipelines and one search UI.
@@ -268,6 +269,12 @@ export interface SearchFilters {
   source: string;
   /** Worldwide only: the Netherlands pipeline records no employment type. */
   employment: string;
+  /**
+   * Worldwide only: which country a vacancy's own `location` text normalizes to (see
+   * `countries.ts`). `'all'` applies no filter; the Netherlands pipeline is already scoped to one
+   * country and carries no comparable free-text location to normalize against a worldwide list.
+   */
+  country: string;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -278,6 +285,7 @@ export const DEFAULT_FILTERS: SearchFilters = {
   postedWithin: 'any',
   source: 'all',
   employment: 'any',
+  country: 'all',
 };
 
 /** The secondary filters that are meaningful for a given market, given what its data carries. */
@@ -286,6 +294,7 @@ export function supportedFilters(market: SearchMarket): {
   arrangement: boolean;
   postedWithin: boolean;
   employment: boolean;
+  country: boolean;
 } {
   const isNetherlands = market === 'netherlands';
   return {
@@ -293,7 +302,17 @@ export function supportedFilters(market: SearchMarket): {
     arrangement: isNetherlands,
     postedWithin: isNetherlands,
     employment: !isNetherlands,
+    country: !isNetherlands,
   };
+}
+
+/**
+ * Every selectable country plus the honest fallback for a vacancy whose location text didn't
+ * confidently normalize to any of them. Static and complete — not derived from the loaded report,
+ * since the worldwide pipeline's sources can return any country regardless of what's shown up yet.
+ */
+export function countryOptions(): string[] {
+  return [...ALL_COUNTRIES, UNSPECIFIED_LOCATION];
 }
 
 export function sourceOptions(results: SearchResult[]): string[] {
@@ -360,6 +379,11 @@ export function filterResults(
 
     if (supported.employment && filters.employment !== 'any') {
       if (result.employmentType !== filters.employment) return false;
+    }
+
+    if (supported.country && filters.country !== 'all') {
+      const resolved = normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION;
+      if (resolved !== filters.country) return false;
     }
 
     return true;

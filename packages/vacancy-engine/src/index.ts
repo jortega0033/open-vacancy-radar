@@ -18,6 +18,12 @@ export { runGlobalRemoteScan, type GlobalRemoteScanResult } from './pipeline/glo
 export { runSponsorSync } from './pipeline/sponsors.js';
 export { runPersistedDeterministicScoring } from './scoring/index.js';
 export { generateJobRadarReport } from './reporting/repository.js';
+export {
+  candidateProfileSchema,
+  isCandidateProfileConfigured,
+  loadCandidateProfile,
+  type CandidateProfile,
+} from './candidate/profile.js';
 
 export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit } from './global-remote/models.js';
 export type { JobRadarReport, ReportVacancy } from './reporting/report.js';

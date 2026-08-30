@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from 'react';
 import {
+  countryOptions,
   MARKET_OPTIONS,
   supportedFilters,
   type SearchFilters,
@@ -181,6 +182,22 @@ export function SearchFilterBar({
             {employmentTypes.map((type) => (
               <option key={type} value={type}>
                 {type}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {supported.country && (
+          <select
+            className="select select-xs w-40"
+            aria-label="Country"
+            value={filters.country}
+            onChange={(event) => onFiltersChange({ country: event.target.value })}
+          >
+            <option value="all">All countries</option>
+            {countryOptions().map((country) => (
+              <option key={country} value={country}>
+                {country}
               </option>
             ))}
           </select>

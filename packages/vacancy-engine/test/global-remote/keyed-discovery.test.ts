@@ -10,6 +10,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'NL',
       himalayasMaxPagesPerQuery: 1,
@@ -39,13 +40,13 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
   };
 }
 
-const ADZUNA_URL = 'https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id=test-id&app_key=test-key&content-type=application%2Fjson&what=frontend+developer&results_per_page=50';
+const ADZUNA_URL = 'https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id=test-id&app_key=test-key&content-type=application%2Fjson&what=frontend&results_per_page=50';
 const JOOBLE_URL = 'https://jooble.org/api/test-jooble-key';
-const JOOBLE_BODY = { keywords: 'frontend developer', location: 'remote' };
-const REED_URL = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend+developer&resultsToTake=100';
+const JOOBLE_BODY = { keywords: 'frontend', location: 'remote' };
+const REED_URL = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend&resultsToTake=100';
 const JOBSPIPE_URL = 'https://api.jobspipe.dev/v1/jobs/search';
 const JOBSPIPE_BODY = {
-  job_title_or: ['frontend developer', 'frontend engineer', 'frontend architect'],
+  job_title_or: ['frontend'],
   remote: true,
   posted_at_max_age_days: 30,
   limit: 25,

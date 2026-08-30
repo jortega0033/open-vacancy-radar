@@ -29,6 +29,7 @@ function profile(): GlobalRemoteConfig {
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'NL',
       himalayasMaxPagesPerQuery: 1,

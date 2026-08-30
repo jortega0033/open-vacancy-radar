@@ -181,7 +181,7 @@ function location(record: WorkableFeedRecord): string {
   return values.join(', ') || 'Unknown';
 }
 
-function vacancy(record: WorkableFeedRecord, minimumAnnualBaseUsd: number): DiscoveryVacancyAudit {
+function vacancy(record: WorkableFeedRecord, minimumAnnualBaseUsd: number | null): DiscoveryVacancyAudit {
   return discoveryAudit({
     key: `workable_global:${record.shortcode}`,
     provider: 'workable_global',
@@ -209,7 +209,7 @@ function resultWarnings(result: WorkableFeedParseResult): string[] {
 
 function discoveryRun(
   result: WorkableFeedParseResult,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
   requests: number,
   extraWarnings: readonly string[] = [],
 ): DiscoveryRun {

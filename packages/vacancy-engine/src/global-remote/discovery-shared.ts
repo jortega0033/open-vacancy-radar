@@ -59,7 +59,7 @@ export function discoveryAudit(
     'decision' | 'reasons' | 'annualizedMinimumUsd' | 'contentHash'
   > & {
     raw: unknown;
-    minimumAnnualBaseUsd: number;
+    minimumAnnualBaseUsd: number | null;
     description?: string | null;
   },
 ): DiscoveryVacancyAudit {

@@ -22,6 +22,7 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'Worldwide',
       himalayasMaxPagesPerQuery: 1,

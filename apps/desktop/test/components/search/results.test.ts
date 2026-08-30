@@ -1,0 +1,98 @@
+import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_FILTERS,
+  filterResults,
+  countryOptions,
+  type SearchResult,
+} from '../../../src/components/search/results.js';
+import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
+
+function worldwideResult(overrides: { key: string; location: string | null }): SearchResult {
+  return {
+    market: 'worldwide' as const,
+    raw: {} as never,
+    official: null,
+    title: 'Frontend Engineer',
+    company: 'Acme',
+    url: 'https://example.com/job',
+    provider: 'jobicy',
+    arrangement: null,
+    arrangementValue: 'unknown',
+    employmentType: null,
+    salary: null,
+    postedAt: null,
+    verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
+    profileScore: null,
+    strongPoints: [],
+    gaps: [],
+    reasons: [],
+    lead: { title: 'Frontend Engineer', company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
+    ...overrides,
+  };
+}
+
+describe('filterResults: country filter (worldwide only)', () => {
+  it('applies no filter when country is "all", the default', () => {
+    const results = [
+      worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' }),
+      worldwideResult({ key: '2', location: 'Remote' }),
+    ];
+    expect(filterResults(results, DEFAULT_FILTERS)).toHaveLength(2);
+  });
+
+  it('keeps only rows whose location normalizes to the selected country', () => {
+    const results = [
+      worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' }),
+      worldwideResult({ key: '2', location: 'Austin, United States' }),
+      worldwideResult({ key: '3', location: 'Singapore' }),
+    ];
+    const filtered = filterResults(results, { ...DEFAULT_FILTERS, country: 'United States' });
+    expect(filtered.map((r) => r.key)).toEqual(['2']);
+  });
+
+  it('groups every unmatched location under the Unspecified location bucket', () => {
+    const results = [
+      worldwideResult({ key: '1', location: 'Remote' }),
+      worldwideResult({ key: '2', location: null }),
+      worldwideResult({ key: '3', location: 'Netherlands' }),
+    ];
+    const filtered = filterResults(results, { ...DEFAULT_FILTERS, country: UNSPECIFIED_LOCATION });
+    expect(filtered.map((r) => r.key).sort()).toEqual(['1', '2']);
+  });
+
+  it('is not applied to Netherlands-market rows, even if a country filter value is set', () => {
+    const nlResult: SearchResult = {
+      market: 'netherlands',
+      raw: {} as never,
+      key: 'nl-1',
+      title: 'Frontend Engineer',
+      company: 'Acme NL',
+      location: 'Remote',
+      url: 'https://example.com/nl-job',
+      provider: 'greenhouse',
+      arrangement: null,
+      arrangementValue: 'unknown',
+      employmentType: null,
+      salary: null,
+      postedAt: null,
+      verification: { level: 'not_available', label: '', tone: null, note: '' },
+      profileScore: null,
+      strongPoints: [],
+      gaps: [],
+      reasons: [],
+      lead: { title: 'Frontend Engineer', company: 'Acme NL', location: 'Remote', url: 'https://example.com/nl-job' },
+    };
+    // A "United States" filter value would exclude this row if the country predicate applied to
+    // Netherlands rows; supportedFilters(netherlands).country is false, so it must pass through.
+    expect(filterResults([nlResult], { ...DEFAULT_FILTERS, country: 'United States' })).toHaveLength(1);
+  });
+});
+
+describe('countryOptions', () => {
+  it('includes every country plus the unspecified-location fallback', () => {
+    const options = countryOptions();
+    expect(options).toContain('Netherlands');
+    expect(options).toContain('United States');
+    expect(options[options.length - 1]).toBe(UNSPECIFIED_LOCATION);
+  });
+});

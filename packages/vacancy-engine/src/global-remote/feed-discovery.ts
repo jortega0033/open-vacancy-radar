@@ -565,11 +565,11 @@ async function discoverRemoteFirstJobs(
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
-  let lastUrl = 'https://remotefirstjobs.com/api/search-jobs?query=frontend&page=0';
+  let lastUrl = 'https://remotefirstjobs.com/api/search-jobs?page=0';
   try {
     for (let page = 0; page < config.discovery.remoteFirstMaxPages; page += 1) {
       const url = new URL('https://remotefirstjobs.com/api/search-jobs');
-      url.searchParams.set('query', 'frontend');
+      if (config.discovery.roleQuery) url.searchParams.set('query', config.discovery.roleQuery);
       url.searchParams.set('page', String(page));
       lastUrl = url.toString();
       requests += 1;
@@ -640,8 +640,10 @@ async function discoverJobRemotely(
   try {
     for (let page = 1; page <= config.discovery.jobRemotelyMaxPages; page += 1) {
       const url = new URL('https://jobremotely.io/api/v1/jobs');
-      url.searchParams.set('search', 'frontend');
-      url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      if (config.discovery.roleQuery) url.searchParams.set('search', config.discovery.roleQuery);
+      if (config.minimumAnnualBaseUsd !== null) {
+        url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      }
       url.searchParams.set('sort', 'newest');
       url.searchParams.set('page', String(page));
       url.searchParams.set('limit', String(pageSize));

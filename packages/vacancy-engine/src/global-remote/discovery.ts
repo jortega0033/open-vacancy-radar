@@ -23,13 +23,17 @@ import type {
   GlobalRemoteConfig,
 } from './models.js';
 
-async function discoverHimalayas(
+export async function discoverHimalayas(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
   const sources: DiscoverySourceAudit[] = [];
   const vacancies: DiscoveryVacancyAudit[] = [];
-  for (const query of config.discovery.himalayasQueries) {
+  // No configured query terms means "no role bias" (the default), not "skip this source
+  // entirely": run one broad, unfiltered query rather than let the loop below never execute and
+  // silently disable Himalayas forever.
+  const queries = config.discovery.himalayasQueries.length > 0 ? config.discovery.himalayasQueries : [''];
+  for (const query of queries) {
     let requests = 0;
     let listings = 0;
     let status: DiscoverySourceAudit['status'] = 'success';
@@ -38,8 +42,10 @@ async function discoverHimalayas(
     try {
       for (let page = 1; page <= config.discovery.himalayasMaxPagesPerQuery; page += 1) {
         const url = new URL('https://himalayas.app/jobs/api/search');
-        url.searchParams.set('q', query);
-        url.searchParams.set('country', config.discovery.himalayasCountry);
+        if (query) url.searchParams.set('q', query);
+        if (config.discovery.himalayasCountry) {
+          url.searchParams.set('country', config.discovery.himalayasCountry);
+        }
         url.searchParams.set('sort', 'salaryDesc');
         url.searchParams.set('page', String(page));
         lastUrl = url.toString();
@@ -83,7 +89,7 @@ async function discoverHimalayas(
       errorMessage = failure.error;
     }
     sources.push({
-      id: `himalayas:${query}`,
+      id: `himalayas:${query || 'all-jobs'}`,
       provider: 'himalayas',
       url: lastUrl,
       requests,
@@ -95,11 +101,12 @@ async function discoverHimalayas(
   return { sources, vacancies };
 }
 
-async function discoverJobicy(
+export async function discoverJobicy(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const url = `https://jobicy.com/api/v2/remote-jobs?count=${config.discovery.jobicyCount}&tag=frontend`;
+  const tagParam = config.discovery.roleQuery ? `&tag=${encodeURIComponent(config.discovery.roleQuery)}` : '';
+  const url = `https://jobicy.com/api/v2/remote-jobs?count=${config.discovery.jobicyCount}${tagParam}`;
   try {
     const root = parsedRoot(await http.get(url), 'jobicy');
     if (!Array.isArray(root.jobs)) throw new AtsResponseError('jobicy', 'jobs is not an array');

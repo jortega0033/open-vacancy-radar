@@ -121,7 +121,7 @@ function writeSearchCache(
 
 function normalizeRemooteJob(
   raw: unknown,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
 ): DiscoveryVacancyAudit | null {
   const job = record(raw);
   const id = positiveNumber(job?.id);
@@ -240,8 +240,8 @@ function parseRemooteSearch(
 
 function searchRequest(config: GlobalRemoteConfig): Record<string, unknown> {
   return {
-    role_title: config.discovery.remooteRoleTitle,
-    country: config.discovery.remooteCountry,
+    ...(config.discovery.remooteRoleTitle ? { role_title: config.discovery.remooteRoleTitle } : {}),
+    ...(config.discovery.remooteCountry ? { country: config.discovery.remooteCountry } : {}),
     salary_required: false,
     limit: config.discovery.remooteLimit,
   };

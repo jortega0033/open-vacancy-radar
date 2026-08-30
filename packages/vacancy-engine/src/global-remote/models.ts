@@ -38,10 +38,19 @@ export type GlobalRemoteSource = z.infer<typeof globalRemoteSourceSchema>;
 
 export const globalRemoteConfigSchema = z.object({
   version: z.string().min(1),
-  minimumAnnualBaseUsd: z.number().positive(),
+  minimumAnnualBaseUsd: z.number().nonnegative().nullable(),
   discovery: z.object({
-    himalayasQueries: z.array(z.string().min(3)).min(1).max(10),
-    himalayasCountry: z.string().min(2).max(30),
+    /**
+     * The single role/keyword query term sent to every discovery source below whose API takes one
+     * (`q`/`query`/`category`/`keyword`/`search`). Defaults to empty: no role bias ships by
+     * default, and an empty string is omitted from the request entirely rather than sent literally
+     * (see each call site) so an unconfigured search returns each source's normal remote-jobs feed
+     * unfiltered by role, not zero results.
+     */
+    roleQuery: z.string().trim().max(200).default(''),
+    himalayasQueries: z.array(z.string().min(3)).max(10),
+    /** Empty means worldwide/no country filter: the param is omitted from the request entirely. */
+    himalayasCountry: z.string().max(30).default(''),
     himalayasMaxPagesPerQuery: z.number().int().min(1).max(25),
     jobicyCount: z.number().int().min(1).max(100),
     freehireLimit: z.number().int().min(1).max(100),
@@ -52,8 +61,9 @@ export const globalRemoteConfigSchema = z.object({
     jobRemotelyMaxPages: z.number().int().min(1).max(10),
     arbeitnowMaxPages: z.number().int().min(1).max(10),
     diceMaxPages: z.number().int().min(1).max(5).default(2),
-    remooteRoleTitle: z.string().trim().min(1).max(200).default('frontend'),
-    remooteCountry: z.string().trim().min(2).max(100).default('Netherlands'),
+    remooteRoleTitle: z.string().trim().max(200).default(''),
+    /** Empty means worldwide/no country filter: the key is omitted from the request entirely. */
+    remooteCountry: z.string().trim().max(100).default(''),
     remooteLimit: z.number().int().min(1).max(10).default(10),
     museEnabled: z.boolean().default(false),
     museMaxPages: z.number().int().min(1).max(10).default(6),
@@ -210,7 +220,7 @@ export type GlobalRemoteReport = {
     fullyRemote: true;
     applicantLocation: string;
     usCitizenshipRequired: false;
-    minimumAnnualBaseUsd: number;
+    minimumAnnualBaseUsd: number | null;
     currency: 'USD';
   };
   statistics: {

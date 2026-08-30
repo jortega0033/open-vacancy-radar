@@ -20,9 +20,9 @@ const JOBTECH_FIELDS = [
   'hits{id,headline,webpage_url,application_deadline,employment_type{label},salary_description,employer{name},application_details{url},workplace_address{municipality,region,country,city},removed,removed_date}',
 ].join(',');
 
-function jobtechSearchUrl(): string {
+function jobtechSearchUrl(roleQuery: string): string {
   const url = new URL('https://jobsearch.api.jobtechdev.se/search');
-  url.searchParams.set('q', 'frontend');
+  if (roleQuery) url.searchParams.set('q', roleQuery);
   url.searchParams.set('remote', 'true');
   url.searchParams.set('limit', String(JOBTECH_PAGE_SIZE));
   url.searchParams.set('offset', '0');
@@ -69,7 +69,7 @@ function safeFingerprint(job: Record<string, unknown>, url: string): Record<stri
 
 function normalizedVacancy(
   raw: unknown,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
 ): DiscoveryVacancyAudit | null {
   const job = record(raw);
   if (job === null || booleanValue(job.removed) === true || stringValue(job.removed_date) !== null)
@@ -106,7 +106,7 @@ export async function runJobtechDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const url = jobtechSearchUrl();
+  const url = jobtechSearchUrl(config.discovery.roleQuery);
   try {
     const root = parsedRoot(
       await http.get(url, {
