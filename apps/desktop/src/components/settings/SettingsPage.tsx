@@ -4,9 +4,11 @@ import type {
   AppSettingsRecord,
   CvDocumentRecord,
 } from '../../window.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
 import { ConfirmDialog } from '../shell/index.js';
-import { SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
+import { AboutSection } from './AboutSection.js';
+import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
 
 /**
@@ -46,6 +48,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   defaultApplicationStatus: 'preparing',
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
+  defaultProvider: 'claude',
 };
 
 const START_PAGE_OPTIONS = [
@@ -142,7 +145,13 @@ function SettingsSelect<T extends string>({ id, value, options, disabled, onChan
   );
 }
 
-export function SettingsPage() {
+export interface SettingsPageProps {
+  /** Rendered as the "AI runtime" section's "Manage in AI Runtime" button. Optional so the page
+   * still works standalone (e.g. in isolation tests) without a real router behind it. */
+  onNavigateToRuntime?: () => void;
+}
+
+export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<AppSettingsRecord | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
@@ -391,26 +400,21 @@ export function SettingsPage() {
             onChange={(startPage) => changeField({ startPage })}
           />
         </SettingsRow>
-        <SettingsRow
-          label="Theme"
-          description="System follows the operating system's light/dark preference, live."
-          htmlFor="setting-theme"
-        >
-          <SettingsSelect
-            id="setting-theme"
+      </SettingsSection>
+
+      <SettingsSection title="Appearance">
+        <SettingsRow label="Theme" description="System follows the operating system's light/dark preference, live.">
+          <SegmentedControl
+            label="Theme"
             value={settings.theme}
             options={THEME_OPTIONS}
             disabled={disabled}
             onChange={(theme) => changeField({ theme })}
           />
         </SettingsRow>
-        <SettingsRow
-          label="Density"
-          description="Compact tightens list and table rows to fit more on screen."
-          htmlFor="setting-density"
-        >
-          <SettingsSelect
-            id="setting-density"
+        <SettingsRow label="Density" description="Compact tightens list and table rows to fit more on screen.">
+          <SegmentedControl
+            label="Density"
             value={settings.density}
             options={DENSITY_OPTIONS}
             disabled={disabled}
@@ -476,17 +480,31 @@ export function SettingsPage() {
             onChange={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
           />
         </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="Market integrations">
         <SettingsRow
-          label="IND sponsor verification"
-          description="Check Netherlands employers against the public IND recognised-sponsor register."
+          label="Netherlands — IND recognised sponsor verification"
+          description="Source: IND Public Register · checks employers of Netherlands vacancies."
         >
           <ToggleSwitch
-            label="IND sponsor verification"
+            label="IND recognised sponsor verification"
             checked={settings.indVerificationEnabled}
             disabled={disabled}
             onChange={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
           />
         </SettingsRow>
+        <SettingsRow
+          label="Netherlands job sources"
+          description="Recruitee, Greenhouse, Teamtailor, SmartRecruiters, Lever and mapped company career sites."
+        >
+          <span className="badge badge-outline badge-sm">Configured</span>
+        </SettingsRow>
+        <p className="ovr-row border-b border-base-300 text-xs text-base-content/60">
+          No market-specific employer verification is configured for Germany, Belgium, France, the
+          United Kingdom or the United States. Vacancy search, CV matching, letters and application
+          tracking still work for those markets.
+        </p>
       </SettingsSection>
 
       <SettingsSection title="Documents">
@@ -578,11 +596,24 @@ export function SettingsPage() {
         </SettingsRow>
       </SettingsSection>
 
+      <SettingsSection title="AI runtime">
+        <SettingsRow
+          label="Runtime provider"
+          description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
+        >
+          <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
+            Manage in AI Runtime
+          </button>
+        </SettingsRow>
+      </SettingsSection>
+
       <DataManagement
         busy={busy}
         onRequestResetSettings={() => setConfirmTarget('settings')}
         onRequestResetData={() => setConfirmTarget('data')}
       />
+
+      <AboutSection />
 
       {confirmTarget === 'settings' && (
         <ConfirmDialog

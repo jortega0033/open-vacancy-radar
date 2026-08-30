@@ -275,11 +275,15 @@ contextBridge.exposeInMainWorld('cv', cvApi);
  */
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
+  getAppVersion(): Promise<string>;
 }
 
 const systemApi: SystemBridge = {
   async setLaunchAtLogin(enabled) {
     await ipcRenderer.invoke('system:set-login-item', enabled === true);
+  },
+  async getAppVersion() {
+    return (await ipcRenderer.invoke('system:get-app-version')) as string;
   },
 };
 

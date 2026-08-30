@@ -35,6 +35,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   defaultApplicationStatus: 'preparing',
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
+  defaultProvider: 'claude',
 };
 
 export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
@@ -76,6 +77,7 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
 export function installSystemBridge(overrides: Partial<SystemBridge> = {}): SystemBridge {
   const bridge: SystemBridge = {
     setLaunchAtLogin: vi.fn().mockResolvedValue(undefined),
+    getAppVersion: vi.fn().mockResolvedValue('0.0.0-test'),
     ...overrides,
   };
   (window as unknown as { system: SystemBridge }).system = bridge;

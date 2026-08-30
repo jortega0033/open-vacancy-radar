@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { ProviderStatus } from '@agent-dock/shared';
+import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
@@ -23,7 +24,23 @@ export interface CvAssistantProps {
 export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
   const [cv, setCv] = useState<CvDocument | null>(null);
   const [model, setModel] = useState('');
-  const [claudeStatus, setClaudeStatus] = useState<ProviderStatus>();
+  const [provider, setProvider] = useState<ProviderId>('claude');
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>();
+
+  // The default provider is a settings preference (set from the AI Runtime page); a failure here
+  // just leaves the Claude Code default in place rather than blocking the feature.
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setProvider(settings.defaultProvider);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Best effort: the model picker is a convenience, so a failed provider listing just hides it
   // rather than blocking the feature (the CLI's own default model is always a valid choice).
@@ -32,31 +49,33 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
     window.agentDock
       .listProviders()
       .then((providers) => {
-        if (!cancelled) setClaudeStatus(providers.find((p) => p.id === 'claude'));
+        if (!cancelled) setProviderStatus(providers.find((p) => p.id === provider));
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [provider]);
 
   const effectiveModel = pinnedModel ?? (model || undefined);
-  const availableModels = claudeStatus?.availableModels ?? [];
-  const claudeUnavailable = claudeStatus && !claudeStatus.installed;
+  const availableModels = providerStatus?.availableModels ?? [];
+  const providerUnavailable = providerStatus && !providerStatus.installed;
+  const providerLabel = PROVIDER_LABEL[provider];
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="text-lg font-semibold">CV assistant</h2>
         <p className="mt-1 text-sm text-base-content/60">
-          Runs on your own authenticated Claude Code CLI — this app never holds an API key.
+          Runs on your own authenticated {providerLabel} CLI — this app never holds an API key.
         </p>
       </div>
 
-      {claudeUnavailable && (
+      {providerUnavailable && (
         <div className="alert alert-error text-sm" role="alert">
-          Claude Code is not installed or not detected, so these features cannot run. Install and
-          authenticate the CLI, then reopen this screen.
+          {providerLabel} is not installed or not detected, so these features cannot run. Install
+          and authenticate the CLI, or choose a different default in AI Runtime, then reopen this
+          screen.
         </div>
       )}
 
@@ -90,8 +109,18 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         </label>
       )}
 
-      <GapAnalysis cv={cv} vacancy={vacancy} {...(effectiveModel ? { model: effectiveModel } : {})} />
-      <CoverLetter cv={cv} vacancy={vacancy} {...(effectiveModel ? { model: effectiveModel } : {})} />
+      <GapAnalysis
+        cv={cv}
+        vacancy={vacancy}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+      <CoverLetter
+        cv={cv}
+        vacancy={vacancy}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
     </div>
   );
 }

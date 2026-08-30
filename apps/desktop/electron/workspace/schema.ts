@@ -120,4 +120,5 @@ export const appSettings = sqliteTable('app_settings', {
   }).notNull().default('preparing'),
   confirmApplicationDelete: integer('confirm_application_delete', { mode: 'boolean' }).notNull().default(true),
   autoArchiveRejected: integer('auto_archive_rejected', { mode: 'boolean' }).notNull().default(false),
+  defaultProvider: text('default_provider', { enum: ['claude', 'codex'] }).notNull().default('claude'),
 });

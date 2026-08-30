@@ -49,6 +49,41 @@ export function SettingsRow({ label, description, htmlFor, children }: SettingsR
   );
 }
 
+export interface SegmentedControlProps<T extends string> {
+  label: string;
+  value: T;
+  options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
+  disabled?: boolean;
+  onChange: (next: T) => void;
+}
+
+/** The prototype's button-group style for Theme/Density — a small, closed set of mutually
+ * exclusive choices reads better as segmented buttons than as a dropdown. */
+export function SegmentedControl<T extends string>({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: SegmentedControlProps<T>) {
+  return (
+    <div className="join" role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`btn btn-sm join-item ${option.value === value ? 'btn-active' : ''}`}
+          aria-pressed={option.value === value}
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export interface ToggleSwitchProps {
   /** Accessible name — the row label repeats it visually, this carries it for the control. */
   label: string;

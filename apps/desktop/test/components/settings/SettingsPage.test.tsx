@@ -63,24 +63,35 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByLabelText('Start page')).toHaveValue('applications'));
-    expect(screen.getByLabelText('Theme')).toHaveValue('dark');
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText('Default market')).toHaveValue('worldwide');
     expect(screen.getByLabelText('Default location')).toHaveValue('Amsterdam');
     expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
     expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
-    expect(screen.getByRole('switch', { name: 'IND sponsor verification' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'IND recognised sponsor verification' })).toBeChecked();
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('renders exactly the five sections — no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections — no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Settings', 'General', 'Search defaults', 'Documents', 'Applications', 'Data management']);
+    expect(headings).toEqual([
+      'Settings',
+      'General',
+      'Appearance',
+      'Search defaults',
+      'Market integrations',
+      'Documents',
+      'Applications',
+      'AI runtime',
+      'Data management',
+      'About',
+    ]);
   });
 
   it('offers exactly the two real markets, never a country list', async () => {
@@ -122,11 +133,11 @@ describe('SettingsPage', () => {
     setup({ updateSettings });
 
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Theme');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'dark' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
 
-    // applyTheme ran synchronously with the change, while updateSettings is still pending.
+    // applyTheme ran synchronously with the click, while updateSettings is still pending.
     expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
     expect(updateSettings).toHaveBeenCalledWith({ theme: 'dark' });
   });
@@ -134,9 +145,9 @@ describe('SettingsPage', () => {
   it('applies a density change to the document immediately and persists it', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Density');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'compact' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }));
 
     expect(document.documentElement.getAttribute('data-density')).toBe('compact');
     await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ density: 'compact' }));
@@ -148,13 +159,13 @@ describe('SettingsPage', () => {
     setup({ updateSettings });
 
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Theme');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'dark' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
     expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/database unreachable/));
-    expect(screen.getByLabelText('Theme')).toHaveValue('system');
+    expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
     expect(document.documentElement.getAttribute('data-theme')).toBeNull();
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
@@ -239,7 +250,9 @@ describe('SettingsPage', () => {
     });
 
     render(<SettingsPage />);
-    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('dark'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true'),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
     const dialog = await screen.findByRole('alertdialog');
@@ -258,7 +271,9 @@ describe('SettingsPage', () => {
         }),
       ),
     );
-    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('system'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true'),
+    );
     expect(document.documentElement.getAttribute('data-theme')).toBeNull();
     expect(document.documentElement.getAttribute('data-density')).toBeNull();
     await waitFor(() => expect(system.setLaunchAtLogin).toHaveBeenCalledWith(false));

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentEvent } from '@agent-dock/shared';
+import type { AgentEvent, ProviderId } from '@agent-dock/shared';
 
 /**
  * One-shot "send a prompt, stream the answer back" runner on top of the AgentDock bridge.
@@ -22,6 +22,9 @@ export type AgentRunStatus = 'idle' | 'starting' | 'streaming' | 'completed' | '
 
 export interface AgentRunOptions {
   model?: string;
+  /** Which installed CLI to run through. Defaults to Claude Code, matching every existing call
+   * site that didn't previously have a choice. */
+  provider?: ProviderId;
 }
 
 export interface AgentRun {
@@ -135,7 +138,7 @@ export function useAgentRun(): AgentRun {
         // directory) rather than being guessed in the renderer. See main.ts's ensureAiWorkspaceDir.
         const cwd = await window.cv.getWorkspaceDir();
         const session = await window.agentDock.createSession({
-          provider: 'claude',
+          provider: options.provider ?? 'claude',
           cwd,
           prompt,
           ...(options.model ? { model: options.model } : {}),
