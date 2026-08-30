@@ -67,14 +67,16 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
-  const [parseNotice, setParseNotice] = useState<string>();
   const [parseError, setParseError] = useState<string>();
 
   const isEdit = mode === 'edit';
   const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
 
-  const parseRun = useAgentRun();
+  // `chunkSeparator: ''` — the parsed response must be byte-exact JSON, not prose, so chunks are
+  // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
+  const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
+  const parseSucceeded = parseRun.status === 'completed' && !parseError;
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -97,16 +99,26 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
         summary: parsed.summary ?? prev.summary,
         auth: parsed.auth ?? prev.auth,
       }));
-      setParseNotice('Filled in from your CV — review before saving.');
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
     }
   }, [parseRun.status, parseRun.text]);
 
+  // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
+  // it's still running — otherwise the daemon session keeps running unobserved until it times out.
+  // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
+  // this must run its cleanup only on actual unmount, reading whatever the latest run was.
+  const parseRunRef = useRef(parseRun);
+  parseRunRef.current = parseRun;
+  useEffect(() => {
+    return () => {
+      if (parseRunRef.current.isBusy) void parseRunRef.current.cancel();
+    };
+  }, []);
+
   function handleParseWithAi() {
     if (!record || !canParseWithAi) return;
     parseAppliedRef.current = false;
-    setParseNotice(undefined);
     setParseError(undefined);
     void parseRun.start(buildCvParsePrompt(record.name, record.text));
   }
@@ -180,13 +192,22 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     {parseRun.isBusy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
                     Parse with AI
                   </button>
+                  {parseRun.isBusy && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void parseRun.cancel()}
+                    >
+                      Stop
+                    </button>
+                  )}
                   <span className="text-xs text-base-content/60">
                     Reads the extracted text and fills in the fields below for you to review.
                   </span>
                 </div>
-                {parseNotice && (
+                {parseSucceeded && (
                   <p className="mt-2 text-xs text-success" role="status">
-                    {parseNotice}
+                    Filled in from your CV — review before saving.
                   </p>
                 )}
                 {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (

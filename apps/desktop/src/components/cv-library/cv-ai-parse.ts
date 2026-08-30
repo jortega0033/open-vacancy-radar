@@ -1,6 +1,19 @@
 import type { CvProfile } from '../../window.js';
 
 /**
+ * Mirrors `LIMITS` in `apps/desktop/electron/workspace/validate.ts` — the actual save-time bound —
+ * so an oversized AI answer is trimmed to something `Save` will accept instead of sailing through
+ * this coercion untouched and only failing later, as a raw length error disconnected from the
+ * "Parse with AI" click that caused it. Duplicated rather than imported: this module runs in the
+ * renderer bundle, `validate.ts` in the main-process one.
+ */
+const SHORT_FIELD_LIMIT = 512;
+const SUMMARY_LIMIT = 20_000;
+const MAX_SKILLS = 200;
+
+const SHORT_FIELD_KEYS = ['title', 'years', 'location', 'languages', 'auth'] as const;
+
+/**
  * The model is asked for a bare JSON object but coding-agent CLIs habitually wrap answers in a
  * fenced code block anyway — this strips one if present, and otherwise falls back to the outermost
  * `{...}` span so a stray sentence before/after the object doesn't break `JSON.parse`.
@@ -14,9 +27,9 @@ function extractJsonPayload(raw: string): string {
   return start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed;
 }
 
-function stringField(value: unknown): string | undefined {
+function stringField(value: unknown, limit: number): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
+  const trimmed = value.trim().slice(0, limit);
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
@@ -24,8 +37,9 @@ function skillsField(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const skills = value
     .filter((entry): entry is string => typeof entry === 'string')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+    .map((entry) => entry.trim().slice(0, SHORT_FIELD_LIMIT))
+    .filter((entry) => entry.length > 0)
+    .slice(0, MAX_SKILLS);
   return skills.length > 0 ? skills : undefined;
 }
 
@@ -40,18 +54,12 @@ export function toPartialCvProfile(value: unknown): Partial<CvProfile> {
   const record = value as Record<string, unknown>;
   const profile: Partial<CvProfile> = {};
 
-  const title = stringField(record.title);
-  if (title) profile.title = title;
-  const years = stringField(record.years);
-  if (years) profile.years = years;
-  const location = stringField(record.location);
-  if (location) profile.location = location;
-  const languages = stringField(record.languages);
-  if (languages) profile.languages = languages;
-  const summary = stringField(record.summary);
+  for (const key of SHORT_FIELD_KEYS) {
+    const field = stringField(record[key], SHORT_FIELD_LIMIT);
+    if (field) profile[key] = field;
+  }
+  const summary = stringField(record.summary, SUMMARY_LIMIT);
   if (summary) profile.summary = summary;
-  const auth = stringField(record.auth);
-  if (auth) profile.auth = auth;
   const skills = skillsField(record.skills);
   if (skills) profile.skills = skills;
 

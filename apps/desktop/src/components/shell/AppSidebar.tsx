@@ -72,7 +72,10 @@ export function AppSidebar({
         className={`border-t border-base-300 ${collapsed ? 'flex flex-col items-center gap-1.5 py-3' : 'flex items-center gap-2 px-3.5 py-3'}`}
       >
         <div className="relative flex-none">
-          <div className="flex size-7 items-center justify-center rounded-full bg-base-300 text-base-content/70">
+          <div
+            className="flex size-7 items-center justify-center rounded-full bg-base-300 text-base-content/70"
+            aria-label="Local profile"
+          >
             <User size={15} weight="bold" aria-hidden="true" />
           </div>
           <span

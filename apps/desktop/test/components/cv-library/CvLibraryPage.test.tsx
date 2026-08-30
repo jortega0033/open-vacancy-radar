@@ -258,6 +258,31 @@ describe('CvLibraryPage', () => {
     expect(within(dialog).getByLabelText(/title/i)).toHaveValue('');
   });
 
+  it('cancels an in-flight AI parse when the drawer is closed before it completes', async () => {
+    const record = makeCv({ id: 'parse-3', name: 'Uploaded CV', kind: 'uploaded', text: 'Some CV text.' });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+    installAgentDockBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+
+    // Closing the drawer while the parse is still streaming must cancel the daemon session —
+    // otherwise it keeps running unobserved (see CvDrawer's unmount-cancel effect).
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => expect(bridge.cancelSession).toHaveBeenCalledWith('sess-cv-parse-1'));
+    expect(screen.queryByRole('dialog', { name: /edit cv/i })).not.toBeInTheDocument();
+  });
+
   it('sets a CV as default and updates the list from the returned array', async () => {
     const a = makeCv({ id: 'a', name: 'CV A', isDefault: true });
     const b = makeCv({ id: 'b', name: 'CV B', isDefault: false });

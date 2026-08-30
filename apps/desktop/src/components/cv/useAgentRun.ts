@@ -27,6 +27,18 @@ export interface AgentRunOptions {
   provider?: ProviderId;
 }
 
+export interface UseAgentRunOptions {
+  /**
+   * Joins successive `assistant.message` chunks. Defaults to `"\n\n"`, right for every existing
+   * consumer (Gap Analysis, Letters) that displays the accumulated text as prose. A consumer that
+   * needs the accumulated text to parse as something exact — e.g. one JSON object — should pass
+   * `""` instead: a coding-agent CLI can legitimately emit one answer across more than one
+   * `assistant.message` event, and `"\n\n"` inserted between two of them would either break
+   * parsing outright or, worse, silently land inside what was meant to be one contiguous value.
+   */
+  chunkSeparator?: string;
+}
+
 export interface AgentRun {
   status: AgentRunStatus;
   /** Everything the assistant has said so far, accumulated across `assistant.message` chunks. */
@@ -56,7 +68,7 @@ export function describeError(err: unknown, fallback: string): string {
   return (match?.[1] ?? message).trim() || fallback;
 }
 
-export function useAgentRun(): AgentRun {
+export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   const [status, setStatus] = useState<AgentRunStatus>('idle');
   const [text, setText] = useState('');
   const [error, setError] = useState<string>();
@@ -64,6 +76,10 @@ export function useAgentRun(): AgentRun {
   const sessionIdRef = useRef<string>();
   const textRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  // Read from inside the mount-once effect below via ref, not a dependency — options is a fresh
+  // object every render, and the effect must not resubscribe on every render because of it.
+  const chunkSeparatorRef = useRef(options.chunkSeparator ?? '\n\n');
+  chunkSeparatorRef.current = options.chunkSeparator ?? '\n\n';
 
   const clearWatchdog = useCallback(() => {
     if (timeoutRef.current !== undefined) clearTimeout(timeoutRef.current);
@@ -78,7 +94,9 @@ export function useAgentRun(): AgentRun {
 
       switch (event.type) {
         case 'assistant.message': {
-          textRef.current = textRef.current ? `${textRef.current}\n\n${event.text}` : event.text;
+          textRef.current = textRef.current
+            ? `${textRef.current}${chunkSeparatorRef.current}${event.text}`
+            : event.text;
           setText(textRef.current);
           setStatus((current) => (current === 'starting' ? 'streaming' : current));
           break;
