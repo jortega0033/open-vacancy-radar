@@ -1,0 +1,31 @@
+{
+  "status": "ok",
+  "data": {
+    "job": {
+      "id": 12345,
+      "title": "Senior Frontend Engineer",
+      "company": {
+        "id": 501,
+        "title": "Example Systems"
+      },
+      "salary": {
+        "min": 120000,
+        "max": 150000,
+        "currency": "USD",
+        "period": "year"
+      },
+      "location": {
+        "geo_raw": "Europe, including Netherlands"
+      },
+      "employment_type": "full-time",
+      "remoote_url": "https://remoote.app/jobs/12345-senior-frontend-engineer",
+      "apply_action": {
+        "type": "open_remoote_job",
+        "url": "https://remoote.app/jobs/12345-senior-frontend-engineer",
+        "requires_user_confirmation": true
+      }
+    }
+  },
+  "next_action": "Open returned Remoote URLs to review current job details.",
+  "limits": null
+}

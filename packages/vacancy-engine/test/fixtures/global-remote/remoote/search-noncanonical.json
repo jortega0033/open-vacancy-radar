@@ -1,0 +1,28 @@
+{
+  "status": "ok",
+  "data": {
+    "jobs": [
+      {
+        "id": 12345,
+        "title": "Senior Frontend Engineer",
+        "company": {
+          "id": 501,
+          "title": "Example Systems"
+        },
+        "salary": null,
+        "location": {
+          "geo_raw": "Worldwide"
+        },
+        "employment_type": "full-time",
+        "remoote_url": "https://employer.invalid/jobs/12345"
+      }
+    ],
+    "result_count": 1,
+    "total_available": 1
+  },
+  "limits": {
+    "requested_limit": 10,
+    "applied_limit": 10,
+    "max_public_results": 10
+  }
+}

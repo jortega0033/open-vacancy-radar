@@ -8,6 +8,7 @@ export type AtsHttpResponse = {
 export type AtsHttpRequestOptions = {
   allowedOrigins?: readonly string[];
   headers?: HeadersInit;
+  cache?: 'default' | 'no-store';
 };
 
 /**

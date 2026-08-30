@@ -63,6 +63,8 @@ export type SafeHttpGetOptions = {
   headers?: HeadersInit;
   /** Optional per-request boundary; redirects outside these origins are not followed. */
   allowedOrigins?: readonly string[];
+  /** Bypass both cache reads and writes for source contracts that prohibit raw-response retention. */
+  cache?: 'default' | 'no-store';
 };
 
 export type SafeHttpStreamGetOptions = SafeHttpGetOptions & {
@@ -450,7 +452,7 @@ export class SafeHttpClient {
     input: string | URL,
     options: SafeHttpGetOptions = {},
   ): Promise<SafeHttpResponse> {
-    return this.#request(input, 'GET', undefined, options, true);
+    return this.#request(input, 'GET', undefined, options, options.cache !== 'no-store');
   }
 
   /**

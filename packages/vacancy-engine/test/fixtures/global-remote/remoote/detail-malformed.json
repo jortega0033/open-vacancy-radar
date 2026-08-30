@@ -1,0 +1,12 @@
+{
+  "status": "ok",
+  "data": {
+    "job": {
+      "id": 12345,
+      "remoote_url": "https://employer.invalid/jobs/12345",
+      "apply_action": {
+        "url": "https://employer.invalid/apply/12345"
+      }
+    }
+  }
+}

@@ -613,6 +613,29 @@ describe('SafeHttpClient resource bounds and caching', () => {
     expect(seenHeaders[0]?.get('user-agent')).toContain('personal vacancy research');
   });
 
+  it('bypasses cache reads and writes when a GET is marked no-store', async () => {
+    const cache = new MemoryHttpCache();
+    let calls = 0;
+    const fetchFn = vi.fn(
+      asFetch(() => {
+        calls += 1;
+        return Promise.resolve(new Response(`network-${calls}`));
+      }),
+    );
+    const client = createClient({ cache, fetchFn });
+    const url = 'https://jobs.example.com/private-retention-contract';
+
+    const first = await client.get(url, { cache: 'no-store' });
+    const second = await client.get(url, { cache: 'no-store' });
+
+    expect(first.text()).toBe('network-1');
+    expect(second.text()).toBe('network-2');
+    expect(first.fromCache).toBe(false);
+    expect(second.fromCache).toBe(false);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    await expect(cache.get(url)).resolves.toBeUndefined();
+  });
+
   it('rejects a declared response larger than the configured bound', async () => {
     const fetchFn = vi.fn(
       asFetch(() =>
