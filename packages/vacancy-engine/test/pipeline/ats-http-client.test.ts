@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { CrawlerHttpError } from '../../src/crawler/errors.js';
 import { SafeHttpResponse } from '../../src/crawler/http-client.js';
-import { createAtsHttpClient } from '../../src/pipeline/ats-http-client.js';
+import type { Database } from '../../src/db/client.js';
+import {
+  createAtsHttpClient,
+  createDatabaseBackedHttpClients,
+} from '../../src/pipeline/ats-http-client.js';
 
 describe('createAtsHttpClient', () => {
   it('preserves the safe response final URL, status, headers, and decoded body', async () => {
@@ -28,6 +32,42 @@ describe('createAtsHttpClient', () => {
     });
     expect(get).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledWith('https://careers.example.com/jobs');
+  });
+
+  it('composes ATS and streaming views over the same safe client', async () => {
+    const clients = createDatabaseBackedHttpClients(
+      {
+        globalConcurrency: 3,
+        perDomainConcurrency: 1,
+        requestTimeoutMs: 500,
+        requestQueueTimeoutMs: 1_000,
+        maxResponseBytes: 1024,
+        maxRetries: 0,
+        userAgent: 'INDJobRadar/test (+personal vacancy research)',
+      },
+      {} as Database,
+      {
+        maxStreamTimeoutMs: 15 * 60 * 1_000,
+        maxStreamResponseBytes: 2 * 1024 * 1024 * 1024,
+      },
+    );
+    const safeResponse = new SafeHttpResponse({
+      requestedUrl: 'https://careers.example.com/jobs',
+      url: 'https://careers.example.com/jobs',
+      status: 200,
+      headers: {},
+      body: new TextEncoder().encode('shared'),
+      fromCache: false,
+      revalidated: false,
+    });
+    const get = vi.spyOn(clients.safeClient, 'get').mockResolvedValue(safeResponse);
+
+    await expect(clients.atsClient.get(safeResponse.url)).resolves.toMatchObject({
+      status: 200,
+      body: 'shared',
+    });
+    expect(get).toHaveBeenCalledWith(safeResponse.url);
+    expect(clients.safeClient.streamGet).toBeTypeOf('function');
   });
 
   it('preserves categorized safe-client failures', async () => {
@@ -82,9 +122,10 @@ describe('createAtsHttpClient', () => {
     const body = { appliedFacets: {}, limit: 20, offset: 0, searchText: '' };
     const options = { allowedOrigins: ['https://acme.wd5.myworkdayjobs.com'] };
 
-    await expect(
-      client.postJson(safeResponse.url, body, options),
-    ).resolves.toMatchObject({ status: 200, body: '{"total":0,"jobPostings":[]}' });
+    await expect(client.postJson(safeResponse.url, body, options)).resolves.toMatchObject({
+      status: 200,
+      body: '{"total":0,"jobPostings":[]}',
+    });
     expect(postJson).toHaveBeenCalledWith(safeResponse.url, body, options);
     expect(get).not.toHaveBeenCalled();
   });

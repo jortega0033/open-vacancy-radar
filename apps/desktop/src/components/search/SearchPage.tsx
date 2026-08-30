@@ -252,6 +252,10 @@ export function SearchPage() {
   );
 
   const report = market === 'netherlands' ? netherlandsReport : worldwideReport;
+  const sourceWarnings =
+    market === 'worldwide'
+      ? (worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [])
+      : [];
   const hasReport = report !== null;
   const busy = hydrating || scanning;
 
@@ -363,6 +367,18 @@ export function SearchPage() {
         {loadError && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
             {loadError}
+          </div>
+        )}
+        {sourceWarnings.length > 0 && (
+          <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+            <div>
+              <span className="font-semibold">Source coverage warning:</span>{' '}
+              {sourceWarnings.map((source) => (
+                <span key={source.id} className="block">
+                  {source.provider}: {source.error ?? source.status}
+                </span>
+              ))}
+            </div>
           </div>
         )}
         {report && (

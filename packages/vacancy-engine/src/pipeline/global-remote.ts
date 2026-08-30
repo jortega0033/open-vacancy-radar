@@ -20,10 +20,12 @@ import {
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
 import { globalRemoteSourceRegistry } from '../global-remote/source-registry.js';
 import {
-  writeGlobalRemoteReport,
-  type GlobalRemoteReportFiles,
-} from '../global-remote/report.js';
-import { createDatabaseBackedAtsHttpClient } from './ats-http-client.js';
+  runWorkableGlobalDiscovery,
+  WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
+  WORKABLE_GLOBAL_TIMEOUT_MS,
+} from '../global-remote/workable-global-discovery.js';
+import { writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
+import { createDatabaseBackedHttpClients } from './ats-http-client.js';
 
 const MANUAL_DECISIONS = new Set<GlobalRemoteDecision>([
   'salary_confirmation',
@@ -50,16 +52,65 @@ async function loadGlobalRemoteConfig(projectRoot: string): Promise<GlobalRemote
   return globalRemoteConfigSchema.parse(JSON.parse(await readFile(file, 'utf8')) as unknown);
 }
 
-function uniqueDiscovery(vacancies: DiscoveryVacancyAudit[]): DiscoveryVacancyAudit[] {
-  const unique = new Map<string, DiscoveryVacancyAudit>();
-  for (const vacancy of vacancies) {
-    if (!unique.has(vacancy.key)) unique.set(vacancy.key, vacancy);
+function canonicalWorkableUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.origin !== 'https://apply.workable.com' ||
+      url.search.length > 0 ||
+      !/^\/j\/[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/u.test(url.pathname)
+    ) {
+      return null;
+    }
+    url.hash = '';
+    return url.href;
+  } catch {
+    return null;
   }
-  return [...unique.values()].sort((left, right) =>
-    left.company.localeCompare(right.company) || left.title.localeCompare(right.title));
 }
 
-function groupOfficial(audits: OfficialVacancyAudit[]): Pick<
+export function uniqueDiscovery(vacancies: DiscoveryVacancyAudit[]): DiscoveryVacancyAudit[] {
+  const directWorkableUrls = new Set(
+    vacancies
+      .filter((vacancy) => vacancy.provider === 'workable_global')
+      .map((vacancy) => canonicalWorkableUrl(vacancy.url))
+      .filter((url): url is string => url !== null),
+  );
+  const prioritized = vacancies
+    .map((vacancy, index) => ({ vacancy, index }))
+    .sort((left, right) => {
+      const leftPriority = left.vacancy.provider === 'workable_global' ? 0 : 1;
+      const rightPriority = right.vacancy.provider === 'workable_global' ? 0 : 1;
+      return leftPriority - rightPriority || left.index - right.index;
+    });
+  const keys = new Set<string>();
+  const retainedWorkableUrls = new Set<string>();
+  const unique: DiscoveryVacancyAudit[] = [];
+  for (const { vacancy } of prioritized) {
+    const workableUrl = canonicalWorkableUrl(vacancy.url);
+    if (
+      keys.has(vacancy.key) ||
+      (workableUrl !== null &&
+        ((vacancy.provider !== 'workable_global' && directWorkableUrls.has(workableUrl)) ||
+          retainedWorkableUrls.has(workableUrl)))
+    ) {
+      continue;
+    }
+    keys.add(vacancy.key);
+    if (vacancy.provider === 'workable_global' && workableUrl !== null) {
+      retainedWorkableUrls.add(workableUrl);
+    }
+    unique.push(vacancy);
+  }
+  return unique.sort(
+    (left, right) =>
+      left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
+  );
+}
+
+function groupOfficial(
+  audits: OfficialVacancyAudit[],
+): Pick<
   GlobalRemoteReport,
   'strictMatches' | 'manualReview' | 'nearMisses' | 'excludedOrInactive' | 'blockedOrErrored'
 > {
@@ -168,7 +219,9 @@ export async function runGlobalRemoteScan(
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
     },
   };
-  const http = createDatabaseBackedAtsHttpClient(appConfig, database, {
+  const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
+    maxStreamTimeoutMs: WORKABLE_GLOBAL_TIMEOUT_MS,
+    maxStreamResponseBytes: WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
     onNetworkRequest(url) {
       logger.debug({ url }, 'Global remote scan HTTP request');
     },
@@ -177,25 +230,35 @@ export async function runGlobalRemoteScan(
     },
   });
   const reuseDiscovery = options.officialOnly === true || options.offlineReclassify === true;
-  const [discovery, official] = await Promise.all([
-    reuseDiscovery
-      ? loadPreviousDiscovery(projectRoot)
-      : runGlobalRemoteDiscovery(http, profile),
+  const [baseDiscovery, official] = await Promise.all([
+    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),
   ]);
+  const workableGlobal = reuseDiscovery
+    ? null
+    : await runWorkableGlobalDiscovery(safeClient, profile, projectRoot);
+  const discovery =
+    workableGlobal === null
+      ? baseDiscovery
+      : {
+          sources: [...baseDiscovery.sources, ...workableGlobal.sources],
+          vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
+        };
   const discoveryAudit = uniqueDiscovery(discovery.vacancies);
-  const officialAudit = [...official.audits].sort((left, right) =>
-    left.company.localeCompare(right.company) || left.title.localeCompare(right.title));
+  const officialAudit = [...official.audits].sort(
+    (left, right) =>
+      left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
+  );
   const groups = groupOfficial(officialAudit);
   const sourceRegistry = globalRemoteSourceRegistry(profile);
   const activeRegistrySources = sourceRegistry.filter((source) => source.state === 'active').length;
   const gatedRegistrySources = sourceRegistry.filter((source) =>
-    ['configuration_required', 'partner_required', 'blocked'].includes(source.state)).length;
-  const manualOrProhibitedRegistrySources = sourceRegistry.length
-    - activeRegistrySources
-    - gatedRegistrySources;
+    ['configuration_required', 'partner_required', 'blocked'].includes(source.state),
+  ).length;
+  const manualOrProhibitedRegistrySources =
+    sourceRegistry.length - activeRegistrySources - gatedRegistrySources;
   const report: GlobalRemoteReport = {
     runId: randomUUID(),
     generatedAt: new Date().toISOString(),
@@ -212,7 +275,9 @@ export async function runGlobalRemoteScan(
       discoveryRequests: discovery.sources.reduce((sum, source) => sum + source.requests, 0),
       discoveryListings: discovery.sources.reduce((sum, source) => sum + source.listings, 0),
       discoveryUniqueListings: discoveryAudit.length,
-      discoveryOfficialReviewCandidates: discoveryAudit.filter((item) => item.decision === 'official_review_candidate').length,
+      discoveryOfficialReviewCandidates: discoveryAudit.filter(
+        (item) => item.decision === 'official_review_candidate',
+      ).length,
       officialBoardsOrPagesAttempted: profile.officialSources.length,
       officialRequests: official.requestCount,
       strictMatches: groups.strictMatches.length,
@@ -236,9 +301,18 @@ export async function runGlobalRemoteScan(
       'Exact official vacancy content is hashed. A changed or unbaselined posting is routed to manual review instead of silently trusting old facts.',
       'No LinkedIn scraping, browser-agent production crawl, CAPTCHA bypass, proxy rotation, or paid AI service is used.',
       'One blocked or malformed source is logged and does not fail the other sources.',
+      'The official Workable all-customer XML is streamed only after normal source scans, parsed incrementally, and cached as a compact hourly snapshot; raw XML is never buffered or persisted.',
       'Dice results are retrieved through Dice’s AI-powered MCP search and are clearly treated as discovery leads requiring official employer verification.',
-      ...(reuseDiscovery ? ['Discovery API data was reused from the prior report; this run made no new discovery-feed requests.'] : []),
-      ...(options.offlineReclassify ? ['Official content and hashes were reused from the immediately prior report; this reclassification made no network requests.'] : []),
+      ...(reuseDiscovery
+        ? [
+            'Discovery API data was reused from the prior report; this run made no new discovery-feed requests.',
+          ]
+        : []),
+      ...(options.offlineReclassify
+        ? [
+            'Official content and hashes were reused from the immediately prior report; this reclassification made no network requests.',
+          ]
+        : []),
     ],
     attribution: sourceRegistry
       .filter((source) => source.state === 'active')
