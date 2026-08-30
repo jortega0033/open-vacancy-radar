@@ -5,7 +5,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createSessionRequestSchema, sessionIdParamSchema } from '@agent-dock/shared';
+import {
+  createSessionRequestSchema,
+  mcpCredentialInputSchema,
+  mcpProviderIdSchema,
+  mcpSearchRequestSchema,
+  sessionIdParamSchema,
+} from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
 import {
   createDatabaseClient,
@@ -366,6 +372,26 @@ ipcMain.handle('daemon:get-status', (): DaemonStatus => (client ? { state: 'read
 ipcMain.handle('daemon:list-providers', async () => {
   if (!client) throw new Error('daemon is not ready yet');
   return client.providers.list();
+});
+
+ipcMain.handle('daemon:mcp-statuses', async () => {
+  if (!client) throw new Error('daemon is not ready yet');
+  return client.mcp.statuses();
+});
+
+ipcMain.handle('daemon:mcp-search', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  return client.mcp.search(mcpSearchRequestSchema.parse(input));
+});
+
+ipcMain.handle('daemon:mcp-set-credential', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  await client.mcp.setCredential(mcpCredentialInputSchema.parse(input));
+});
+
+ipcMain.handle('daemon:mcp-remove', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  await client.mcp.remove(mcpProviderIdSchema.parse(input));
 });
 
 ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {

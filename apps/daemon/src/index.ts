@@ -10,6 +10,9 @@ import {
 import { buildProviderRegistry } from './providers.js';
 import { buildServer } from './server.js';
 import { SessionManager } from './session-manager.js';
+import { OsMcpCredentialStore } from './mcp/credential-store.js';
+import { McpConnectionManager } from './mcp/manager.js';
+import { McpSdkConnectorFactory } from './mcp/sdk-connector.js';
 
 async function main() {
   const logger = createConsoleLogger('daemon', process.env.AGENT_DOCK_LOG_LEVEL === 'debug' ? 'debug' : 'info');
@@ -22,8 +25,18 @@ async function main() {
   const registry = buildProviderRegistry(logger);
   const sessionManager = new SessionManager(registry, logger);
   const token = generateToken();
+  const mcpCredentials = new OsMcpCredentialStore();
+  // Provider-specific policies (starting with #29) inject their OAuthClientProvider here. Keeping
+  // the registry empty means an OAuth server can never be contacted before its redirect URI,
+  // PKCE/token persistence, terms, tool, and retention policy have all been reviewed together.
+  const mcpManager = new McpConnectionManager(
+    [],
+    new McpSdkConnectorFactory(mcpCredentials),
+    mcpCredentials,
+    logger,
+  );
 
-  const app = buildServer({ registry, sessionManager, token, logger });
+  const app = buildServer({ registry, sessionManager, token, logger, mcpManager });
 
   const requestedPort = Number(process.env.AGENT_DOCK_PORT ?? '0');
   await app.listen({ port: requestedPort, host: '127.0.0.1' });
@@ -40,6 +53,7 @@ async function main() {
     shuttingDown = true;
     logger.info('shutting down', { signal });
     await sessionManager.cancelAll();
+    await mcpManager.close();
     await app.close();
     removeDiscoveryFile(appId);
     process.exit(0);

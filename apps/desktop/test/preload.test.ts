@@ -42,7 +42,7 @@ beforeEach(() => {
 });
 
 describe('electron/preload.ts — real bridge (AD-07)', () => {
-  it('exposes exactly the seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload();
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -53,6 +53,10 @@ describe('electron/preload.ts — real bridge (AD-07)', () => {
         'cancelSession',
         'onSessionEvent',
         'selectDirectory',
+        'listMcpProviders',
+        'searchMcp',
+        'setMcpCredential',
+        'removeMcpProvider',
       ].sort(),
     );
   });
@@ -121,6 +125,27 @@ describe('electron/preload.ts — real bridge (AD-07)', () => {
     const api = await loadPreload();
     await (api.cancelSession as (id: string) => Promise<unknown>)('session-42');
     expect(invoke).toHaveBeenCalledWith('daemon:cancel-session', 'session-42');
+  });
+
+  it('exposes only typed MCP status/search/credential/removal channels', async () => {
+    const api = await loadPreload();
+    invoke.mockResolvedValueOnce([]);
+    await (api.listMcpProviders as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenLastCalledWith('daemon:mcp-statuses');
+    const input = { providerId: 'approved', query: 'frontend', limit: 10 };
+    invoke.mockResolvedValueOnce([]);
+    await (api.searchMcp as (value: unknown) => Promise<unknown>)(input);
+    expect(invoke).toHaveBeenLastCalledWith('daemon:mcp-search', input);
+    await (api.setMcpCredential as (value: unknown) => Promise<unknown>)({ providerId: 'approved', credential: 'secret' });
+    expect(invoke).toHaveBeenLastCalledWith('daemon:mcp-set-credential', { providerId: 'approved', credential: 'secret' });
+    await (api.removeMcpProvider as (value: string) => Promise<unknown>)('approved');
+    expect(invoke).toHaveBeenLastCalledWith('daemon:mcp-remove', 'approved');
+  });
+
+  it('rejects extra daemon fields instead of leaking them into MCP renderer state', async () => {
+    invoke.mockResolvedValue([{ providerId: 'approved', enabled: true, connectionEnabled: true, searchEnabled: true, persistenceEnabled: true, connected: false, credentialConfigured: true, credential: 'must-not-cross' }]);
+    const api = await loadPreload();
+    await expect((api.listMcpProviders as () => Promise<unknown>)()).rejects.toThrow();
   });
 });
 

@@ -99,6 +99,46 @@ describe('AgentDockClient — health / protocol compatibility', () => {
   });
 });
 
+describe('AgentDockClient — policy-gated MCP API', () => {
+  it('uses fixed MCP routes and validates statuses returned by the daemon', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return jsonResponse(200, { providers: [{
+        providerId: 'approved', enabled: true, connectionEnabled: true, searchEnabled: true,
+        persistenceEnabled: true, connected: false, credentialConfigured: true,
+      }] });
+    });
+    const statuses = await makeClient(fetchImpl).mcp.statuses();
+    expect(statuses[0]?.providerId).toBe('approved');
+    expect(fetchImpl).toHaveBeenLastCalledWith(`${BASE_URL}/mcp/providers`, expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${TOKEN}` }),
+    }));
+  });
+
+  it('rejects arbitrary native provider fields before sending a search', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(healthOk());
+    const client = makeClient(fetchImpl);
+    await expect(client.mcp.search({
+      providerId: 'approved', query: 'frontend', limit: 10, serverUrl: 'https://attacker.test',
+    } as never)).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('validates normalized MCP results and rejects extra secret fields', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return jsonResponse(200, { results: [{
+        externalId: '1', title: 'Engineer', company: 'Example', url: 'https://jobs.example.test/1',
+        location: 'Remote', description: null, employmentType: null, publishedAt: null,
+        providerId: 'approved', sourceUrl: 'https://jobs.example.test', attribution: 'Example jobs',
+        policyVersion: '1', policyReviewedAt: '2026-08-30', fetchedAt: '2026-08-30T10:00:00.000Z',
+        expiresAt: '2026-08-31T10:00:00.000Z', credential: 'must-not-cross',
+      }] });
+    });
+    await expect(makeClient(fetchImpl).mcp.search({ providerId: 'approved', query: 'frontend', limit: 10 })).rejects.toThrow();
+  });
+});
+
 describe('AgentDockClient — transport and auth errors', () => {
   it('throws DaemonUnavailableError when fetch itself rejects (connection refused)', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
