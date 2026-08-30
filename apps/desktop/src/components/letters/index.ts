@@ -1,5 +1,5 @@
 /**
- * Public surface of the Letters feature. The app shell only needs `LettersPage` — it takes no
+ * Public surface of the Letters feature. The app shell only needs `LettersPage`; it takes no
  * required props and covers both prototype routes (`/letters/new` and `/letters`) itself. The
  * pieces below are exported for tests and for any later layout that wants the generator on its
  * own (for example straight from a vacancy on the Search page).

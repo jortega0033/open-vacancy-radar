@@ -1,18 +1,18 @@
 import { SettingsRow, SettingsSection } from './controls.js';
 
 export interface DataManagementProps {
-  /** True while a reset is running — both entry points disable so they cannot overlap. */
+  /** True while a reset is running. Both entry points are disabled so they cannot overlap. */
   busy: boolean;
   onRequestResetSettings: () => void;
   onRequestResetData: () => void;
 }
 
 /**
- * The data-management section. Two of the prototype's actions are real today (reset settings,
- * reset application data — both run entirely over the existing workspace IPC); export/import are
+ * The data-management section. Two of the prototype's actions are available (reset settings,
+ * reset application data; both run entirely over the existing workspace IPC); export/import are
  * shown disabled with an explanation, because doing them properly needs native save/open dialogs
  * that the fixed-capability bridge does not expose yet. Per the page's one rule, a control either
- * works or visibly says it doesn't — these say it.
+ * works or visibly says it does not.
  */
 export function DataManagement({ busy, onRequestResetSettings, onRequestResetData }: DataManagementProps) {
   return (
@@ -27,9 +27,7 @@ export function DataManagement({ busy, onRequestResetSettings, onRequestResetDat
         description={
           <>
             <span className="badge badge-ghost badge-sm mr-1.5 align-middle">Not yet available</span>
-            Backing up and restoring your data as JSON needs the native save/open dialogs, which
-            this build does not expose to the interface yet. The buttons are disabled rather than
-            pretending to work.
+            This build cannot choose backup files yet, so export and import are disabled.
           </>
         }
       >

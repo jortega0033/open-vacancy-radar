@@ -34,7 +34,7 @@ describe('SavedJobsPage', () => {
     render(<SavedJobsPage />);
 
     await waitFor(() => expect(screen.getByText(/no saved jobs/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /add manually/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add first job/i })).toBeInTheDocument();
     expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain(
       'empty-saved-jobs',
     );

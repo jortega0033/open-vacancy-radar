@@ -44,7 +44,7 @@ describe('ROO bulk domain source', () => {
     );
   });
 
-  it('uses the shared HTTP seam with an exact redirect boundary', async () => {
+  it('uses the shared HTTP client with an exact redirect boundary', async () => {
     const http = new FixtureHttpClient(new Map([[ROO_BULK_XML_URL, await fixture()]]));
 
     const result = await fetchRooDomainEvidence(http);

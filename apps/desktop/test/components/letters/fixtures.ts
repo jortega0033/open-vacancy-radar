@@ -32,7 +32,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
 export function makeLetter(overrides: Partial<LetterRecord> = {}): LetterRecord {
   return {
     id: 'letter-1',
-    title: 'Motivation letter — Redwood Software',
+    title: 'Motivation letter: Redwood Software',
     company: 'Redwood Software',
     role: 'Senior Frontend Engineer',
     type: 'motivation_letter',

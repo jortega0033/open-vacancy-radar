@@ -28,9 +28,9 @@ const TERMINAL_TYPES = new Set<AgentEvent['type']>(['session.completed', 'sessio
 
 export interface ProviderContractSpec {
   providerId: ProviderId;
-  /** The real, currently-declared capabilities for this provider — drives which sections run. */
+  /** The provider's declared capabilities, which determine which sections run. */
   capabilities: ProviderCapabilities;
-  /** The adapter's real parser — this suite exercises actual normalization logic, not a stand-in. */
+  /** The adapter parser. This suite exercises its normalization logic, not a stand-in. */
   parseLine: (raw: unknown, logger: Logger) => ParsedLine;
   /** The adapter's real argv builder, used only for the (process-free) resume assertion below. */
   buildArgs: (opts: StartSessionOptions) => string[];
@@ -51,13 +51,13 @@ async function collect(events: AsyncGenerator<AgentEvent, void, void>): Promise<
 /**
  * Baseline behavioral guarantees every provider adapter must uphold, run against the adapter's
  * *real* parser and argv construction (spawning a small `node` fixture script in place of the
- * real CLI binary — see providers.md#adding-a-new-provider). A future provider adapter can reuse
+ * CLI binary; see providers.md#adding-a-new-provider). A future provider adapter can reuse
  * this by fixturing its own success/failure/hang scripts and calling `describeProviderContract`
  * with its real `parseLine`/`buildArgs`/`capabilities`.
  *
  * Lives under test/support rather than src/ deliberately: it's a vitest-coupled test helper, not
  * part of the package's public runtime API, so it isn't exported from index.ts or shipped to
- * consumers — a provider package outside this repo would copy the pattern, not import this file.
+ * consumers. A provider package outside this repo would copy the pattern instead of importing this file.
  */
 export function describeProviderContract(spec: ProviderContractSpec): void {
   describe(`provider contract: ${spec.providerId}`, () => {
@@ -99,7 +99,7 @@ export function describeProviderContract(spec: ProviderContractSpec): void {
       it('rejects a nonexistent working directory before touching the provider CLI', async () => {
         const events = await collect(runFixture(spec.fixtures.success, { cwd: join(cwd, 'does-not-exist') }).events);
         expect(events.some((e) => e.type === 'error' && e.code === 'INVALID_CWD')).toBe(true);
-        expect(events.at(-1)).toEqual({ type: 'session.failed', message: 'invalid working directory' });
+        expect(events.at(-1)).toEqual({ type: 'session.failed', message: 'Invalid working directory.' });
       });
     });
 

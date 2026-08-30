@@ -1,9 +1,9 @@
 /**
  * All reads and writes against `workspace.db`, expressed as plain functions over a `WorkspaceDb`.
  *
- * Deliberately free of Electron and of `ipcMain`: main.ts's handlers are a thin layer that
- * validates (validate.ts) and then calls exactly one function from here, which keeps every
- * behavior worth arguing about — default-CV promotion, archive filtering, duplication — testable
+ * Deliberately free of Electron and of `ipcMain`: main.ts's small handlers validate input
+ * (validate.ts) and then call exactly one function from here. This keeps behaviors such as
+ * default-CV promotion, archive filtering, and duplication testable
  * against a real SQLite file with no Electron process in sight (test/workspace-repository.test.ts).
  *
  * better-sqlite3 is synchronous, so is everything here. The handlers are still `async` because
@@ -39,7 +39,7 @@ const SETTINGS_ROW_ID = 1;
 
 export class WorkspaceNotFoundError extends Error {
   constructor(entity: string, id: string) {
-    super(`no ${entity} with id "${id}"`);
+    super(`No ${entity} with id "${id}".`);
     this.name = 'WorkspaceNotFoundError';
   }
 }
@@ -104,12 +104,12 @@ export function createSavedJob(db: WorkspaceDb, input: SavedJobInput): SavedJobR
     })
     .returning()
     .all();
-  if (!row) throw new Error('failed to insert saved job');
+  if (!row) throw new Error('Failed to insert saved job.');
   return toSavedJob(row);
 }
 
 export function updateSavedJob(db: WorkspaceDb, id: string, values: SavedJobPatch): SavedJobRecord {
-  // An empty patch is a no-op read rather than an invalid `set {}` statement — the renderer
+  // An empty patch is a no-op read rather than an invalid `set {}` statement. The renderer
   // sending "nothing changed" should not be an error.
   if (Object.keys(values).length === 0) {
     const existing = db.select().from(savedJobs).where(eq(savedJobs.id, id)).get();
@@ -123,7 +123,7 @@ export function updateSavedJob(db: WorkspaceDb, id: string, values: SavedJobPatc
 
 export function deleteSavedJob(db: WorkspaceDb, id: string): DeleteResult {
   // `applications.saved_job_id` is `on delete set null`, so any application created from this
-  // saved job survives as a standalone row — the prototype's "deleting a saved job detaches
+  // saved job survives as a standalone row. The prototype's "deleting a saved job detaches
   // applications" behavior falls straight out of the schema.
   const removed = db.delete(savedJobs).where(eq(savedJobs.id, id)).returning({ id: savedJobs.id }).all();
   return { deleted: removed.length > 0 };
@@ -183,7 +183,7 @@ export function createApplication(db: WorkspaceDb, input: ApplicationInput): App
     })
     .returning()
     .all();
-  if (!row) throw new Error('failed to insert application');
+  if (!row) throw new Error('Failed to insert application.');
   return toApplication(row);
 }
 
@@ -261,7 +261,7 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
       })
       .returning()
       .all();
-    if (!row) throw new Error('failed to insert CV document');
+    if (!row) throw new Error('Failed to insert CV document.');
     return toCvDocument(row);
   });
 }
@@ -310,7 +310,7 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
     if (!existing) return { deleted: false };
 
     // Foreign keys (`on delete set null`) detach letters, applications and `app_settings`
-    // .default_cv_id by themselves — the client opens the connection with `foreign_keys = ON`.
+    // .default_cv_id by themselves. The client opens the connection with `foreign_keys = ON`.
     tx.delete(cvDocuments).where(eq(cvDocuments.id, id)).run();
 
     if (existing.isDefault) {
@@ -365,7 +365,7 @@ export function createLetter(db: WorkspaceDb, input: LetterInput): LetterRecord 
     })
     .returning()
     .all();
-  if (!row) throw new Error('failed to insert letter');
+  if (!row) throw new Error('Failed to insert letter.');
   return toLetter(row);
 }
 
@@ -387,7 +387,7 @@ export function deleteLetter(db: WorkspaceDb, id: string): DeleteResult {
 
 /**
  * Copies a letter into a new draft. The copy is always a `draft` regardless of the original's
- * status — duplicating a letter you already sent must not produce a second row claiming to have
+ * status. Duplicating a letter you already sent must not produce a second row claiming to have
  * been sent.
  */
 export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {
@@ -441,7 +441,7 @@ export function getSettings(db: WorkspaceDb): AppSettingsRecord {
   if (existing) return toSettings(existing);
 
   const [created] = db.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
-  if (!created) throw new Error('failed to initialize app settings');
+  if (!created) throw new Error('Failed to initialize app settings.');
   return toSettings(created);
 }
 
@@ -455,7 +455,7 @@ export function updateSettings(db: WorkspaceDb, values: AppSettingsPatch): AppSe
     .where(eq(appSettings.id, SETTINGS_ROW_ID))
     .returning()
     .all();
-  if (!row) throw new Error('failed to update app settings');
+  if (!row) throw new Error('Failed to update app settings.');
   return toSettings(row);
 }
 

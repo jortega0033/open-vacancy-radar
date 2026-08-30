@@ -11,7 +11,7 @@ export type AtsHttpRequestOptions = {
 };
 
 /**
- * Deliberately small injection seam. Request policy, caching, retries, and
+ * Small injected HTTP interface. Request policy, caching, retries, and
  * conditional headers belong to the crawler HTTP implementation, not adapters.
  */
 export type AtsHttpClient = {

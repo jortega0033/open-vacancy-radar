@@ -17,7 +17,7 @@ const PARSE_STATUS_CLASS: Record<ParseStatusTone, string> = {
 /**
  * The CV library table, per the prototype's `cvCols`/`cvRows` (`export-src.html` lines ~381-403):
  * name, kind, target role, updated date, parse status, a default marker/action, and row actions.
- * The name doubles as a "click to edit" affordance (per the prototype's `onRow`), in addition to
+ * The name also opens the edit form when clicked (per the prototype's `onRow`), in addition to
  * the explicit Edit action, matching the click-to-edit-reopens-the-drawer requirement without
  * removing the row-action convention `SavedJobsTable`/`ApplicationsTable` already use.
  */
@@ -47,7 +47,7 @@ export function CvLibraryTable({ documents, onEdit, onSetDefault, onDelete }: Cv
                     type="button"
                     className="text-left hover:underline"
                     onClick={() => onEdit(doc)}
-                    title="Edit parsed profile"
+                    title="Edit CV profile"
                   >
                     {doc.name}
                   </button>
@@ -55,7 +55,7 @@ export function CvLibraryTable({ documents, onEdit, onSetDefault, onDelete }: Cv
                 <td>
                   <span className="badge badge-outline whitespace-nowrap">{CV_KIND_LABEL[doc.kind]}</span>
                 </td>
-                <td className="text-base-content/80">{doc.targetRole || '—'}</td>
+                <td className="text-base-content/80">{doc.targetRole || 'Not provided'}</td>
                 <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.uploadedAt)}</td>
                 <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.updatedAt)}</td>
                 <td className={`whitespace-nowrap text-sm ${PARSE_STATUS_CLASS[parseStatus.tone]}`}>

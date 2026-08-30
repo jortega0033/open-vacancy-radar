@@ -8,12 +8,12 @@ export function registerProviderRoutes(app: FastifyInstance, registry: ProviderR
   app.get('/providers/:providerId', async (req, reply) => {
     const parsed = providerIdSchema.safeParse((req.params as Record<string, unknown>).providerId);
     if (!parsed.success) {
-      reply.code(400).send({ error: 'unknown provider id' });
+      reply.code(400).send({ error: 'Unknown provider ID.' });
       return;
     }
     const provider = registry.get(parsed.data);
     if (!provider) {
-      reply.code(404).send({ error: 'provider not registered' });
+      reply.code(404).send({ error: 'Provider not registered.' });
       return;
     }
     reply.send(await provider.detect());

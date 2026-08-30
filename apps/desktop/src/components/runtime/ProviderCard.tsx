@@ -38,7 +38,7 @@ export interface ProviderCardProps {
  * One CLI's status, matching the prototype's provider card (`export-src.html` AI Runtime screen):
  * a ready dot, an Installed/Authentication/Version/Model grid, capability chips, and a button that
  * either sets this provider as the one AI features run through or explains why it can't yet.
- * Every field here is real data from `window.agentDock.listProviders()` — nothing is invented for
+ * Every field comes from `window.agentDock.listProviders()`. Nothing is added only for
  * the sake of matching the mockup's layout.
  */
 export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: ProviderCardProps) {
@@ -61,7 +61,7 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
           <dt className="text-base-content/60">Authentication</dt>
           <dd className="font-medium">{authLabel(status)}</dd>
           <dt className="text-base-content/60">Version</dt>
-          <dd className="font-medium">{status.version ?? '—'}</dd>
+          <dd className="font-medium">{status.version ?? 'Not reported'}</dd>
           <dt className="text-base-content/60">Model</dt>
           <dd className="font-medium">CLI default</dd>
         </dl>
@@ -89,7 +89,7 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
           disabled={!status.installed || isDefault || saving}
           onClick={onUseAsDefault}
         >
-          {isDefault ? 'Default ✓' : status.installed ? 'Use as default' : 'Not installed'}
+          {isDefault ? 'Current default' : status.installed ? 'Use as default' : 'Not installed'}
         </button>
       </div>
     </div>

@@ -45,23 +45,22 @@ export interface LetterGeneratorProps {
   model?: string;
   /** Called with the persisted row after every successful save. */
   onSaved?: (letter: LetterRecord) => void;
-  /** Rendered as a "Back to library" affordance when supplied. */
+  /** Renders a "Back to library" button when supplied. */
   onClose?: () => void;
 }
 
 /**
  * Generate → edit → save, in one screen.
  *
- * The generation step is a real agent run: `useAgentRun` (shared with the CV assistant) starts an
+ * The generation step uses `useAgentRun` (shared with the CV assistant) to start an
  * AgentDock session on the user's own Claude Code CLI and streams `assistant.message` chunks back.
- * That means it is genuinely asynchronous and can genuinely fail, so this component keeps three
- * separate ideas apart that a fake instant generator would let collapse into one:
+ * The run is asynchronous and can fail, so this component keeps three states separate:
  *
- * - **the stream** (`run.text`) — read-only, appended to as it arrives, shown through the same
+ * - **the stream** (`run.text`): read-only, appended to as it arrives, shown through the same
  *   `AiOutput` surface as the rest of the app;
- * - **the working document** (`body`) — a plain editable text area, seeded from the stream once the
+ * - **the working document** (`body`): a plain editable text area, seeded from the stream once the
  *   run completes and owned by the user from that moment on;
- * - **the saved row** (`letterId` / `savedBody`) — what is actually in the database.
+ * - **the saved row** (`letterId` / `savedBody`): what is actually in the database.
  *
  * Because those are separate, a failed *re*generation cannot destroy a letter that was already
  * loaded or already saved: the error appears above the editor and the text stays exactly as it was.
@@ -116,7 +115,7 @@ export function LetterGenerator({
 
   // Which run's output has already been moved into the editor. A counter rather than a text
   // comparison, so a second run that happens to produce the identical text still replaces edits the
-  // user made in between — "Regenerate" must always mean "replace with the new draft".
+  // user made in between. "Regenerate" must always mean "replace with the new draft."
   const runSeq = useRef(0);
   const appliedSeq = useRef(0);
 
@@ -135,7 +134,7 @@ export function LetterGenerator({
         const docs = await window.workspace.listCvDocuments();
         if (!cancelled) setCvs(docs);
       } catch (err) {
-        if (!cancelled) setCvError(describeError(err, 'could not load your CV library'));
+        if (!cancelled) setCvError(describeError(err, 'Could not load your CV library.'));
       }
     })();
     return () => {
@@ -184,7 +183,7 @@ export function LetterGenerator({
   }, [letter]);
 
   // Which CLI a generation runs through is a runtime preference, not a per-document style choice
-  // like tone/type/length, so it is read for every letter — new or existing — not gated on `!letter`.
+  // like tone/type/length, so it is read for every letter, new or existing, and not gated on `!letter`.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -200,8 +199,7 @@ export function LetterGenerator({
     };
   }, []);
 
-  // Once the library lands, settle on a CV: whatever was already chosen if it still exists, else
-  // the library's default, else the first one.
+  // Keep the selected CV if it still exists. Otherwise, use the library default or the first CV.
   useEffect(() => {
     if (cvs.length === 0) return;
     setCvId((current) => {
@@ -269,7 +267,7 @@ export function LetterGenerator({
   const typeLabel = labelFor(LETTER_TYPE_OPTIONS, type);
   const derivedTitle = useMemo(() => {
     const company = lead?.company?.trim() ?? '';
-    return company ? `${typeLabel} — ${company}` : typeLabel;
+    return company ? `${typeLabel}: ${company}` : typeLabel;
   }, [typeLabel, lead?.company]);
 
   useEffect(() => {
@@ -305,7 +303,7 @@ export function LetterGenerator({
 
   const handleGenerate = useCallback(() => {
     // Replacing text the user has edited but not saved is the one destructive thing this screen
-    // does, so it asks first — and only then.
+    // does, so it asks first.
     if (hasBody && isDirty && !confirmRegenerate) {
       setConfirmRegenerate(true);
       return;
@@ -345,7 +343,7 @@ export function LetterGenerator({
       onSaved?.(record);
     } catch (err) {
       setSaveState('idle');
-      setSaveError(describeError(err, 'could not save this letter'));
+      setSaveError(describeError(err, 'Could not save this letter.'));
     }
   }, [
     body,
@@ -371,7 +369,7 @@ export function LetterGenerator({
       setCopyError(undefined);
     } catch (err) {
       setCopyState('failed');
-      setCopyError(describeError(err, 'could not copy to the clipboard'));
+      setCopyError(describeError(err, 'Could not copy to the clipboard.'));
     }
     copyTimeoutRef.current = setTimeout(() => setCopyState('idle'), COPY_FEEDBACK_MS);
   }, [body]);
@@ -389,11 +387,11 @@ export function LetterGenerator({
           setExportState('exported');
           exportTimeoutRef.current = setTimeout(() => setExportState('idle'), COPY_FEEDBACK_MS);
         } else {
-          setExportState('idle'); // the user cancelled the save dialog — not a failure
+          setExportState('idle'); // The user cancelled the save dialog. This is not a failure.
         }
       } catch (err) {
         setExportState('failed');
-        setExportError(describeError(err, 'could not export this letter'));
+        setExportError(describeError(err, 'Could not export this letter.'));
       }
     },
     [body, title, derivedTitle],
@@ -416,11 +414,11 @@ export function LetterGenerator({
                 onChange={(event) => setJobSource(event.target.value)}
                 disabled={run.isBusy}
               >
-                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title} — ${vacancy.company}`}</option>}
+                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title} · ${vacancy.company}`}</option>}
                 <option value={JOB_MANUAL}>Enter the job manually</option>
                 {savedJobs.map((job) => (
                   <option key={job.id} value={`${JOB_SAVED_PREFIX}${job.id}`}>
-                    {`${job.role} — ${job.company}`}
+                    {`${job.role} · ${job.company}`}
                   </option>
                 ))}
               </select>
@@ -431,7 +429,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{vacancy.title}</div>
                 <div className="text-base-content/60">
                   {vacancy.company}
-                  {vacancy.location ? ` — ${vacancy.location}` : ''}
+                  {vacancy.location ? ` · ${vacancy.location}` : ''}
                 </div>
               </div>
             )}
@@ -441,7 +439,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{selectedSavedJob.role}</div>
                 <div className="text-base-content/60">
                   {selectedSavedJob.company}
-                  {selectedSavedJob.location ? ` — ${selectedSavedJob.location}` : ''}
+                  {selectedSavedJob.location ? ` · ${selectedSavedJob.location}` : ''}
                 </div>
               </div>
             )}
@@ -503,7 +501,7 @@ export function LetterGenerator({
                     disabled={run.isBusy}
                   />
                   <span className="mt-1 block text-xs text-base-content/50">
-                    Optional, but the draft is only as specific as the posting text you give it.
+                    Optional. More posting detail allows a more specific draft.
                   </span>
                 </label>
               </div>
@@ -519,8 +517,7 @@ export function LetterGenerator({
             )}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
-                No CVs saved yet. Upload one on the Search page and choose “Save to CV library”, then
-                come back here.
+                No CVs saved yet. Add one to the CV library, then return here.
               </p>
             ) : (
               <label className="block">
@@ -613,8 +610,7 @@ export function LetterGenerator({
               />
             </label>
             <p className="mt-1 text-xs text-base-content/50">
-              Optional. Instructions never override the rule that nothing may be claimed the CV does
-              not support.
+              Optional. The document cannot claim anything your CV does not support.
             </p>
           </section>
 
@@ -629,7 +625,7 @@ export function LetterGenerator({
             )}
             {confirmRegenerate && !run.isBusy && (
               <div className="alert alert-soft flex-col items-start gap-2 text-sm" role="alert">
-                <span>This replaces the current text, and it has unsaved edits.</span>
+                <span>This will replace your unsaved edits.</span>
                 <div className="flex gap-2">
                   <button className="btn btn-sm btn-primary" type="button" onClick={startRun}>
                     Regenerate anyway
@@ -649,7 +645,7 @@ export function LetterGenerator({
               </p>
             )}
             <p className="text-xs text-base-content/50">
-              Generated on your own Claude Code CLI through AgentDock. Nothing is sent to a
+              Generated through your selected local CLI and AgentDock. Nothing is sent to a
               letter-writing service.
             </p>
           </div>
@@ -793,8 +789,8 @@ export function LetterGenerator({
               }}
             />
             <p className="mt-2 text-xs text-base-content/50">
-              A first draft written from your CV and the posting text above. Read it before you send
-              it — you are responsible for the final text.
+              A first draft based on your CV and the posting text above. Review it before sending.
+              You are responsible for the final text.
             </p>
           </div>
         ) : (

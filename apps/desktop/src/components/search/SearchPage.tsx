@@ -38,10 +38,10 @@ const SALARY_NOTE: Record<SearchMarket, string> = {
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
  *
  * The normalisation in `results.ts` already assembles this per market, because only it knows which
- * fields each pipeline genuinely carries — the Netherlands report contributes title/company/
+ * fields each report carries. The Netherlands report contributes title/company/
  * location/url and nothing more, while a worldwide discovery row can also contribute employment
  * type and the advertised salary triple. Re-deriving that here would mean guessing at fields the
- * selected market may not have, so this function is a named seam over that decision rather than a
+ * selected market may not have. This function exposes that mapping rather than creating a
  * second, competing mapping. `description`/`requirements` stay absent for both markets: neither
  * pipeline stores the posting text, and the prompt builders say so to the model explicitly.
  */
@@ -54,9 +54,9 @@ export function toVacancyLead(result: SearchResult): VacancyLead {
  *
  * `verification` stores the label the search page itself showed, so a worldwide row is saved as
  * "Not available for this market" rather than as an empty (and later re-readable as "unverified")
- * cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score — a real
- * 0-100 figure against the engine's configured candidate profile — and stays null for worldwide,
- * which computes no score. It is not a comparison against any CV in the library; the only real CV
+ * cell. `matchPercent` takes the Netherlands report's deterministic relevance score, a
+ * 0-100 figure against the configured candidate profile, and stays null for worldwide,
+ * which computes no score. It is not a comparison against any CV in the library; the only CV
  * comparison in this app is the on-demand gap analysis.
  */
 export function savedJobInputFor(result: SearchResult): SavedJobInput {
@@ -90,16 +90,16 @@ function describeError(error: unknown, fallback: string): string {
 }
 
 /**
- * Top-level Search screen: one market selector over two genuinely different scan pipelines, a
+ * Top-level Search screen: one market selector over two different scan pipelines, a
  * client-side filter bar, a results list and a detail pane.
  *
- * The lifecycle rule is hydrate-then-optionally-scan, as on the Vacancy Leads panel it replaces:
+ * Load the stored report first, then scan only when requested, matching the earlier Search panel:
  * opening the page (or switching market) reads whatever report that pipeline last produced and
- * never starts a network scan on its own. Scanning hits real external feeds and can take a couple
+ * never starts a network scan on its own. Scanning contacts external feeds and can take a couple
  * of minutes, so it is always something the user asked for.
  *
- * Filtering is entirely client-side over the loaded report — narrowing a search must never trigger
- * a scan — which is why "Search" only runs a scan when the selected market has nothing loaded yet,
+ * Filtering happens over the loaded report. Narrowing a search must never trigger a scan. This is
+ * why "Search" only runs a scan when the selected market has nothing loaded yet,
  * and a separate "Rescan sources" action exists once it does.
  */
 export function SearchPage() {
@@ -136,12 +136,12 @@ export function SearchPage() {
         if (status.ready) setEngineState('ready');
         else {
           setEngineState('unavailable');
-          setEngineError(status.error ?? 'vacancy engine is not ready');
+          setEngineError(status.error ?? 'The vacancy search service is not ready.');
         }
       } catch (error) {
         if (cancelled) return;
         setEngineState('unavailable');
-        setEngineError(describeError(error, 'failed to reach the vacancy engine'));
+        setEngineError(describeError(error, 'Could not reach the vacancy search service.'));
       }
     })();
     return () => {
@@ -149,7 +149,7 @@ export function SearchPage() {
     };
   }, []);
 
-  // Hydrate the market's last report. Both branches are `getReport`-style reads of stored output;
+  // Load the market's last report. Both branches are `getReport`-style reads of stored output;
   // neither runs a scan, so opening the page costs nothing and shows what is already known.
   useEffect(() => {
     if (hydratedMarkets.current.has(market)) {
@@ -175,7 +175,7 @@ export function SearchPage() {
         hydratedMarkets.current.add(market);
       } catch (error) {
         if (cancelled) return;
-        setLoadError(describeError(error, `could not load the ${marketLabel(market)} report`));
+        setLoadError(describeError(error, `Could not load the ${marketLabel(market)} report.`));
       } finally {
         if (!cancelled) setHydrating(false);
       }
@@ -267,7 +267,7 @@ export function SearchPage() {
       }
       hydratedMarkets.current.add(market);
     } catch (error) {
-      setScanError(describeError(error, 'scan failed'));
+      setScanError(describeError(error, 'The scan failed.'));
     } finally {
       setScanning(false);
     }
@@ -311,7 +311,7 @@ export function SearchPage() {
       setSavedKeys((current) => new Set(current).add(key));
     } catch (error) {
       setSaveStates((current) => ({ ...current, [key]: 'idle' }));
-      setSaveErrors((current) => ({ ...current, [key]: describeError(error, 'could not save this job') }));
+      setSaveErrors((current) => ({ ...current, [key]: describeError(error, 'Could not save this job.') }));
     }
   }, [selected]);
 
@@ -345,14 +345,14 @@ export function SearchPage() {
       <div className="flex-none">
         {engineState === 'unavailable' && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
-            shown, but no new scan can run.
+            Vacancy search unavailable: {engineError ?? 'Unknown error'}. Stored reports may still
+            be shown, but you cannot run a new scan.
           </div>
         )}
         {scanning && (
           <div className="alert alert-info mt-3 text-sm">
-            Scanning live {marketLabel(market)} sources — this hits real external APIs and feeds, and
-            can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.
+            Scanning live {marketLabel(market)} sources. This contacts external APIs and feeds and
+            may take 10 seconds to 2 minutes.
           </div>
         )}
         {scanError && (
@@ -367,7 +367,7 @@ export function SearchPage() {
         )}
         {report && (
           <p className="mt-2 text-xs text-base-content/60">
-            Run {report.runId} · generated {new Date(report.generatedAt).toLocaleString()}
+            Scan ID {report.runId} · generated {new Date(report.generatedAt).toLocaleString()}
           </p>
         )}
       </div>
@@ -377,8 +377,8 @@ export function SearchPage() {
       ) : !hasReport ? (
         <EmptyState
           illustration={emptySearchIllustration}
-          title="No search yet"
-          description={`No ${marketLabel(market)} scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from this market's sources.`}
+          title="No report yet"
+          description={`Run a ${marketLabel(market)} scan to load vacancies from this market's sources.`}
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={() => void runScan()} disabled={busy}>
               Run the first scan
@@ -417,7 +417,7 @@ export function SearchPage() {
             <div className="min-w-0 flex-1">
               <EmptyState
                 title="Select a vacancy"
-                description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
+                description="Select a vacancy to view its verification details, save it, or compare it with your CV."
               />
             </div>
           )}

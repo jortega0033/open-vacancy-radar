@@ -31,18 +31,18 @@ export function App() {
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
 
-  // The provider AI features (gap analysis, letters) currently run through — a persisted setting
+  // The provider AI features (gap analysis, letters) currently run through a persisted setting
   // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
   // and header labels need it; RuntimePage owns the actual read/write of the setting and reports
   // changes back up via `onDefaultProviderChanged` so this label updates without a re-fetch.
   const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
 
   // Settings hydration is async, so the user can already have clicked a nav item by the time it
-  // lands. Restoring the remembered start page at that point would yank them off the page they
+  // lands. Restoring the remembered start page at that point would move them from the page they
   // deliberately opened, so hydration only ever sets the page if nothing else has.
   const hasNavigatedRef = useRef(false);
 
-  // Hydrate shell state from the persisted settings row. Every failure mode here is non-fatal on
+  // Load shell state from the persisted settings row. Every failure mode here is non-fatal on
   // purpose: an unavailable workspace database should cost the user their remembered sidebar
   // state and nothing else, so the app still opens on the default page with the default theme.
   useEffect(() => {
@@ -93,9 +93,10 @@ export function App() {
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
     void window.workspace?.updateSettings({ lastOpenedPage: page }).catch(() => {});
-    // Cheap re-sync for the sidebar's badge counts: whichever page the user is leaving may have
+    // Refresh the sidebar badge counts because the page the user is leaving may have
     // just changed saved jobs/applications/letters, and there's no per-page mutation callback for
-    // three of the five pages, so refreshing on every navigation is simpler than wiring one to each.
+    // three of the five pages, so refreshing on every navigation is simpler than adding a
+    // callback to each.
     void refreshCounts();
   }, [refreshCounts]);
 
@@ -126,7 +127,7 @@ export function App() {
 
     const timeout = setTimeout(() => {
       setDaemonState((current) => (current === 'connecting' ? 'unavailable' : current));
-      setDaemonError((current) => current ?? 'timed out waiting for the local daemon to start');
+      setDaemonError((current) => current ?? 'Timed out waiting for the local AI runtime to start.');
     }, DAEMON_CONNECT_TIMEOUT_MS);
 
     return () => {
@@ -161,9 +162,13 @@ export function App() {
         <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
           {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
               destination you are on, "the CLI runtime is not running" is worth knowing. */}
-          {daemonState === 'connecting' && <div className="alert alert-info mb-5">Connecting to local daemon…</div>}
+          {daemonState === 'connecting' && (
+            <div className="alert alert-info mb-5">Connecting to local AI runtime…</div>
+          )}
           {daemonState === 'unavailable' && (
-            <div className="alert alert-error alert-soft mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</div>
+            <div className="alert alert-error alert-soft mb-5">
+              Local AI runtime unavailable: {daemonError ?? 'Unknown error'}
+            </div>
           )}
 
           {nav === 'search' && <SearchPage />}

@@ -41,7 +41,7 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   };
 }
 
-/** Empty string on an optional free-text field means "not set" — send `null`, not `''`. */
+/** An empty optional text field means "not set." Send `null`, not `''`. */
 function blankToNull(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
@@ -50,7 +50,7 @@ function blankToNull(value: string): string | null {
 /**
  * Right-side add/edit drawer for a saved job, per the prototype's `EntityEditorDrawer`
  * (`export-src.html` Saved Jobs row "Edit" action / "Add job manually" button). A plain fixed
- * panel with a Tailwind slide-in transition — no drawer library needed for one form.
+ * panel with a Tailwind slide-in transition. One form does not need a drawer library.
  *
  * Mounted only while a drawer is open (see `SavedJobsPage`), keyed by the job id so switching
  * between "add" and "edit" (or between two different rows) always starts from a fresh form
@@ -69,7 +69,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (form.role.trim() === '' || form.company.trim() === '') {
-      setValidationError('Role and company are required');
+      setValidationError('Role and company are required.');
       return;
     }
     setValidationError(undefined);
@@ -137,7 +137,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               onChange={(e) => set('market', e.target.value as Market)}
             >
               <option value="netherlands">Netherlands</option>
-              <option value="worldwide">Worldwide</option>
+              <option value="worldwide">Worldwide / Remote</option>
             </select>
           </label>
 
@@ -164,7 +164,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm font-medium">Arrangement</span>
+            <span className="mb-1 block text-sm font-medium">Work arrangement</span>
             <input
               className="input w-full"
               type="text"

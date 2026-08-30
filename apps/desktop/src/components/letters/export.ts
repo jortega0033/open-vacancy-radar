@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 import type { SaveFileResult } from '../../window.js';
 
 /** Strips characters invalid in a Windows/macOS filename and collapses whitespace, so a letter
- * title like "Senior Frontend Engineer / Redwood?" becomes a real, usable suggested filename. */
+ * title like "Senior Frontend Engineer / Redwood?" becomes a valid suggested filename. */
 export function sanitizeFileName(title: string): string {
   const cleaned = title
     .replace(/[\\/:*?"<>|]/g, ' ')

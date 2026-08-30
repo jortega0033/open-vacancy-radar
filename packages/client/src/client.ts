@@ -23,7 +23,7 @@ import {
 import { parseSseStream } from './sse.js';
 
 export interface AgentDockClientOptions {
-  /** e.g. `http://127.0.0.1:54321` — no trailing slash required. */
+  /** For example, `http://127.0.0.1:54321`. A trailing slash is not required. */
   baseUrl: string;
   token: string;
   /** Injectable for tests; defaults to the ambient global `fetch`. */
@@ -50,7 +50,7 @@ export interface SessionEventsOptions {
  *
  * No reconnect logic: `sessions.events()` opens exactly one stream and ends when the daemon
  * closes it (at the session's terminal event) or `signal` aborts. If the connection drops for any
- * other reason, the generator throws — call `sessions.events()` again to resume; because the
+ * other reason, the generator throws. Call `sessions.events()` again to resume. Because the
  * daemon replays its full stored event history to a fresh subscriber (or from `lastEventId`
  * onward), a bare retry is a complete, correct "reconnect" with no separate resume protocol needed.
  */
@@ -73,8 +73,8 @@ export class AgentDockClient {
     cancel: (id: string): Promise<void> => this.cancelSession(id),
     delete: (id: string): Promise<void> => this.deleteSession(id),
     /** Cancels every in-flight session on the daemon. Used by the desktop shutdown path so
-     * quitting the app doesn't orphan any session besides the one it happens to be tracking —
-     * see electron/main.ts#killDaemon. */
+     * quitting the app does not orphan sessions that the current window is not tracking. See
+     * electron/main.ts#killDaemon. */
     cancelAll: (): Promise<void> => this.cancelAllSessions(),
   };
 
@@ -93,7 +93,7 @@ export class AgentDockClient {
     if (!this.compatibilityCheck) {
       this.compatibilityCheck = this.checkCompatibility().catch((err: unknown) => {
         // Don't let a transient failure (daemon still starting up, briefly unreachable) poison
-        // every future call — the next one gets a fresh check.
+        // every future call. The next one gets a fresh check.
         this.compatibilityCheck = undefined;
         throw err;
       });
@@ -106,17 +106,17 @@ export class AgentDockClient {
     try {
       res = await this.fetchImpl(`${this.baseUrl}/health`);
     } catch (err) {
-      throw new DaemonUnavailableError(`could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
+      throw new DaemonUnavailableError(`Could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
         cause: err,
       });
     }
     if (!res.ok) {
-      throw new DaemonUnavailableError(`daemon health check failed with status ${res.status}`);
+      throw new DaemonUnavailableError(`Daemon health check failed with status ${res.status}.`);
     }
     const json = await res.json().catch(() => undefined);
     const parsed = healthResponseSchema.safeParse(json);
     if (!parsed.success) {
-      throw new ValidationError(`daemon /health response did not match the expected shape: ${parsed.error.message}`);
+      throw new ValidationError(`Daemon /health response did not match the expected shape: ${parsed.error.message}`);
     }
     if (parsed.data.protocolVersion !== AGENT_DOCK_PROTOCOL_VERSION) {
       throw new ProtocolMismatchError(AGENT_DOCK_PROTOCOL_VERSION, parsed.data.protocolVersion);
@@ -138,7 +138,7 @@ export class AgentDockClient {
         headers: { ...(init.headers ?? {}), Authorization: `Bearer ${this.token}` },
       });
     } catch (err) {
-      throw new DaemonUnavailableError(`could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
+      throw new DaemonUnavailableError(`Could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
         cause: err,
       });
     }
@@ -148,7 +148,7 @@ export class AgentDockClient {
 
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      const message = body.error ?? `daemon request failed with status ${res.status}`;
+      const message = body.error ?? `Daemon request failed with status ${res.status}.`;
       if (res.status === 400) throw new ValidationError(message);
       throw new DaemonError(message, res.status);
     }
@@ -164,7 +164,7 @@ export class AgentDockClient {
 
   private async getProvider(id: ProviderId): Promise<ProviderStatus> {
     const raw = await this.request<unknown>(`/providers/${encodeURIComponent(id)}`, undefined, {
-      notFound: () => new ProviderUnavailableError(`provider not registered: ${id}`),
+      notFound: () => new ProviderUnavailableError(`Provider not registered: ${id}.`),
     });
     return validate(providerStatusSchema, raw, 'provider status');
   }
@@ -203,7 +203,7 @@ export class AgentDockClient {
       });
     } catch (err) {
       if (options.signal?.aborted) return; // caller cancelled before/while connecting; not an error
-      throw new DaemonUnavailableError(`could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
+      throw new DaemonUnavailableError(`Could not reach the daemon at ${this.baseUrl}: ${errorMessage(err)}`, {
         cause: err,
       });
     }
@@ -212,7 +212,7 @@ export class AgentDockClient {
     if (res.status === 404) throw new SessionNotFoundError(id);
     if (!res.ok || !res.body) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new DaemonError(body.error ?? `failed to open event stream (status ${res.status})`, res.status);
+      throw new DaemonError(body.error ?? `Failed to open event stream (status ${res.status}).`, res.status);
     }
 
     yield* parseSseStream(res.body, options.signal);
@@ -242,7 +242,7 @@ export class AgentDockClient {
 function validate<T>(schema: { safeParse: (v: unknown) => { success: boolean; data?: T; error?: { message: string } } }, raw: unknown, label: string): T {
   const result = schema.safeParse(raw);
   if (!result.success) {
-    throw new ValidationError(`daemon returned a ${label} that does not match the protocol: ${result.error?.message}`);
+    throw new ValidationError(`Daemon returned a ${label} that does not match the protocol: ${result.error?.message}`);
   }
   return result.data as T;
 }

@@ -10,9 +10,9 @@ afterEach(() => {
 });
 
 /**
- * Compile-time contract, not a runtime one: the Vacancy Leads screen will hand these components a
+ * Compile-time contract, not a runtime one: the Search page hands these components a
  * `DiscoveryVacancyAudit` straight from the engine, so if that type ever stops satisfying
- * `VacancyLead` this file fails `pnpm typecheck` — before anyone wires the screens together.
+ * `VacancyLead`. This file then fails `pnpm typecheck`.
  */
 const _assignabilityCheck = (audit: DiscoveryVacancyAudit): VacancyLead => audit;
 void _assignabilityCheck;
@@ -56,7 +56,7 @@ describe('CvUpload', () => {
           .fn()
           .mockRejectedValue(
             new Error(
-              "Error invoking remote method 'cv:select-and-read': Error: no selectable text found in \"scan.pdf\"",
+              "Error invoking remote method 'cv:select-and-read': Error: No selectable text found in \"scan.pdf\".",
             ),
           ),
       },
@@ -66,7 +66,7 @@ describe('CvUpload', () => {
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('no selectable text found in "scan.pdf"');
+    expect(alert).toHaveTextContent('No selectable text found in "scan.pdf".');
     expect(alert).not.toHaveTextContent('invoking remote method');
   });
 

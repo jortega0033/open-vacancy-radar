@@ -10,7 +10,7 @@ const DEFAULT_MAX_LINE_BYTES = 10 * 1024 * 1024;
  * Decodes with a single stateful `TextDecoder` across the whole stream rather than calling
  * `Buffer#toString('utf8')` per chunk: a multi-byte UTF-8 character (e.g. an emoji or CJK text)
  * can legitimately land split across two raw chunks, and decoding each chunk independently turns
- * the split character into U+FFFD replacement characters — silent data corruption in whatever the
+ * the split character into U+FFFD replacement characters. This silently corrupts the
  * CLI actually said. `{ stream: true }` tells the decoder to hold back a trailing incomplete
  * sequence and prepend it to the next chunk instead.
  */
@@ -23,7 +23,7 @@ export async function* readLines(
   for await (const chunk of stream) {
     buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk as Buffer, { stream: true });
     if (Buffer.byteLength(buffer, 'utf8') > maxLineBytes) {
-      throw new Error(`line exceeded ${maxLineBytes} bytes without a newline`);
+      throw new Error(`Line exceeded ${maxLineBytes} bytes without a newline.`);
     }
     let newlineIndex: number;
     while ((newlineIndex = buffer.indexOf('\n')) >= 0) {

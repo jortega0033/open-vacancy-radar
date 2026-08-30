@@ -64,16 +64,16 @@ describe('LetterGenerator', () => {
     // The safety layer shared with the CV assistant travels with it.
     expect(prompt).toContain('Do not invent a hiring manager');
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Hi — I saw the frontend role.' });
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Hi, I saw the frontend role.' });
     expect(await screen.findByRole('log', { name: /letter being generated/i })).toHaveTextContent(
-      'Hi — I saw the frontend role.',
+      'Hi, I saw the frontend role.',
     );
 
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
     // On completion the stream hands over to an editable document.
     const body = await screen.findByRole('textbox', { name: /letter body/i });
-    expect(body).toHaveValue('Hi — I saw the frontend role.');
+    expect(body).toHaveValue('Hi, I saw the frontend role.');
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
   });
 
@@ -197,7 +197,7 @@ describe('LetterGenerator', () => {
 
     fireEvent.click(await waitForGenerateEnabled(/^regenerate$/i));
     expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
-    expect(await screen.findByText(/replaces the current text/i)).toBeInTheDocument();
+    expect(await screen.findByText(/replace your unsaved edits/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /keep my draft/i }));
     expect(bridges.agentDock.createSession).not.toHaveBeenCalled();

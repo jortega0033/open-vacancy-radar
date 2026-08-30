@@ -13,7 +13,7 @@ import type { NavPage } from './nav.js';
 /**
  * One Phosphor icon per destination, "regular" weight (the default) to match the app's flat,
  * near-monochrome aesthetic. Every Phosphor icon renders with `color: currentColor` by default, so
- * it inherits whatever `text-*` token its button carries and needs no per-theme handling — the
+ * it inherits the `text-*` token from its button and needs no per-theme handling. The
  * same property the hand-drawn icons this replaced relied on.
  */
 const NAV_ICON: Record<NavPage, Icon> = {

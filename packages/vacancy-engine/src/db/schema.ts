@@ -75,7 +75,7 @@ export const applicationStatusValues = [
  * PostgreSQL `timestamptz` columns become millisecond-resolution SQLite
  * integers. `timestamp_ms` round-trips to and from native JS `Date` objects,
  * so every existing call site keeps working unchanged, and unlike second
- * resolution it preserves sub-second ordering. That precision is load bearing:
+ * resolution it preserves sub-second ordering. That precision is required because
  * `mergeBraveCandidates` advances a catalog stamp by exactly one millisecond,
  * and the discovery/mapping regression guards compare those stamps with
  * `getTime()` equality against persisted values.

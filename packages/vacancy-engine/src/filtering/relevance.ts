@@ -222,7 +222,7 @@ function normalizeForMatching(value: string): string {
   return value
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/[–—]/g, '-')
+    .replace(/[\u2013\u2014]/g, '-')
     .replace(/[’]/g, "'")
     .toLowerCase();
 }

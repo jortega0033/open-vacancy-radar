@@ -62,7 +62,7 @@ Every production connector must:
 - distinguish complete, partial, empty, malformed, blocked, and transient outcomes;
 - remove or deactivate vacancies that the authoritative source no longer publishes;
 - isolate failure so one unavailable source cannot block other source scans;
-- ship with hermetic fixtures for valid, empty, malformed, duplicate, bounded, and failure cases;
+- ship with local, no-network fixtures for valid, empty, malformed, duplicate, bounded, and failure cases;
 - avoid collecting applicant data or storing response bodies, query strings, cookies, or secrets in
   diagnostics.
 

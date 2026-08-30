@@ -53,7 +53,7 @@ describe('RuntimePage', () => {
     expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
   });
 
-  it('renders real provider cards — installed/auth/version/capabilities — not the old prompt runner', async () => {
+  it('renders real provider cards with installed/auth/version/capabilities, not the old prompt runner', async () => {
     installAgentDockBridge();
     installWorkspaceBridge();
     render(<RuntimePage daemonState="ready" />);
@@ -68,7 +68,7 @@ describe('RuntimePage', () => {
     expect(screen.getByText('Codex')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not installed' })).toBeDisabled();
 
-    // The old boilerplate's session runner is gone.
+    // The previous session runner is gone.
     expect(screen.queryByPlaceholderText('/path/to/project')).not.toBeInTheDocument();
   });
 
@@ -87,7 +87,7 @@ describe('RuntimePage', () => {
     const onDefaultProviderChanged = vi.fn();
 
     render(<RuntimePage daemonState="ready" onDefaultProviderChanged={onDefaultProviderChanged} />);
-    await waitFor(() => expect(screen.getByText('Default ✓')).toBeInTheDocument()); // Claude starts as default
+    await waitFor(() => expect(screen.getByText('Current default')).toBeInTheDocument()); // Claude starts as default
 
     fireEvent.click(screen.getByRole('button', { name: 'Use as default' })); // Codex's button
 
@@ -106,7 +106,7 @@ describe('RuntimePage', () => {
 
     await waitFor(() => expect(screen.getByText(/executable detected/i)).toBeInTheDocument());
     expect(screen.getByText('/usr/local/bin/claude')).toBeInTheDocument();
-    expect(screen.getByText(/version check passed — 2\.4\.1/i)).toBeInTheDocument();
+    expect(screen.getByText(/version check passed: 2\.4\.1/i)).toBeInTheDocument();
   });
 
   it('verify reports a real failure when the default provider is not authenticated', async () => {

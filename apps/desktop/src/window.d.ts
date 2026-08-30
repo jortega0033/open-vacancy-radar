@@ -27,7 +27,7 @@ export interface VacancyRadarBridge {
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
   runScan(): Promise<GlobalRemoteReport>;
-  /** Netherlands pipeline — the IND recognised-sponsor scan. */
+  /** Netherlands pipeline: the IND recognised-sponsor scan. */
   getNetherlandsReport(): Promise<JobRadarReport | null>;
   runNetherlandsScan(): Promise<JobRadarReport>;
 }
@@ -37,7 +37,7 @@ export interface CvFile {
   text: string;
 }
 
-/** Mirror of `CvBridge` in electron/preload.ts — see the rationale for the narrow shape there. */
+/** Mirror of `CvBridge` in electron/preload.ts. See the rationale for the narrow shape there. */
 export interface CvBridge {
   selectAndRead(): Promise<CvFile | null>;
   getWorkspaceDir(): Promise<string>;
@@ -60,23 +60,23 @@ export interface SaveFileResult {
   path?: string;
 }
 
-/** Mirror of `SystemBridge` in electron/preload.ts — OS-level integration: login item, app
- * version, and the native save-file dialog used for real document export. */
+/** Mirror of `SystemBridge` in electron/preload.ts. OS-level integration: login item, app
+ * version, and the native save-file dialog used for document export. */
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
-  /** `app.getVersion()` — reads `package.json`'s `version`, so the About section can never drift
+  /** `app.getVersion()` reads the `package.json` version, so the About section can never drift
    * from what actually shipped. */
   getAppVersion(): Promise<string>;
   saveFile(input: SaveFileInput): Promise<SaveFileResult>;
 }
 
 /**
- * The workspace record/input types are *imported* from the Electron side rather than re-declared
- * here, unlike the three bridges above. Those are short enough that a hand-written mirror is
- * cheap and its drift would be obvious; the workspace contract is five entities × three shapes,
- * where a silent divergence between main and renderer is a real risk and re-typing it would be
- * pure duplication. The import is type-only, so nothing from `electron/` is ever pulled into the
- * renderer bundle — it is erased at compile time.
+ * The workspace record/input types are *imported* from the Electron side rather than re-declared.
+ * The smaller bridge interfaces above are easy to compare by hand;
+ * the workspace contract spans record, input, and patch types for several entities, where a silent
+ * difference between main and renderer is more likely and retyping it would duplicate the source.
+ * The import is type-only, so nothing from `electron/` enters the renderer bundle. It is erased at
+ * compile time.
  */
 export type {
   ApplicationFilter,

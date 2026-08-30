@@ -13,23 +13,23 @@ export interface SearchFilterBarProps {
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
   onSearch: () => void;
   onClear: () => void;
-  /** Provider ids present in the loaded report — never a hardcoded list. */
+  /** Provider ids present in the loaded report. Never a hardcoded list. */
   sources: string[];
   /** Employment types present in the loaded report (worldwide only). */
   employmentTypes: string[];
   busy: boolean;
   /** "Search" before the first scan, "Rescan sources" once a report is loaded. */
   searchLabel: string;
-  /** Whether a rescan is offered — only meaningful once something is already loaded. */
+  /** Whether a rescan is offered. Only meaningful once something is already loaded. */
   canRescan: boolean;
   onRescan: () => void;
-  /** One honest line about the money the current market's report actually carries. */
+  /** One line about the salary data available in the current market's report. */
   salaryNote: string;
 }
 
 /**
- * The search header: role/keyword, market, city/region, the search action, and — for the
- * Netherlands only — the IND sponsor filter, plus the secondary client-side filter chips.
+ * The search header: role/keyword, market, city/region, the search action, and, for the
+ * Netherlands only, the IND sponsor filter, plus the secondary local filters.
  *
  * Which secondary filters appear is driven by `supportedFilters(market)`, i.e. by what the
  * selected pipeline's data actually carries. The prototype's "experience level" chip is
@@ -126,13 +126,13 @@ export function SearchFilterBar({
         {supported.arrangement && (
           <select
             className="select select-xs w-36"
-            aria-label="Arrangement"
+            aria-label="Work arrangement"
             value={filters.arrangement}
             onChange={(event) =>
               onFiltersChange({ arrangement: event.target.value as SearchFilters['arrangement'] })
             }
           >
-            <option value="any">Any arrangement</option>
+            <option value="any">Any work arrangement</option>
             <option value="remote">Remote</option>
             <option value="hybrid">Hybrid</option>
             <option value="onsite">On-site</option>
@@ -195,8 +195,7 @@ export function SearchFilterBar({
 
       {supported.postedWithin && filters.postedWithin !== 'any' && (
         <p className="mt-2 text-xs text-base-content/60">
-          Vacancies with no known posting date are excluded while this filter is narrowed, so the
-          list means exactly what it says.
+          Vacancies without a known posting date are excluded by this filter.
         </p>
       )}
     </div>

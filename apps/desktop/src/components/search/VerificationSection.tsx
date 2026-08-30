@@ -33,17 +33,17 @@ export interface VerificationSectionProps {
 }
 
 /**
- * "Employer verification & sources", branched on the market's *real* capability.
+ * "Employer verification & sources", based on each market's supported checks.
  *
  * Netherlands: the pipeline resolves an employer to an IND recognised-sponsor legal entity, so
- * there is a genuine result to show — including which entity, at what mapping confidence, and
+ * there is a result to show, including which entity, at what mapping confidence, and
  * whether this vacancy was re-verified in the run that produced the report.
  *
  * Worldwide: the pipeline has no employer-verification step whatsoever. The panel says that
  * plainly instead of borrowing the Netherlands vocabulary; there is no "possible match" or "not
  * found" to report, because nothing was looked up. Where the same run happened to verify this
- * exact URL against an official employer/ATS source, that separate (vacancy-level, not
- * employer-level) evidence is shown for what it is.
+ * exact URL against an official employer career site or applicant tracking system, that separate
+ * (vacancy-level, not employer-level) evidence is shown for what it is.
  */
 export function VerificationSection({ result, sponsorSource, runId }: VerificationSectionProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -98,8 +98,8 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
               ))}
             </dl>
             <p className="mt-2.5 text-xs leading-relaxed text-base-content/60">
-              A vacancy&apos;s trading name can differ from the registered legal entity, so anything
-              below a high-confidence mapping needs manual review before you rely on sponsorship.
+              A vacancy&apos;s trading name can differ from the registered legal entity. Review any
+              mapping that is not a high-confidence match before relying on it for sponsorship.
               Recognition applies to the employer, never to a specific vacancy or to the terms it
               offers.
             </p>
@@ -121,7 +121,7 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
         </div>
         <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
           {result.verification.note} You can still compare this vacancy against your CV, save it,
-          generate a letter and track an application. Discovery source: {result.provider}. Discovery
+          generate a letter and track an application. Job source: {result.provider}. Discovery
           decision: {result.raw.decision.replace(/_/g, ' ')}.
         </p>
       </div>
@@ -131,14 +131,14 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
         {official ? (
           <>
             <p className="mt-1.5 text-sm text-base-content/70">
-              This exact URL was also fetched from an official employer/ATS source in this run —
-              a check on the <em>vacancy</em>, not on the employer.
+              This exact URL was also fetched from an official employer career site or applicant tracking system in this run.
+              This checks the <em>vacancy</em>, not the employer.
             </p>
             <KeyValue
               items={[
                 { k: 'Official source state', v: official.state },
                 { k: 'Decision', v: official.decision.replace(/_/g, ' ') },
-                { k: 'Provider', v: official.provider },
+                { k: 'Source', v: official.provider },
                 { k: 'Reviewed', v: formatDate(official.reviewedAt) },
               ]}
             />
@@ -152,9 +152,8 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
           </>
         ) : (
           <p className="mt-1.5 text-sm text-base-content/70">
-            This lead was not fetched from an official employer or ATS source in this run, so it is
-            a discovery lead only. Open the vacancy and confirm it on the employer&apos;s own site
-            before acting on it.
+            This vacancy came only from a job feed in this run. Open it and confirm the details
+            on the employer&apos;s own site before acting on it.
           </p>
         )}
       </div>

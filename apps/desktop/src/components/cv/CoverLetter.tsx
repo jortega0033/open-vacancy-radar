@@ -61,7 +61,7 @@ export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) 
     } catch (err) {
       // Clipboard access can be denied; say so rather than silently pretending it worked.
       setCopyState('failed');
-      setCopyError(describeError(err, 'could not copy to the clipboard'));
+      setCopyError(describeError(err, 'Could not copy to the clipboard.'));
     }
     copyTimeoutRef.current = setTimeout(() => setCopyState('idle'), COPY_FEEDBACK_MS);
   }, [run.text]);
@@ -71,8 +71,8 @@ export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) 
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Cover letter</div>
         <p className="text-sm text-base-content/60">
-          A motivation letter for this specific vacancy, written from your actual CV. Read it before
-          you send it — it is a first draft, not a submission.
+          A motivation letter for this vacancy, based on your CV. Review it before sending. It is a
+          first draft, not a submission.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}

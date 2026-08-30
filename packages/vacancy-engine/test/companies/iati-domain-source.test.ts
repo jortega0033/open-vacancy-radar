@@ -39,7 +39,7 @@ describe('IATI reporting-org domain source', () => {
     ]);
   });
 
-  it('follows same-feed pagination through the cached HTTP seam', async () => {
+  it('follows same-feed pagination through the cached HTTP client', async () => {
     const http = new FixtureHttpClient(
       new Map([
         [IATI_REPORTING_ORGS_URL, await fixture('iati-page-1.json')],

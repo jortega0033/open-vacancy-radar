@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /**
- * Personal workspace data (saved jobs, applications, CV library, generated letters, settings) —
- * deliberately a separate small schema/database from `@open-vacancy-radar/vacancy-engine`'s.
+ * Personal workspace data (saved jobs, applications, CV library, generated letters, settings)
+ * uses a separate small schema and database from `@open-vacancy-radar/vacancy-engine`.
  * The engine's database is scan/discovery state with its own lifecycle (migrations, advisory
  * locks, content-hash reuse); this is plain per-user CRUD the desktop app owns outright. Keeping
  * them apart means neither schema's migration history constrains the other.
  *
- * `market` is deliberately just the two tracks this app can actually search — 'netherlands' (the
- * IND-sponsor pipeline) and 'worldwide' (the global-remote pipeline) — not an invented per-country
+ * `market` contains only the two tracks this app can search: 'netherlands' (the
+ * IND-sponsor pipeline) and 'worldwide' (the global-remote pipeline). It is not an invented per-country
  * list. There is no real backend for a UK/DE/US/etc. structured search today; adding fake markets
  * here would be a UI promise the app can't keep.
  */
@@ -38,10 +38,10 @@ export const cvDocuments = sqliteTable('cv_documents', {
   name: text('name').notNull(),
   kind: text('kind', { enum: ['uploaded', 'manual'] }).notNull(),
   targetRole: text('target_role').notNull().default(''),
-  /** Full extracted text for an uploaded CV (PDF/txt/md) — what the AI features actually read.
+  /** Full extracted text for an uploaded CV (PDF/txt/md), which the AI features read.
    * Empty for a manual profile, which instead relies entirely on `profile`. */
   text: text('text').notNull().default(''),
-  /** Structured profile fields, editable regardless of kind — { title, years, location,
+  /** Structured profile fields, editable regardless of kind: { title, years, location,
    * languages, skills: string[], summary, auth }. */
   profile: text('profile', { mode: 'json' }).notNull().$type<{
     title: string;
@@ -68,7 +68,7 @@ export const letters = sqliteTable('letters', {
   status: text('status', { enum: ['draft', 'final', 'sent'] }).notNull().default('draft'),
   vacancyKey: text('vacancy_key'),
   cvId: text('cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
-  /** The generated letter body, as returned by the AI session — plain text, user-editable. */
+  /** The generated letter body as returned by the AI session. Plain text and user-editable. */
   body: text('body').notNull().default(''),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
@@ -93,7 +93,7 @@ export const applications = sqliteTable('applications', {
   archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
 });
 
-/** Single fixed row (id fixed at 1) — this is app-wide preference state, not a multi-row table. */
+/** Single fixed row (id fixed at 1). This stores app-wide preferences, not a multi-row collection. */
 export const appSettings = sqliteTable('app_settings', {
   id: integer('id').primaryKey().default(1),
   launchAtLogin: integer('launch_at_login', { mode: 'boolean' }).notNull().default(false),

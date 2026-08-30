@@ -20,7 +20,7 @@ export interface ProviderRunConfig {
   describeFailure?(stderr: string, code: number | null, signal: NodeJS.Signals | null): string;
   /**
    * When true, the prompt is written to the child's stdin instead of appearing anywhere in argv
-   * (AD-05) — set by an adapter whose CLI supports reading its prompt from stdin. Adapters that
+   * (AD-05). Set this in an adapter whose CLI supports reading its prompt from stdin. Adapters that
    * don't set this keep the previous behavior (`buildArgs` embeds the prompt itself; stdin is
    * closed immediately with nothing written).
    */
@@ -44,13 +44,13 @@ export function runProviderSession(
 
   /**
    * Enqueues an EVENT_OVERFLOW error followed by session.failed, bypassing the channel's normal
-   * cap (see AsyncChannel.closeWith) — the fix for AD-10: an overflowed channel must still
+   * cap (see AsyncChannel.closeWith). This is the AD-10 fix: an overflowed channel must still
    * deliver exactly one terminal event, not silently strand every subscriber in "running".
    */
   function closeWithOverflow(): void {
     channel.closeWith([
-      { type: 'error', code: 'EVENT_OVERFLOW', message: 'session event buffer overflowed', recoverable: false },
-      { type: 'session.failed', message: 'session event buffer overflowed' },
+      { type: 'error', code: 'EVENT_OVERFLOW', message: 'Session event buffer overflowed.', recoverable: false },
+      { type: 'session.failed', message: 'Session event buffer overflowed.' },
     ]);
   }
 
@@ -65,10 +65,10 @@ export function runProviderSession(
         {
           type: 'error',
           code: 'INVALID_CWD',
-          message: `working directory does not exist: ${options.cwd}`,
+          message: `Working directory does not exist: ${options.cwd}.`,
           recoverable: false,
         },
-        { type: 'session.failed', message: 'invalid working directory' },
+        { type: 'session.failed', message: 'Invalid working directory.' },
       ]);
       return;
     }
@@ -79,10 +79,10 @@ export function runProviderSession(
         {
           type: 'error',
           code: 'PROVIDER_NOT_INSTALLED',
-          message: `${config.executableNames[0]} executable not found on this machine`,
+          message: `${config.executableNames[0]} executable was not found on this machine.`,
           recoverable: false,
         },
-        { type: 'session.failed', message: 'provider executable not found' },
+        { type: 'session.failed', message: 'Provider executable not found.' },
       ]);
       return;
     }
@@ -95,7 +95,7 @@ export function runProviderSession(
     const args = config.buildArgs(options);
     logger.info(`${config.providerId}: starting session`, { sessionId: options.sessionId });
     spawned = spawnProcess(exePath, args, { cwd: options.cwd, env: options.env });
-    // AD-05: when the adapter supports it, the prompt travels over stdin rather than argv — see
+    // AD-05: when the adapter supports it, the prompt travels over stdin rather than argv. See
     // ProviderRunConfig.promptViaStdin and build-args.ts for why. `.write()` followed immediately
     // by `.end()` is safe and standard: Node buffers and flushes the write before actually
     // closing the stream, no explicit wait needed here, and preserves the string exactly
@@ -139,7 +139,7 @@ export function runProviderSession(
       channel.push({
         type: 'error',
         code: 'STREAM_READ_FAILED',
-        message: `failed reading ${config.providerId} output: ${(err as Error).message}`,
+        message: `Failed to read ${config.providerId} output: ${(err as Error).message}`,
         recoverable: false,
       });
     }
@@ -162,7 +162,7 @@ export function runProviderSession(
       const stderrText = stderrChunks.join('');
       if (stderrText.trim()) {
         // Bounded and at warn (shown by default): a session failure with no visible reason is
-        // unusable for debugging. This is the CLI's own diagnostic output, not daemon secrets —
+        // unusable for debugging. This is the CLI's own diagnostic output, not daemon secrets.
         // still capped, since we can't guarantee a third-party CLI never echoes something
         // sensitive to stderr.
         logger.warn(`${config.providerId}: process exited non-zero`, {
@@ -183,8 +183,8 @@ export function runProviderSession(
   run().catch((err) => {
     logger.error(`${config.providerId}: adapter crashed`, { message: (err as Error).message });
     channel.closeWith([
-      { type: 'error', code: 'ADAPTER_CRASH', message: 'internal adapter error', recoverable: false },
-      { type: 'session.failed', message: 'internal adapter error' },
+      { type: 'error', code: 'ADAPTER_CRASH', message: 'Internal adapter error.', recoverable: false },
+      { type: 'session.failed', message: 'Internal adapter error.' },
     ]);
   });
 
@@ -199,7 +199,7 @@ export function runProviderSession(
 
 /**
  * Falls back to this when an adapter doesn't provide its own `describeFailure`. A bare "exited
- * with code 1" tells a developer nothing actionable — include a short stderr snippet so a session
+ * with code 1" does not explain the cause. Include a short stderr snippet so a session
  * failure is debuggable without needing to run the daemon with debug logging just to see why.
  */
 function defaultFailureMessage(

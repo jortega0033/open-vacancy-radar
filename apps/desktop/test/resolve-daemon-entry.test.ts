@@ -37,7 +37,7 @@ describe('resolveDaemonEntry', () => {
   });
 
   it('packaged app never falls back to tsx even if fileExists lies and says nothing exists', () => {
-    // Regression guard: packaged mode must not have any code path that reaches the tsx fallback —
+    // Regression guard: packaged mode must not have any code path that reaches the tsx fallback.
     // there is no tsx dependency and no .ts source shipped in a packaged build.
     const entry = resolveDaemonEntry({
       mainDir: MAIN_DIR,

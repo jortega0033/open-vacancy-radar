@@ -23,7 +23,7 @@ function grantingLock(): CountingLock {
   return lock;
 }
 
-/** A lock already held by somebody else — what a second process looks like from here. */
+/** A lock already held by somebody else, as seen by a second process. */
 const heldLock: ScanLock = { tryAcquire: () => null };
 
 function deferred<T>() {
@@ -48,7 +48,7 @@ describe('createScanGuard', () => {
     await expect(running).resolves.toBe('first');
   });
 
-  it('refuses a second scan of a DIFFERENT kind too — one guard covers both pipelines', async () => {
+  it('refuses a second scan of a different kind because one guard covers both pipelines', async () => {
     // The global-remote and Netherlands scans write the same engine database. A per-kind flag
     // would let them interleave, which is the bug this single shared guard exists to prevent.
     const guard = createScanGuard(() => grantingLock());

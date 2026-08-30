@@ -9,7 +9,7 @@ import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
- * testing here — default-CV promotion, foreign-key detachment, archive filtering — are behaviors
+ * testing here (default-CV promotion, foreign-key detachment and archive filtering) are behaviors
  * of the schema plus these functions together, and a stubbed Drizzle would assert nothing about
  * either.
  */
@@ -39,7 +39,7 @@ describe('settings', () => {
     expect(settings.sidebarCollapsed).toBe(false);
   });
 
-  it('is idempotent — reading twice does not create a second row or reset the first', () => {
+  it('is idempotent: reading twice does not create a second row or reset the first', () => {
     workspace.updateSettings(db, { theme: 'dark' });
     expect(workspace.getSettings(db).theme).toBe('dark');
     expect(workspace.getSettings(db).theme).toBe('dark');
@@ -53,7 +53,7 @@ describe('settings', () => {
   });
 
   it('updates cleanly even when the settings row does not exist yet', () => {
-    // First write of the session can arrive before any read — e.g. the user collapses the
+    // The first write of the session can arrive before any read. For example, the user collapses the
     // sidebar before anything has called getSettings.
     expect(workspace.updateSettings(db, { sidebarCollapsed: true }).sidebarCollapsed).toBe(true);
   });
@@ -119,7 +119,7 @@ describe('applications', () => {
 });
 
 describe('CV documents', () => {
-  const CV = { name: 'Jake — frontend', kind: 'uploaded' } as const;
+  const CV = { name: 'Jake: frontend', kind: 'uploaded' } as const;
 
   it('makes the first CV the default even when the caller did not ask', () => {
     const first = workspace.createCvDocument(db, CV);
@@ -128,7 +128,7 @@ describe('CV documents', () => {
 
   it('does not make a later CV the default unless asked', () => {
     workspace.createCvDocument(db, CV);
-    const second = workspace.createCvDocument(db, { ...CV, name: 'Jake — architect' });
+    const second = workspace.createCvDocument(db, { ...CV, name: 'Jake: architect' });
     expect(second.isDefault).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 /**
  * Plain-text, case-insensitive substring filter over the role/company of the already-fetched
- * saved-job list. Filtering happens client-side in the parent as the value changes — this
+ * saved-job list. Filtering happens in the parent as the value changes. This
  * component only owns the input itself, mirroring `vacancies/RoleSearchBox.tsx`.
  */
 export function SavedJobFilterBox({

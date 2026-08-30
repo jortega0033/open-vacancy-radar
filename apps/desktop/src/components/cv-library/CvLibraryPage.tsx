@@ -13,16 +13,12 @@ function describeError(err: unknown, fallback: string): string {
 }
 
 /**
- * "CV library" screen (`export-src.html` lines ~359-445): every CV document — uploaded or typed
- * in by hand — with an upload action, an "add manual profile" drawer that doubles as the edit
+ * "CV library" screen (`export-src.html` lines ~359-445): every uploaded or manually entered CV,
+ * with an upload action and an "add manual profile" drawer that doubles as the edit
  * form for any document's profile metadata, set-default, and delete.
  *
- * Deliberately not wired into `App.tsx` here, same as the other standalone page exports — the
- * shell's router picks pages up once each page agent's work has landed, without every agent
- * racing to edit the same file.
- *
  * Delete has no undo, unlike `SavedJobsPage`/the applications page. Those can offer one because
- * "undo" there is just re-creating an equivalent row via `createSavedJob`/`createApplication` —
+ * "undo" there is just re-creating an equivalent row via `createSavedJob`/`createApplication`.
  * every field on the record is something the user typed and the UI still has in hand right up to
  * the delete. A CV document's main value is its extracted `text`, and this screen never retains a
  * copy of that text once a row is saved (an uploaded file's text lives only in the database row,
@@ -45,7 +41,7 @@ export function CvLibraryPage() {
       setDocuments(rows);
       setLoadError(undefined);
     } catch (err) {
-      setLoadError(describeError(err, 'could not load your CV library'));
+      setLoadError(describeError(err, 'Could not load your CV library.'));
     }
   }, []);
 
@@ -56,7 +52,7 @@ export function CvLibraryPage() {
         const rows = await window.workspace.listCvDocuments();
         if (!cancelled) setDocuments(rows);
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load your CV library'));
+        if (!cancelled) setLoadError(describeError(err, 'Could not load your CV library.'));
       }
     }
     void load();
@@ -87,12 +83,12 @@ export function CvLibraryPage() {
   const handleSetDefault = useCallback(async (doc: CvDocumentRecord) => {
     setActionError(undefined);
     try {
-      // The whole refreshed library, so the previous default's demotion shows up too — see the
+      // The whole refreshed library, so the previous default's demotion shows up too. See the
       // bridge doc comment on `setDefaultCvDocument` for why re-fetching would be redundant here.
       const refreshed = await window.workspace.setDefaultCvDocument(doc.id);
       setDocuments(refreshed);
     } catch (err) {
-      setActionError(describeError(err, 'could not set this CV as default'));
+      setActionError(describeError(err, 'Could not set this CV as the default.'));
     }
   }, []);
 
@@ -111,7 +107,7 @@ export function CvLibraryPage() {
       await window.workspace.deleteCvDocument(doc.id);
       setDocuments((prev) => (prev ?? []).filter((row) => row.id !== doc.id));
     } catch (err) {
-      setActionError(describeError(err, 'could not delete this CV'));
+      setActionError(describeError(err, 'Could not delete this CV.'));
     }
   }, [deleteTarget]);
 
@@ -141,7 +137,7 @@ export function CvLibraryPage() {
       {!isLoading && !hasAnyDocuments && (
         <EmptyState
           illustration={emptyCvIllustration}
-          title="No CV on file"
+          title="No CVs on file"
           description="Upload a PDF, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>

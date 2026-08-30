@@ -25,7 +25,7 @@ function toAtsResponse(response: SafeHttpResponse): AtsHttpResponse {
   };
 }
 
-/** Adapts the shared safety-policy client to the deliberately small ATS seam. */
+/** Adapts the shared safety-policy client to the ATS HTTP interface. */
 export function createAtsHttpClient(httpClient: AtsHttpSafeClient): AtsHttpClient {
   return {
     async get(url, options) {

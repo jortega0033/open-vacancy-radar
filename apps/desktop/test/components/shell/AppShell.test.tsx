@@ -77,7 +77,7 @@ describe('AppSidebar', () => {
     }
   });
 
-  it('shows badge counts next to Saved Jobs, Applications and Letters — and only those', () => {
+  it('shows badge counts next to Saved Jobs, Applications and Letters, and only those', () => {
     render(<AppSidebar {...BASE} />);
     expect(screen.getByRole('button', { name: 'Saved Jobs' })).toHaveTextContent('3');
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveTextContent('2');
@@ -95,7 +95,7 @@ describe('AppSidebar', () => {
   it('keeps every destination reachable and named when collapsed, dropping only the visible label', () => {
     render(<AppSidebar {...BASE} collapsed />);
     // The accessible name survives via aria-label, so a collapsed rail is not a screen-reader
-    // dead end — but the text (and the badge) is genuinely gone, not just visually hidden.
+    // dead end, but the text (and the badge) is gone, not just visually hidden.
     expect(screen.getByRole('button', { name: 'Saved Jobs' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Saved Jobs' })).not.toHaveTextContent('3');
     expect(screen.queryByText('Open Vacancy Radar')).not.toBeInTheDocument();
@@ -190,8 +190,8 @@ describe('isNavPage', () => {
 
 describe('EmptyState', () => {
   it('renders its title and description', () => {
-    render(<EmptyState title="Applications — coming next" description="Your pipeline." />);
-    expect(screen.getByRole('heading', { name: 'Applications — coming next' })).toBeInTheDocument();
+    render(<EmptyState title="Applications: coming next" description="Your pipeline." />);
+    expect(screen.getByRole('heading', { name: 'Applications: coming next' })).toBeInTheDocument();
     expect(screen.getByText('Your pipeline.')).toBeInTheDocument();
   });
 
@@ -217,13 +217,13 @@ describe('App shell routing', () => {
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('switches page — and header — when a nav item is clicked', async () => {
+  it('switches the page and header when a nav item is clicked', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
 
-    // The real ApplicationsPage now renders here instead of a placeholder — its own test suite
+    // The real ApplicationsPage now renders here instead of a placeholder. Its own test suite
     // (test/components/applications/ApplicationsPage.test.tsx) covers its content in depth; this
     // level only needs to prove routing actually switched. Both the WorkspaceHeader's <h1> page
     // title and ApplicationsPage's own <h2> section heading say "Applications", so disambiguate

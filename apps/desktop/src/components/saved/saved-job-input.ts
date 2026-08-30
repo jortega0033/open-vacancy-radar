@@ -2,10 +2,10 @@ import type { SavedJobInput, SavedJobRecord } from '../../window.js';
 
 /**
  * Turns a persisted row back into the shape `createSavedJob` expects, dropping the
- * server-assigned `id`/`savedAt`. Used for the delete-undo flow: the delete is real and
- * irreversible, so "undo" is actually a fresh `createSavedJob` call with the same field values —
- * the recreated row gets a new id and a new `savedAt`, which is the expected, honest behavior for
- * an undo built on top of a real delete rather than a soft-delete/restore.
+ * server-assigned `id`/`savedAt`. Used for the delete-undo flow: the deletion is permanent and
+ * irreversible, so "undo" is a fresh `createSavedJob` call with the same field values. It is
+ * the recreated row gets a new id and a new `savedAt`, which is the expected behavior for
+ * an undo built on a permanent deletion rather than a soft-delete/restore.
  */
 export function toSavedJobInput(job: SavedJobRecord): SavedJobInput {
   return {

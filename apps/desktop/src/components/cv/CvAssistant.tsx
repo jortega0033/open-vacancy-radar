@@ -10,12 +10,12 @@ import type { CvDocument, VacancyLead } from './types.js';
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
  *
- * It owns exactly one piece of shared state — the loaded CV — so the two AI features below it read
+ * It owns exactly one piece of shared state, the loaded CV, so the two AI features below it read
  * the same document without the user uploading it twice. Everything else (session lifecycle,
  * streaming, errors) belongs to the individual feature components.
  */
 export interface CvAssistantProps {
-  /** The vacancy both features work against; null until the Vacancy Leads screen selects one. */
+  /** The vacancy both features work against; null until the Search page selects one. */
   vacancy: VacancyLead | null;
   /** Optional: skip the model picker and pin a model. */
   model?: string;
@@ -42,7 +42,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
     };
   }, []);
 
-  // Best effort: the model picker is a convenience, so a failed provider listing just hides it
+  // The model picker is optional, so a failed provider listing hides it
   // rather than blocking the feature (the CLI's own default model is always a valid choice).
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +67,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
       <div>
         <h2 className="text-lg font-semibold">CV assistant</h2>
         <p className="mt-1 text-sm text-base-content/60">
-          Runs on your own authenticated {providerLabel} CLI — this app never holds an API key.
+          Runs through your authenticated {providerLabel} CLI. This app never stores an API key.
         </p>
       </div>
 
@@ -90,7 +90,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         <div className="rounded-box border border-base-300 p-4 text-sm">
           <div className="font-semibold">{vacancy.title}</div>
           <div className="text-base-content/60">
-            {vacancy.company} — {vacancy.location}
+            {vacancy.company} · {vacancy.location}
           </div>
         </div>
       )}
@@ -99,7 +99,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         <label className="block">
           <span className="mb-1 block text-sm font-medium">Model</span>
           <select className="select w-full" value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="">Provider default</option>
+            <option value="">CLI default</option>
             {availableModels.map((id) => (
               <option key={id} value={id}>
                 {id}

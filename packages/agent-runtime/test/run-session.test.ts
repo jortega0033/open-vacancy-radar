@@ -73,7 +73,7 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
         executableNames: [process.execPath],
         buildArgs: () => [join(fixturesDir, 'fake-claude-failure.mjs')],
         parseLine: parseClaudeLine,
-        // no describeFailure — this is exactly how providers/claude/adapter.ts and
+        // No describeFailure, matching providers/claude/adapter.ts and
         // providers/codex/adapter.ts are configured in production.
       },
       { sessionId: 'test-session-2b', cwd, prompt: 'hello' },
@@ -144,7 +144,7 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
 
     const events = await collectEvents(handle.events);
     expect(events.some((e) => e.type === 'error' && e.code === 'INVALID_CWD')).toBe(true);
-    expect(events.at(-1)).toEqual({ type: 'session.failed', message: 'invalid working directory' });
+    expect(events.at(-1)).toEqual({ type: 'session.failed', message: 'Invalid working directory.' });
   });
 
   it('reports PROVIDER_NOT_INSTALLED when the executable cannot be found', async () => {

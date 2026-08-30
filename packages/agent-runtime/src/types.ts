@@ -10,7 +10,7 @@ export interface StartSessionOptions {
   /** One of the provider's `availableModels`, passed straight through to its CLI's model flag.
    * A provider with no model selection (no `availableModels`) ignores this field entirely. */
   model?: string;
-  /** Unset by every caller in this codebase today — the spawned process inherits the daemon's
+  /** Currently unset by every caller in this codebase. The spawned process inherits the daemon's
    * full `process.env` by default, deliberately, since the CLI needs its own PATH/HOME/etc. to
    * find its config and credentials. See SECURITY.md#environment-inheritance-a-deliberate-tradeoff-not-an-oversight. */
   env?: NodeJS.ProcessEnv;

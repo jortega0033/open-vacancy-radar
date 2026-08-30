@@ -7,9 +7,9 @@ import { readCvFile } from '../electron/cv-text.js';
 /**
  * The PDF path is the only place user-supplied file *content* (not just a path) is parsed by this
  * app, and it is the one branch of `readCvFile` that cv-text.test.ts cannot reach: that suite only
- * covers .txt/.md and the pre-parse guards, so `extractPdfText` — the lazy `unpdf` import, the
+ * covers .txt/.md and the pre-parse guards, so `extractPdfText` (the lazy `unpdf` import, the
  * `Uint8Array.from(buffer)` copy that exists because pdf.js may detach the buffer it is handed, and
- * the "scanned image, no selectable text" failure — was never executed by any test. A green suite
+ * the "scanned image, no selectable text" failure) was never executed by any test. A green suite
  * therefore said nothing about whether picking a PDF worked at all.
  *
  * These fixtures are built here rather than committed as binary files so what is being parsed is
@@ -58,7 +58,7 @@ async function writePdf(name: string, contentStream: string): Promise<string> {
   return path;
 }
 
-describe('readCvFile — real PDF extraction', () => {
+describe('readCvFile: real PDF extraction', () => {
   it('extracts the text layer of an actual parsed PDF, normalized', async () => {
     const path = await writePdf(
       'cv.pdf',
@@ -80,6 +80,6 @@ describe('readCvFile — real PDF extraction', () => {
     // returning "" here would send an empty CV to the model.
     const path = await writePdf('scan.pdf', '0 0 0 rg 20 20 260 260 re f');
 
-    await expect(readCvFile(path)).rejects.toThrow(/no selectable text found in "scan\.pdf"/);
+    await expect(readCvFile(path)).rejects.toThrow(/No selectable text found in "scan\.pdf"/);
   }, 30_000);
 });

@@ -5,15 +5,15 @@ import type { AgentEvent, ProviderId } from '@agent-dock/shared';
  * One-shot "send a prompt, stream the answer back" runner on top of the AgentDock bridge.
  *
  * This exists because both AI features need exactly the same lifecycle and exactly the same
- * failure discipline, and because that lifecycle has three ways to hang that a naive
- * `createSession` + `onSessionEvent` wiring gets wrong:
+ * failure handling. A direct combination of `createSession` and `onSessionEvent` does not handle
+ * these three stall conditions correctly:
  *
  * - **A session that never reaches a terminal event.** The daemon guarantees one, but a killed
  *   CLI, a dropped SSE stream, or a provider that stalls mid-answer would otherwise leave the UI
  *   spinning forever. `RUN_TIMEOUT_MS` converts that into an explicit, actionable failure.
  * - **A "successful" run that produced no text.** `session.completed` with an empty buffer is a
- *   failure from the user's point of view; surfacing it as an empty success panel is the worst
- *   possible outcome, so it is reported as an error.
+ *   failure from the user's point of view, so it is reported as an error instead of an empty
+ *   success panel.
  * - **Cross-talk between runs.** `onSessionEvent` is a process-wide stream; every event is
  *   filtered against a ref holding *this* run's session id, so a stale session (or the other
  *   feature's session) can never append text to this one.
@@ -32,7 +32,7 @@ export interface AgentRun {
   /** Everything the assistant has said so far, accumulated across `assistant.message` chunks. */
   text: string;
   error?: string;
-  /** True while a session is being created or is streaming — the "don't touch it yet" flag. */
+  /** True while a session is being created or is streaming. */
   isBusy: boolean;
   start(prompt: string, options?: AgentRunOptions): Promise<void>;
   cancel(): Promise<void>;
@@ -46,7 +46,7 @@ export interface AgentRun {
 export const RUN_TIMEOUT_MS = 240_000;
 
 /**
- * IPC rejections arrive as "Error invoking remote method 'x': Error: <the real message>". Showing
+ * IPC rejections arrive as "Error invoking remote method 'x': Error: <the useful message>". Showing
  * that verbatim buries the one part the user can act on.
  */
 export function describeError(err: unknown, fallback: string): string {
@@ -84,7 +84,7 @@ export function useAgentRun(): AgentRun {
           break;
         }
         case 'error': {
-          // Not terminal on its own — the daemon still owes us session.failed/completed — but
+          // Not terminal on its own. The daemon still owes us session.failed/completed, but this is
           // worth capturing so a completed-with-nothing run can explain itself.
           setError((current) => current ?? event.message);
           break;
@@ -94,7 +94,7 @@ export function useAgentRun(): AgentRun {
           sessionIdRef.current = undefined;
           if (textRef.current.trim().length === 0) {
             setStatus('failed');
-            setError((current) => current ?? 'the agent finished without returning any text');
+            setError((current) => current ?? 'The AI runtime finished without returning any text.');
           } else {
             setStatus('completed');
           }
@@ -104,7 +104,7 @@ export function useAgentRun(): AgentRun {
           clearWatchdog();
           sessionIdRef.current = undefined;
           setStatus('failed');
-          setError(event.message || 'the agent session failed');
+          setError(event.message || 'The AI session failed.');
           break;
         }
         case 'session.cancelled': {
@@ -150,13 +150,15 @@ export function useAgentRun(): AgentRun {
           if (sessionIdRef.current !== session.id) return;
           sessionIdRef.current = undefined;
           setStatus('failed');
-          setError(`no response after ${Math.round(RUN_TIMEOUT_MS / 1000)}s — the run was stopped; try again`);
+          setError(
+            `No response after ${Math.round(RUN_TIMEOUT_MS / 1000)} seconds. The run was stopped. Try again.`,
+          );
           void window.agentDock.cancelSession(session.id).catch(() => {});
         }, RUN_TIMEOUT_MS);
       } catch (err) {
         sessionIdRef.current = undefined;
         setStatus('failed');
-        setError(describeError(err, 'failed to start the agent session'));
+        setError(describeError(err, 'Could not start the AI session.'));
       }
     },
     [clearWatchdog],

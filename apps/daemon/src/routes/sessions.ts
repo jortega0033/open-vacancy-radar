@@ -12,22 +12,22 @@ export function registerSessionRoutes(
   app.post('/sessions', async (req, reply) => {
     const parsed = createSessionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      reply.code(400).send({ error: 'invalid request body', details: parsed.error.flatten() });
+      reply.code(400).send({ error: 'Invalid request body.', details: parsed.error.flatten() });
       return;
     }
     const { provider, cwd, prompt, resumeProviderSessionId, model } = parsed.data;
 
     const providerImpl = registry.get(provider);
     if (!providerImpl) {
-      reply.code(400).send({ error: `unsupported provider: ${provider}` });
+      reply.code(400).send({ error: `Unsupported provider: ${provider}.` });
       return;
     }
     if (resumeProviderSessionId && !(await providerImpl.detect()).capabilities.resume) {
-      reply.code(400).send({ error: `provider does not support resume: ${provider}` });
+      reply.code(400).send({ error: `Provider does not support resume: ${provider}.` });
       return;
     }
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
-      reply.code(400).send({ error: `working directory does not exist: ${cwd}` });
+      reply.code(400).send({ error: `Working directory does not exist: ${cwd}.` });
       return;
     }
 
@@ -38,12 +38,12 @@ export function registerSessionRoutes(
   app.get('/sessions/:sessionId', async (req, reply) => {
     const params = sessionIdParamSchema.safeParse(req.params);
     if (!params.success) {
-      reply.code(400).send({ error: 'invalid session id' });
+      reply.code(400).send({ error: 'Invalid session ID.' });
       return;
     }
     const session = sessionManager.get(params.data.sessionId);
     if (!session) {
-      reply.code(404).send({ error: 'session not found' });
+      reply.code(404).send({ error: 'Session not found.' });
       return;
     }
     reply.send(session);
@@ -52,11 +52,11 @@ export function registerSessionRoutes(
   app.get('/sessions/:sessionId/events', async (req, reply) => {
     const params = sessionIdParamSchema.safeParse(req.params);
     if (!params.success) {
-      reply.code(400).send({ error: 'invalid session id' });
+      reply.code(400).send({ error: 'Invalid session ID.' });
       return;
     }
     if (!sessionManager.get(params.data.sessionId)) {
-      reply.code(404).send({ error: 'session not found' });
+      reply.code(404).send({ error: 'Session not found.' });
       return;
     }
 
@@ -74,7 +74,7 @@ export function registerSessionRoutes(
 
     let ended = false;
     // Declared separately (not `const unsubscribe = subscribe(...)`) because the listener below
-    // can run *synchronously inside* this call (replaying already-stored events) — referencing
+    // can run *synchronously inside* this call while replaying stored events. Referencing
     // `unsubscribe` from inside it before a combined declaration+assignment finished initializing
     // would throw. `let` here is deliberate, not a lint slip.
     let unsubscribe: (() => void) | undefined;
@@ -94,7 +94,7 @@ export function registerSessionRoutes(
 
     if (!unsubscribe) {
       // Lost the race against a concurrent DELETE that ran between the existence check above and
-      // subscribe() — the session's runtime state is already gone. Without this, the already-200
+      // subscribe(); the session's runtime state is already gone. Without this, the already-200
       // response would stay open forever with no data and no close (the exact race the daemon
       // audit flagged for this route).
       reply.raw.end();
@@ -102,7 +102,7 @@ export function registerSessionRoutes(
     }
 
     // If the session was already terminal, the listener above fired synchronously during
-    // subscribe() (before `unsubscribe` was assigned) — clean it up now instead.
+    // subscribe() before `unsubscribe` was assigned. Clean it up now instead.
     if (ended) unsubscribe();
     else req.raw.on('close', () => unsubscribe?.());
   });
@@ -110,19 +110,19 @@ export function registerSessionRoutes(
   app.post('/sessions/:sessionId/cancel', async (req, reply) => {
     const params = sessionIdParamSchema.safeParse(req.params);
     if (!params.success) {
-      reply.code(400).send({ error: 'invalid session id' });
+      reply.code(400).send({ error: 'Invalid session ID.' });
       return;
     }
     const ok = await sessionManager.cancel(params.data.sessionId);
     if (!ok) {
-      reply.code(404).send({ error: 'session not found' });
+      reply.code(404).send({ error: 'Session not found.' });
       return;
     }
     reply.code(202).send({ status: 'cancelling' });
   });
 
   // Narrow, single-purpose route (not a generic process-control endpoint) so Electron's shutdown
-  // path can ask the daemon to cancel every in-flight session over HTTP — which Windows can
+  // path can ask the daemon to cancel every in-flight session over HTTP. Windows can
   // deliver reliably, unlike a real SIGTERM to the daemon process itself (child.kill() maps to
   // TerminateProcess on Windows, so the daemon's own SIGTERM handler never runs there; see
   // apps/desktop/electron/main.ts#killDaemon and SECURITY.md). AD-12.
@@ -134,12 +134,12 @@ export function registerSessionRoutes(
   app.delete('/sessions/:sessionId', async (req, reply) => {
     const params = sessionIdParamSchema.safeParse(req.params);
     if (!params.success) {
-      reply.code(400).send({ error: 'invalid session id' });
+      reply.code(400).send({ error: 'Invalid session ID.' });
       return;
     }
     const ok = await sessionManager.remove(params.data.sessionId);
     if (!ok) {
-      reply.code(404).send({ error: 'session not found' });
+      reply.code(404).send({ error: 'Session not found.' });
       return;
     }
     reply.code(204).send();

@@ -332,7 +332,7 @@ function isAccessDenial(error: unknown): boolean {
 
 /**
  * Public Career Site Builder adapter. SAP career sites expose a job sitemap at
- * `/job_sitemap.xml`; every selected entry is hydrated once, sequentially, and
+ * `/job_sitemap.xml`; every selected entry is loaded once, sequentially, and
  * only on the exact configured origin. A bound or malformed entry revokes the
  * authoritative-complete claim, and access challenges stop the source.
  */

@@ -1,34 +1,31 @@
-# electron-builder config for the Open Vacancy Radar desktop shell.
+# electron-builder configuration for the Open Vacancy Radar desktop app.
 #
-# appId is a placeholder reverse-DNS identifier, not a claim to own that domain — anyone forking
-# this boilerplate for real distribution should change it (and productName) to their own.
+# appId is a placeholder reverse-DNS identifier, not a claim to own that domain. Forks intended
+# for distribution should set their own appId and productName.
 appId: dev.agentdock.desktop
 productName: Open Vacancy Radar
 copyright: Copyright © Open Vacancy Radar contributors
 
 directories:
-  # Keep installer/unpacked-app output out of Vite's dist/ and esbuild's dist-electron/, and out
-  # of the repo root's own node_modules — a dedicated top-level folder is unambiguous either way.
+  # Keep installer and unpacked-app output separate from Vite's dist/, esbuild's dist-electron/,
+  # and the repository's node_modules.
   output: ../../dist-packages
   buildResources: assets/app-icons
 
 # main.js and preload.js are mostly self-contained bundles (see vite.config.ts). The renderer is a
-# normal self-contained Vite build. `better-sqlite3` is the deliberate exception: Rollup leaves the
+# self-contained Vite build. `better-sqlite3` is the exception: Rollup leaves the
 # native addon external, so it remains a production dependency and electron-builder includes and
-# smart-unpacks its binding. Keep the explicit files list narrow; builder's dependency walker adds
+# smart-unpacks its binding. The explicit files list stays limited; builder's dependency walker adds
 # that one required runtime module without copying the renderer's already-bundled dependencies.
 files:
   - dist/**/*
   - dist-electron/**/*
   - package.json
 
-# The daemon is a *separate* process the packaged app spawns (see electron/main.ts), not code the
-# renderer or main bundle import — it has to exist as a real file on disk for `spawn()` to launch,
-# so it can't just live inside main.js. It's shipped as an extraResource (outside app.asar
-# entirely) rather than relying on Electron's asar-aware fs patching, since spawning a *new*
-# process against a path inside an asar archive is exactly the kind of "works by accident"
-# behavior this project avoids — apps/daemon/dist/index.js is already a single self-contained
-# esbuild bundle (see apps/daemon/scripts/build.mjs), so nothing else needs to come with it.
+# The packaged app spawns the daemon as a separate process (see electron/main.ts), so `spawn()`
+# needs a regular file on disk. The daemon is an extraResource outside app.asar instead of a path
+# inside the archive. apps/daemon/dist/index.js is already a self-contained esbuild bundle (see
+# apps/daemon/scripts/build.mjs), so it needs no additional files.
 extraResources:
   - from: ../daemon/dist
     to: daemon
@@ -37,7 +34,7 @@ extraResources:
 
 asar: true
 
-# No auto-update in this boilerplate (out of scope by design — see docs/architecture.md). Without
+# Auto-update is not implemented (see docs/architecture.md). Without
 # this, electron-builder still tries to generate update-feed metadata (latest.yml, .blockmap) and
 # infer a publish target from the git remote, which crashes when there isn't one configured.
 publish: null
@@ -59,5 +56,5 @@ nsis:
   uninstallerIcon: open-vacancy-radar.ico
   artifactName: "${productName}-Setup-${version}.${ext}"
   # A .blockmap is only useful for differential auto-update downloads, which this project doesn't
-  # have — skip generating one rather than ship a file with no purpose.
+  # have. Do not generate a file that the app cannot use.
   differentialPackage: false

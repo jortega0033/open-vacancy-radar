@@ -2,7 +2,7 @@
   "name": "agent-dock",
   "private": true,
   "version": "0.1.0",
-  "description": "Open Vacancy Radar desktop job-search workspace built on the AgentDock local runtime",
+  "description": "Desktop app for vacancy discovery, application tracking, and CV and letter preparation using the local AgentDock runtime",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {

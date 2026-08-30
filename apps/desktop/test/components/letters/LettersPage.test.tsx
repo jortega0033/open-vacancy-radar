@@ -38,16 +38,16 @@ describe('LettersPage', () => {
   });
 
   it('opening a letter from the library loads it into the generator in edit mode', async () => {
-    const letter = makeLetter({ title: 'Motivation letter — Redwood', body: 'Saved body text.' });
+    const letter = makeLetter({ title: 'Motivation letter: Redwood', body: 'Saved body text.' });
     setup({ listLetters: vi.fn().mockResolvedValue([letter]) });
 
     render(<LettersPage />);
-    await waitFor(() => expect(screen.getByText('Motivation letter — Redwood')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Motivation letter: Redwood')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^open$/i }));
 
     expect(await screen.findByRole('textbox', { name: /letter title/i })).toHaveValue(
-      'Motivation letter — Redwood',
+      'Motivation letter: Redwood',
     );
     expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue('Saved body text.');
     // Edit mode: the action updates the existing row rather than adding one.
@@ -69,7 +69,7 @@ describe('LettersPage', () => {
   });
 
   it('a save in the generator refreshes the library and reports the change upward', async () => {
-    const saved = makeLetter({ id: 'saved-1', title: 'Motivation letter — Redwood Software' });
+    const saved = makeLetter({ id: 'saved-1', title: 'Motivation letter: Redwood Software' });
     const listLetters = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([saved]);
     const onLettersChanged = vi.fn();
     const bridges = setup({ listLetters, createLetter: vi.fn().mockResolvedValue(saved) });
@@ -93,7 +93,7 @@ describe('LettersPage', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /library/i }));
 
-    expect(await screen.findByText('Motivation letter — Redwood Software')).toBeInTheDocument();
+    expect(await screen.findByText('Motivation letter: Redwood Software')).toBeInTheDocument();
     expect(listLetters).toHaveBeenCalledTimes(2);
   });
 

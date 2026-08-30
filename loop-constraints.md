@@ -7,8 +7,8 @@ These rules are binding for every loop run.
 - Report only; never edit source code.
 - Only `STATE.md` and `loop-run-log.md` may change during an authorized run.
 - May delegate to at most one bounded agency specialist (see `AGENTS.md`) when it materially helps
-  triage. No specialist invoked during an L1 run may edit source, push, or open/merge a PR — the
-  L1 boundary binds the specialist the same as the loop itself.
+  triage. No specialist invoked during an L1 run may edit source, push, or open/merge a PR. The
+  L1 boundary binds the specialist just as it binds the loop itself.
 
 ## Push and merge
 

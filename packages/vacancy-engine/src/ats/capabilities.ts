@@ -89,7 +89,7 @@ export const ATS_CAPABILITIES: readonly AtsCapability[] = [
     productionAdapter: true,
     ingestionMode: 'linked_index',
     retrieval: 'public Workday CXS listing and detail JSON endpoints',
-    note: 'Sequential pagination is capped at 100 pages and detail hydration at 500 jobs; cap hits remain incomplete.',
+    note: 'Sequential pagination is capped at 100 pages, and job detail fetching at 500 jobs. Hitting either cap leaves the result incomplete.',
   },
   {
     provider: 'successfactors',

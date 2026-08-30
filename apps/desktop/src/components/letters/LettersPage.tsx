@@ -6,7 +6,7 @@ import type { SelectedVacancy } from './types.js';
 
 /**
  * Which half of the feature is on screen. The generator additionally carries *what* it is editing
- * and a `seq`, because `LetterGenerator` seeds its form from props on mount only (deliberately —
+ * and a `seq`, because `LetterGenerator` seeds its form from props on mount only (deliberately;
  * see its state initializers). Bumping `seq` gives it a new React key, which is what makes
  * "Open a different letter" and "New letter" actually reset the editor instead of leaving the
  * previous document's title and body in place.
@@ -32,7 +32,7 @@ export interface LettersPageProps {
  * `/letters`) as one page with a tab between them.
  *
  * They are one page rather than two nav entries because the round trip between them is the actual
- * workflow — generate, save, come back later, reopen, regenerate — and a shell-level route change
+ * workflow: generate, save, come back later, reopen, and regenerate. A shell-level route change
  * per step would throw away the generator's in-progress state on every hop. The tabs are plain
  * local state for the same reason: nothing here needs to survive a restart, and `App.tsx` stays
  * untouched.
@@ -41,7 +41,7 @@ export interface LettersPageProps {
  * bumps; the library reloads on it instead of guessing when its rows went stale.
  *
  * Switching to the Library tab unmounts the editor, exactly as the prototype's two routes would.
- * Returning to it reopens the last letter *as last saved* — an unsaved draft is not carried across,
+ * Returning to it reopens the last letter *as last saved*. An unsaved draft is not carried across,
  * which is why the editor labels unsaved changes and offers Save before anything else.
  */
 export function LettersPage({ vacancy = null, model, onLettersChanged }: LettersPageProps) {
@@ -80,8 +80,8 @@ export function LettersPage({ vacancy = null, model, onLettersChanged }: Letters
     (letter: LetterRecord) => {
       setRefreshToken((token) => token + 1);
       onLettersChanged?.();
-      // Keep the editor pointed at the row it just wrote — without changing `seq`, so the open
-      // editor is *not* remounted — so that leaving and re-entering the tab resumes the saved
+      // Keep the editor pointed at the row it just wrote without changing `seq`, so the open
+      // editor is not remounted. Leaving and re-entering the tab then resumes the saved
       // version rather than a blank form.
       lastEditor.current = { letter, seq: editorSeq.current };
       setView((current) => (current.tab === 'generator' ? { ...current, letter } : current));

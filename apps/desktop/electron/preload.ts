@@ -5,8 +5,8 @@ import type { WorkspaceBridge } from './workspace/types.js';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
- * single-purpose capability — never a generic "invoke this IPC channel with this payload" tunnel
- * and never the daemon's connection info (base URL + bearer token stay in the main process; see
+ * single-purpose capability. The bridge never exposes a generic "invoke this IPC channel with
+ * this payload" tunnel or the daemon's connection info (base URL and bearer token stay in the main process; see
  * electron/main.ts and SECURITY.md). The renderer cannot run a shell command, read/write an
  * arbitrary file, or reach any daemon route this bridge doesn't explicitly expose.
  */
@@ -33,8 +33,8 @@ export type VacancyEngineStatus = { ready: boolean; error?: string };
 
 /**
  * A second, independent bridge namespace (rather than folding these onto `AgentDockBridge`)
- * because it talks to the embedded vacancy-discovery engine in the main process directly — no
- * daemon, no bearer token, nothing shared with the AgentDock session machinery above. Keeping it
+ * because it talks directly to the embedded vacancy-discovery engine in the main process. It uses
+ * no daemon or bearer token and shares nothing with the AgentDock session machinery above. Keeping it
  * separate means a fork that drops the vacancy-lead feature can delete this namespace without
  * touching the AgentDock bridge at all, and vice versa.
  */
@@ -44,7 +44,7 @@ export interface VacancyRadarBridge {
   getReport(): Promise<GlobalRemoteReport | null>;
   runScan(): Promise<GlobalRemoteReport>;
   /**
-   * Netherlands pipeline — the IND recognised-sponsor scan. A separate pair of methods rather
+   * Netherlands pipeline: the IND recognised-sponsor scan. A separate pair of methods rather
    * than a `market` argument on the two above, because the two pipelines return genuinely
    * different report shapes (`GlobalRemoteReport` vs `JobRadarReport`) and a union-typed return
    * would push a discriminator check into every caller for no gain.
@@ -69,12 +69,12 @@ export interface CvFile {
 /**
  * A third independent namespace, for the same reason `vacancyRadar` is separate from `agentDock`:
  * it is the only part of the bridge that touches the user's own documents, so it stays isolated
- * and auditable on its own terms. Note what is deliberately *not* here — no `readFile(path)`, no
+ * and auditable on its own terms. It provides no `readFile(path)` or
  * path argument of any kind. `selectAndRead()` returns already-extracted text for a file **the
  * user picked in a native dialog**; the renderer never names a file and never sees a filesystem
  * path, so a compromised renderer cannot turn this into an arbitrary-file-read primitive.
  * `getWorkspaceDir()` returns one app-owned scratch directory (main.ts creates it) purely so the
- * AI features have a valid `cwd` for `createSession` — it grants no access to that directory.
+ * AI features have a valid `cwd` for `createSession`; it grants no access to that directory.
  */
 export interface CvBridge {
   selectAndRead(): Promise<CvFile | null>;
@@ -85,7 +85,7 @@ export interface CvBridge {
  * Reconstructs a clean `DaemonStatus` from whatever main sent, rather than validating its shape
  * and then passing the original object through unchanged (AD-07). The difference matters: the
  * previous `isDaemonStatus` type guard only checked that `state` was one of the three known
- * values and then returned the raw object as-is — so an extra field on that object (a token, a
+ * values and then returned the raw object as-is. An extra field on that object (a token, a
  * base URL, anything) would have crossed into the renderer completely untouched. Building a fresh
  * object with only the fields each variant is actually supposed to carry means an accidental
  * extra property on the main-process side can never reach here, structurally, regardless of what
@@ -96,7 +96,7 @@ function toDaemonStatus(value: unknown): DaemonStatus {
   if (state === 'ready') return { state: 'ready' };
   if (state === 'unavailable') {
     const error = (value as { error?: unknown }).error;
-    return { state: 'unavailable', error: typeof error === 'string' ? error : 'unknown error' };
+    return { state: 'unavailable', error: typeof error === 'string' ? error : 'Unknown error.' };
   }
   return { state: 'connecting' };
 }
@@ -161,7 +161,7 @@ contextBridge.exposeInMainWorld('vacancyRadar', vacancyApi);
 
 /**
  * Each function names its own channel literally and forwards only the arguments that channel is
- * documented to take — there is no `channel` parameter anywhere, so a compromised renderer cannot
+ * documented to take. There is no `channel` parameter, so a compromised renderer cannot
  * reach a `workspace:*` channel this list does not already grant, let alone a `daemon:*` one.
  * Main validates every payload again on arrival (electron/workspace/validate.ts); this side is
  * about the shape of the capability, not about trusting the renderer.
@@ -240,7 +240,7 @@ contextBridge.exposeInMainWorld('workspace', workspaceApi);
 
 /**
  * Rebuilt field by field rather than passed through, on the same principle as `toDaemonStatus`:
- * whatever `cv:select-and-read` sends, only `fileName` and `text` can ever reach the renderer — an
+ * whatever `cv:select-and-read` sends, only `fileName` and `text` can reach the renderer. An
  * absolute path accidentally added to that payload later could not cross this boundary.
  */
 function toCvFile(value: unknown): CvFile | null {
@@ -257,7 +257,7 @@ const cvApi: CvBridge = {
   async getWorkspaceDir() {
     const result: unknown = await ipcRenderer.invoke('cv:get-workspace-dir');
     if (typeof result !== 'string' || result.length === 0) {
-      throw new Error('main process did not return a workspace directory');
+      throw new Error('Main process did not return a workspace directory.');
     }
     return result;
   },
@@ -266,12 +266,11 @@ const cvApi: CvBridge = {
 contextBridge.exposeInMainWorld('cv', cvApi);
 
 /**
- * A fifth, single-capability namespace for the Settings page's "launch at login" toggle. Kept off
- * `WorkspaceBridge` on purpose: that bridge is the SQLite workspace contract (asserted
- * exhaustively in tests as "exactly these functions"), while this one call is OS integration with
- * no database involvement. The boolean is coerced with `=== true` so nothing but a literal
- * boolean ever reaches the channel, and the promise resolves to void — main returns nothing worth
- * forwarding.
+ * A separate namespace for OS and application integration: launch-at-login settings, the
+ * application version, and native-dialog-gated file exports. It stays off `WorkspaceBridge`
+ * because that bridge is the SQLite workspace contract (asserted exhaustively in tests as
+ * "exactly these functions"). The launch-at-login value is coerced with `=== true` so only a
+ * literal boolean reaches that channel.
  */
 export interface SaveFileFilter {
   name: string;

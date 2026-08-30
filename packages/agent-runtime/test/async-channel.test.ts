@@ -60,7 +60,7 @@ describe('AsyncChannel', () => {
       expect(await drain(channel)).toEqual([0, 1, 2, 997, 998, 999]);
     });
 
-    it('is the terminal step — nothing pushed after it is delivered', async () => {
+    it('is terminal and delivers nothing pushed afterward', async () => {
       const channel = new AsyncChannel<number>();
       channel.push(1);
       channel.closeWith([2]);

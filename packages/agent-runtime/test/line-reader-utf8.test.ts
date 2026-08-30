@@ -11,7 +11,7 @@ async function collect(stream: Readable): Promise<string[]> {
 describe('readLines UTF-8 chunk-boundary handling', () => {
   it('does not corrupt a multibyte emoji split exactly across two raw chunks', async () => {
     // Real assistant text containing an emoji ("hello 🎉 world") encoded as UTF-8, then split the
-    // raw byte buffer in the middle of the 4-byte emoji sequence — exactly what a TCP/pipe chunk
+    // raw byte buffer in the middle of the 4-byte emoji sequence, as a TCP or pipe chunk
     // boundary can do to output from a real CLI process.
     const line = JSON.stringify({ type: 'assistant.message', text: 'hello 🎉 world' });
     const bytes = Buffer.from(line + '\n', 'utf8');

@@ -9,11 +9,11 @@ export interface SaveCvToLibraryProps {
 }
 
 /**
- * Turns a one-off upload into a real `cv_documents` row.
+ * Turns a one-off upload into a persisted `cv_documents` row.
  *
  * The ephemeral path deliberately stays: picking a CV to run a single gap analysis against one
  * vacancy is a legitimate thing to do without committing the document to a library you then have
- * to curate. So saving is an explicit second step rather than a side effect of the upload — the
+ * to curate. Saving is therefore an explicit second step rather than a side effect of the upload;
  * user decides whether this file is a keeper.
  *
  * Only the extracted text and the file name cross into the database; the file itself is never
@@ -36,7 +36,7 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
       onSaved?.(created.id);
     } catch (err) {
       setState('idle');
-      setError(describeError(err, 'could not save this CV to your library'));
+      setError(describeError(err, 'Could not save this CV to your library.'));
     }
   }, [cv.fileName, cv.text, onSaved]);
 

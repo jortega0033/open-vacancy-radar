@@ -8,7 +8,7 @@ export type CachedHttpResponse = {
   fetchedAt: Date;
 };
 
-/** Storage seam for a database- or filesystem-backed conditional HTTP cache. */
+/** Storage interface for a database- or filesystem-backed conditional HTTP cache. */
 export type HttpCache = {
   get(url: string): Promise<CachedHttpResponse | undefined>;
   set(url: string, response: CachedHttpResponse): Promise<void>;

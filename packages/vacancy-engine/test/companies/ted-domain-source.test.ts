@@ -58,7 +58,7 @@ describe('TED winner domain source', () => {
     ]);
   });
 
-  it('uses bounded year-partitioned page-number queries through the safe JSON POST seam', async () => {
+  it('uses bounded year-partitioned page-number queries through the safe JSON POST client', async () => {
     const firstRequest = buildTedWinnerSearchRequest(2024, 1, 6);
     const secondRequest = buildTedWinnerSearchRequest(2024, 2, 6);
     const http = new FixtureHttpClient(

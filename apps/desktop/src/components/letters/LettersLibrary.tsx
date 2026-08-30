@@ -31,12 +31,12 @@ export interface LettersLibraryProps {
  *
  * Owns its own load against `window.workspace` rather than receiving rows as a prop, for the same
  * reason `SavedJobsPage` does: the page above it should not have to know how to recover from an
- * IPC failure that only this table can describe. It deliberately keeps *three* error slots apart —
+ * IPC failure that only this table can describe. It deliberately keeps three error slots apart:
  * a failed initial load (nothing to show), a failed row action (the table is still valid), and a
  * delete that reported `{ deleted: false }` (the row was already gone). Collapsing those would
  * either hide a working table behind a load error or silently swallow a failed duplicate.
  *
- * The row is not itself clickable: the actions are real buttons, and a `<tr onClick>` wrapping
+ * The row is not itself clickable: the actions are buttons, and a `<tr onClick>` wrapping
  * them would make "Duplicate" ambiguously also mean "Open" for keyboard and screen-reader users.
  */
 export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged }: LettersLibraryProps) {
@@ -56,7 +56,7 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
           setLoadError(undefined);
         }
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load your letters'));
+        if (!cancelled) setLoadError(describeError(err, 'Could not load your letters.'));
       }
     })();
     return () => {
@@ -74,7 +74,7 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
         setLetters((prev) => [copy, ...(prev ?? [])]);
         onCountChanged?.();
       } catch (err) {
-        setActionError(describeError(err, 'could not duplicate this letter'));
+        setActionError(describeError(err, 'Could not duplicate this letter.'));
       } finally {
         setBusyId(null);
       }
@@ -90,13 +90,13 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
     setBusyId(letter.id);
     try {
       // `{ deleted: false }` means the row had already gone server-side. Drop it locally either
-      // way so the table matches reality, and say so rather than reporting a phantom success.
+      // way so the table matches the stored data, and report that it was already deleted.
       const result = await window.workspace.deleteLetter(letter.id);
       setLetters((prev) => (prev ?? []).filter((row) => row.id !== letter.id));
       if (!result.deleted) setActionError('That letter had already been deleted.');
       onCountChanged?.();
     } catch (err) {
-      setActionError(describeError(err, 'could not delete this letter'));
+      setActionError(describeError(err, 'Could not delete this letter.'));
     } finally {
       setBusyId(null);
     }
@@ -169,8 +169,8 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
               {rows.map((letter) => (
                 <tr key={letter.id} className="ovr-row hover:bg-base-200">
                   <td className="font-medium">{letter.title}</td>
-                  <td className="text-base-content/80">{letter.company || '—'}</td>
-                  <td className="text-base-content/80">{letter.role || '—'}</td>
+                  <td className="text-base-content/80">{letter.company || 'Not provided'}</td>
+                  <td className="text-base-content/80">{letter.role || 'Not provided'}</td>
                   <td className="whitespace-nowrap text-base-content/70">
                     {labelFor(LETTER_TYPE_OPTIONS, letter.type)}
                   </td>

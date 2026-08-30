@@ -4,14 +4,14 @@ Open Vacancy Radar uses an original monochrome open-radar mark. The square point
 vacancy discovered beyond the scanning ring. No third-party provider, job board, government,
 national or immigration-service logo is bundled.
 
-## Source of truth
+## Authoritative files
 
-Canonical assets live under `apps/desktop/assets`:
+Primary assets live under `apps/desktop/assets`:
 
 | Path                                      | Role                                            |
 | ----------------------------------------- | ----------------------------------------------- |
-| `brand/open-vacancy-radar-app-icon.svg`   | canonical fixed-background application icon     |
-| `brand/open-vacancy-radar-mark.svg`       | canonical themeable `currentColor` mark         |
+| `brand/open-vacancy-radar-app-icon.svg`   | fixed-background application icon               |
+| `brand/open-vacancy-radar-mark.svg`       | themeable `currentColor` mark                   |
 | `brand/open-vacancy-radar-mark-light.svg` | static dark mark for light documents            |
 | `brand/open-vacancy-radar-mark-dark.svg`  | static light mark for dark documents            |
 | `brand/open-vacancy-radar-lockup-*.svg`   | static horizontal/stacked documentation lockups |
@@ -40,7 +40,7 @@ pnpm assets:generate
 pnpm assets:validate
 ```
 
-Generation reads one canonical app-icon SVG and overwrites these outputs cleanly:
+Generation reads one app-icon SVG and overwrites these outputs:
 
 - PNG: 16, 24, 32, 44, 48, 64, 128, 256, 512 and 1024px
 - Windows ICO: embedded 16, 24, 32, 48, 64, 128 and 256px representations
@@ -52,9 +52,9 @@ common secret/PII patterns. Generation and validation use no online conversion s
 
 ## Renderer integration
 
-`OpenVacancyRadarMark` is an inline React SVG. It uses `currentColor`, stays crisp at sidebar size,
-supports decorative and labelled usage, and has no runtime network dependency. Expanded sidebar
-branding combines the mark with live text; collapsed branding keeps the mark centred while all
+`OpenVacancyRadarMark` is an inline React SVG. It uses `currentColor`, supports decorative and
+labelled usage, and has no runtime network dependency. The expanded sidebar combines the mark with
+a text label; the collapsed sidebar keeps the mark centred while all
 navigation targets retain their 44x44 geometry.
 
 `EmptyState` accepts an optional local illustration URL. Consumers import canonical SVG URLs via
@@ -65,13 +65,13 @@ system themes without unsafe raw-SVG injection or a new SVG loader.
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `empty-search.svg`        | Search before a scan                                                                              |
 | `no-results.svg`          | completed Search/filter with zero matches; Saved Jobs filter miss                                 |
-| `empty-saved-jobs.svg`    | `SavedJobsPage` no-record state; its CTA is preserved, but the shell route is still a placeholder |
-| `empty-applications.svg`  | current honest Applications placeholder until its page owner lands                                |
-| `empty-cv.svg`            | current honest CV placeholder until its library page owner lands                                  |
-| `empty-letters.svg`       | current honest Letters placeholder until its library page owner lands                             |
+| `empty-saved-jobs.svg`    | `SavedJobsPage` no-record state                                                                  |
+| `empty-applications.svg`  | Applications no-record state                                                                    |
+| `empty-cv.svg`            | CV Library no-record state                                                                       |
+| `empty-letters.svg`       | Letters no-record state                                                                          |
 | `runtime-unavailable.svg` | AI Runtime page only when the local runtime is unavailable                                        |
 
-Loading, validation and compact error states deliberately do not use illustrations.
+Loading, validation, and compact error states do not use illustrations.
 
 ## Electron and Windows packaging
 
@@ -91,13 +91,12 @@ configured or claimed verified.
 Selected sample-data captures live in `docs/images/screenshots`; public compositions live in
 `docs/images/social`:
 
-- `readme-hero.webp` — README introduction
-- `github-social-preview.png` — manual GitHub repository social-preview upload
-- `open-graph.png` — website/social metadata consumer
+- `readme-hero.webp`: README introduction
+- `github-social-preview.png`: manual GitHub repository social-preview upload
+- `open-graph.png`: website/social metadata consumer
 
 These files are documentation-only and never enter the application bundle. The source pack's
-portfolio composition, preview boards and captures with unrelated toast state were deliberately
-not imported. GitHub settings and any separate portfolio repository are outside this task.
+portfolio composition, preview boards, and captures with unrelated toast state were not imported.
 
 ## Rebranding a fork
 
@@ -109,7 +108,7 @@ not imported. GitHub settings and any separate portfolio repository are outside 
    migration is planned.
 5. Rebuild and package on the target OS; visually inspect native icons and all themes.
 
-This is intentionally not a white-label system.
+The project does not provide automated rebranding.
 
 ## Licensing
 
@@ -117,4 +116,4 @@ This repository is Apache-2.0. The asset pack supplied no separate license file;
 identifies the brand and illustrations as original Open Vacancy Radar artwork. Contributors must
 confirm they have rights to submit those files under the repository license. No font files or
 third-party logos are embedded. AgentDock and provider/source names remain factual text references;
-no unofficial Claude, Codex, IND, LinkedIn or job-board marks are fabricated.
+no unofficial Claude, Codex, IND, LinkedIn, or job-board marks are included.

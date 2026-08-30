@@ -3,7 +3,7 @@ import type { CvDocumentRecord, CvProfile } from '../../window.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 
 /**
- * Everything the drawer can change — deliberately not `CvDocumentInput`/`CvDocumentPatch`
+ * Everything the drawer can change. Deliberately not `CvDocumentInput`/`CvDocumentPatch`
  * directly: `kind` never appears here (a manual profile is always created with `kind: 'manual'`,
  * and an existing document's kind can never change), and the page decides at the call site
  * whether this becomes a `createCvDocument` or an `updateCvDocument` call.
@@ -16,7 +16,7 @@ export interface CvDrawerSubmitPayload {
 
 export interface CvDrawerProps {
   mode: 'add' | 'edit';
-  /** Present in edit mode — pre-fills the form from the existing record, uploaded or manual. */
+  /** Present in edit mode. Pre-fills the form from the existing record, uploaded or manual. */
   record?: CvDocumentRecord;
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
@@ -57,7 +57,7 @@ function toFormState(record: CvDocumentRecord | undefined): FormState {
  *
  * Docked to the right edge via daisyUI's `modal-end`, matching `ApplicationDrawer`'s convention
  * (self-contained submitting/error state, async `onSubmit`) rather than `SavedJobDrawer`'s plain
- * fixed panel — one of the two existing drawer conventions, not a third.
+ * fixed panel, using one of the two existing drawer conventions rather than introducing a third.
  */
 export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [form, setForm] = useState<FormState>(() => toFormState(record));
@@ -99,7 +99,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     try {
       await onSubmit(payload);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not save this CV');
+      setError(err instanceof Error ? err.message : 'Could not save this CV.');
     } finally {
       setSubmitting(false);
     }
@@ -137,7 +137,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
                 disabled={submitting}
-                placeholder="e.g. Frontend CV — Netherlands"
+                placeholder="e.g. Frontend CV (Netherlands)"
               />
             </label>
 

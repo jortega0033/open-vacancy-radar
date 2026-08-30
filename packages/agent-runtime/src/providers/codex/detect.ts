@@ -7,7 +7,7 @@ import { CODEX_CAPABILITIES } from './capabilities.js';
 const EXECUTABLE_NAMES = ['codex'];
 
 /**
- * Pure parsing of `codex login status`'s combined stdout+stderr (AD-16) — split out from
+ * Parses the combined stdout and stderr from `codex login status` (AD-16). Kept separate from
  * `detectCodex` so it's testable with captured output strings, no CLI or account needed. `codex
  * login status` has no `--json` flag, so this is a conservative regex match against short
  * human-readable lines rather than guessing: falls back to `'unknown'` for anything that doesn't
@@ -42,7 +42,7 @@ export async function detectCodex(logger: Logger): Promise<ProviderStatus> {
       installed: true,
       authenticated: 'unknown',
       executablePath,
-      error: 'codex --version failed',
+      error: 'codex --version failed.',
     };
   }
   const versionMatch = versionResult.stdout.trim().match(/[\d.]+/);
@@ -56,7 +56,7 @@ export async function detectCodex(logger: Logger): Promise<ProviderStatus> {
       authenticated: 'unknown',
       executablePath,
       version,
-      error: 'login status check timed out',
+      error: 'Login status check timed out.',
     };
   }
 
@@ -72,6 +72,6 @@ export async function detectCodex(logger: Logger): Promise<ProviderStatus> {
     authenticated: 'unknown',
     executablePath,
     version,
-    error: output.slice(0, 200) || 'could not determine codex login status',
+    error: output.slice(0, 200) || 'Could not determine Codex login status.',
   };
 }

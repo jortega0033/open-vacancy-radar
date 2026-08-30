@@ -1,4 +1,4 @@
-# Loop Budget — Open Vacancy Radar
+# Loop Budget: Open Vacancy Radar
 
 ## Daily limits
 

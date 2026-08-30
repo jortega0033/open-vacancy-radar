@@ -9,14 +9,14 @@ export interface CvUploadActionProps {
 
 /**
  * "Upload CV" for the CV library. Picks a file through the same `window.cv` bridge the CV
- * assistant's `CvUpload` uses (PDF, plain text or Markdown — the design reference's prototype also
- * mentions DOCX, but the real `cv:select-and-read` bridge does not support it, so this action
+ * assistant's `CvUpload` uses (PDF, plain text, or Markdown; the design reference's prototype also
+ * mentions DOCX, but the `cv:select-and-read` bridge does not support it, so this action
  * doesn't claim it does), then hands the extracted text to the existing `SaveCvToLibrary`
  * component to persist unchanged rather than re-implementing `createCvDocument` persistence that
  * is already implemented and already tested.
  *
- * Only the plain bridge call lives here — no picker UI, no show/hide-extracted-text affordance —
- * so this stays a thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`)
+ * Only the plain bridge call lives here, with no picker UI or show/hide extracted-text control, so
+ * so this component only combines "pick" (this component) and "persist" (`SaveCvToLibrary`)
  * rather than a second `CvUpload`.
  */
 export function CvUploadAction({ onSaved }: CvUploadActionProps) {
@@ -32,7 +32,7 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
       // null = the user closed the dialog; nothing to do.
       if (selected) setPicked(selected);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not read that file');
+      setError(err instanceof Error ? err.message : 'Could not read that file.');
     } finally {
       setIsPicking(false);
     }

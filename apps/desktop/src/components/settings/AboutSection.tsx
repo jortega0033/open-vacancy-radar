@@ -6,10 +6,9 @@ const REPOSITORY_URL = 'https://github.com/jortega0033/open-vacancy-radar';
 type CopyState = 'idle' | 'copied' | 'failed';
 
 /**
- * Static-but-real "About" information: version comes from `app.getVersion()` (never a
- * hand-maintained string that could drift), everything else is a fact about this specific build
- * rather than decoration copied from the prototype (which listed a placeholder repository URL and
- * an MIT license — this app is actually Apache-2.0, and the repository is real).
+ * About information for this build. The version comes from `app.getVersion()` instead of a
+ * hand-maintained string. The license and repository values replace the prototype placeholders
+ * with this project's Apache-2.0 license and repository URL.
  */
 export function AboutSection() {
   const [version, setVersion] = useState<string>();
@@ -78,7 +77,7 @@ export function AboutSection() {
         )}
         {copyState === 'failed' && (
           <span className="text-sm text-error" role="alert">
-            Could not copy to the clipboard
+            Could not copy to the clipboard.
           </span>
         )}
       </div>

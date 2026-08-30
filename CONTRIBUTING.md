@@ -1,9 +1,8 @@
 # Contributing
 
 Thanks for considering a contribution to Open Vacancy Radar. Its local AI runtime is based on
-AgentDock and is designed to be forked and
-extended, so contributions here should stay in that spirit: keep the core small, provider-neutral,
-and easy for someone else to reason about after forking it.
+AgentDock and can be used as the base for other products. Keep the shared runtime small,
+provider-neutral, and understandable to contributors who reuse it.
 
 ## Contribution workflow
 
@@ -29,7 +28,7 @@ exact version this repo was built against).
 
 ## Project structure
 
-See [docs/architecture.md](docs/architecture.md) for the full picture, and
+See [docs/architecture.md](docs/architecture.md) for the component details and
 [DEVELOPMENT.md](DEVELOPMENT.md) for an "I want to change X, start here" map. In short:
 `packages/shared` (types/contracts) → `packages/agent-runtime` (provider adapters, process
 management) → `apps/daemon` (HTTP+SSE server) → `apps/desktop` (Electron+React demo client).
@@ -40,15 +39,15 @@ Dependencies only flow in that direction.
 The default product decision is to integrate lawful public vacancy sources. Follow the
 [job source policy](docs/job-source-policy.md): prefer official APIs and feeds, keep all requests
 behind the existing safe HTTP boundary, preserve direct application URLs and attribution, and add
-hermetic fixtures for complete and failure outcomes. Source complexity can affect sequencing; it
-does not justify permanently dropping useful coverage. Permission uncertainty limits a connector to
+local fixtures for complete and failure outcomes. A source that takes longer to implement remains
+planned. Uncertain permission limits a connector to
 the factual linked-index mode; authentication or access-control bypass and explicit automation or
 licensing prohibitions are stop conditions.
 
 ## Architecture rules
 
-These aren't style preferences — breaking them tends to break the security model or the layering
-the tests assume. The full list, with the reasoning behind each, is
+These rules protect the security model and the dependency boundaries checked by the tests. The
+full list, with the reason for each rule, is
 [DEVELOPMENT.md#common-architectural-rules](DEVELOPMENT.md#common-architectural-rules); briefly:
 never build a shell command string, never let the renderer call the daemon directly, never accept
 an executable path from a request, never branch on provider id outside `packages/agent-runtime`,
@@ -56,17 +55,17 @@ never add a generic IPC passthrough to the preload bridge.
 
 ## Testing requirements
 
-- Never make a test depend on a real, authenticated Claude/Codex CLI being present, and never make
-  one that spends real API credit — CI has neither. See
+- Never make a test depend on an authenticated Claude or Codex CLI, and never make one that spends
+  API credit. CI has neither. See
   [DEVELOPMENT.md#testing-without-paid-providers](DEVELOPMENT.md#testing-without-paid-providers)
   for the fixture-based pattern this project uses instead.
 - Never commit a fixture, test, or example that contains a real credential, token, or account
-  identifier — even a revoked or expired one. Provider CLI fixtures are small `node` scripts
+  identifier, even a revoked or expired one. Provider CLI fixtures are small `node` scripts
   standing in for the real CLI's I/O shape, never real recorded CLI output.
-- If your change affects the public contract — anything in
+- If your change affects the public contract, anything in
   [docs/protocol-v1.md](docs/protocol-v1.md)'s "public/stable" list, `@agent-dock/client`'s exports,
-  or a daemon route's shape — update the relevant doc (`docs/protocol-v1.md`, `docs/client-sdk.md`,
-  or `docs/daemon.md`) in the same PR. A behavior change with no doc update for it isn't done.
+  or a daemon route's shape, update the relevant doc (`docs/protocol-v1.md`, `docs/client-sdk.md`,
+  or `docs/daemon.md`) in the same PR.
 
 ## Before opening a PR
 
@@ -75,22 +74,22 @@ pnpm typecheck   # strict TypeScript, no `any` without a comment justifying it
 pnpm lint
 pnpm test        # must pass without a real Claude/Codex install or any paid API call
 pnpm build
-pnpm audit       # electron-builder's own build-time deps are a known, documented exception —
+pnpm audit       # electron-builder's own build-time dependencies are a documented exception;
                  # see docs/packaging.md; nothing shipped in the app should show up here
 ```
 
 If you touched anything under `apps/desktop/electron/` (main process, preload, or packaging
 config), also run `pnpm package:win` (Windows) and confirm the app still launches from
-`dist-packages/win-unpacked/Open Vacancy Radar.exe` — packaging has its own failure modes that `pnpm build`
-alone won't catch (see [docs/packaging.md#verifying-a-packaging-sensitive-change](docs/packaging.md#verifying-a-packaging-sensitive-change)
-for real ones this project already hit).
+`dist-packages/win-unpacked/Open Vacancy Radar.exe`. Packaging can fail in ways that `pnpm build`
+does not detect. See
+[docs/packaging.md#verifying-a-packaging-sensitive-change](docs/packaging.md#verifying-a-packaging-sensitive-change)
+for examples.
 
-These same commands run automatically in CI on every push and pull request
-(`.github/workflows/ci.yml`) — `pnpm install --frozen-lockfile`, `lint`, `typecheck`, `test`,
-`build`, in that order, on Linux. A separate workflow (`.github/workflows/package-windows.yml`)
-runs `pnpm package:win` on Windows for every push and PR too, and fails if the NSIS installer
-doesn't actually get produced. Neither workflow installs or authenticates a real Claude/Codex CLI
-— see [Testing requirements](#testing-requirements) above for why that's never necessary.
+CI runs the same checks on every push and pull request (`.github/workflows/ci.yml`):
+`pnpm install --frozen-lockfile`, `lint`, `typecheck`, `test`, and `build`, in that order, on Linux.
+A separate workflow (`.github/workflows/package-windows.yml`) runs `pnpm package:win` on Windows
+and fails if it does not produce the NSIS installer. Neither workflow installs or authenticates a
+Claude or Codex CLI. See [Testing requirements](#testing-requirements).
 
 ### Provider contribution checklist
 
@@ -108,20 +107,20 @@ If you're touching a provider adapter (`packages/agent-runtime/src/providers/*`)
 ## Code style
 
 - TypeScript strict mode, no `any` unless there's a comment explaining why it's unavoidable.
-- No comments explaining *what* code does — name things so that's obvious. A comment is for a
+- Avoid comments that only restate *what* code does. Use a comment for a
   non-obvious *why*: a constraint, an invariant, a workaround for a specific CLI quirk.
 - Small, focused modules over one big file. If you're adding a provider, follow the existing
   `detect.ts` / `parser.ts` / `adapter.ts` split (see [docs/providers.md](docs/providers.md#adding-a-new-provider)).
-- No new abstraction or config surface for a hypothetical future need — this is boilerplate that
-  should stay easy to fork and delete parts of, not a framework.
+- Do not add an abstraction or configuration option for a hypothetical future need. This base
+  project should remain easy to adapt and reduce; it is not a general framework.
 
 ## Scope
 
 Please open an issue before working on anything that would add: persistence (SQLite/a database),
 authentication of the app's own users, telemetry/analytics, a new heavy dependency, or a new
 provider mode (API-key based, cloud-hosted). These are explicitly out of scope for the current
-version — see the README's "What this is not" section — and may or may not be a direction the
-project wants to take.
+version. See the README's "What this is not" section. Maintainers will decide these changes case by
+case.
 
 ## License
 

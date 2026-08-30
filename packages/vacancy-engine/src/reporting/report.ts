@@ -202,7 +202,7 @@ function renderStatistics(statistics: ReportStatistics): string {
     ['Inactive', statistics.vacanciesInactive],
     ['Known stale postings excluded', statistics.staleVacanciesExcluded],
     ['Duplicate reposts collapsed', statistics.duplicateVacanciesCollapsed],
-    ['Passed deterministic filter', statistics.deterministicCandidates],
+    ['Passed rule-based filter', statistics.deterministicCandidates],
     ['Semantically scored', statistics.semanticScored],
     ['Relevant', statistics.relevantVacancies],
     ['Excellent matches', statistics.excellentMatches],
@@ -229,7 +229,7 @@ export function renderHtmlReport(report: JobRadarReport): string {
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Open Vacancy Radar — ${escapeHtml(formatDate(report.generatedAt))}</title>
+<title>Open Vacancy Radar: ${escapeHtml(formatDate(report.generatedAt))}</title>
 <style>
 :root{color-scheme:light;--ink:#17211d;--muted:#617069;--line:#d9e1dc;--surface:#f4f7f5;--green:#0b6e4f;--red:#a51d2d;--amber:#855f00}*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;color:var(--ink);background:#fff}main{width:min(1100px,calc(100% - 32px));margin:48px auto 96px}h1{font-size:clamp(2rem,6vw,4.5rem);line-height:1;margin:.2em 0}h2{border-bottom:2px solid var(--ink);padding-bottom:.4rem;margin-top:3rem}h2 span{color:var(--muted);font-size:.8em}.lede{max-width:75ch}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:2rem 0}.stats div{background:#fff;padding:12px}.stats dt{color:var(--muted);font-size:.8rem}.stats dd{font-size:1.5rem;font-weight:700;margin:0}.job{display:grid;grid-template-columns:72px 1fr;gap:20px;padding:24px 0;border-bottom:1px solid var(--line)}.score{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:#fff;font-size:1.5rem;font-weight:800}.job h3{font-size:1.5rem;margin:.15rem 0}.eyebrow,.meta,.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.05em;font-size:.8rem}.meta{font-size:.82rem}.dimensions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.dimensions span{background:var(--surface);padding:4px 8px;border-radius:4px}details{margin:.5rem 0}details ul{margin:.5rem 0}.open{display:inline-block;background:var(--green);color:#fff;font-weight:800;text-decoration:none;padding:12px 18px;border-radius:5px;margin-top:8px}.open:focus,.open:hover{outline:3px solid #8dd7bd;outline-offset:2px}.danger,.unsafe{color:var(--red)}.warning{color:var(--amber)}@media(max-width:600px){.job{grid-template-columns:1fr}.score{width:52px;height:52px}}
 </style></head><body><main>

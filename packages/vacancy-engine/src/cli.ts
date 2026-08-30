@@ -222,7 +222,7 @@ async function main(): Promise<void> {
               latestHtml: result.files.latestHtml,
               latestAudit: result.files.latestAudit,
             },
-            'Global remote frontend scan completed',
+            'Worldwide / Remote frontend scan completed',
           );
         });
         break;

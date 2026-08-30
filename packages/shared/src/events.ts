@@ -5,11 +5,10 @@ import type { ProviderId } from './provider.js';
  * its CLI's native output into this union. Nothing above the agent-runtime package (the daemon,
  * the desktop UI) should ever branch on provider id to interpret an event.
  *
- * AD-14: a token-streaming `assistant.delta` variant was deliberately removed before v1 — no
+ * AD-14: a token-streaming `assistant.delta` variant was removed before v1. No
  * adapter ever emitted it, nothing tested it, and it lacked the message-boundary id a real
  * streaming provider would need to correlate deltas with their eventual `assistant.message`.
- * Reserved-but-unspecified surface in a version-frozen public union is worse than adding it later
- * once a real adapter needs it (and can specify it properly).
+ * Add the event when an adapter needs it and can define its behavior.
  */
 export type AgentEvent =
   | { type: 'session.started'; sessionId: string; provider: ProviderId; providerSessionId?: string }
@@ -34,7 +33,7 @@ export type AgentEventType = AgentEvent['type'];
 
 /**
  * Ordering/correlation metadata the daemon stamps onto an AgentEvent when it records and
- * broadcasts one — never something a provider adapter produces itself. `sequence` is a
+ * broadcasts one. Provider adapters do not produce this metadata. `sequence` is a
  * per-session, zero-based, monotonically increasing index (it *is* the SSE `id:` field on the
  * wire, and what `Last-Event-ID`-based reconnection resumes from); `timestamp` is when the daemon
  * observed the event, not when the provider CLI produced it.
@@ -46,7 +45,7 @@ export interface AgentEventMeta {
 
 /**
  * What actually crosses the daemon → client boundary: a normalized AgentEvent plus the ordering
- * metadata above, flattened into one object. This is the protocol v1 wire/public shape — see
+ * metadata above, flattened into one object. This is the protocol v1 wire and public shape; see
  * docs/protocol-v1.md#ordering-guarantees for the ordering guarantees every session's event stream
  * upholds (exactly one terminal event, always last; nothing emitted after it).
  */

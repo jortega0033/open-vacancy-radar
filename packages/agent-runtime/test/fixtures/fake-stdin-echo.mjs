@@ -1,4 +1,4 @@
-// Simulates a headless CLI reading its prompt from stdin (AD-05) rather than argv — reads stdin
+// Simulates a headless CLI reading its prompt from stdin (AD-05) rather than argv. It reads stdin
 // to completion, then emits it back verbatim inside a normal Claude-shaped `assistant`/`result`
 // JSONL pair so parseClaudeLine normalizes it exactly like a real response. Used to prove the
 // prompt survives spawnProcess -> child.stdin.write()/.end() byte-for-byte, including spaces,

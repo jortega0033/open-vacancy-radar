@@ -45,7 +45,7 @@ async function loadGlobalRemoteConfig(projectRoot: string): Promise<GlobalRemote
   const file = path.resolve(projectRoot, 'config', 'global-remote-profile-v1.json');
   const relative = path.relative(projectRoot, file);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('Global remote profile must remain inside the project root');
+    throw new Error('Worldwide / Remote profile must remain inside the project root.');
   }
   return globalRemoteConfigSchema.parse(JSON.parse(await readFile(file, 'utf8')) as unknown);
 }
@@ -86,7 +86,7 @@ async function loadPreviousDiscovery(projectRoot: string): Promise<{
   const file = path.resolve(projectRoot, 'reports', 'global-remote', 'latest.json');
   const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<GlobalRemoteReport>;
   if (!Array.isArray(parsed.discoverySources) || !Array.isArray(parsed.discoveryAudit)) {
-    throw new Error('Previous global remote report does not contain reusable discovery audit data');
+    throw new Error('Previous Worldwide / Remote report does not contain reusable discovery audit data.');
   }
   return {
     sources: parsed.discoverySources.map((source) => ({ ...source, requests: 0 })),
@@ -101,7 +101,7 @@ async function loadPreviousOfficial(
   const file = path.resolve(projectRoot, 'reports', 'global-remote', 'latest.json');
   const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<GlobalRemoteReport>;
   if (!Array.isArray(parsed.officialAudit)) {
-    throw new Error('Previous global remote report does not contain reusable official audit data');
+    throw new Error('Previous Worldwide / Remote report does not contain reusable official audit data.');
   }
   const previous = new Map(parsed.officialAudit.map((audit) => [audit.id, audit]));
   const audits = profile.officialSources.map((source): OfficialVacancyAudit => {
@@ -170,10 +170,10 @@ export async function runGlobalRemoteScan(
   };
   const http = createDatabaseBackedAtsHttpClient(appConfig, database, {
     onNetworkRequest(url) {
-      logger.debug({ url }, 'Global remote scan HTTP request');
+      logger.debug({ url }, 'Worldwide / Remote scan HTTP request');
     },
     onCacheError(error, operation, url) {
-      logger.warn({ error, operation, url }, 'Global remote scan cache operation failed');
+      logger.warn({ error, operation, url }, 'Worldwide / Remote scan cache operation failed');
     },
   });
   const reuseDiscovery = options.officialOnly === true || options.offlineReclassify === true;

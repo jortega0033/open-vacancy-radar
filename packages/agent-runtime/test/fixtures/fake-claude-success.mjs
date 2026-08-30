@@ -1,6 +1,6 @@
 // Simulates `claude -p ... --output-format stream-json --verbose` on success, including a tool
 // call round-trip and one unrecognized event type (both providers can emit event kinds this
-// codebase doesn't know about yet — the parser must ignore them, not crash).
+// codebase does not know about yet; the parser must ignore them without crashing).
 // Writes output in awkward chunks (split JSON, multiple lines per write) to exercise the
 // line-reader's chunk-boundary handling end to end, not just in isolation.
 const lines = [

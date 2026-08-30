@@ -24,9 +24,7 @@ function describeError(err: unknown, fallback: string): string {
  * table of saved jobs with an inline status select, add/edit through a right-side drawer, and
  * delete through a confirm dialog with a short undo window.
  *
- * Owns the whole lifecycle against `window.workspace`. Deliberately not wired into `App.tsx`
- * here — this page is exported standalone (see `index.ts`) so the shell's router can pick it up
- * once every page agent's work has landed, without every agent racing to edit the same file.
+ * Owns the whole lifecycle against `window.workspace`.
  */
 export function SavedJobsPage() {
   const [jobs, setJobs] = useState<SavedJobRecord[] | null>(null);
@@ -50,7 +48,7 @@ export function SavedJobsPage() {
         const rows = await window.workspace.listSavedJobs();
         if (!cancelled) setJobs(rows);
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load saved jobs'));
+        if (!cancelled) setLoadError(describeError(err, 'Could not load saved jobs.'));
       }
     }
     void load();
@@ -98,7 +96,7 @@ export function SavedJobsPage() {
         }
         setDrawerState(null);
       } catch (err) {
-        setDrawerError(describeError(err, 'could not save this job'));
+        setDrawerError(describeError(err, 'Could not save this job.'));
       } finally {
         setSavingDrawer(false);
       }
@@ -112,7 +110,7 @@ export function SavedJobsPage() {
       const updated = await window.workspace.updateSavedJob(job.id, { status });
       setJobs((prev) => (prev ?? []).map((row) => (row.id === updated.id ? updated : row)));
     } catch (err) {
-      setActionError(describeError(err, 'could not update status'));
+      setActionError(describeError(err, 'Could not update the status.'));
     }
   }, []);
 
@@ -129,14 +127,14 @@ export function SavedJobsPage() {
     setDeleteTarget(null);
     try {
       const result = await window.workspace.deleteSavedJob(job.id);
-      // `{ deleted: false }` means the row was already gone server-side; still drop it locally so
+      // `{ deleted: false }` means the row was already gone on the server. Still drop it locally so
       // the table matches reality, but skip the "undo a delete that didn't happen" toast.
       setJobs((prev) => (prev ?? []).filter((row) => row.id !== job.id));
       if (result.deleted) {
         setPendingUndo({ message: `Deleted "${job.role}" at ${job.company}.`, job });
       }
     } catch (err) {
-      setActionError(describeError(err, 'could not delete this job'));
+      setActionError(describeError(err, 'Could not delete this job.'));
     }
   }, [deleteTarget]);
 
@@ -149,7 +147,7 @@ export function SavedJobsPage() {
       const recreated = await window.workspace.createSavedJob(toSavedJobInput(undo.job));
       setJobs((prev) => [recreated, ...(prev ?? [])]);
     } catch (err) {
-      setActionError(describeError(err, 'could not undo the delete'));
+      setActionError(describeError(err, 'Could not undo the deletion.'));
     }
   }, [pendingUndo]);
 
@@ -180,10 +178,10 @@ export function SavedJobsPage() {
         <EmptyState
           illustration={emptySavedJobsIllustration}
           title="No saved jobs"
-          description="Save vacancies from a scan, or add one manually to compare opportunities and prepare applications."
+          description="Save vacancies from search results, or add one manually to review it and prepare an application."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
-              Add manually
+              Add first job
             </button>
           }
         />

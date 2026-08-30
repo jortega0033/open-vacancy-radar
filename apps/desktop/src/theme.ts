@@ -2,7 +2,7 @@
  * The one place that writes theme/density attributes onto the document element.
  *
  * daisyUI 5 keys every theme off `[data-theme="<name>"]`, and the dark theme in
- * `styles/tokens.css` is declared with `prefersdark: true` — which emits
+ * `styles/tokens.css` is declared with `prefersdark: true`, which emits
  * `@media (prefers-color-scheme: dark) { :root:not([data-theme]) { … } }`. That gives all
  * three states the settings schema needs with no JavaScript media-query listener at all:
  *
@@ -11,7 +11,7 @@
  *   'dark'   → data-theme="openvacancyradar-dark"
  *
  * Density is a separate attribute (`data-density`) driving one custom property, because it
- * is orthogonal to color — see the comment in tokens.css.
+ * is independent of color. See the comment in tokens.css.
  */
 
 export type ThemePreference = 'light' | 'dark' | 'system';

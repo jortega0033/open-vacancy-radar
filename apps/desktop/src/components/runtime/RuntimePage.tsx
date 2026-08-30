@@ -14,7 +14,7 @@ function describeError(err: unknown, fallback: string): string {
 }
 
 export interface RuntimePageProps {
-  /** App-wide daemon connectivity, computed once in App.tsx — every page would otherwise need its
+  /** App-wide daemon connectivity, computed once in App.tsx. Every page would otherwise need its
    * own `getDaemonStatus`/`onDaemonStatus` subscription for the same one piece of state. */
   daemonState: 'connecting' | 'ready' | 'unavailable';
   daemonError?: string;
@@ -24,10 +24,10 @@ export interface RuntimePageProps {
 }
 
 /**
- * The real "AI Runtime" screen from the prototype: which CLIs are available, their capabilities,
+ * The "AI Runtime" screen from the prototype: which CLIs are available, their capabilities,
  * which one AI features run through, and a way to verify a CLI without spending a model call.
  * Replaces the AgentDock template's generic "pick a provider, type a prompt, watch raw events"
- * tester — that panel tested the daemon during development; it was never a feature a job-seeker
+ * tester. That panel tested the daemon during development; it was never a feature a job seeker
  * uses, and nothing in the CV/letter/gap-analysis code paths went through it (they use
  * `useAgentRun` directly).
  */
@@ -46,7 +46,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       setProviders(list);
       setProvidersError(undefined);
     } catch (err) {
-      setProvidersError(describeError(err, 'could not reach the local runtime'));
+      setProvidersError(describeError(err, 'Could not reach the local AI runtime.'));
     }
   }, []);
 
@@ -80,7 +80,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         setVerifyResult(undefined);
         onDefaultProviderChanged?.(updated.defaultProvider);
       } catch (err) {
-        setActionError(describeError(err, 'could not save the default runtime'));
+        setActionError(describeError(err, 'Could not save the default AI CLI.'));
       } finally {
         setSavingDefault(false);
       }
@@ -110,7 +110,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         });
       }
     } catch (err) {
-      setVerifyResult({ kind: 'failed', reason: describeError(err, 'verification failed') });
+      setVerifyResult({ kind: 'failed', reason: describeError(err, 'Verification failed.') });
     } finally {
       setVerifying(false);
     }
@@ -121,7 +121,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       <EmptyState
         illustration={runtimeUnavailableIllustration}
         title="AI runtime unavailable"
-        description={`The local runtime is not available. AI-assisted actions remain disabled until it starts.${daemonError ? ` (${daemonError})` : ''}`}
+        description={`The local AI runtime could not be reached. AI features remain disabled until it starts.${daemonError ? ` (${daemonError})` : ''}`}
       />
     );
   }
@@ -130,7 +130,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
     <div className="max-w-3xl">
       <h2 className="text-lg font-semibold">AI Runtime</h2>
       <p className="mt-2 text-sm text-base-content/70">
-        Open Vacancy Radar uses an AI CLI already installed and authenticated on this computer,
+        Open Vacancy Radar uses a supported AI CLI installed and authenticated on this computer
         through the local AgentDock runtime.
       </p>
       <p className="mt-1 text-xs text-base-content/50">
@@ -139,7 +139,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       </p>
 
       {daemonState === 'connecting' && (
-        <div className="alert alert-info mt-4">Connecting to local daemon…</div>
+        <div className="alert alert-info mt-4">Connecting to local AI runtime…</div>
       )}
       {providersError && <div className="alert alert-error mt-4">{providersError}</div>}
       {actionError && <div className="alert alert-error mt-4">{actionError}</div>}
@@ -161,11 +161,11 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-box border border-base-300 p-4">
         <div>
           <div className="text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
-            Default runtime
+            Default AI CLI
           </div>
           <div className="mt-1 text-sm font-semibold">{PROVIDER_LABEL[defaultProvider]}</div>
           <div className="mt-0.5 text-xs text-base-content/60">
-            Model: CLI default — Open Vacancy Radar uses the model configured by the selected CLI.
+            Model: CLI default. Open Vacancy Radar uses the model configured by the selected CLI.
           </div>
         </div>
         <button type="button" className="btn btn-sm" onClick={() => void verify()} disabled={verifying}>
@@ -176,14 +176,14 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       {verifyResult?.kind === 'ok' && (
         <div className="mt-2.5 rounded-box border border-base-300 bg-base-200 p-3.5 text-xs leading-loose">
           <div>
-            <span className="text-success">✓</span> Executable detected —{' '}
+            <span className="text-success">✓</span> Executable detected:{' '}
             <span className="font-mono">{verifyResult.executablePath}</span>
           </div>
           <div>
-            <span className="text-success">✓</span> Version check passed — {verifyResult.version}
+            <span className="text-success">✓</span> Version check passed: {verifyResult.version}
           </div>
           <div>
-            <span className="text-success">✓</span> Authentication status available — Authenticated
+            <span className="text-success">✓</span> Authentication: Authenticated
           </div>
         </div>
       )}

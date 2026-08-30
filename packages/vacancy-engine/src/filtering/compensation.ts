@@ -69,7 +69,7 @@ export function assessNetherlandsSalary(
     return {
       decision: 'unverified',
       advertisedMonthlyBaseEur: null,
-      reason: `No deterministic EUR base salary was found; the required floor is €${minimumMonthlyBaseEur.toLocaleString('en-US')} gross per month.`,
+      reason: `No EUR base salary could be confirmed from the source; the required floor is €${minimumMonthlyBaseEur.toLocaleString('en-US')} gross per month.`,
     };
   }
   const advertisedMonthlyBaseEur = Math.min(...monthlyCandidates);

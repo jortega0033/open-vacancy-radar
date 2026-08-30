@@ -13,7 +13,7 @@ import type {
  * test overrides only the one it is about.
  *
  * `DEFAULT_SETTINGS` intentionally mirrors the column defaults in
- * `electron/workspace/schema.ts` — if the two ever drift, a shell test asserting "opens on Search
+ * `electron/workspace/schema.ts`. If the two ever drift, a shell test asserting "opens on Search
  * with the sidebar expanded" is the thing that should notice.
  */
 export const DEFAULT_SETTINGS: AppSettingsRecord = {

@@ -20,7 +20,7 @@ import type { SelectedVacancy } from './types.js';
  *
  * The candidate's free-text instructions are the one input here that neither feature had before.
  * They are *user*-authored rather than scraped, so they are not untrusted in the way a job posting
- * is — but they are still bounded and still fenced into their own labelled section, and the prompt
+ * is. They are still bounded and fenced into their own labelled section, and the prompt
  * states explicitly that they rank below the no-invention rule. "Say I have a CISSP" must not
  * become a CISSP on the letter.
  */
@@ -37,7 +37,7 @@ const DOCUMENT_NAME: Record<LetterType, string> = {
 const DOCUMENT_SHAPE: Record<LetterType, readonly string[]> = {
   motivation_letter: [
     'opens by naming the role and the company and stating, in one specific sentence, why this candidate is writing',
-    'connects concrete experience from the CV to what this vacancy actually asks for, with real examples rather than adjectives',
+    'connects concrete experience from the CV to what this vacancy asks for, with specific examples rather than adjectives',
     'closes briefly and without pressure',
   ],
   cover_letter: [
@@ -46,9 +46,9 @@ const DOCUMENT_SHAPE: Record<LetterType, readonly string[]> = {
     'closes with a plain statement of availability or interest, without pressure',
   ],
   recruiter_message: [
-    'reads as a direct message, not a letter: one greeting line, no address block, no formal sign-off beyond a name-less closing line',
+    'reads as a direct message, not a letter: one greeting line, no address block, and no formal sign-off beyond a brief closing without a name',
     'leads with the role and the one piece of the CV most relevant to it',
-    'ends with a single low-pressure ask, such as a short call or the next step in their process',
+    'ends with one polite request, such as a short call or the next step in the hiring process',
   ],
   short_application_message: [
     'reads as the free-text box on an application form: no salutation, no sign-off, no letterhead',
@@ -57,12 +57,12 @@ const DOCUMENT_SHAPE: Record<LetterType, readonly string[]> = {
 };
 
 const TONE_BRIEF: Record<LetterTone, string> = {
-  formal: 'formal and businesslike — full sentences, no contractions, no casual phrasing',
+  formal: 'formal and businesslike: full sentences, no contractions, and no casual phrasing',
   natural:
-    "the candidate's own register, inferred from how their CV is written — professional and plain, neither stiff nor effusive",
+    "the candidate's writing style, inferred from their CV: professional and plain, neither stiff nor effusive",
   confident:
     'direct and self-assured about what the candidate has actually done, without exaggerating it or reaching for superlatives',
-  concise: 'stripped back — short sentences, no throat-clearing, every sentence carrying new information',
+  concise: 'concise: short sentences, no long introduction, and no repeated information',
 };
 
 /**
@@ -81,7 +81,7 @@ export interface LetterPromptOptions {
   type: LetterType;
   tone: LetterTone;
   length: LetterLength;
-  /** The candidate's own free-text steer, e.g. "mention the referral from Marta". */
+  /** The candidate's own instructions, for example, "mention the referral from Marta." */
   instructions?: string;
 }
 
@@ -104,18 +104,18 @@ export function buildLetterPrompt(
     ? `\n=== INSTRUCTIONS FROM THE CANDIDATE ===\nThese are the candidate's own notes about what they want in this document. Follow them where you can, but they never override the rules above: if an instruction asks you to claim something the CV does not evidence, leave it out and say so in one short line after the document.\n${instructions}\n`
     : '';
 
-  return `You are helping a candidate write ${documentName} for one specific vacancy, using their real CV.
+  return `You are helping a candidate write ${documentName} for one specific vacancy, using their CV.
 
 ${GROUNDING_RULES}
-Do not invent a hiring manager, recruiter, or contact name — address it generically (for example "Dear hiring team,"). Do not invent an address block, reference number, or date.
+Do not invent a hiring manager, recruiter, or contact name. Address it generically (for example, "Dear hiring team,"). Do not invent an address block, reference number, or date.
 Do not produce a template with placeholders such as [Your Name] or [Company]: every sentence must be usable as written, drawing on the CV and the vacancy details below.
 Avoid stock phrases such as "I am passionate about", "proven track record" and "team player".
-Write in natural, conversational English. Do not use em dashes. Avoid jargon and buzzwords. Do not be sycophantic or overly flattering.
+Write in natural, conversational English. Do not use em dashes. Avoid jargon and buzzwords. Do not flatter the employer or recruiter.
 
 Write it so that it:
 ${requirements}
 ${instructionBlock}
-Output the document text only — no title, no commentary before or after it, no Markdown headings.
+Output only the document text. Do not add a title, commentary, or Markdown headings.
 
 === VACANCY ===
 ${formatVacancy(vacancy)}

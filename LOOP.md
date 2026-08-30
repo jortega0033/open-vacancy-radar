@@ -1,4 +1,4 @@
-# Loop Engineering — Open Vacancy Radar
+# Loop Engineering: Open Vacancy Radar
 
 Status: installed locally, passive, L1 report-only. No automation has been created.
 
@@ -15,7 +15,7 @@ Status: installed locally, passive, L1 report-only. No automation has been creat
 - May not edit source, auto-fix, push, create or merge PRs, close tickets, or mutate external systems.
 - May delegate to one bounded agency specialist to assist triage; the specialist inherits the same
   L1 boundary and may not edit, push, or open/merge a PR either. `loop_verifier` remains reserved
-  for a future human-approved L2 pilot — its job is approving fixes, which L1 never makes.
+  for a future human-approved L2 pilot. Its job is approving fixes, which L1 never makes.
 
 ## Promotion gate
 

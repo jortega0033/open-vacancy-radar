@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseCodexLoginStatus } from '../src/providers/codex/detect.js';
 
-describe('parseCodexLoginStatus — pure parser (AD-16)', () => {
+describe('parseCodexLoginStatus: pure parser (AD-16)', () => {
   it('returns "authenticated" for a real "Logged in using ChatGPT" line', () => {
     expect(parseCodexLoginStatus('Logged in using ChatGPT')).toBe('authenticated');
   });
@@ -33,7 +33,7 @@ describe('parseCodexLoginStatus — pure parser (AD-16)', () => {
   });
 });
 
-describe('detectCodex — end-to-end failure paths (mocked exec, no real CLI)', () => {
+describe('detectCodex: end-to-end failure paths (mocked exec, no real CLI)', () => {
   beforeEach(() => {
     vi.resetModules();
   });
@@ -52,7 +52,7 @@ describe('detectCodex — end-to-end failure paths (mocked exec, no real CLI)', 
     }));
     const { detectCodex } = await import('../src/providers/codex/detect.js');
     const status = await detectCodex({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'codex --version failed' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'codex --version failed.' });
   });
 
   it('reports "unknown" when the login status check times out', async () => {
@@ -65,7 +65,7 @@ describe('detectCodex — end-to-end failure paths (mocked exec, no real CLI)', 
     }));
     const { detectCodex } = await import('../src/providers/codex/detect.js');
     const status = await detectCodex({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'login status check timed out' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'Login status check timed out.' });
   });
 
   it('reports "authenticated" end to end when both commands succeed with a logged-in line', async () => {

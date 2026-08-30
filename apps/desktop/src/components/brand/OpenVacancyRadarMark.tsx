@@ -6,7 +6,7 @@ export interface OpenVacancyRadarMarkProps extends Omit<SVGProps<SVGSVGElement>,
   label?: string;
 }
 
-/** Compact, theme-safe product mark for sidebar and application chrome. */
+/** Compact product mark that works in each theme and appears in the application shell. */
 export function OpenVacancyRadarMark({ size = 22, label, ...props }: OpenVacancyRadarMarkProps) {
   return (
     <svg

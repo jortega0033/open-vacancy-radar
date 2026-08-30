@@ -13,22 +13,19 @@ import { DataManagement } from './DataManagement.js';
 
 /**
  * Top-level "Settings" screen. Every control autosaves its own field through
- * `window.workspace.updateSettings({ [field]: value })` the moment it changes — there is no page
- * "Save" button — and the "Saved" flash only appears after the IPC call actually resolves, never
+ * `window.workspace.updateSettings({ [field]: value })` the moment it changes. There is no page
+ * "Save" button, and the "Saved" flash only appears after the IPC call resolves, never
  * optimistically. Theme and density additionally take effect immediately via `applyTheme` /
  * `applyDensity` (the same calls App.tsx makes on initial hydration).
- *
- * Deliberately not wired into `App.tsx` here — exported standalone (see `index.ts`) so the
- * shell's router can pick it up in a separate integration pass.
  *
  * What is intentionally NOT on this page:
  *  - Per-source discovery toggles. The main process exposes no per-source configuration IPC, so
  *    rendering toggles for them would be decoration that silently does nothing.
- *  - `sidebarCollapsed` / `lastOpenedPage`. Those are shell bookkeeping written by App.tsx as the
- *    user navigates, not preferences a person sets; `sidebarStart` is the user-facing knob.
+ *  - `sidebarCollapsed` / `lastOpenedPage`. App.tsx records those values as the user navigates;
+ *    they are not preferences a person sets. `sidebarStart` is the user-facing setting.
  */
 
-/** Mirrors the column defaults in electron/workspace/schema.ts — used by both reset actions. */
+/** Mirrors the column defaults in electron/workspace/schema.ts. Used by both reset actions. */
 const SETTINGS_DEFAULTS: AppSettingsPatch = {
   launchAtLogin: false,
   startPage: 'search',
@@ -75,10 +72,10 @@ const SIDEBAR_START_OPTIONS = [
   { value: 'remember_last', label: 'Remember last state' },
 ] as const;
 
-/** Exactly the two pipelines this app can search — never a per-country list. */
+/** Exactly the two search markets this app supports, not a per-country list. */
 const MARKET_OPTIONS = [
   { value: 'netherlands', label: 'Netherlands (IND sponsors)' },
-  { value: 'worldwide', label: 'Worldwide remote' },
+  { value: 'worldwide', label: 'Worldwide / Remote' },
 ] as const;
 
 const LETTER_TYPE_OPTIONS = [
@@ -147,7 +144,7 @@ function SettingsSelect<T extends string>({ id, value, options, disabled, onChan
 
 export interface SettingsPageProps {
   /** Rendered as the "AI runtime" section's "Manage in AI Runtime" button. Optional so the page
-   * still works standalone (e.g. in isolation tests) without a real router behind it. */
+   * still works standalone (for example, in isolation tests) without a router. */
   onNavigateToRuntime?: () => void;
 }
 
@@ -177,7 +174,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         setSettings(loaded);
         setLocationDraft(loaded.defaultLocation);
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load settings'));
+        if (!cancelled) setLoadError(describeError(err, 'Could not load settings.'));
       }
     })();
     void (async () => {
@@ -185,7 +182,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         const docs = await window.workspace.listCvDocuments();
         if (!cancelled) setCvDocuments(docs);
       } catch (err) {
-        if (!cancelled) setCvListError(describeError(err, 'could not load the CV library'));
+        if (!cancelled) setCvListError(describeError(err, 'Could not load the CV library.'));
       }
     })();
     return () => {
@@ -205,7 +202,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   /**
    * The single autosave path: reflect the choice in local state immediately (so the control shows
    * what the user picked), persist just that field, and only report "Saved" once the IPC call has
-   * resolved. On failure the previous record — and any theme/density it implied — is restored.
+   * resolved. On failure, the previous record and any theme/density it implied are restored.
    */
   const changeField = useCallback(
     (patch: AppSettingsPatch) => {
@@ -229,7 +226,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           setLocationDraft(previous.defaultLocation);
           applyTheme(previous.theme);
           applyDensity(previous.density);
-          flash({ kind: 'error', message: describeError(err, 'could not save this setting') });
+          flash({ kind: 'error', message: describeError(err, 'Could not save this setting.') });
         }
       })();
     },
@@ -255,7 +252,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         } catch (err) {
           if (seq !== saveSeq.current) return;
           setSettings(previous);
-          flash({ kind: 'error', message: describeError(err, 'could not save this setting') });
+          flash({ kind: 'error', message: describeError(err, 'Could not save this setting.') });
           return;
         }
         if (seq === saveSeq.current) setSettings(updated);
@@ -266,7 +263,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           if (seq === saveSeq.current) {
             flash({
               kind: 'error',
-              message: `Preference saved, but the system login item could not be updated: ${describeError(err, 'unknown error')}`,
+              message: `Preference saved, but Open Vacancy Radar could not update the startup setting: ${describeError(err, 'Unknown error')}`,
             });
           }
         }
@@ -341,7 +338,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             kind: 'error',
             message: describeError(
               err,
-              target === 'data' ? 'could not reset application data' : 'could not reset settings',
+              target === 'data' ? 'Could not reset application data.' : 'Could not reset settings.',
             ),
           });
         } finally {
@@ -403,7 +400,10 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
       </SettingsSection>
 
       <SettingsSection title="Appearance">
-        <SettingsRow label="Theme" description="System follows the operating system's light/dark preference, live.">
+        <SettingsRow
+          label="Theme"
+          description="System follows your operating system's light or dark theme as it changes."
+        >
           <SegmentedControl
             label="Theme"
             value={settings.theme}
@@ -439,7 +439,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
       <SettingsSection title="Search defaults">
         <SettingsRow
           label="Default market"
-          description="Which of the two search pipelines a new search starts on."
+          description="Which market is selected when you start a new search."
           htmlFor="setting-default-market"
         >
           <SettingsSelect
@@ -484,7 +484,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
       <SettingsSection title="Market integrations">
         <SettingsRow
-          label="Netherlands — IND recognised sponsor verification"
+          label="Netherlands: IND recognised sponsor verification"
           description="Source: IND Public Register · checks employers of Netherlands vacancies."
         >
           <ToggleSwitch
@@ -514,7 +514,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             cvListError
               ? `The CV library could not be loaded: ${cvListError}`
               : cvDocuments.length === 0
-                ? 'No CVs in the library yet — add one on the CV page first.'
+                ? 'No CVs are in the library yet. Add one on the CV page first.'
                 : 'Pre-selected CV for gap analysis and letter generation.'
           }
           htmlFor="setting-default-cv"
@@ -598,11 +598,11 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
       <SettingsSection title="AI runtime">
         <SettingsRow
-          label="Runtime provider"
-          description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
+          label="Default AI CLI"
+          description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · Runs locally through AgentDock`}
         >
           <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
-            Manage in AI Runtime
+            Manage AI runtime
           </button>
         </SettingsRow>
       </SettingsSection>

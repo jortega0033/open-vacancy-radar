@@ -6,13 +6,13 @@ import type { CvDocument } from './types.js';
  * Picks a CV through the `window.cv` bridge and hands the extracted text up.
  *
  * Controlled on purpose: the CV lives in the parent (CvAssistant) so gap analysis and the cover
- * letter share one upload — asking for the same document twice for two features that run
- * side by side would be the obvious flow bug here.
+ * letter share one upload. Asking for the same document twice for two features that run
+ * side by side would add an unnecessary step.
  *
  * The three outcomes of the picker are distinct and all visible: loaded (name + character count,
  * with the text inspectable so the user can confirm the PDF extracted sensibly before it is sent
- * anywhere), cancelled (nothing changes, no error shown — cancelling is not a failure), and failed
- * (the real reason, e.g. a scanned PDF with no selectable text).
+ * anywhere), cancelled (nothing changes and no error appears because cancelling is not a failure), and failed
+ * (the reported reason, for example, a scanned PDF with no selectable text).
  */
 export interface CvUploadProps {
   cv: CvDocument | null;
@@ -35,7 +35,7 @@ export function CvUpload({ cv, onCvChange }: CvUploadProps) {
         setShowText(false);
       }
     } catch (err) {
-      setError(describeError(err, 'could not read that file'));
+      setError(describeError(err, 'Could not read that file.'));
     } finally {
       setIsLoading(false);
     }
@@ -46,8 +46,8 @@ export function CvUpload({ cv, onCvChange }: CvUploadProps) {
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Your CV</div>
         <p className="text-sm text-base-content/60">
-          PDF, plain text or Markdown. The file is read on this machine and its text is only sent to
-          your own Claude Code CLI.
+          PDF, plain text, or Markdown. The file is read on this computer. Its text is sent only to
+          your selected local CLI.
         </p>
 
         <div className="flex flex-wrap items-center gap-2">

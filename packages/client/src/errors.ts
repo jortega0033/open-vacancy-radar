@@ -1,7 +1,7 @@
-/** Base class for every error this client throws — `catch (e) { if (e instanceof AgentDockClientError) ... }` catches all of them. */
+/** Base class for every client error. Use `instanceof AgentDockClientError` to catch all of them. */
 export abstract class AgentDockClientError extends Error {}
 
-/** The daemon could not be reached at all — connection refused, DNS failure, timeout, aborted. */
+/** The daemon could not be reached because the connection was refused, DNS resolution failed, the request timed out, or it was aborted. */
 export class DaemonUnavailableError extends AgentDockClientError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
@@ -11,7 +11,7 @@ export class DaemonUnavailableError extends AgentDockClientError {
 
 /** The daemon rejected the request's bearer token (HTTP 401). */
 export class UnauthorizedError extends AgentDockClientError {
-  constructor(message = 'the daemon rejected this client\'s token') {
+  constructor(message = 'The daemon rejected this client\'s token.') {
     super(message);
     this.name = 'UnauthorizedError';
   }
@@ -19,7 +19,7 @@ export class UnauthorizedError extends AgentDockClientError {
 
 /**
  * The daemon's protocol version doesn't match what this client was built against. Thrown from
- * the first call any client method makes (see client.ts's compatibility check) — never something
+ * the first call any client method makes (see client.ts's compatibility check). It is not something
  * you need to check for manually.
  */
 export class ProtocolMismatchError extends AgentDockClientError {
@@ -27,7 +27,7 @@ export class ProtocolMismatchError extends AgentDockClientError {
     public readonly clientVersion: number,
     public readonly daemonVersion: number,
   ) {
-    super(`this client supports protocol ${clientVersion}, but the daemon reports protocol ${daemonVersion}`);
+    super(`This client supports protocol ${clientVersion}, but the daemon reports protocol ${daemonVersion}.`);
     this.name = 'ProtocolMismatchError';
   }
 }
@@ -43,7 +43,7 @@ export class ValidationError extends AgentDockClientError {
 /** `GET/POST /sessions/:id...` referenced a session id the daemon doesn't know about (HTTP 404). */
 export class SessionNotFoundError extends AgentDockClientError {
   constructor(public readonly sessionId: string) {
-    super(`session not found: ${sessionId}`);
+    super(`Session not found: ${sessionId}.`);
     this.name = 'SessionNotFoundError';
   }
 }
@@ -56,7 +56,7 @@ export class ProviderUnavailableError extends AgentDockClientError {
   }
 }
 
-/** Any other daemon-declared failure — preserves the daemon's own status code and message. */
+/** Any other daemon-declared failure. Preserves the daemon's status code and message. */
 export class DaemonError extends AgentDockClientError {
   constructor(
     message: string,

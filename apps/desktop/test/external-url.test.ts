@@ -14,7 +14,7 @@ describe('isSafeExternalUrl', () => {
 
   it('refuses schemes the OS shell would act on, which a scraped posting can supply', () => {
     // Every one of these is a string a hostile third-party job feed could put in `vacancy.url`;
-    // the Vacancy Leads card renders it as <a target="_blank">, and Electron routes that click to
+    // the Search page renders it as <a target="_blank">, and Electron routes that click to
     // setWindowOpenHandler -> shell.openExternal -> ShellExecute.
     for (const url of [
       'file:///C:/Windows/System32/cmd.exe',

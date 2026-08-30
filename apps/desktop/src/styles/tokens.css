@@ -1,16 +1,14 @@
 /*
- * OpenVacancyRadar design tokens — the single source of truth for all styling.
+ * Open Vacancy Radar design tokens: shared definitions for application styling.
  *
  * This file is the app's only stylesheet entry. It loads Tailwind CSS v4, registers
  * daisyUI (with every built-in theme disabled), and defines the app's two themes:
  * "openvacancyradar" (light, default) and "openvacancyradar-dark".
  *
- * The palette is near-monochrome — surfaces, text and actions are pure grayscale, so
- * emphasis comes from contrast rather than hue — with ONE deliberate exception:
- * success / warning / error carry real green / amber / red, because employer
- * verification, scan outcomes and application status are exactly the kind of
- * at-a-glance state that a grayscale badge cannot communicate honestly. Those three
- * are the only hues in the system; see DESIGN-TOKENS.md.
+ * The palette is nearly monochrome. Surfaces, text, and actions are grayscale, so
+ * emphasis comes from contrast rather than hue. Success, warning, and error states use
+ * green, amber, and red so employer verification, scan outcomes, and application status
+ * remain distinguishable at a glance. Those are the only state hues; see DESIGN-TOKENS.md.
  *
  * Theme switching (daisyUI 5 semantics, verified against node_modules/daisyui/theme/index.js):
  *  - each `@plugin "daisyui/theme"` block emits `[data-theme="<name>"] { … }`
@@ -52,11 +50,11 @@
   --color-neutral: oklch(19.13% 0 0);
   --color-neutral-content: oklch(100% 0 0);
 
-  /* Info stays grayscale on purpose — "we are working on it" is not a status worth a hue,
+  /* Info stays grayscale on purpose. "We are working on it" does not need a status color,
      and a fourth color would dilute the three that matter. */
   --color-info: oklch(94.91% 0 0);
   --color-info-content: oklch(19.13% 0 0);
-  /* The three real state colors: --ok #15803d, --warn #b45309, --danger #b91c1c. */
+  /* State colors: --ok #15803d, --warn #b45309, --danger #b91c1c. */
   --color-success: oklch(52.73% 0.1371 150.07);
   --color-success-content: oklch(100% 0 0);
   --color-warning: oklch(55.53% 0.1455 49);
@@ -99,7 +97,7 @@
 
   --color-info: oklch(29.72% 0 0);
   --color-info-content: oklch(94.31% 0 0);
-  /* --ok #4cae6e, --warn #cf8b2e, --danger #e05252 — lifted for legibility on a dark ground. */
+  /* --ok #4cae6e, --warn #cf8b2e, --danger #e05252. Lifted for legibility on a dark background. */
   --color-success: oklch(67.56% 0.1326 152.54);
   --color-success-content: oklch(20.9% 0 0);
   --color-warning: oklch(69.02% 0.1324 69.97);
@@ -119,7 +117,7 @@
 
 /* Typography and shape tokens for Tailwind utilities (font-sans, text-*, rounded-*). */
 @theme {
-  /* Clean native sans stack — no webfont dependency in an offline desktop app. */
+  /* Native sans-serif stack with no web font dependency in an offline desktop app. */
   --font-sans:
     system-ui, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-mono:
@@ -155,11 +153,11 @@
  */
 @layer base {
   :root {
-    --ovr-row-padding: 0.6875rem; /* 11px — prototype --rowpad */
+    --ovr-row-padding: 0.6875rem; /* 11px (prototype --rowpad) */
   }
 
   [data-density='compact'] {
-    --ovr-row-padding: 0.4375rem; /* 7px — prototype [data-dens="Compact"] */
+    --ovr-row-padding: 0.4375rem; /* 7px (prototype [data-dens="Compact"]) */
   }
 
   body {
@@ -176,7 +174,7 @@
 }
 
 /*
- * Fixed shell geometry from the prototype — sidebar 236px / 64px collapsed, header 52px. Named
+ * Fixed shell geometry from the prototype: sidebar 236px or 64px collapsed, header 52px. Named
  * utilities rather than raw `w-[236px]`, so the numbers live in this file like every other token
  * and the shell components stay inside the approved class vocabulary.
  */

@@ -15,7 +15,7 @@ export interface ApplicationsTableProps {
 }
 
 function formatAppliedDate(iso: string | null): string {
-  if (!iso) return '—';
+  if (!iso) return 'Not applied';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -55,9 +55,9 @@ export function ApplicationsTable({
             <tr key={application.id} className={`ovr-row ${application.archived ? 'opacity-60' : ''}`}>
               <td className="font-semibold">{application.role}</td>
               <td>{application.company}</td>
-              <td>{application.location || '—'}</td>
+              <td>{application.location || 'Not provided'}</td>
               <td>{MARKET_LABEL[application.market]}</td>
-              <td>{application.verification || '—'}</td>
+              <td>{application.verification || 'Not provided'}</td>
               <td>
                 <select
                   aria-label="Application status"
@@ -73,8 +73,8 @@ export function ApplicationsTable({
                 </select>
               </td>
               <td className="whitespace-nowrap">{formatAppliedDate(application.appliedAt)}</td>
-              <td>{application.nextStep || '—'}</td>
-              <td>{application.contact || '—'}</td>
+              <td>{application.nextStep || 'Not provided'}</td>
+              <td>{application.contact || 'Not provided'}</td>
               <td className="text-right whitespace-nowrap">
                 <button type="button" className="btn btn-ghost btn-xs" onClick={() => onEdit(application)}>
                   Edit

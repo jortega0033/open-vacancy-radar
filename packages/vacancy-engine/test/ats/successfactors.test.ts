@@ -31,7 +31,7 @@ describe('SuccessFactorsAdapter', () => {
     expect(createVacancyAdapter('successfactors', http)).toBeInstanceOf(SuccessFactorsAdapter);
   });
 
-  it('hydrates the public sitemap sequentially and normalizes microdata and JSON-LD jobs', async () => {
+  it('loads the public sitemap sequentially and normalizes microdata and JSON-LD jobs', async () => {
     const http = new FixtureHttpClient(await completeRoutes());
 
     const result = await new SuccessFactorsAdapter(http).listVacancies(source);

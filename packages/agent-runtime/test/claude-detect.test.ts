@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseClaudeAuthStatus } from '../src/providers/claude/detect.js';
 
-describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
+describe('parseClaudeAuthStatus: pure parser (AD-16)', () => {
   it('returns "authenticated" for { loggedIn: true }', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: true }))).toBe('authenticated');
   });
@@ -22,7 +22,7 @@ describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ authMethod: 'claude.ai' }))).toBe('unknown');
   });
 
-  it('returns "unknown" when loggedIn is present but not a boolean — never guesses truthy/falsy', () => {
+  it('returns "unknown" when loggedIn is present but is not a boolean', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: 'yes' }))).toBe('unknown');
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: 1 }))).toBe('unknown');
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: null }))).toBe('unknown');
@@ -40,7 +40,7 @@ describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
   });
 });
 
-describe('detectClaude — end-to-end failure paths (mocked exec, no real CLI)', () => {
+describe('detectClaude: end-to-end failure paths (mocked exec, no real CLI)', () => {
   beforeEach(() => {
     vi.resetModules();
   });
@@ -59,7 +59,7 @@ describe('detectClaude — end-to-end failure paths (mocked exec, no real CLI)',
     }));
     const { detectClaude } = await import('../src/providers/claude/detect.js');
     const status = await detectClaude({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'claude --version failed' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'claude --version failed.' });
   });
 
   it('reports "unknown" when the auth status check times out', async () => {
@@ -72,7 +72,7 @@ describe('detectClaude — end-to-end failure paths (mocked exec, no real CLI)',
     }));
     const { detectClaude } = await import('../src/providers/claude/detect.js');
     const status = await detectClaude({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'auth status check timed out' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'Authentication status check timed out.' });
   });
 
   it('reports "authenticated" end to end when both commands succeed with a logged-in response', async () => {
@@ -98,6 +98,6 @@ describe('detectClaude — end-to-end failure paths (mocked exec, no real CLI)',
     }));
     const { detectClaude } = await import('../src/providers/claude/detect.js');
     const status = await detectClaude({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'could not parse claude auth status output' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'Could not parse Claude authentication status output.' });
   });
 });

@@ -25,8 +25,8 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     const vacancy = result.raw;
     return [
       ...shared,
-      { k: 'Arrangement', v: result.arrangement ?? 'Not stated' },
-      { k: 'Employment type', v: 'Not recorded by this pipeline' },
+      { k: 'Work arrangement', v: result.arrangement ?? 'Not stated' },
+      { k: 'Employment type', v: 'Not recorded in this report' },
       { k: 'Salary', v: 'Not published in the Netherlands report' },
       { k: 'Posted', v: formatDate(vacancy.postedAt) },
       { k: 'First seen', v: formatDate(vacancy.firstSeenAt) },
@@ -43,14 +43,14 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
   const vacancy = result.raw;
   return [
     ...shared,
-    { k: 'Arrangement', v: 'Not recorded by this pipeline' },
+    { k: 'Work arrangement', v: 'Not recorded in this report' },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
     {
       k: 'Annualised minimum (USD)',
       v: vacancy.annualizedMinimumUsd == null ? 'Not derivable' : vacancy.annualizedMinimumUsd.toLocaleString(),
     },
-    { k: 'Posted', v: 'Not recorded by this pipeline' },
+    { k: 'Posted', v: 'Not recorded in this report' },
     { k: 'Discovery decision', v: vacancy.decision.replace(/_/g, ' ') },
   ];
 }
@@ -78,7 +78,7 @@ export interface VacancyDetailProps {
  *
  * Notably there is no "CV match %". Neither report compares a vacancy to a CV: the Netherlands
  * report's `score` is deterministic relevance against the engine's *configured candidate profile*,
- * and the worldwide report has no score at all. The only real CV comparison in this app is the
+ * and the worldwide report has no score. The only CV comparison in this app is the
  * on-demand AI gap analysis, so that is what the CV card offers.
  */
 export function VacancyDetail({
@@ -118,14 +118,14 @@ export function VacancyDetail({
               {saveState === 'saved' ? 'Saved' : 'Save job'}
             </button>
             <button className="btn btn-primary btn-sm" type="button" onClick={onToggleAssistant}>
-              {assistantOpen ? 'Hide AI assistant' : 'Use for AI'}
+              {assistantOpen ? 'Close CV assistant' : 'Open CV assistant'}
             </button>
             {isWebUrl(result.url) ? (
               <a className="btn btn-outline btn-sm" href={result.url} target="_blank" rel="noopener noreferrer">
                 Open job
               </a>
             ) : (
-              <span className="badge badge-outline badge-sm">Link withheld: unsafe URL</span>
+              <span className="badge badge-outline badge-sm">Job link hidden because the URL is unsafe</span>
             )}
           </div>
         </div>
@@ -152,12 +152,12 @@ export function VacancyDetail({
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">{result.verification.note}</p>
           </Card>
 
-          <Card label="CV match">
-            <div className="mt-1.5 text-sm font-semibold">Manual review</div>
+          <Card label="CV comparison">
+            <div className="mt-1.5 text-sm font-semibold">Not yet compared</div>
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">
               No score here compares this vacancy to your CV. Run the gap analysis to compare it
               against {defaultCvName ? `your default CV (${defaultCvName})` : 'a CV you load'} using
-              your own Claude Code CLI.
+              your selected local CLI.
             </p>
             <button className="btn btn-outline btn-xs mt-2" type="button" onClick={onToggleAssistant}>
               Analyse against my CV
@@ -179,11 +179,11 @@ export function VacancyDetail({
               </p>
             </Card>
           ) : (
-            <Card label="Vacancy source">
+            <Card label="Job source">
               <div className="mt-1.5 text-sm font-semibold">{result.provider}</div>
               <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-                Discovery feed. This pipeline records no posting date, so freshness must be checked
-                on the vacancy itself.
+                Job feed. This report has no posting date. Check the vacancy page for its
+                current status.
               </p>
             </Card>
           )}
@@ -205,11 +205,11 @@ export function VacancyDetail({
           <SectionHeading
             aside={
               result.market === 'netherlands'
-                ? 'Deterministic engine scoring, against the configured candidate profile'
-                : 'No deterministic scoring in this pipeline'
+                ? 'Rule-based score against the configured candidate profile'
+                : 'No rule-based score for this market'
             }
           >
-            Why this matches you
+            Profile relevance
           </SectionHeading>
 
           {result.market === 'netherlands' ? (
@@ -247,15 +247,15 @@ export function VacancyDetail({
             </div>
           ) : (
             <p className="mt-3 text-sm text-base-content/70">
-              The worldwide pipeline does not score a vacancy against a candidate profile. Use the
-              AI gap analysis for a real comparison against your CV.
+              The worldwide report does not score a vacancy against a candidate profile. Use gap
+              analysis to compare the vacancy with your CV.
             </p>
           )}
 
           {result.reasons.length > 0 && (
             <div className="mt-4">
               <div className="mb-1.5 text-xs font-semibold text-base-content/60">
-                Why this row is in the report
+                Why this vacancy is in the report
               </div>
               <ul className="list-disc pl-5 text-sm text-base-content/70">
                 {result.reasons.map((reason) => (
@@ -269,8 +269,8 @@ export function VacancyDetail({
         <section className="mt-6">
           <SectionHeading>Job description</SectionHeading>
           <p className="mt-3 text-sm leading-relaxed text-base-content/70">
-            Neither scan pipeline stores the posting text, so there is no description to show here.
-            Open the vacancy at its source to read it in full.
+            Neither report includes the posting text. Open the vacancy at its source to read the
+            full description.
           </p>
         </section>
 

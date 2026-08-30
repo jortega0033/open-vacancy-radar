@@ -77,8 +77,8 @@ export interface ApplicationDrawerProps {
 }
 
 /**
- * Add/edit drawer for an application, docked to the right edge — daisyUI's `modal-end` variant
- * gives us that layout plus a themed scrim for free, so nothing here hardcodes an overlay color.
+ * Add/edit drawer for an application, docked to the right edge. daisyUI's `modal-end` variant
+ * provides that layout and a themed scrim, so nothing here hardcodes an overlay color.
  * Field set mirrors the design reference's `drawerApp` block exactly (see
  * design-reference/export-src.html lines ~815-834): everything except the linked-record dropdowns,
  * which pull their options from the lists the parent already fetched via the workspace bridge.
@@ -129,7 +129,7 @@ export function ApplicationDrawer({
     try {
       await onSubmit(input);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed to save application');
+      setError(err instanceof Error ? err.message : 'Could not save the application.');
     } finally {
       setSubmitting(false);
     }
@@ -161,10 +161,10 @@ export function ApplicationDrawer({
               value={draft.savedJobId}
               onChange={(e) => update('savedJobId', e.target.value)}
             >
-              <option value="">None — manual entry</option>
+              <option value="">None (manual entry)</option>
               {savedJobs.map((job) => (
                 <option key={job.id} value={job.id}>
-                  {job.role} — {job.company}
+                  {job.role} · {job.company}
                 </option>
               ))}
             </select>

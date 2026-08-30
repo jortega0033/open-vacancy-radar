@@ -58,8 +58,8 @@ export function badgeCount(counts: WorkspaceCounts, badge: NavBadge | undefined)
 /**
  * Title + contextual subtitle for the 52px workspace header.
  *
- * The subtitles are counts and plain statements of fact on purpose — this header is the one
- * always-visible piece of chrome, so it is the wrong place for a claim the app cannot back up.
+ * The subtitles are counts and plain statements of fact. This header is the one
+ * always-visible part of the interface, so it should contain only claims the app can support.
  */
 export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: string; subtitle: string } {
   switch (page) {
@@ -77,7 +77,7 @@ export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: str
     case 'letters':
       return { title: 'Letters', subtitle: `${counts.letters} documents` };
     case 'runtime':
-      return { title: 'AI Runtime', subtitle: 'Your own Claude Code / Codex CLI, via AgentDock' };
+      return { title: 'AI Runtime', subtitle: 'Uses your local Claude Code or Codex CLI through AgentDock' };
     case 'settings':
       return { title: 'Settings', subtitle: 'Saved automatically to local data' };
   }

@@ -49,7 +49,7 @@ describe('TenderNed supplier domain source', () => {
     ]);
   });
 
-  it('downloads an injected pinned JSON subset through the safe HTTP seam', async () => {
+  it('downloads an injected pinned JSON subset through the safe HTTP client', async () => {
     const http = new FixtureHttpClient(
       new Map([
         [

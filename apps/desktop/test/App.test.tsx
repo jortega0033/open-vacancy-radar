@@ -66,15 +66,15 @@ describe('App', () => {
     });
 
     render(<App />);
-    expect(screen.getByText(/connecting to local daemon/i)).toBeInTheDocument();
+    expect(screen.getByText(/connecting to local ai runtime/i)).toBeInTheDocument();
 
-    statusCallback?.({ state: 'unavailable', error: 'daemon process exited unexpectedly (code 1, signal null)' });
+    statusCallback?.({ state: 'unavailable', error: 'Daemon process exited unexpectedly (code 1, signal null).' });
 
-    await waitFor(() => expect(screen.getByText(/daemon unavailable/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/local ai runtime unavailable/i)).toBeInTheDocument());
     expect(screen.getByText(/exited unexpectedly/)).toBeInTheDocument();
   });
 
-  it('renders the real AI Runtime screen — provider cards, not the old session-runner form', async () => {
+  it('renders the real AI Runtime screen with provider cards, not the old session-runner form', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText(/claude code ready/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'AI Runtime' }));
@@ -83,7 +83,7 @@ describe('App', () => {
     // content instead of the ambiguous name text.
     await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
     expect(screen.getByRole('heading', { level: 1, name: 'AI Runtime' })).toBeInTheDocument();
-    // The old boilerplate's prompt-runner is gone: no cwd input, no free-text prompt box.
+    // The previous prompt runner is gone: no cwd input, no free-text prompt box.
     expect(screen.queryByPlaceholderText('/path/to/project')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /prompt/i })).not.toBeInTheDocument();
   });

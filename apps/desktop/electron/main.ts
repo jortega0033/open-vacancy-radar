@@ -46,16 +46,16 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Two AgentDock windows would each spawn their own daemon sidecar and race over the same
-// discovery file (the daemon's own single-instance guard, see SECURITY.md, would make the
-// second one fail to start) — rather than let that surface as a confusing "daemon unavailable"
-// error, refuse to open a second window at all and focus the existing one instead.
+// discovery file. The daemon's own single-instance guard (see SECURITY.md) would make the
+// second one fail to start. Refuse to open a second window and focus the existing one instead
+// of showing a confusing "daemon unavailable" error.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 }
 
 /**
- * Renderer status only — never the token or base URL. The renderer talks to the daemon
+ * Renderer status only. The token and base URL never leave the main process. The renderer talks to the daemon
  * exclusively through the IPC handlers below, which delegate to `@agent-dock/client`; the
  * `AgentDockClient` instance (which carries the bearer token) never crosses into the renderer
  * process. See SECURITY.md.
@@ -75,7 +75,7 @@ let latestVacancyReport: GlobalRemoteReport | undefined;
 let latestNetherlandsReport: JobRadarReport | undefined;
 
 /**
- * One guard for *both* scan kinds, not one per kind — the two pipelines write the same engine
+ * One guard for *both* scan kinds, not one per kind. The two pipelines write the same engine
  * database, so running them together is exactly as damaging as running two of either. See
  * electron/scan-guard.ts for why the in-process half and the cross-process advisory lock are both
  * needed.
@@ -89,19 +89,19 @@ let closeWorkspaceDb: (() => void) | undefined;
 
 /**
  * Where `config/global-remote-profile-v1.json` and `reports/global-remote/*` live for the vendored
- * engine. Dev-mode only: this assumes the monorepo layout (`apps/desktop/dist-electron` three
- * levels under the repo root, next to `packages/vacancy-engine`) and will need a real resolution
- * strategy — bundling the engine's `config/` as a packaged resource and moving `reports/` under
- * `app.getPath('userData')` — before this app is ever built with `electron-builder`.
+ * engine. Dev mode assumes the monorepo layout (`apps/desktop/dist-electron` three levels under
+ * the repo root, next to `packages/vacancy-engine`). Before packaging with `electron-builder`,
+ * bundle the engine's `config/` as a packaged resource and move `reports/` under
+ * `app.getPath('userData')`.
  */
 function vacancyEngineProjectRoot(): string {
   return join(__dirname, '..', '..', '..', 'packages', 'vacancy-engine');
 }
 
 /**
- * The database itself lives under the OS-provided per-user app data directory, never inside the
- * (potentially read-only, once packaged) install location — the whole point of this engine being
- * embedded is that an end user never touches a file path or a database server.
+ * The database lives under the OS-provided per-user app data directory, never inside the
+ * potentially read-only install location. Because the engine is embedded, users never need to
+ * manage a file path or database server.
  */
 async function ensureVacancyEngine(): Promise<Database> {
   if (vacancyDb) return vacancyDb;
@@ -113,15 +113,15 @@ async function ensureVacancyEngine(): Promise<Database> {
     const config = vacancyEngineConfig();
     const { db } = createDatabaseClient(config.databasePath);
     // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
-    // resolves when the process cwd happens to be `packages/vacancy-engine` — never true once
-    // Electron actually launches. Resolve it against the same dev-mode project root used for
+    // resolves when the process cwd is `packages/vacancy-engine`. Electron does not launch there.
+    // Resolve it against the same dev-mode project root used for
     // `config/` and `reports/` below instead of relying on cwd.
     await migrateDatabase(db, join(vacancyEngineProjectRoot(), 'drizzle'));
     vacancyDb = db;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
-    // sidecar SQLite file keyed to this database path, so it is meaningful across processes
-    // (a `pnpm vacancies:scan` run against the same userData database, a second app instance
-    // that somehow got past the single-instance lock) — not just within this one.
+    // sidecar SQLite file keyed to this database path, so it applies across processes, not only
+    // within this one. Examples include `pnpm vacancies:scan` against the same userData database
+    // or a second app instance that somehow passed the single-instance lock.
     vacancyScanLock = createScanLock(config.databasePath);
     return db;
   })();
@@ -142,8 +142,8 @@ function vacancyEngineConfig() {
 }
 
 /**
- * Opens the personal-workspace database, on the same lazy-init-once contract as
- * `ensureVacancyEngine` above and for the same reasons — `app.whenReady` pre-warms it while the
+ * Opens the personal-workspace database using the same lazy-init-once contract as
+ * `ensureVacancyEngine` above. `app.whenReady` pre-warms it while the
  * window is being created, so a renderer call arriving mid-migration joins that run instead of
  * starting a second `migrate()` against the same SQLite file.
  */
@@ -164,7 +164,7 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
   }
 }
 
-// Namespaces the daemon rendezvous per application (AD-02) — see apps/daemon/src/discovery-file.ts
+// Namespaces the daemon rendezvous per application (AD-02). See apps/daemon/src/discovery-file.ts
 // for the daemon side of this. A fork shipping its own product under a different name should set
 // this to its own id (env var, or hardcode a different literal here) so it doesn't collide with
 // another AgentDock-based app's daemon on the same machine; the reference app just uses the
@@ -206,11 +206,11 @@ function spawnDaemon(): void {
   daemonChild.on('exit', (code, signal) => {
     if (!client) return; // never became ready; startup error already reported
     client = undefined;
-    sendStatus({ state: 'unavailable', error: `daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})` });
+    sendStatus({ state: 'unavailable', error: `Daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'}).` });
   });
 
   waitForDaemonReady(spawnedAt).catch((err: Error) => {
-    sendStatus({ state: 'unavailable', error: `daemon failed to start: ${err.message}` });
+    sendStatus({ state: 'unavailable', error: `Daemon failed to start: ${err.message}` });
   });
 }
 
@@ -223,20 +223,20 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
       try {
         const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
         const candidate = new AgentDockClient({ baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token });
-        // health() also verifies protocol compatibility (see @agent-dock/client) — this doubles
+        // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
         await candidate.health();
         client = candidate;
         sendStatus({ state: 'ready' });
         return;
       } catch {
-        // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
-        // bump) a stale daemon still shutting down — keep polling rather than fail on one miss
+        // The discovery file may be mid-write, the daemon may not be reachable yet, or a stale
+        // daemon may still be shutting down during a development protocol change. Keep polling.
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error('timed out waiting for daemon to become ready');
+  throw new Error('Timed out waiting for daemon to become ready.');
 }
 
 /** Streams one session's events to the renderer and clears `activeSessionId` at its terminal event. */
@@ -258,7 +258,7 @@ function forwardSessionEvents(sessionId: string): void {
       if (controller.signal.aborted) return;
       sendToRenderer(mainWindow, 'daemon:session-event', {
         sessionId,
-        event: { type: 'error', message: `event stream failed: ${(err as Error).message}`, recoverable: false },
+        event: { type: 'error', message: `Event stream failed: ${(err as Error).message}`, recoverable: false },
       });
     }
   })();
@@ -268,7 +268,7 @@ async function killDaemon(): Promise<void> {
   activeStreamAbort?.abort();
   if (client) {
     try {
-      // Cancels every in-flight session over HTTP, not just `activeSessionId` — on Windows,
+      // Cancels every in-flight session over HTTP, not just `activeSessionId`. On Windows,
       // daemonChild.kill() below maps to TerminateProcess, which never gives the daemon's own
       // SIGTERM handler (and its cancelAll()) a chance to run, so this HTTP call is the only
       // reliable way to stop every session's CLI process on that platform. Tracking a single
@@ -286,7 +286,7 @@ const packagedEntryUrl = pathToFileURL(join(__dirname, '..', 'dist', 'index.html
 
 /**
  * Scopes `will-navigate` to exactly the app's own content instead of "any http(s) origin that
- * happens to start with the dev-server URL" or "any file:// path at all" — both of the previous
+ * happens to start with the dev-server URL" or "any file:// path at all". Both previous
  * checks were prefix-based (`url.startsWith(...)`), which a URL like
  * `http://localhost:5173.evil.example` passes against an allowed `http://localhost:5173`. Real
  * origin comparison (dev) and exact-path comparison against the one file this app ever loads
@@ -304,7 +304,7 @@ function isAllowedNavigationTarget(url: string): boolean {
   return url === packagedEntryUrl;
 }
 
-/** Drops any non-http(s) URL rather than handing it to the OS shell — see external-url.ts. */
+/** Drops any non-http(s) URL rather than handing it to the OS shell. See external-url.ts. */
 function openExternalIfSafe(url: string): void {
   if (!isSafeExternalUrl(url)) return;
   void shell.openExternal(url);
@@ -329,7 +329,7 @@ function createWindow(): void {
     },
   });
 
-  // Defense in depth for forks of this boilerplate that later render untrusted content (e.g. a
+  // Defense in depth for forks that later render untrusted content (for example, a
   // link in a tool result): never let the window navigate away from our own app, and never let
   // it spawn an unrestricted child window. Legitimate external links go to the OS browser instead.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -342,7 +342,7 @@ function createWindow(): void {
     openExternalIfSafe(url);
   });
 
-  // Deny every permission request by default — nothing in this UI currently asks for camera,
+  // Deny every permission request by default. Nothing in this UI currently asks for camera,
   // microphone, geolocation, notifications, etc, so there's no legitimate request to allow.
   // Electron's own per-permission/per-platform defaults are inconsistent; this makes the policy
   // explicit and uniform instead of relying on them.
@@ -364,13 +364,13 @@ function createWindow(): void {
 ipcMain.handle('daemon:get-status', (): DaemonStatus => (client ? { state: 'ready' } : { state: 'connecting' }));
 
 ipcMain.handle('daemon:list-providers', async () => {
-  if (!client) throw new Error('daemon is not ready yet');
+  if (!client) throw new Error('Daemon is not ready yet.');
   return client.providers.list();
 });
 
 ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
-  if (!client) throw new Error('daemon is not ready yet');
-  // Validated here too, at the IPC boundary from the (untrusted) renderer — @agent-dock/client
+  if (!client) throw new Error('Daemon is not ready yet.');
+  // Validated here too, at the IPC boundary from the untrusted renderer. @agent-dock/client
   // validates again before it ever builds a request, but that's a different concern (protecting
   // the client's own contract), not a substitute for validating what crossed the privileged
   // boundary from the renderer in the first place.
@@ -382,7 +382,7 @@ ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
 });
 
 ipcMain.handle('daemon:cancel-session', async (_event, input: unknown) => {
-  if (!client) throw new Error('daemon is not ready yet');
+  if (!client) throw new Error('Daemon is not ready yet.');
   const { sessionId } = sessionIdParamSchema.parse({ sessionId: input });
   await client.sessions.cancel(sessionId);
 });
@@ -395,19 +395,17 @@ ipcMain.handle('dialog:select-directory', async () => {
 });
 
 /**
- * A scratch directory the CV/AI features hand to `createSession` as its `cwd`. The daemon requires
- * an existing directory, but these two features are one-shot text generation — the CLI is never
- * asked to touch a file. Pointing it at a dedicated, empty, app-owned folder (rather than the
- * user's repo, their home directory, or `os.tmpdir()` which other processes share) means an agent
- * that decided to look around on its own finds nothing of the user's in reach. The renderer only
- * ever learns this one path; it still cannot read or write it.
+ * A scratch directory the current CV and letter features pass to `createSession` as its `cwd`.
+ * The daemon requires an existing directory, but these sessions generate text and do not ask the
+ * CLI to touch a file. Pointing it at a dedicated, empty, app-owned folder (rather than the user's
+ * repo, home directory, or `os.tmpdir()`, which other processes share) means an agent that looks
+ * around finds none of the user's files in reach. The renderer only learns this one path; it still
+ * cannot read or write it.
  *
  * Be precise about what this is and isn't: it is a good *default*, not an enforced sandbox.
- * `daemon:create-session` accepts whatever `cwd` the renderer sends (the Run panel in App.tsx
- * exists to let the user pick an arbitrary one), so "the CV features run in an empty directory" is
- * a convention the renderer follows, not a boundary the main process imposes. Enforcing it would
- * mean main choosing the `cwd` itself for these sessions — worth doing if the generic
- * arbitrary-`cwd` Run panel is ever removed, but pointless while it is still there.
+ * `daemon:create-session` still accepts whatever `cwd` the renderer sends. The current CV and
+ * letter callers use this scratch directory, but the main process does not enforce that choice.
+ * Enforcing it would require the main process to choose the `cwd` for these sessions.
  */
 async function ensureAiWorkspaceDir(): Promise<string> {
   const dir = join(app.getPath('userData'), 'ai-workspace');
@@ -418,7 +416,7 @@ async function ensureAiWorkspaceDir(): Promise<string> {
 ipcMain.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
 
 /**
- * Opens a native file picker and returns the CV's extracted plain text — never a path the renderer
+ * Opens a native file picker and returns the CV's extracted plain text, not a path the renderer
  * could then ask something else to open, and never raw filesystem access. The renderer cannot
  * choose *which* file is read: only the user can, through the OS dialog. Mirrors
  * `dialog:select-directory` above (null on cancel / no window); a genuine read or parse failure
@@ -453,33 +451,33 @@ interface SaveFileInput {
 const MAX_EXPORT_BYTES = 20_000_000;
 
 function assertSaveFileInput(input: unknown): asserts input is SaveFileInput {
-  if (typeof input !== 'object' || input === null) throw new Error('invalid export request');
+  if (typeof input !== 'object' || input === null) throw new Error('Invalid export request.');
   const { suggestedName, data, encoding, filters } = input as Record<string, unknown>;
   if (typeof suggestedName !== 'string' || !suggestedName.trim()) {
-    throw new Error('"suggestedName" is required');
+    throw new Error('"suggestedName" is required.');
   }
-  if (typeof data !== 'string') throw new Error('"data" must be a string');
-  if (encoding !== 'utf8' && encoding !== 'base64') throw new Error('"encoding" must be "utf8" or "base64"');
-  if (!Array.isArray(filters) || filters.length === 0) throw new Error('"filters" is required');
+  if (typeof data !== 'string') throw new Error('"data" must be a string.');
+  if (encoding !== 'utf8' && encoding !== 'base64') throw new Error('"encoding" must be "utf8" or "base64".');
+  if (!Array.isArray(filters) || filters.length === 0) throw new Error('"filters" is required.');
   for (const filter of filters) {
-    if (typeof filter !== 'object' || filter === null) throw new Error('invalid filter');
+    if (typeof filter !== 'object' || filter === null) throw new Error('Invalid filter.');
     const { name, extensions } = filter as Record<string, unknown>;
     const validExtensions = Array.isArray(extensions) && extensions.every((ext) => typeof ext === 'string');
-    if (typeof name !== 'string' || !validExtensions) throw new Error('invalid filter');
+    if (typeof name !== 'string' || !validExtensions) throw new Error('Invalid filter.');
   }
 }
 
 /**
  * Saves already-finished file bytes to a user-chosen path via the native save dialog. The
- * renderer builds the actual export content — plain markdown text, or a real .docx/.pdf buffer via
- * the `docx`/`jspdf` packages — and hands it across as one payload; main only ever names a path and
+ * renderer builds the actual export content (plain Markdown text or a .docx/.pdf buffer from the
+ * `docx`/`jspdf` packages) and hands it across as one payload. Main only names a path and
  * writes bytes, never generates document content itself.
  */
 ipcMain.handle('system:save-file', async (_event, input: unknown): Promise<{ saved: boolean; path?: string }> => {
   assertSaveFileInput(input);
   if (!mainWindow) return { saved: false };
   const buffer = Buffer.from(input.data, input.encoding);
-  if (buffer.byteLength > MAX_EXPORT_BYTES) throw new Error('export is too large');
+  if (buffer.byteLength > MAX_EXPORT_BYTES) throw new Error('Export is too large.');
 
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export letter',
@@ -494,9 +492,9 @@ ipcMain.handle('system:save-file', async (_event, input: unknown): Promise<{ sav
 
 /**
  * Awaits the engine rather than sampling it. The renderer asks once, on mount, and treats
- * `{ ready: false }` as terminal ("Vacancy engine unavailable") with no retry — so a bare
+ * `{ ready: false }` as terminal ("Vacancy engine unavailable") with no retry. A bare
  * `!!vacancyDb` snapshot lost a startup race: `app.whenReady` starts the first-run migration and
- * creates the window in the same tick, and whenever the React mount won, the Vacancy Leads screen
+ * creates the window in the same tick, and whenever the React mount won, the Search page
  * stayed permanently unavailable until the app was restarted, despite a perfectly healthy engine.
  * Awaiting the initialization means "not ready yet" is simply a slower answer, covered by the
  * panel's existing "Checking vacancy engine status…" state, and `{ ready: false }` now means only
@@ -533,15 +531,15 @@ ipcMain.handle('vacancy:run-scan', async (): Promise<GlobalRemoteReport> => {
  *
  * `runEndToEndScan` takes the engine's advisory lock itself and answers
  * `{ status: 'skipped', reason: 'already-running' }` rather than throwing when it cannot get it,
- * so that outcome is translated into the same error message `vacancy:run-scan` uses — from the
- * renderer's point of view "another scan is running" is one condition, not two.
+ * so that outcome is translated into the same error message `vacancy:run-scan` uses. From the
+ * renderer's point of view, "another scan is running" is one condition, not two.
  */
 ipcMain.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
 
 ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
   const db = await ensureVacancyEngine();
   const lock = vacancyScanLock;
-  if (!lock) throw new Error('vacancy engine is not initialized');
+  if (!lock) throw new Error('Vacancy engine is not initialized.');
 
   return runExclusiveScan(
     async () => {
@@ -578,7 +576,7 @@ ipcMain.handle('workspace:settings:update', async (_event, input: unknown) =>
   workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input)),
 );
 
-/** Badge counts for the sidebar — a dedicated read so the shell never has to fetch three lists. */
+/** Badge counts for the sidebar. A dedicated read keeps the shell from fetching three lists. */
 ipcMain.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
 
 ipcMain.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
@@ -655,21 +653,21 @@ ipcMain.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
  * ---------------------------------------------------------------------------------------------
  * System integration for the Settings page. One narrow verb: mirror the persisted
  * "launch at login" preference into the OS login-item registration. The renderer sends a boolean
- * and nothing else — no app path, no arguments — so this can never register an arbitrary
+ * and nothing else: no app path or arguments. This cannot register an arbitrary
  * executable. The OS keeps its own persistent record (registry key on Windows, login item on
  * macOS), so applying it once at toggle time is sufficient; no startup re-sync is needed.
  * Skipped in dev because `app.setLoginItemSettings` would register the bare Electron binary,
- * not this app — the preference still persists in settings and applies in packaged builds.
+ * not this app. The preference still persists in settings and applies in packaged builds.
  * ---------------------------------------------------------------------------------------------
  */
 ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
-  if (typeof input !== 'boolean') throw new Error('"enabled" must be a boolean');
+  if (typeof input !== 'boolean') throw new Error('"enabled" must be a boolean.');
   if (!app.isPackaged) return;
   app.setLoginItemSettings({ openAtLogin: input });
 });
 
-/** Reads `package.json`'s `version` via Electron's own resolution — never a hand-maintained
- * string the Settings page's About section could drift from. */
+/** Reads `package.json`'s `version` through Electron instead of using a separate string that
+ * could drift from the Settings page's About section. */
 ipcMain.handle('system:get-app-version', (): string => app.getVersion());
 
 if (gotSingleInstanceLock) {

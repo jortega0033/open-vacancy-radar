@@ -18,7 +18,7 @@ type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecor
 
 interface PendingUndo {
   message: string;
-  /** Precomputed by `toApplicationInput` at delete time — undo is a fresh `createApplication`
+  /** Precomputed by `toApplicationInput` at delete time. Undo is a fresh `createApplication`
    * call with the same field values, not a soft-delete restore, so the record this recreates
    * gets a new id. */
   input: ApplicationInput;
@@ -34,8 +34,6 @@ function describeError(err: unknown, fallback: string): string {
  * `ApplicationDrawer`, and delete through `ConfirmDialog` with a short undo window.
  *
  * Owns the whole lifecycle against `window.workspace`, in the same shape as `SavedJobsPage`.
- * Deliberately not wired into `App.tsx` here — exported standalone via `index.ts` so the shell's
- * router can pick it up once every page agent's work has landed.
  */
 export function ApplicationsPage() {
   const [filter, setFilter] = useState<ApplicationFilter>('active');
@@ -54,7 +52,7 @@ export function ApplicationsPage() {
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
 
   // Linked-record dropdowns (saved job / CV / letter) load once, independently of the
-  // applications list itself — a failure here must never block the pipeline table from showing.
+  // applications list itself. A failure here must never block the applications table from showing.
   useEffect(() => {
     let cancelled = false;
     async function loadLinkedRecords() {
@@ -86,7 +84,7 @@ export function ApplicationsPage() {
         const rows = await window.workspace.listApplications(filter);
         if (!cancelled) setApplications(rows);
       } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load applications'));
+        if (!cancelled) setLoadError(describeError(err, 'Could not load applications.'));
       }
     }
     void load();
@@ -124,7 +122,7 @@ export function ApplicationsPage() {
       const updated = await window.workspace.updateApplication(record.id, { status });
       setApplications((prev) => (prev ?? []).map((row) => (row.id === updated.id ? updated : row)));
     } catch (err) {
-      setActionError(describeError(err, 'could not update status'));
+      setActionError(describeError(err, 'Could not update the status.'));
     }
   }, []);
 
@@ -143,7 +141,7 @@ export function ApplicationsPage() {
           return rows.map((row) => (row.id === updated.id ? updated : row));
         });
       } catch (err) {
-        setActionError(describeError(err, 'could not update this application'));
+      setActionError(describeError(err, 'Could not update this application.'));
       }
     },
     [filter],
@@ -162,7 +160,7 @@ export function ApplicationsPage() {
     setDeleteTarget(null);
     try {
       const result = await window.workspace.deleteApplication(record.id);
-      // `{ deleted: false }` means the row was already gone server-side; still drop it locally
+      // `{ deleted: false }` means the row was already gone on the server. Still drop it locally
       // so the table matches reality, but skip the "undo a delete that didn't happen" toast.
       setApplications((prev) => (prev ?? []).filter((row) => row.id !== record.id));
       if (result.deleted) {
@@ -172,7 +170,7 @@ export function ApplicationsPage() {
         });
       }
     } catch (err) {
-      setActionError(describeError(err, 'could not delete this application'));
+      setActionError(describeError(err, 'Could not delete this application.'));
     }
   }, [deleteTarget]);
 
@@ -185,7 +183,7 @@ export function ApplicationsPage() {
       const recreated = await window.workspace.createApplication(undo.input);
       setApplications((prev) => [...(prev ?? []), recreated]);
     } catch (err) {
-      setActionError(describeError(err, 'could not undo the delete'));
+      setActionError(describeError(err, 'Could not undo the deletion.'));
     }
   }, [pendingUndo]);
 

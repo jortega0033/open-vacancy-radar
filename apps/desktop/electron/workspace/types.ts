@@ -1,5 +1,5 @@
 /**
- * The wire contract for the `workspace:*` IPC channels — the single source of truth shared by
+ * The wire contract for the `workspace:*` IPC channels, shared by
  * `electron/main.ts` (which produces these records), `electron/preload.ts` (which types the
  * bridge) and `src/window.d.ts` (which re-exports them to the renderer). Type-only: nothing here
  * is emitted, so the renderer never gains a runtime import from the Electron side.
@@ -230,7 +230,7 @@ export interface WorkspaceCounts {
  * interface; `src/window.d.ts` re-exports it.
  *
  * Flat and explicit on purpose: twenty named capabilities rather than a nested
- * `workspace.savedJobs.create(...)` object or — worse — a `workspace.query(table, verb, payload)`
+ * `workspace.savedJobs.create(...)` object or, worse, a `workspace.query(table, verb, payload)`
  * dispatcher. A flat list is the shape a test can assert exhaustively ("exactly these functions
  * and nothing else"), and it makes adding a capability a visible diff in four files rather than a
  * new string threaded through one generic channel.

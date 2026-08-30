@@ -16,9 +16,8 @@ function formatSavedAt(iso: string): string {
 /**
  * The Saved Jobs table, per the prototype's `savedCols`/`savedRows` (`export-src.html` lines
  * ~278-306): role, company, location, verification, match, salary, saved date, an inline status
- * select, and row actions. Free-text fields (`salary`, `arrangement`, `verification`) render an
- * em dash when unset rather than an empty cell, so a reviewer can tell "not filled in" apart from
- * a rendering glitch.
+ * select, and row actions. Free-text fields (`salary`, `arrangement`, `verification`) say when a
+ * value was not provided rather than leaving an empty cell.
  */
 export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: SavedJobsTableProps) {
   return (
@@ -30,7 +29,7 @@ export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: Saved
             <th>Company</th>
             <th>Location</th>
             <th>Salary</th>
-            <th>Arrangement</th>
+            <th>Work arrangement</th>
             <th>Verification</th>
             <th>Match</th>
             <th>Saved</th>
@@ -44,17 +43,17 @@ export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: Saved
             <tr key={job.id} className="ovr-row hover:bg-base-200">
               <td className="font-medium">{job.role}</td>
               <td className="text-base-content/80">{job.company}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.location || '—'}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.salary ?? '—'}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.arrangement ?? '—'}</td>
+              <td className="whitespace-nowrap text-base-content/70">{job.location || 'Not provided'}</td>
+              <td className="whitespace-nowrap text-base-content/70">{job.salary ?? 'Not provided'}</td>
+              <td className="whitespace-nowrap text-base-content/70">{job.arrangement ?? 'Not provided'}</td>
               <td>
                 {job.verification ? (
                   <span className="badge badge-outline whitespace-nowrap">{job.verification}</span>
                 ) : (
-                  <span className="text-base-content/50">Not verified</span>
+                  <span className="text-base-content/50">Not provided</span>
                 )}
               </td>
-              <td className="font-mono">{job.matchPercent != null ? `${job.matchPercent}%` : '—'}</td>
+              <td className="font-mono">{job.matchPercent != null ? `${job.matchPercent}%` : 'Not scored'}</td>
               <td className="whitespace-nowrap text-base-content/60">{formatSavedAt(job.savedAt)}</td>
               <td>
                 {job.notes.trim() !== '' ? (
@@ -62,7 +61,7 @@ export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: Saved
                     Notes
                   </span>
                 ) : (
-                  <span className="text-base-content/40">—</span>
+                  <span className="text-base-content/40">None</span>
                 )}
               </td>
               <td>

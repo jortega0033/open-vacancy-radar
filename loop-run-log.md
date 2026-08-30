@@ -1,4 +1,4 @@
-# Loop Run Log — Open Vacancy Radar
+# Loop Run Log: Open Vacancy Radar
 
 Append one JSON object per authorized run. Prune entries older than 30 days.
 

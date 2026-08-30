@@ -152,7 +152,7 @@ function makeWorldwideReport(vacancies: DiscoveryVacancyAudit[]): GlobalRemoteRe
 
 /**
  * Every bridge the page (and the CV assistant it can open) touches, with the vacancy engine
- * reported ready — the interesting failure modes here are report-shaped, not engine-shaped.
+ * reported ready. The interesting failure modes here are report-shaped, not engine-shaped.
  */
 function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): VacancyRadarBridge {
   installBridges();
@@ -171,7 +171,7 @@ afterEach(() => {
 });
 
 describe('SearchPage', () => {
-  it('hydrates the Netherlands report on mount without starting a scan', async () => {
+  it('loads the Netherlands report on mount without starting a scan', async () => {
     const bridge = installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
     });
@@ -227,7 +227,7 @@ describe('SearchPage', () => {
     expect(
       screen.getByText(/employer verification is not available for worldwide \/ remote/i),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/nothing was verified about this employer/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/no employer check was performed/i).length).toBeGreaterThan(0);
 
     // None of the Netherlands verification vocabulary may leak into a market that runs no check.
     expect(screen.queryByText(/recognised sponsor/i)).not.toBeInTheDocument();
@@ -244,7 +244,7 @@ describe('SearchPage', () => {
     const bridge = installAllBridges({ runNetherlandsScan: vi.fn().mockReturnValue(scanPromise) });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no report yet/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
 
@@ -264,7 +264,7 @@ describe('SearchPage', () => {
     installAllBridges({ runNetherlandsScan: vi.fn().mockRejectedValue(new Error('network unreachable')) });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no report yet/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
 
@@ -351,7 +351,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText('CV assistant')).toBeInTheDocument());
     // It receives the row the user picked, not the first one in the report.
-    expect(screen.getByText(/freeday — amsterdam/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /hide ai assistant/i })).toBeInTheDocument();
+    expect(screen.getByText(/^freeday · amsterdam$/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /close cv assistant/i })).toBeInTheDocument();
   });
 });

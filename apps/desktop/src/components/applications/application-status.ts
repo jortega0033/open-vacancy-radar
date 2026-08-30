@@ -2,12 +2,12 @@ import type { ApplicationFilter, ApplicationInput, ApplicationRecord, Applicatio
 
 /**
  * Canonical status list/labels/styling. `types.ts` (electron/workspace/types.ts) is the source of
- * truth for the enum itself — nothing here may invent a status the schema does not have.
+ * truth for the enum itself. Nothing here may add a status that the schema does not have.
  *
  * Colors follow DESIGN-TOKENS.md: the pipeline states (preparing/applied/recruiter_screen/
  * interview) are "still working on it" and stay grayscale, matching the "info stays grayscale"
- * rule. `offer` and `rejected` are genuine outcomes, so they get the real success/error hue on the
- * inline `<select>` itself — the option text still names the state either way, so color is never
+ * rule. `offer` and `rejected` are outcomes, so they get the success/error color on the
+ * inline `<select>` itself. The option text still names the state either way, so color is never
  * the only signal.
  */
 export const APPLICATION_STATUS_ORDER: readonly ApplicationStatus[] = [
@@ -42,7 +42,7 @@ export const APPLICATION_STATUS_SELECT_CLASS: Record<ApplicationStatus, string> 
 
 export const MARKET_LABEL: Record<Market, string> = {
   netherlands: 'Netherlands',
-  worldwide: 'Worldwide',
+  worldwide: 'Worldwide / Remote',
 };
 
 export const MARKET_OPTIONS: readonly Market[] = ['netherlands', 'worldwide'];
@@ -59,9 +59,9 @@ export const APPLICATIONS_FILTER_TABS: readonly ApplicationsFilterTab[] = [
 ];
 
 /**
- * Most-recently-applied first, matching the pipeline mental model of "what did I just do." Rows
+ * Most recently applied first, matching the order in which users review recent activity. Rows
  * that have not been applied to yet (still `preparing`, `appliedAt` null) have no date to sort by,
- * so they sink below anything with a real applied date and fall back to a stable alphabetical
+ * so they appear below anything with an applied date and fall back to a stable alphabetical
  * order by role.
  */
 export function sortApplications(applications: readonly ApplicationRecord[]): ApplicationRecord[] {
@@ -80,7 +80,7 @@ export function toDateInputValue(iso: string | null): string {
   return iso ? iso.slice(0, 10) : '';
 }
 
-/** Rebuilds the create payload for an existing record — used to recreate a row on delete-undo. */
+/** Rebuilds the create payload for an existing record, used to recreate a row after undo. */
 export function toApplicationInput(record: ApplicationRecord): ApplicationInput {
   return {
     role: record.role,

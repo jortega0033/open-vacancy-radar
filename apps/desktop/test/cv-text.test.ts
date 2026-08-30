@@ -31,7 +31,7 @@ describe('readCvFile', () => {
 
   it('rejects an unsupported extension even though the dialog filtered for it', async () => {
     const path = await write('cv.docx', 'not really a docx');
-    await expect(readCvFile(path)).rejects.toThrow(/unsupported CV file type "\.docx"/);
+    await expect(readCvFile(path)).rejects.toThrow(/Unsupported CV file type "\.docx"/);
     expect(isSupportedCvFile(path)).toBe(false);
     expect(isSupportedCvFile('/somewhere/CV.PDF')).toBe(true); // extension check is case-insensitive
   });

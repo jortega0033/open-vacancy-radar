@@ -83,11 +83,11 @@ describe('GapAnalysis', () => {
   });
 
   it('surfaces a rejected createSession as an error state instead of an endless spinner', async () => {
-    installBridges({ agentDock: { createSession: vi.fn().mockRejectedValue(new Error('daemon is not ready yet')) } });
+    installBridges({ agentDock: { createSession: vi.fn().mockRejectedValue(new Error('Daemon is not ready yet.')) } });
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
     fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('daemon is not ready yet');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Daemon is not ready yet.');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 

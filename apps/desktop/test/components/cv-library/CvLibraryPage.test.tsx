@@ -40,7 +40,7 @@ describe('CvLibraryPage', () => {
 
     render(<CvLibraryPage />);
 
-    await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no cvs on file/i)).toBeInTheDocument());
     expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('empty-cv');
   });
 
@@ -82,7 +82,7 @@ describe('CvLibraryPage', () => {
     installCvBridge();
 
     render(<CvLibraryPage />);
-    await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no cvs on file/i)).toBeInTheDocument());
 
     // The empty state's own call-to-action shares this label with the header button.
     const addButtons = screen.getAllByRole('button', { name: /add manual profile/i });
@@ -165,7 +165,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /set as default/i }));
 
     await waitFor(() => expect(setDefaultCvDocument).toHaveBeenCalledWith('b'));
-    // Exactly one badge (excluding the "Default" column header) — proves the demotion round-tripped.
+    // Exactly one badge (excluding the "Default" column header) proves the demotion round-tripped.
     await waitFor(() => expect(screen.getAllByText('Default', { selector: '.badge' })).toHaveLength(1));
 
     const rows = screen.getAllByRole('row');
@@ -189,7 +189,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(deleteCvDocument).toHaveBeenCalledWith('del-1'));
-    await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no cvs on file/i)).toBeInTheDocument());
   });
 
   it('cancels a delete without calling deleteCvDocument', async () => {
@@ -219,7 +219,7 @@ describe('CvLibraryPage', () => {
     installCvBridge({ selectAndRead });
 
     render(<CvLibraryPage />);
-    await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no cvs on file/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^upload cv$/i }));
     await waitFor(() => expect(selectAndRead).toHaveBeenCalledTimes(1));

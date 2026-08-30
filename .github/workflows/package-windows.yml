@@ -1,9 +1,9 @@
 name: Windows Packaging
 
-# Proves the NSIS packaging pipeline (electron-builder) still produces a real installer — the
+# Proves the NSIS packaging pipeline (electron-builder) still produces an installer. This is the
 # one thing Core CI's `pnpm build` alone doesn't exercise. See docs/packaging.md for why a
 # packaging-sensitive change needs this and not just a plain build. No signing, no publishing,
-# no release automation — this only verifies packaging still works.
+# and no release automation. This workflow only verifies packaging.
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
         run: pnpm package:win
 
       # `pnpm package:win` can exit 0 without electron-builder actually having produced an
-      # installer (e.g. a silently-skipped target) — fail the job explicitly rather than trust
+      # installer (for example, a silently skipped target). Fail the job explicitly instead of trusting
       # the exit code alone.
       - name: Verify installer was produced
         shell: pwsh

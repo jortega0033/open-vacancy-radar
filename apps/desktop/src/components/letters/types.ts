@@ -59,7 +59,7 @@ export function labelFor<T extends string>(options: readonly LetterOption<T>[], 
 /**
  * Monochrome on purpose, for the same reason App.tsx keeps run statuses grayscale: draft/final/sent
  * are lifecycle positions, not outcomes. A sent letter is not "good" and a draft is not "bad", so
- * the three real state hues in the token set stay reserved for things that genuinely are (see
+ * the three state colors in the token set stay reserved for outcomes (see
  * DESIGN-TOKENS.md). The status word itself is always rendered, so the badge is never the only cue.
  */
 export const LETTER_STATUS_BADGE_CLASS: Record<LetterStatus, string> = {

@@ -78,13 +78,13 @@ export function renderGlobalRemoteHtml(report: GlobalRemoteReport): string {
   const stats = report.statistics;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Global Remote Frontend Radar</title>
+<title>Open Vacancy Radar: Worldwide / Remote Frontend Jobs</title>
 <style>
 body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2rem;color:#17202a;background:#f7f9fb}h1,h2{line-height:1.2}a{color:#0757a6}code{font-size:.85rem}table{width:100%;border-collapse:collapse;background:white;margin:1rem 0 2rem}th,td{text-align:left;vertical-align:top;border:1px solid #d8dee4;padding:.65rem}th{background:#edf2f7}ul{margin:.25rem 0;padding-left:1.25rem}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem}.card{background:white;border:1px solid #d8dee4;border-radius:8px;padding:1rem}.number{font-size:1.7rem;font-weight:700}.warning{background:#fff8dc;border-left:4px solid #d39e00;padding:1rem}small{color:#5f6b76}
 </style></head><body>
-<h1>Global Remote Frontend Radar</h1>
+<h1>Open Vacancy Radar: Worldwide / Remote Frontend Jobs</h1>
 <p>Generated ${escapeHtml(report.generatedAt)} · Run ${escapeHtml(report.runId)}</p>
-<p class="warning">A discovery-board label is never treated as final proof. Strict matches require a current official employer/ATS source, fully remote work from the Netherlands, no US-only authorization gate, and a guaranteed USD annual base floor of ${money(report.criteria.minimumAnnualBaseUsd)}.</p>
+<p class="warning">A discovery-board label is never treated as final proof. Strict matches require a current official employer career site or applicant tracking system, fully remote work from the Netherlands, no US-only authorization gate, and a guaranteed USD annual base floor of ${money(report.criteria.minimumAnnualBaseUsd)}.</p>
 <div class="cards">
   <div class="card"><div class="number">${stats.strictMatches}</div>strict matches</div>
   <div class="card"><div class="number">${stats.manualReview}</div>manual checks</div>
@@ -102,7 +102,7 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
 <p>The complete per-listing record, including role mismatches, is in <code>latest.audit.ndjson</code>.</p>
 ${discoveryRows(report.discoveryAudit)}
 <h2>Source integration registry</h2>
-<p>${stats.activeRegistrySources} active, ${stats.gatedRegistrySources} credential/partner/blocked, and ${stats.manualOrProhibitedRegistrySources} manual or prohibited. A registry entry is not counted as an active adapter unless the scan actually has a deterministic integration.</p>
+<p>${stats.activeRegistrySources} active, ${stats.gatedRegistrySources} credential/partner/blocked, and ${stats.manualOrProhibitedRegistrySources} manual or prohibited. A registry entry is counted as an active adapter only when the scan has an implemented integration for it.</p>
 ${registryRows(report.sourceRegistry)}
 <h2>Method</h2><ul>${report.methodology.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
 <h2>Attribution</h2><ul>${report.attribution.map((item) => `<li>${link(item.url, item.name)}</li>`).join('')}</ul>
@@ -113,7 +113,7 @@ function safeOutputDirectory(projectRoot: string): string {
   const output = path.resolve(projectRoot, 'reports', 'global-remote');
   const relative = path.relative(projectRoot, output);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('Global remote report path must remain inside the project root');
+    throw new Error('Global remote report path must remain inside the project root.');
   }
   return output;
 }

@@ -66,7 +66,7 @@ export function classifyDiscoveryVacancy(input: {
   if (input.annualizedMinimumUsd === null) {
     return {
       decision: 'salary_unverified',
-      reasons: ['No deterministic USD annual base floor can be established from discovery metadata.'],
+      reasons: ['No USD annual base salary floor could be confirmed from the discovery data.'],
     };
   }
   if (input.annualizedMinimumUsd < input.minimumAnnualBaseUsd) {

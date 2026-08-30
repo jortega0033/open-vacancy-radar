@@ -10,7 +10,7 @@ export type SemanticScoringRequest = {
   vacancy: NormalizedVacancy;
 };
 
-/** Optional provider-neutral seam. V1 intentionally ships without a paid provider implementation. */
+/** Optional provider-neutral interface. V1 ships without a paid provider implementation. */
 export type SemanticScorer = {
   readonly configVersion: string;
   score(request: SemanticScoringRequest): Promise<SemanticScore>;

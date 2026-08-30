@@ -37,7 +37,7 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-sm font-semibold">{result.title}</span>
         {result.profileScore != null && (
-          <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
+          <span className="flex-none font-mono text-xs text-base-content/70" title="Rule-based profile score">
             {result.profileScore}
           </span>
         )}
@@ -91,7 +91,7 @@ export function SearchResultList({
           title="No vacancies found"
           description={
             totalCount > 0
-              ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
+              ? 'No vacancy in the loaded report matches these filters. Change the role, location, or filters.'
               : 'The latest report for this market contains no vacancies.'
           }
         />

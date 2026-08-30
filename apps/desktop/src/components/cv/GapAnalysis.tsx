@@ -7,7 +7,7 @@ import type { CvDocument, VacancyLead } from './types.js';
 
 /**
  * Compares the loaded CV against one vacancy via the user's own installed CLI and streams the
- * answer back. Self-contained: it owns its run state, so wiring it into the app shell is a single
+ * answer back. It owns its run state, so the app shell only needs to render
  * `<GapAnalysis cv={cv} vacancy={vacancy} />`.
  */
 export interface GapAnalysisProps {

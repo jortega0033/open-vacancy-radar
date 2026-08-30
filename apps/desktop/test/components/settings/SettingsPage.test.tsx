@@ -74,7 +74,7 @@ describe('SettingsPage', () => {
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('renders exactly these sections — no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections, with no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
@@ -192,7 +192,7 @@ describe('SettingsPage', () => {
     fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/login item could not be updated.*registry denied/i),
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not update the startup setting.*registry denied/i),
     );
     // The preference row itself did save; the toggle stays on rather than silently reverting.
     expect(bridge.updateSettings).toHaveBeenCalledWith({ launchAtLogin: true });
@@ -205,7 +205,7 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     const input = await screen.findByLabelText('Default location');
 
-    fireEvent.blur(input); // unchanged — no save
+    fireEvent.blur(input); // Unchanged, so no save.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
 
     fireEvent.change(input, { target: { value: 'Amsterdam' } });
@@ -236,7 +236,7 @@ describe('SettingsPage', () => {
 
     const select = await screen.findByLabelText('Default CV');
     expect(select).toBeDisabled();
-    expect(screen.getByText(/no cvs in the library yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no cvs are in the library yet/i)).toBeInTheDocument();
   });
 
   it('resets settings to schema defaults after confirmation, re-applying theme and density', async () => {
