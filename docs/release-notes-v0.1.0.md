@@ -1,0 +1,51 @@
+# Release notes — v0.1.0
+
+First packaged release. Windows only.
+
+## What's in
+
+- **Vacancy discovery** across the public sources in
+  [job-source-policy.md](job-source-policy.md) (ATS APIs, RSS feeds, official registries), scored
+  and deduplicated by the local vacancy engine.
+- **Application tracker**: save jobs, log applications, track status.
+- **CV library**: upload/manage multiple CVs, AI-assisted parsing into structured profile data
+  (see issue #25's delivered work — replaces the earlier OCR-based approach).
+- **Letters**: AI-assisted cover-letter drafting per application, with copy-to-clipboard and
+  export (md/docx/pdf).
+- **AgentDock runtime**: BYOS model — features that use AI run through your own installed and
+  authenticated `claude` or `codex` CLI. This app never holds an API key and never talks to an
+  AI provider directly; see [README.md#what-this-is-not](../README.md#what-this-is-not).
+- **Optional MCP job-source providers**: connect additional providers with credentials stored in
+  your OS's native credential store, never in plaintext (see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)).
+- No telemetry, no account, no cloud sync — see [privacy.md](privacy.md).
+
+## Known limitations
+
+- **Windows only.** macOS and Linux are untested and unpackaged; see
+  [packaging.md#platform-matrix](packaging.md#platform-matrix).
+- **Unsigned installer.** Expect a Windows SmartScreen warning on first run; see
+  [packaging.md#unsigned-installer-and-smartscreen](packaging.md#unsigned-installer-and-smartscreen).
+- **No backup/restore feature.** Your data is a plain SQLite file you'd copy yourself; see
+  [troubleshooting.md#backing-up-and-restoring-your-workspace](troubleshooting.md#backing-up-and-restoring-your-workspace).
+- **No vacancy-cache pruning.** `vacancy-engine.db` grows unbounded over time (safe to delete; see
+  [privacy.md#retention-and-deletion](privacy.md#retention-and-deletion)).
+- **Single instance only.** Launching a second copy focuses the existing window rather than
+  running two daemons concurrently; see
+  [daemon.md#single-instance-behavior](daemon.md#single-instance-behavior).
+- AI features require you to separately install and authenticate a `claude` or `codex` CLI
+  yourself — this app doesn't bundle or provision one.
+
+## Privacy implications
+
+Using the AI-assisted features (CV parsing, gap analysis, letter drafting) sends your CV text and
+job details as a prompt to whichever CLI/provider you've chosen, subject to that provider's own
+terms — not this project's. Everything else (saved jobs, applications, settings, navigation) never
+leaves your machine. Full detail in [privacy.md](privacy.md).
+
+## Deferred to a future release
+
+- macOS/Linux packaging and code signing.
+- In-app backup/export/restore.
+- Vacancy-cache pruning/retention limits.
+- Branch-protection and CI release-gating policy decisions.

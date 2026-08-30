@@ -32,6 +32,18 @@ import {
 } from './errors.js';
 import { parseSseStream } from './sse.js';
 
+/**
+ * Trims trailing `/` characters without a regex. `baseUrl` is caller-supplied, and a
+ * quantifier-anchored pattern here (`/\/+$/`) is exactly the shape CodeQL's polynomial-ReDoS query
+ * flags on unbounded input — a plain backward scan is O(n) with no backtracking possible at all,
+ * so this closes the finding structurally rather than arguing the input happens to be trusted today.
+ */
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return url.slice(0, end);
+}
+
 export interface AgentDockClientOptions {
   /** e.g. `http://127.0.0.1:54321` (no trailing slash required). */
   baseUrl: string;
@@ -96,7 +108,7 @@ export class AgentDockClient {
   };
 
   constructor(options: AgentDockClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = stripTrailingSlashes(options.baseUrl);
     this.token = options.token;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }

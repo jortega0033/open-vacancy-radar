@@ -7,6 +7,7 @@ import {
   RELEVANCE_THRESHOLD,
   detectDutchRequirement,
   isDeterministicallyRelevant,
+  plainText,
   scoreVacancy,
 } from '../../src/filtering/index.js';
 
@@ -801,5 +802,30 @@ describe('Netherlands salary gate', () => {
     expect(result.reasons).toContain(
       'No salary eligibility cap applied because vacancies with undisclosed salary remain reviewable.',
     );
+  });
+});
+
+describe('plainText (CodeQL js/double-escaping regression)', () => {
+  it('decodes a single-escaped entity normally', () => {
+    expect(plainText('Tom &amp; Jerry')).toBe('Tom & Jerry');
+    expect(plainText('5 &lt; 10')).toBe('5 &lt; 10'); // &lt; isn't in the decode list; left as-is on purpose
+  });
+
+  it('does not double-decode an entity that was already escaped in the source', () => {
+    // `&amp;quot;` in source HTML displays the literal text `&quot;` on the page (the `&` was
+    // escaped so the browser doesn't try to parse `&quot;` as an entity). Decoding this in two
+    // independent passes turns it all the way into `"`, one level of decoding too far, which is
+    // exactly what CodeQL's double-escaping query flags. A single pass must stop at `&quot;`.
+    expect(plainText('&amp;quot;Angular&amp;quot; developer wanted')).toBe(
+      '&quot;Angular&quot; developer wanted',
+    );
+  });
+
+  it('still fully decodes entities that were only escaped once', () => {
+    expect(plainText('&quot;Angular&quot; developer wanted')).toBe('"Angular" developer wanted');
+  });
+
+  it('handles every supported entity, including numeric forms, in one pass', () => {
+    expect(plainText('A&nbsp;B&#160;C&quot;D&#34;E&#39;F&apos;G')).toBe("A B C\"D\"E'F'G");
   });
 });
