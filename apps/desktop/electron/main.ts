@@ -29,6 +29,10 @@ import {
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
 import { resolveWindowIcon } from './resolve-window-icon.js';
+import {
+  resolveVacancyEngineDataRoot,
+  resolveVacancyEngineMigrationsFolder,
+} from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, SCAN_BUSY_OTHER_PROCESS } from './scan-guard.js';
@@ -112,35 +116,46 @@ function vacancyEngineProjectRoot(): string {
 
 /** Read-only migration SQL, shipped as an extraResource (see electron-builder.yml). */
 function vacancyEngineMigrationsFolder(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'vacancy-engine', 'drizzle')
-    : join(vacancyEngineProjectRoot(), 'drizzle');
+  return resolveVacancyEngineMigrationsFolder({
+    vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
 }
 
-let vacancyEngineDataRootInit: Promise<string> | undefined;
+let vacancyEngineDataRootInit: Promise<void> | undefined;
 
 /**
  * Where the engine reads `config/*.json` (including `company-domain-candidates-v1.json`, which it
  * also *writes* back to across scans — not purely static input) and writes `reports/`/`.data/`.
- * Once packaged, `resourcesPath` isn't guaranteed writable and isn't the project source tree, so
- * this resolves to a `vacancy-engine` subdirectory under the same per-user app-data directory the
- * database itself lives in, seeded on first run from the read-only `config/` shipped as an
- * extraResource. Idempotent and safe to call on every launch: only copies `config/` files that
- * don't already exist at the destination, so an update-carried-forward `company-domain-candidates-v1.json`
- * from a previous run is never overwritten by the packaged default.
+ * Once packaged, this seeds `config/` from the read-only copy shipped as an extraResource.
+ * `force: false` skips only the individual destination files that already exist (so an
+ * update-carried-forward `company-domain-candidates-v1.json` is never overwritten by the packaged
+ * default) rather than gating on whether the whole directory exists: a launch interrupted mid-copy,
+ * or a future release adding a new config file, both still complete on the next call instead of
+ * leaving a partial `config/` permanently stuck. Retries on failure like the two lazy-init
+ * functions below, for the same reason: a transient error (disk full, AV lock) shouldn't wedge
+ * every scan for the rest of the process's lifetime.
  */
 async function vacancyEngineDataRoot(): Promise<string> {
-  if (!app.isPackaged) return vacancyEngineProjectRoot();
-  vacancyEngineDataRootInit ??= (async () => {
-    const root = join(app.getPath('userData'), 'vacancy-engine');
-    const configDir = join(root, 'config');
-    if (!existsSync(configDir)) {
-      await mkdir(configDir, { recursive: true });
-      await cp(join(process.resourcesPath, 'vacancy-engine', 'config'), configDir, { recursive: true });
-    }
+  const root = resolveVacancyEngineDataRoot({
+    vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
+    isPackaged: app.isPackaged,
+    userDataPath: app.getPath('userData'),
+  });
+  if (!app.isPackaged) return root;
+  vacancyEngineDataRootInit ??= cp(
+    join(process.resourcesPath, 'vacancy-engine', 'config'),
+    join(root, 'config'),
+    { recursive: true, force: false },
+  );
+  try {
+    await vacancyEngineDataRootInit;
     return root;
-  })();
-  return vacancyEngineDataRootInit;
+  } catch (error) {
+    vacancyEngineDataRootInit = undefined;
+    throw error;
+  }
 }
 
 /**
