@@ -49,7 +49,7 @@ function sseResponse(frames: string[], status = 200) {
   return { ok: status >= 200 && status < 300, status, headers: new Headers(), body, json: async () => ({}) } as Response;
 }
 
-describe('AgentDockClient — health / protocol compatibility', () => {
+describe('AgentDockClient: health / protocol compatibility', () => {
   it('resolves health() when the daemon reports a matching protocol version', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(healthOk());
     const client = makeClient(fetchImpl);
@@ -99,7 +99,7 @@ describe('AgentDockClient — health / protocol compatibility', () => {
   });
 });
 
-describe('AgentDockClient — policy-gated MCP API', () => {
+describe('AgentDockClient: policy-gated MCP API', () => {
   it('uses fixed MCP routes and validates statuses returned by the daemon', async () => {
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/health')) return healthOk();
@@ -139,7 +139,7 @@ describe('AgentDockClient — policy-gated MCP API', () => {
   });
 });
 
-describe('AgentDockClient — transport and auth errors', () => {
+describe('AgentDockClient: transport and auth errors', () => {
   it('throws DaemonUnavailableError when fetch itself rejects (connection refused)', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
     const client = makeClient(fetchImpl);
@@ -179,7 +179,7 @@ describe('AgentDockClient — transport and auth errors', () => {
   });
 });
 
-describe('AgentDockClient — providers', () => {
+describe('AgentDockClient: providers', () => {
   it('lists providers', async () => {
     const provider = { id: 'claude', name: 'Claude Code', installed: true, authenticated: 'authenticated', capabilities: CAPS };
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
@@ -210,7 +210,7 @@ describe('AgentDockClient — providers', () => {
   });
 });
 
-describe('AgentDockClient — sessions', () => {
+describe('AgentDockClient: sessions', () => {
   const session = {
     id: '123e4567-e89b-12d3-a456-426614174000',
     provider: 'claude',
@@ -277,7 +277,7 @@ describe('AgentDockClient — sessions', () => {
   });
 });
 
-describe('AgentDockClient — SSE event streaming', () => {
+describe('AgentDockClient: SSE event streaming', () => {
   it('yields validated events and ends the iteration at the terminal event', async () => {
     const frames = [
       `data: ${JSON.stringify({ type: 'session.started', sessionId: 's1', provider: 'claude', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' })}\n\n`,
@@ -355,7 +355,7 @@ describe('AgentDockClient — SSE event streaming', () => {
         err.name = 'AbortError';
         throw err;
       }
-      // Never resolves on its own — only aborting ends this.
+      // Never resolves on its own: only aborting ends this.
       return new Promise<Response>(() => {});
     });
     const client = makeClient(fetchImpl);

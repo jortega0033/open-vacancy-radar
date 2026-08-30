@@ -10,7 +10,7 @@ export interface AppSidebarProps {
   collapsed: boolean;
   onToggleCollapsed(): void;
   counts: WorkspaceCounts;
-  /** e.g. "Claude Code" — the provider the AI features would use right now. */
+  /** e.g. "Claude Code": the provider the AI features would use right now. */
   runtimeLabel: string;
   runtimeReady: boolean;
 }
@@ -18,7 +18,7 @@ export interface AppSidebarProps {
 /**
  * The persistent left rail: 236px expanded, 64px collapsed.
  *
- * Collapsed is a real mode, not a visual trick — the labels are removed from the accessibility
+ * Collapsed is a real mode, not a visual trick. The labels are removed from the accessibility
  * tree along with the pixels, and each button keeps an `aria-label` plus a `title` so it is still
  * both announced and hoverable. `aria-current="page"` marks the active destination for screen
  * readers; the visual selected state (a `base-300` fill) is the same information for everyone

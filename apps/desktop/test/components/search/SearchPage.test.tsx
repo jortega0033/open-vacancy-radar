@@ -155,7 +155,7 @@ function makeWorldwideReport(
 
 /**
  * Every bridge the page (and the CV assistant it can open) touches, with the vacancy engine
- * reported ready — the interesting failure modes here are report-shaped, not engine-shaped.
+ * reported ready. The interesting failure modes here are report-shaped, not engine-shaped.
  */
 function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): VacancyRadarBridge {
   installBridges();
@@ -380,7 +380,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText('CV assistant')).toBeInTheDocument());
     // It receives the row the user picked, not the first one in the report.
-    expect(screen.getByText(/freeday — amsterdam/i)).toBeInTheDocument();
+    expect(screen.getByText(/freeday, amsterdam/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /hide ai assistant/i })).toBeInTheDocument();
   });
 });

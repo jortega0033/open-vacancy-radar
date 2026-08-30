@@ -17,11 +17,11 @@ test.describe('Settings', () => {
 
   test('settings persist across a full app relaunch', async () => {
     // Every setting change here is saved to the embedded workspace SQLite file the moment it's
-    // made (SettingsPage's subtitle says as much: "Saved automatically to local data") — this
+    // made (SettingsPage's subtitle says as much: "Saved automatically to local data"). This
     // confirms that promise across a real process restart, not just within one running instance.
     // This test can't use the `electronApp` fixture (it needs to close and relaunch mid-test
     // against the same user-data dir), so it calls `launchApp` directly and is responsible for its
-    // own cleanup — both processes are closed in `finally`, not just after each succeeds, so a
+    // own cleanup: both processes are closed in `finally`, not just after each succeeds, so a
     // failing assertion between launches can't leave one running on the CI runner.
     const userDataDir = mkdtempSync(join(tmpdir(), 'ovr-e2e-settings-'));
     let first: ElectronApplication | undefined;

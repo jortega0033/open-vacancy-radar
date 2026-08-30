@@ -72,7 +72,7 @@ export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) 
         <div className="card-title text-base font-bold">Cover letter</div>
         <p className="text-sm text-base-content/60">
           A motivation letter for this specific vacancy, written from your actual CV. Read it before
-          you send it — it is a first draft, not a submission.
+          you send it: it is a first draft, not a submission.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}

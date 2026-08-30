@@ -14,7 +14,7 @@ body:
     id: source
     attributes:
       label: Source and operator
-      placeholder: Workable — Workable Technology Limited
+      placeholder: Workable (Workable Technology Limited)
     validations:
       required: true
 
@@ -56,9 +56,9 @@ body:
       label: Lawful ingestion mode
       description: Choose the broadest mode supported by the evidence above. Unclear republication rights should use linked index, not hard stop.
       options:
-        - Full ingestion — explicit reuse or open-data permission
-        - Linked index — public interface, no prohibition, factual metadata and canonical link only
-        - Hard stop — explicit prohibition or concrete access/legal boundary
+        - Full ingestion (explicit reuse or open-data permission)
+        - Linked index (public interface, no prohibition, factual metadata and canonical link only)
+        - Hard stop (explicit prohibition or concrete access/legal boundary)
     validations:
       required: true
 

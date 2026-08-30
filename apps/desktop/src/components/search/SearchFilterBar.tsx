@@ -13,14 +13,14 @@ export interface SearchFilterBarProps {
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
   onSearch: () => void;
   onClear: () => void;
-  /** Provider ids present in the loaded report — never a hardcoded list. */
+  /** Provider ids present in the loaded report: never a hardcoded list. */
   sources: string[];
   /** Employment types present in the loaded report (worldwide only). */
   employmentTypes: string[];
   busy: boolean;
   /** "Search" before the first scan, "Rescan sources" once a report is loaded. */
   searchLabel: string;
-  /** Whether a rescan is offered — only meaningful once something is already loaded. */
+  /** Whether a rescan is offered: only meaningful once something is already loaded. */
   canRescan: boolean;
   onRescan: () => void;
   /** One honest line about the money the current market's report actually carries. */
@@ -28,8 +28,8 @@ export interface SearchFilterBarProps {
 }
 
 /**
- * The search header: role/keyword, market, city/region, the search action, and — for the
- * Netherlands only — the IND sponsor filter, plus the secondary client-side filter chips.
+ * The search header: role/keyword, market, city/region, the search action, and (for the
+ * Netherlands only) the IND sponsor filter, plus the secondary client-side filter chips.
  *
  * Which secondary filters appear is driven by `supportedFilters(market)`, i.e. by what the
  * selected pipeline's data actually carries. The prototype's "experience level" chip is

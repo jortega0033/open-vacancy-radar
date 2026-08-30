@@ -73,7 +73,7 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
         executableNames: [process.execPath],
         buildArgs: () => [join(fixturesDir, 'fake-claude-failure.mjs')],
         parseLine: parseClaudeLine,
-        // no describeFailure — this is exactly how providers/claude/adapter.ts and
+        // no describeFailure. This is exactly how providers/claude/adapter.ts and
         // providers/codex/adapter.ts are configured in production.
       },
       { sessionId: 'test-session-2b', cwd, prompt: 'hello' },

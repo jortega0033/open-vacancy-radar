@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // it could never fail for the reason its name claimed. This imports the REAL electron/preload.ts
 // module against a stubbed ipcRenderer, so the assertions run against code that could actually
 // leak something. `vi.hoisted` is required here (not plain module-scope consts) because
-// `vi.mock('electron', ...)` is hoisted above other statements by vitest's transform — referencing
+// `vi.mock('electron', ...)` is hoisted above other statements by vitest's transform: referencing
 // un-hoisted variables from inside the factory would throw a "used before initialization" error.
 const { invoke, on, removeListener } = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -13,7 +13,7 @@ const { invoke, on, removeListener } = vi.hoisted(() => ({
 }));
 
 // preload.ts exposes four independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`)
-// via four separate exposeInMainWorld calls — keyed by name so loading one doesn't clobber the
+// via four separate exposeInMainWorld calls, keyed by name so loading one doesn't clobber the
 // other, the way a single shared `exposedApi` variable would.
 let exposedApis: Record<string, Record<string, unknown>>;
 
@@ -41,7 +41,7 @@ beforeEach(() => {
   removeListener.mockReset();
 });
 
-describe('electron/preload.ts — real bridge (AD-07)', () => {
+describe('electron/preload.ts: real bridge (AD-07)', () => {
   it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload();
     expect(Object.keys(api).sort()).toEqual(
@@ -149,7 +149,7 @@ describe('electron/preload.ts — real bridge (AD-07)', () => {
   });
 });
 
-describe('electron/preload.ts — vacancyRadar bridge', () => {
+describe('electron/preload.ts: vacancyRadar bridge', () => {
   it('exposes exactly the five documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
@@ -203,7 +203,7 @@ describe('electron/preload.ts — vacancyRadar bridge', () => {
   });
 });
 
-describe('electron/preload.ts — workspace bridge', () => {
+describe('electron/preload.ts: workspace bridge', () => {
   const EXPECTED_CAPABILITIES = [
     'getSettings',
     'updateSettings',
@@ -236,7 +236,7 @@ describe('electron/preload.ts — workspace bridge', () => {
     }
   });
 
-  it('exposes no generic IPC passthrough — no channel argument anywhere in the namespace', async () => {
+  it('exposes no generic IPC passthrough: no channel argument anywhere in the namespace', async () => {
     const api = await loadPreload('workspace');
     expect(api.invoke).toBeUndefined();
     expect(api.send).toBeUndefined();
@@ -246,8 +246,8 @@ describe('electron/preload.ts — workspace bridge', () => {
   });
 
   it('maps every capability to exactly one hard-coded workspace: channel', async () => {
-    // The table is the contract. A capability that reached a channel outside `workspace:` — or a
-    // second channel — would widen what a compromised renderer can do, so it is asserted
+    // The table is the contract. A capability that reached a channel outside `workspace:` (or a
+    // second channel) would widen what a compromised renderer can do, so it is asserted
     // exhaustively rather than sampled.
     const cases: [name: string, channel: string, call: (fn: never) => Promise<unknown>][] = [
       ['getSettings', 'workspace:settings:get', (fn: never) => (fn as () => Promise<unknown>)()],
@@ -295,7 +295,7 @@ describe('electron/preload.ts — workspace bridge', () => {
   });
 });
 
-describe('electron/preload.ts — cv bridge', () => {
+describe('electron/preload.ts: cv bridge', () => {
   it('exposes exactly the two documented capability functions and nothing else', async () => {
     const api = await loadPreload('cv');
     expect(Object.keys(api).sort()).toEqual(['getWorkspaceDir', 'selectAndRead'].sort());
@@ -305,7 +305,7 @@ describe('electron/preload.ts — cv bridge', () => {
   });
 
   it('takes no file path: selectAndRead invokes cv:select-and-read with no arguments at all', async () => {
-    // The renderer must never be able to name the file that gets read — only the user can, in the
+    // The renderer must never be able to name the file that gets read: only the user can, in the
     // native dialog. An argument reaching this channel would make it an arbitrary-file-read.
     invoke.mockResolvedValue({ fileName: 'cv.pdf', text: 'hello' });
     const api = await loadPreload('cv');

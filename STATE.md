@@ -1,4 +1,4 @@
-# Loop State — Open Vacancy Radar
+# Loop State: Open Vacancy Radar
 
 Last run: never
 Mode: L1 report-only

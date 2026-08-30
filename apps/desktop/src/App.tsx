@@ -31,7 +31,7 @@ export function App() {
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
 
-  // The provider AI features (gap analysis, letters) currently run through — a persisted setting
+  // The provider AI features (gap analysis, letters) currently run through: a persisted setting
   // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
   // and header labels need it; RuntimePage owns the actual read/write of the setting and reports
   // changes back up via `onDefaultProviderChanged` so this label updates without a re-fetch.

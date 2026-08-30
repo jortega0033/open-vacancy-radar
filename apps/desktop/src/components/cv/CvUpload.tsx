@@ -6,12 +6,12 @@ import type { CvDocument } from './types.js';
  * Picks a CV through the `window.cv` bridge and hands the extracted text up.
  *
  * Controlled on purpose: the CV lives in the parent (CvAssistant) so gap analysis and the cover
- * letter share one upload — asking for the same document twice for two features that run
+ * letter share one upload. Asking for the same document twice for two features that run
  * side by side would be the obvious flow bug here.
  *
  * The three outcomes of the picker are distinct and all visible: loaded (name + character count,
  * with the text inspectable so the user can confirm the PDF extracted sensibly before it is sent
- * anywhere), cancelled (nothing changes, no error shown — cancelling is not a failure), and failed
+ * anywhere), cancelled (nothing changes, no error shown: cancelling is not a failure), and failed
  * (the real reason, e.g. a scanned PDF with no selectable text).
  */
 export interface CvUploadProps {

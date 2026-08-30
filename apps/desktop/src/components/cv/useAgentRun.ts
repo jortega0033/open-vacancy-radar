@@ -31,7 +31,7 @@ export interface UseAgentRunOptions {
   /**
    * Joins successive `assistant.message` chunks. Defaults to `"\n\n"`, right for every existing
    * consumer (Gap Analysis, Letters) that displays the accumulated text as prose. A consumer that
-   * needs the accumulated text to parse as something exact — e.g. one JSON object — should pass
+   * needs the accumulated text to parse as something exact (e.g. one JSON object) should pass
    * `""` instead: a coding-agent CLI can legitimately emit one answer across more than one
    * `assistant.message` event, and `"\n\n"` inserted between two of them would either break
    * parsing outright or, worse, silently land inside what was meant to be one contiguous value.
@@ -44,7 +44,7 @@ export interface AgentRun {
   /** Everything the assistant has said so far, accumulated across `assistant.message` chunks. */
   text: string;
   error?: string;
-  /** True while a session is being created or is streaming — the "don't touch it yet" flag. */
+  /** True while a session is being created or is streaming: the "don't touch it yet" flag. */
   isBusy: boolean;
   start(prompt: string, options?: AgentRunOptions): Promise<void>;
   cancel(): Promise<void>;
@@ -76,7 +76,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   const sessionIdRef = useRef<string>();
   const textRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  // Read from inside the mount-once effect below via ref, not a dependency — options is a fresh
+  // Read from inside the mount-once effect below via ref, not a dependency: options is a fresh
   // object every render, and the effect must not resubscribe on every render because of it.
   const chunkSeparatorRef = useRef(options.chunkSeparator ?? '\n\n');
   chunkSeparatorRef.current = options.chunkSeparator ?? '\n\n';
@@ -102,7 +102,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           break;
         }
         case 'error': {
-          // Not terminal on its own — the daemon still owes us session.failed/completed — but
+          // Not terminal on its own (the daemon still owes us session.failed/completed), but
           // worth capturing so a completed-with-nothing run can explain itself.
           setError((current) => current ?? event.message);
           break;
@@ -168,7 +168,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           if (sessionIdRef.current !== session.id) return;
           sessionIdRef.current = undefined;
           setStatus('failed');
-          setError(`no response after ${Math.round(RUN_TIMEOUT_MS / 1000)}s — the run was stopped; try again`);
+          setError(`no response after ${Math.round(RUN_TIMEOUT_MS / 1000)}s: the run was stopped; try again`);
           void window.agentDock.cancelSession(session.id).catch(() => {});
         }, RUN_TIMEOUT_MS);
       } catch (err) {

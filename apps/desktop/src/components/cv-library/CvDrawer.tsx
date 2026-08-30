@@ -6,8 +6,8 @@ import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 
 /**
- * Everything the drawer can change — deliberately not `CvDocumentInput`/`CvDocumentPatch`
- * directly: `kind` never appears here (a manual profile is always created with `kind: 'manual'`,
+ * Everything the drawer can change (deliberately not `CvDocumentInput`/`CvDocumentPatch`
+ * directly): `kind` never appears here (a manual profile is always created with `kind: 'manual'`,
  * and an existing document's kind can never change), and the page decides at the call site
  * whether this becomes a `createCvDocument` or an `updateCvDocument` call.
  */
@@ -19,7 +19,7 @@ export interface CvDrawerSubmitPayload {
 
 export interface CvDrawerProps {
   mode: 'add' | 'edit';
-  /** Present in edit mode — pre-fills the form from the existing record, uploaded or manual. */
+  /** Present in edit mode: pre-fills the form from the existing record, uploaded or manual. */
   record?: CvDocumentRecord;
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
@@ -60,7 +60,7 @@ function toFormState(record: CvDocumentRecord | undefined): FormState {
  *
  * Docked to the right edge via daisyUI's `modal-end`, matching `ApplicationDrawer`'s convention
  * (self-contained submitting/error state, async `onSubmit`) rather than `SavedJobDrawer`'s plain
- * fixed panel — one of the two existing drawer conventions, not a third.
+ * fixed panel: one of the two existing drawer conventions, not a third.
  */
 export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [form, setForm] = useState<FormState>(() => toFormState(record));
@@ -72,7 +72,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const isEdit = mode === 'edit';
   const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
 
-  // `chunkSeparator: ''` — the parsed response must be byte-exact JSON, not prose, so chunks are
+  // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
   // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
@@ -82,7 +82,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  // Applies the AI's fields to the form exactly once per run, the moment that run completes —
+  // Applies the AI's fields to the form exactly once per run, the moment that run completes:
   // never automatically saved, so a wrong or thin answer costs the user a glance, not their data.
   useEffect(() => {
     if (parseRun.status !== 'completed' || parseAppliedRef.current) return;
@@ -105,7 +105,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   }, [parseRun.status, parseRun.text]);
 
   // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
-  // it's still running — otherwise the daemon session keeps running unobserved until it times out.
+  // it's still running, otherwise the daemon session keeps running unobserved until it times out.
   // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
   // this must run its cleanup only on actual unmount, reading whatever the latest run was.
   const parseRunRef = useRef(parseRun);
@@ -207,7 +207,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 </div>
                 {parseSucceeded && (
                   <p className="mt-2 text-xs text-success" role="status">
-                    Filled in from your CV — review before saving.
+                    Filled in from your CV: review before saving.
                   </p>
                 )}
                 {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (
@@ -227,7 +227,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
                 disabled={submitting}
-                placeholder="e.g. Frontend CV — Netherlands"
+                placeholder="e.g. Frontend CV: Netherlands"
               />
             </label>
 

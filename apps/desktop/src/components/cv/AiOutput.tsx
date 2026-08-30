@@ -6,8 +6,8 @@ import type { AgentRunStatus } from './useAgentRun.js';
  * region with `role="log"` so a screen reader announces additions, rather than a growing block
  * that pushes the buttons off-screen mid-answer.
  *
- * Every state is explicit and named — idle, working, streaming-but-not-done, done, failed,
- * cancelled — because "nothing visibly happening" is indistinguishable from "hung" otherwise.
+ * Every state is explicit and named: idle, working, streaming-but-not-done, done, failed,
+ * cancelled (because "nothing visibly happening" is indistinguishable from "hung" otherwise).
  * Monochrome throughout (see DESIGN-TOKENS.md): status is carried by weight, borders and opacity.
  */
 export interface AiOutputProps {

@@ -25,7 +25,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
 
 /**
  * `CvDrawer` now always mounts `useAgentRun` (the "Parse with AI" action), which subscribes to
- * `window.agentDock.onSessionEvent` on every render regardless of whether that action is visible —
+ * `window.agentDock.onSessionEvent` on every render regardless of whether that action is visible,
  * so every test that opens the drawer needs this stub present, not just ones that click it.
  */
 function installAgentDockBridge(): EmitEvent {
@@ -275,7 +275,7 @@ describe('CvLibraryPage', () => {
     const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
 
-    // Closing the drawer while the parse is still streaming must cancel the daemon session —
+    // Closing the drawer while the parse is still streaming must cancel the daemon session,
     // otherwise it keeps running unobserved (see CvDrawer's unmount-cancel effect).
     fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
 
@@ -299,7 +299,7 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /set as default/i }));
 
     await waitFor(() => expect(setDefaultCvDocument).toHaveBeenCalledWith('b'));
-    // Exactly one badge (excluding the "Default" column header) — proves the demotion round-tripped.
+    // Exactly one badge (excluding the "Default" column header): proves the demotion round-tripped.
     await waitFor(() => expect(screen.getAllByText('Default', { selector: '.badge' })).toHaveLength(1));
 
     const rows = screen.getAllByRole('row');

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 /**
  * The three layout/control primitives of the settings page, matching the prototype's suggested
- * SettingsSection / SettingsRow / ToggleSwitch breakdown. Purely presentational — every save
+ * SettingsSection / SettingsRow / ToggleSwitch breakdown. Purely presentational: every save
  * decision stays in SettingsPage, so a row never knows (or lies about) whether a change landed.
  */
 
@@ -24,7 +24,7 @@ export function SettingsSection({ title, children }: SettingsSectionProps) {
 
 export interface SettingsRowProps {
   label: string;
-  /** Secondary line under the label — what the setting actually affects. */
+  /** Secondary line under the label: what the setting actually affects. */
   description?: ReactNode;
   /** Id of the row's form control; when present the label is a real <label> for it. */
   htmlFor?: string;
@@ -57,7 +57,7 @@ export interface SegmentedControlProps<T extends string> {
   onChange: (next: T) => void;
 }
 
-/** The prototype's button-group style for Theme/Density — a small, closed set of mutually
+/** The prototype's button-group style for Theme/Density: a small, closed set of mutually
  * exclusive choices reads better as segmented buttons than as a dropdown. */
 export function SegmentedControl<T extends string>({
   label,
@@ -85,7 +85,7 @@ export function SegmentedControl<T extends string>({
 }
 
 export interface ToggleSwitchProps {
-  /** Accessible name — the row label repeats it visually, this carries it for the control. */
+  /** Accessible name: the row label repeats it visually, this carries it for the control. */
   label: string;
   checked: boolean;
   disabled?: boolean;

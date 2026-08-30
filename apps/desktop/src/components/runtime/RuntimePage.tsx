@@ -14,7 +14,7 @@ function describeError(err: unknown, fallback: string): string {
 }
 
 export interface RuntimePageProps {
-  /** App-wide daemon connectivity, computed once in App.tsx — every page would otherwise need its
+  /** App-wide daemon connectivity, computed once in App.tsx: every page would otherwise need its
    * own `getDaemonStatus`/`onDaemonStatus` subscription for the same one piece of state. */
   daemonState: 'connecting' | 'ready' | 'unavailable';
   daemonError?: string;
@@ -27,7 +27,7 @@ export interface RuntimePageProps {
  * The real "AI Runtime" screen from the prototype: which CLIs are available, their capabilities,
  * which one AI features run through, and a way to verify a CLI without spending a model call.
  * Replaces the AgentDock template's generic "pick a provider, type a prompt, watch raw events"
- * tester — that panel tested the daemon during development; it was never a feature a job-seeker
+ * tester. That panel tested the daemon during development; it was never a feature a job-seeker
  * uses, and nothing in the CV/letter/gap-analysis code paths went through it (they use
  * `useAgentRun` directly).
  */
@@ -165,7 +165,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
           </div>
           <div className="mt-1 text-sm font-semibold">{PROVIDER_LABEL[defaultProvider]}</div>
           <div className="mt-0.5 text-xs text-base-content/60">
-            Model: CLI default — Open Vacancy Radar uses the model configured by the selected CLI.
+            Model: CLI default. Open Vacancy Radar uses the model configured by the selected CLI.
           </div>
         </div>
         <button type="button" className="btn btn-sm" onClick={() => void verify()} disabled={verifying}>
@@ -176,14 +176,14 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       {verifyResult?.kind === 'ok' && (
         <div className="mt-2.5 rounded-box border border-base-300 bg-base-200 p-3.5 text-xs leading-loose">
           <div>
-            <span className="text-success">✓</span> Executable detected —{' '}
+            <span className="text-success">✓</span> Executable detected:{' '}
             <span className="font-mono">{verifyResult.executablePath}</span>
           </div>
           <div>
-            <span className="text-success">✓</span> Version check passed — {verifyResult.version}
+            <span className="text-success">✓</span> Version check passed: {verifyResult.version}
           </div>
           <div>
-            <span className="text-success">✓</span> Authentication status available — Authenticated
+            <span className="text-success">✓</span> Authentication status available: Authenticated
           </div>
         </div>
       )}

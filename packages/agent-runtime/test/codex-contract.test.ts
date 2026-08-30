@@ -10,7 +10,7 @@ describeProviderContract({
   buildArgs: buildCodexArgs,
   fixtures: {
     // Codex's own parser ignores the one unrecognized system/init-shaped line in this fixture
-    // the same way it ignores any other event kind it doesn't know — reusing it here (rather than
+    // the same way it ignores any other event kind it doesn't know. Reusing it here (rather than
     // adding a near-duplicate) is exactly the "unknown events don't crash the adapter" guarantee
     // this suite checks.
     success: 'fake-codex-success.mjs',

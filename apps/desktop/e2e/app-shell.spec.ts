@@ -2,7 +2,7 @@ import { ensureLightTheme, expect, goto, test } from './fixtures.js';
 
 /**
  * The one flow every other spec depends on being right: the app boots, every destination is
- * reachable, and the sidebar carries no fake per-user data — the exact regression this suite exists
+ * reachable, and the sidebar carries no fake per-user data: the exact regression this suite exists
  * to catch a repeat of (see AppSidebar.tsx's history: a hardcoded "JO" avatar was shipped and only
  * caught by manual testing).
  */
@@ -38,7 +38,11 @@ test.describe('app shell', () => {
 
   test('Search and Settings page visual baselines', async ({ window }) => {
     await ensureLightTheme(window);
-    // Already on Settings — ensureLightTheme just navigated here to click "Light".
+    // The daemon connects asynchronously after launch (App.tsx's "Connecting to local daemon..."
+    // banner); without waiting for it to settle, a screenshot taken this soon after launch is racing
+    // daemon startup and its content/layout depends on how far that race got, not on the app itself.
+    await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
+    // Already on Settings. ensureLightTheme just navigated here to click "Light".
     await expect(window).toHaveScreenshot('settings-page.png');
 
     await goto(window, 'Search');

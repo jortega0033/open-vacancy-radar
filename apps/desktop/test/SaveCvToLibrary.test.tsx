@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe('SaveCvToLibrary', () => {
-  it('persists the extracted text and file name — and nothing else about the file', async () => {
+  it('persists the extracted text and file name, and nothing else about the file', async () => {
     // Notably absent: any path. The renderer never learns one, so it cannot leak one here.
     const bridge = installWorkspaceBridge({ createCvDocument: vi.fn().mockResolvedValue(SAVED) });
     render(<SaveCvToLibrary cv={CV} />);

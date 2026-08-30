@@ -8,9 +8,9 @@
 ## Agency specialists
 
 - Project specialists are defined in `.codex/agents/agency-*.toml`; their source playbooks remain in `.claude/agents/`.
-- Delegate at most one bounded task to one primary specialist when specialization materially helps — including during an L1 loop run, where a specialist may assist triage. Add `agency_code_reviewer` only when an independent review materially helps.
+- Delegate at most one bounded task to one primary specialist when specialization materially helps, including during an L1 loop run, where a specialist may assist triage. Add `agency_code_reviewer` only when an independent review materially helps.
 - Do not stack overlapping roles or let a role broaden the user's scope.
-- Specialists inherit the parent session's MCP and permissions. They must not edit unless the delegated task authorizes implementation. During an L1 loop, no specialist may edit source, push, or open/merge a PR, regardless of what the delegated task asks — the loop's own L1 boundary always wins.
+- Specialists inherit the parent session's MCP and permissions. They must not edit unless the delegated task authorizes implementation. During an L1 loop, no specialist may edit source, push, or open/merge a PR, regardless of what the delegated task asks. The loop's own L1 boundary always wins.
 
 ## Loop Engineering
 

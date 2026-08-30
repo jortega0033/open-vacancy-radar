@@ -41,7 +41,7 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   };
 }
 
-/** Empty string on an optional free-text field means "not set" — send `null`, not `''`. */
+/** Empty string on an optional free-text field means "not set": send `null`, not `''`. */
 function blankToNull(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
@@ -50,7 +50,7 @@ function blankToNull(value: string): string | null {
 /**
  * Right-side add/edit drawer for a saved job, per the prototype's `EntityEditorDrawer`
  * (`export-src.html` Saved Jobs row "Edit" action / "Add job manually" button). A plain fixed
- * panel with a Tailwind slide-in transition — no drawer library needed for one form.
+ * panel with a Tailwind slide-in transition. No drawer library is needed for one form.
  *
  * Mounted only while a drawer is open (see `SavedJobsPage`), keyed by the job id so switching
  * between "add" and "edit" (or between two different rows) always starts from a fresh form

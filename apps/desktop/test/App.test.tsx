@@ -74,7 +74,7 @@ describe('App', () => {
     expect(screen.getByText(/exited unexpectedly/)).toBeInTheDocument();
   });
 
-  it('renders the real AI Runtime screen — provider cards, not the old session-runner form', async () => {
+  it('renders the real AI Runtime screen: provider cards, not the old session-runner form', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText(/claude code ready/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'AI Runtime' }));

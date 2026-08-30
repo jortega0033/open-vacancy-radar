@@ -12,7 +12,7 @@ afterEach(() => {
 /**
  * Compile-time contract, not a runtime one: the Vacancy Leads screen will hand these components a
  * `DiscoveryVacancyAudit` straight from the engine, so if that type ever stops satisfying
- * `VacancyLead` this file fails `pnpm typecheck` — before anyone wires the screens together.
+ * `VacancyLead` this file fails `pnpm typecheck`, before anyone wires the screens together.
  */
 const _assignabilityCheck = (audit: DiscoveryVacancyAudit): VacancyLead => audit;
 void _assignabilityCheck;

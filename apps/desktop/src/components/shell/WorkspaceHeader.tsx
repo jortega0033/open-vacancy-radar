@@ -17,7 +17,7 @@ const RUNTIME_TEXT: Record<RuntimeState, string> = {
  * The 52px band above every page: what you are looking at on the left, whether the AI runtime is
  * usable on the right.
  *
- * The runtime dot is one of the few places this design spends a hue — `success` when the local
+ * The runtime dot is one of the few places this design spends a hue: `success` when the local
  * CLI daemon is up, `error` when it is not. The word next to it says the same thing, so the color
  * is reinforcement rather than the only carrier of the state.
  */
@@ -35,7 +35,7 @@ export function WorkspaceHeader({ title, subtitle, runtimeLabel, runtimeState }:
         <span className="flex items-center gap-1.5">
           <span className={`size-1.5 rounded-full ${dotClass}`} aria-hidden="true" />
           {/* Label and state read as one phrase ("Claude Code Ready") in a single element, rather
-              than as two separately-addressable nodes — the provider name on its own is not a
+              than as two separately-addressable nodes: the provider name on its own is not a
               status, and splitting it out would make the header a second element in the document
               whose entire text is just the provider name. */}
           <span className="font-medium">

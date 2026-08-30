@@ -28,9 +28,9 @@ const TERMINAL_TYPES = new Set<AgentEvent['type']>(['session.completed', 'sessio
 
 export interface ProviderContractSpec {
   providerId: ProviderId;
-  /** The real, currently-declared capabilities for this provider — drives which sections run. */
+  /** The real, currently-declared capabilities for this provider: drives which sections run. */
   capabilities: ProviderCapabilities;
-  /** The adapter's real parser — this suite exercises actual normalization logic, not a stand-in. */
+  /** The adapter's real parser. This suite exercises actual normalization logic, not a stand-in. */
   parseLine: (raw: unknown, logger: Logger) => ParsedLine;
   /** The adapter's real argv builder, used only for the (process-free) resume assertion below. */
   buildArgs: (opts: StartSessionOptions) => string[];
@@ -51,13 +51,13 @@ async function collect(events: AsyncGenerator<AgentEvent, void, void>): Promise<
 /**
  * Baseline behavioral guarantees every provider adapter must uphold, run against the adapter's
  * *real* parser and argv construction (spawning a small `node` fixture script in place of the
- * real CLI binary — see providers.md#adding-a-new-provider). A future provider adapter can reuse
+ * real CLI binary. See providers.md#adding-a-new-provider). A future provider adapter can reuse
  * this by fixturing its own success/failure/hang scripts and calling `describeProviderContract`
  * with its real `parseLine`/`buildArgs`/`capabilities`.
  *
  * Lives under test/support rather than src/ deliberately: it's a vitest-coupled test helper, not
  * part of the package's public runtime API, so it isn't exported from index.ts or shipped to
- * consumers — a provider package outside this repo would copy the pattern, not import this file.
+ * consumers. A provider package outside this repo would copy the pattern, not import this file.
  */
 export function describeProviderContract(spec: ProviderContractSpec): void {
   describe(`provider contract: ${spec.providerId}`, () => {

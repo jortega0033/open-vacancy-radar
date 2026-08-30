@@ -91,9 +91,9 @@ configured or claimed verified.
 Selected sample-data captures live in `docs/images/screenshots`; public compositions live in
 `docs/images/social`:
 
-- `readme-hero.webp` — README introduction
-- `github-social-preview.png` — manual GitHub repository social-preview upload
-- `open-graph.png` — website/social metadata consumer
+- `readme-hero.webp`: README introduction
+- `github-social-preview.png`: manual GitHub repository social-preview upload
+- `open-graph.png`: website/social metadata consumer
 
 These files are documentation-only and never enter the application bundle. The source pack's
 portfolio composition, preview boards and captures with unrelated toast state were deliberately

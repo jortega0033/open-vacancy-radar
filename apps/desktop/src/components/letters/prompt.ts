@@ -20,7 +20,7 @@ import type { SelectedVacancy } from './types.js';
  *
  * The candidate's free-text instructions are the one input here that neither feature had before.
  * They are *user*-authored rather than scraped, so they are not untrusted in the way a job posting
- * is — but they are still bounded and still fenced into their own labelled section, and the prompt
+ * is, but they are still bounded and still fenced into their own labelled section, and the prompt
  * states explicitly that they rank below the no-invention rule. "Say I have a CISSP" must not
  * become a CISSP on the letter.
  */
@@ -57,12 +57,12 @@ const DOCUMENT_SHAPE: Record<LetterType, readonly string[]> = {
 };
 
 const TONE_BRIEF: Record<LetterTone, string> = {
-  formal: 'formal and businesslike — full sentences, no contractions, no casual phrasing',
+  formal: 'formal and businesslike: full sentences, no contractions, no casual phrasing',
   natural:
-    "the candidate's own register, inferred from how their CV is written — professional and plain, neither stiff nor effusive",
+    "the candidate's own register, inferred from how their CV is written: professional and plain, neither stiff nor effusive",
   confident:
     'direct and self-assured about what the candidate has actually done, without exaggerating it or reaching for superlatives',
-  concise: 'stripped back — short sentences, no throat-clearing, every sentence carrying new information',
+  concise: 'stripped back: short sentences, no throat-clearing, every sentence carrying new information',
 };
 
 /**
@@ -107,7 +107,7 @@ export function buildLetterPrompt(
   return `You are helping a candidate write ${documentName} for one specific vacancy, using their real CV.
 
 ${GROUNDING_RULES}
-Do not invent a hiring manager, recruiter, or contact name — address it generically (for example "Dear hiring team,"). Do not invent an address block, reference number, or date.
+Do not invent a hiring manager, recruiter, or contact name: address it generically (for example "Dear hiring team,"). Do not invent an address block, reference number, or date.
 Do not produce a template with placeholders such as [Your Name] or [Company]: every sentence must be usable as written, drawing on the CV and the vacancy details below.
 Avoid stock phrases such as "I am passionate about", "proven track record" and "team player".
 Write in natural, conversational English. Do not use em dashes. Avoid jargon and buzzwords. Do not be sycophantic or overly flattering.
@@ -115,7 +115,7 @@ Write in natural, conversational English. Do not use em dashes. Avoid jargon and
 Write it so that it:
 ${requirements}
 ${instructionBlock}
-Output the document text only — no title, no commentary before or after it, no Markdown headings.
+Output the document text only: no title, no commentary before or after it, no Markdown headings.
 
 === VACANCY ===
 ${formatVacancy(vacancy)}

@@ -83,7 +83,7 @@ describe('providerCapabilitiesSchema', () => {
     expect(providerCapabilitiesSchema.safeParse(invalid).success).toBe(false);
   });
 
-  // AD-15: every known key is optional — absent means unsupported, the same as `false` — so a
+  // AD-15: every known key is optional (absent means unsupported, the same as `false`), so a
   // client built against a newer @agent-dock/shared can still validate an older daemon's
   // response that predates a since-added capability, without that capability being present.
   it('accepts a status with a capability key omitted entirely', () => {
@@ -186,9 +186,9 @@ describe('agentEventEnvelopeSchema', () => {
     expect(agentEventEnvelopeSchema.safeParse(event).success).toBe(false);
   });
 
-  // AD-14: assistant.delta was removed from protocol v1 before any adapter ever emitted it — see
+  // AD-14: assistant.delta was removed from protocol v1 before any adapter ever emitted it: see
   // packages/shared/src/events.ts. This pins the removal so it can't silently come back.
-  it('rejects assistant.delta — removed from protocol v1 (AD-14), never re-add without deliberately updating this test', () => {
+  it('rejects assistant.delta (removed from protocol v1, AD-14), never re-add without deliberately updating this test', () => {
     const event = { type: 'assistant.delta', text: 'hi', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
     expect(agentEventEnvelopeSchema.safeParse(event).success).toBe(false);
   });

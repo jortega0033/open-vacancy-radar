@@ -1,7 +1,7 @@
 import type { SavedJobStatus } from '../../window.js';
 
 /**
- * The saved-job pipeline is intentionally three states — matching `SavedJobStatus` exactly.
+ * The saved-job pipeline is intentionally three states, matching `SavedJobStatus` exactly.
  * Do not add a fourth status here without adding it to the schema/bridge first; this list is a
  * view over that enum, not a place to invent new states.
  */

@@ -9,7 +9,7 @@ type CopyState = 'idle' | 'copied' | 'failed';
  * Static-but-real "About" information: version comes from `app.getVersion()` (never a
  * hand-maintained string that could drift), everything else is a fact about this specific build
  * rather than decoration copied from the prototype (which listed a placeholder repository URL and
- * an MIT license — this app is actually Apache-2.0, and the repository is real).
+ * an MIT license: this app is actually Apache-2.0, and the repository is real).
  */
 export function AboutSection() {
   const [version, setVersion] = useState<string>();

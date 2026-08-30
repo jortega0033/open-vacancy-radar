@@ -58,7 +58,7 @@ export function badgeCount(counts: WorkspaceCounts, badge: NavBadge | undefined)
 /**
  * Title + contextual subtitle for the 52px workspace header.
  *
- * The subtitles are counts and plain statements of fact on purpose — this header is the one
+ * The subtitles are counts and plain statements of fact on purpose. This header is the one
  * always-visible piece of chrome, so it is the wrong place for a claim the app cannot back up.
  */
 export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: string; subtitle: string } {

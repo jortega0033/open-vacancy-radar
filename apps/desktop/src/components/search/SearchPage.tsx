@@ -38,7 +38,7 @@ const SALARY_NOTE: Record<SearchMarket, string> = {
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
  *
  * The normalisation in `results.ts` already assembles this per market, because only it knows which
- * fields each pipeline genuinely carries — the Netherlands report contributes title/company/
+ * fields each pipeline genuinely carries. The Netherlands report contributes title/company/
  * location/url and nothing more, while a worldwide discovery row can also contribute employment
  * type and the advertised salary triple. Re-deriving that here would mean guessing at fields the
  * selected market may not have, so this function is a named seam over that decision rather than a
@@ -54,8 +54,8 @@ export function toVacancyLead(result: SearchResult): VacancyLead {
  *
  * `verification` stores the label the search page itself showed, so a worldwide row is saved as
  * "Not available for this market" rather than as an empty (and later re-readable as "unverified")
- * cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score — a real
- * 0-100 figure against the engine's configured candidate profile — and stays null for worldwide,
+ * cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score (a real
+ * 0-100 figure against the engine's configured candidate profile) and stays null for worldwide,
  * which computes no score. It is not a comparison against any CV in the library; the only real CV
  * comparison in this app is the on-demand gap analysis.
  */
@@ -98,8 +98,8 @@ function describeError(error: unknown, fallback: string): string {
  * never starts a network scan on its own. Scanning hits real external feeds and can take a couple
  * of minutes, so it is always something the user asked for.
  *
- * Filtering is entirely client-side over the loaded report — narrowing a search must never trigger
- * a scan — which is why "Search" only runs a scan when the selected market has nothing loaded yet,
+ * Filtering is entirely client-side over the loaded report: narrowing a search must never trigger
+ * a scan, which is why "Search" only runs a scan when the selected market has nothing loaded yet,
  * and a separate "Rescan sources" action exists once it does.
  */
 export function SearchPage() {
@@ -355,7 +355,7 @@ export function SearchPage() {
         )}
         {scanning && (
           <div className="alert alert-info mt-3 text-sm">
-            Scanning live {marketLabel(market)} sources — this hits real external APIs and feeds, and
+            Scanning live {marketLabel(market)} sources: this hits real external APIs and feeds, and
             can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.
           </div>
         )}

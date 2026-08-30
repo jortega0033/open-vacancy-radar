@@ -7,7 +7,7 @@ import { SessionManager } from '../src/session-manager.js';
 const TERMINAL_TYPES = new Set(['session.completed', 'session.failed', 'session.cancelled']);
 
 /**
- * A hand-rolled controllable event source — deliberately not the real `FakeProvider` (its
+ * A hand-rolled controllable event source: deliberately not the real `FakeProvider` (its
  * scenarios are fixed, short sequences and can't be driven event-by-event, which every test here
  * needs: pushing an exact count past the cap, holding a session open until explicitly cancelled,
  * asserting nothing arrives after a terminal push). Same push/pull shape as the real
@@ -111,7 +111,7 @@ function collectUntilTerminal(sessionManager: SessionManager, id: string): Promi
   });
 }
 
-describe('SessionManager — normal lifecycle', () => {
+describe('SessionManager: normal lifecycle', () => {
   it('starts a session with status "starting", moving to "running" before create() even returns', () => {
     const { sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -173,7 +173,7 @@ describe('SessionManager — normal lifecycle', () => {
   });
 });
 
-describe('SessionManager — model selection', () => {
+describe('SessionManager: model selection', () => {
   it('is absent from the session record and never reaches the provider when not given', () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -189,7 +189,7 @@ describe('SessionManager — model selection', () => {
   });
 });
 
-describe('SessionManager — terminal guarantees', () => {
+describe('SessionManager: terminal guarantees', () => {
   it('delivers exactly one terminal event, and it is last', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -221,7 +221,7 @@ describe('SessionManager — terminal guarantees', () => {
   });
 });
 
-describe('SessionManager — past the history cap (AD-01)', () => {
+describe('SessionManager: past the history cap (AD-01)', () => {
   it('still delivers every event live, including the terminal event, past MAX_STORED_EVENTS_PER_SESSION, with sequence staying monotonic', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -251,7 +251,7 @@ describe('SessionManager — past the history cap (AD-01)', () => {
 
     const received: AgentEventEnvelope[] = [];
     const unsubscribe = sessionManager.subscribe(session.id, 0, (_i, event) => received.push(event));
-    expect(unsubscribe).toBeDefined(); // session still exists — replay just has nothing past the cap to offer
+    expect(unsubscribe).toBeDefined(); // session still exists: replay just has nothing past the cap to offer
     expect(received.length).toBe(5_000); // exactly MAX_STORED_EVENTS_PER_SESSION replayed
 
     testSession.push({ type: 'session.completed' });
@@ -262,7 +262,7 @@ describe('SessionManager — past the history cap (AD-01)', () => {
   }, 15_000);
 });
 
-describe('SessionManager — replay', () => {
+describe('SessionManager: replay', () => {
   it('a subscriber connecting after events were already emitted receives them via replay, in order', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -316,7 +316,7 @@ describe('SessionManager — replay', () => {
   });
 });
 
-describe('SessionManager — cancellation', () => {
+describe('SessionManager: cancellation', () => {
   it('cancel() on a running session calls the handle and returns true', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -357,7 +357,7 @@ describe('SessionManager — cancellation', () => {
   });
 });
 
-describe('SessionManager — removal', () => {
+describe('SessionManager: removal', () => {
   it('remove() on a running session cancels it first, then deletes the record', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -399,7 +399,7 @@ describe('SessionManager — removal', () => {
   });
 });
 
-describe('SessionManager — bounded retention of completed sessions (AD-11)', () => {
+describe('SessionManager: bounded retention of completed sessions (AD-11)', () => {
   it('evicts the oldest completed session once more than the retention cap have finished', async () => {
     const { provider, sessionManager } = setup();
     const RETENTION_CAP = 50; // MAX_RETAINED_COMPLETED_SESSIONS in session-manager.ts
@@ -441,6 +441,6 @@ describe('SessionManager — bounded retention of completed sessions (AD-11)', (
 
     expect(sessionManager.get(running.id)?.status).toBe('cancelled');
     expect(runningSession.isCancelled()).toBe(true);
-    expect(completedSession.isCancelled()).toBe(false); // never touched — it was already terminal
+    expect(completedSession.isCancelled()).toBe(false); // never touched, it was already terminal
   }, 10_000);
 });

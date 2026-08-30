@@ -20,7 +20,7 @@ import {
 
 const VALID_SAVED_JOB = { role: 'Frontend Engineer', company: 'Redwood Software', market: 'netherlands' };
 
-describe('workspace input validation — allow-listing', () => {
+describe('workspace input validation: allow-listing', () => {
   it('drops properties the caller was never granted, rather than passing them through to Drizzle', () => {
     const parsed = parseSavedJobInput({
       ...VALID_SAVED_JOB,
@@ -51,7 +51,7 @@ describe('workspace input validation — allow-listing', () => {
     );
   });
 
-  it('refuses to let a patch set isDefault on a CV — promotion must go through set-default', () => {
+  it('refuses to let a patch set isDefault on a CV: promotion must go through set-default', () => {
     // Two rows claiming `isDefault` (or none claiming it) is a corrupt library. The only writer
     // of that column is `setDefaultCvDocument`, which demotes and promotes in one transaction.
     const parsed = parseCvDocumentPatch({ name: 'Renamed', isDefault: true });
@@ -69,7 +69,7 @@ describe('workspace input validation — allow-listing', () => {
   });
 });
 
-describe('workspace input validation — required fields and enums', () => {
+describe('workspace input validation: required fields and enums', () => {
   it('rejects a missing or blank required field', () => {
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '' })).toThrow(/"role" is required/);
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '   ' })).toThrow(/"role" is required/);
@@ -99,7 +99,7 @@ describe('workspace input validation — required fields and enums', () => {
   });
 });
 
-describe('workspace input validation — bounds', () => {
+describe('workspace input validation: bounds', () => {
   it('bounds every free-text field, so one create call cannot write the disk full', () => {
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: 'a'.repeat(LIMITS.short + 1) })).toThrow(
       /at most 512 characters/,
@@ -148,7 +148,7 @@ describe('workspace input validation — bounds', () => {
   });
 });
 
-describe('workspace input validation — dates and envelopes', () => {
+describe('workspace input validation: dates and envelopes', () => {
   it('normalizes appliedAt to an ISO instant and rejects an unparseable one', () => {
     expect(parseApplicationInput({ ...VALID_SAVED_JOB, appliedAt: '2026-08-29' }).appliedAt).toBe(
       new Date('2026-08-29').toISOString(),
@@ -195,7 +195,7 @@ describe('workspace settings patch', () => {
 
   it('accepts only real nav pages for lastOpenedPage', () => {
     expect(parseSettingsPatch({ lastOpenedPage: 'letters' })).toEqual({ lastOpenedPage: 'letters' });
-    // 'last_opened' is a startPage instruction, not a destination — storing it here would make
+    // 'last_opened' is a startPage instruction, not a destination: storing it here would make
     // "restore the last page" resolve to itself.
     expect(() => parseSettingsPatch({ lastOpenedPage: 'last_opened' })).toThrow(/must be one of/);
     expect(() => parseSettingsPatch({ lastOpenedPage: 'admin' })).toThrow(/must be one of/);
@@ -225,7 +225,7 @@ describe('workspace letter/CV patches', () => {
     });
   });
 
-  it('requires an explicit CV kind — there is no sensible default between uploaded and manual', () => {
+  it('requires an explicit CV kind: there is no sensible default between uploaded and manual', () => {
     expect(() => parseCvDocumentInput({ name: 'CV' })).toThrow(/"kind" must be one of/);
     expect(parseCvDocumentInput({ name: 'CV', kind: 'uploaded' }).kind).toBe('uploaded');
   });

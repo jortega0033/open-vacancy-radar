@@ -31,7 +31,7 @@ export interface LettersLibraryProps {
  *
  * Owns its own load against `window.workspace` rather than receiving rows as a prop, for the same
  * reason `SavedJobsPage` does: the page above it should not have to know how to recover from an
- * IPC failure that only this table can describe. It deliberately keeps *three* error slots apart —
+ * IPC failure that only this table can describe. It deliberately keeps *three* error slots apart:
  * a failed initial load (nothing to show), a failed row action (the table is still valid), and a
  * delete that reported `{ deleted: false }` (the row was already gone). Collapsing those would
  * either hide a working table behind a load error or silently swallow a failed duplicate.
@@ -169,8 +169,8 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
               {rows.map((letter) => (
                 <tr key={letter.id} className="ovr-row hover:bg-base-200">
                   <td className="font-medium">{letter.title}</td>
-                  <td className="text-base-content/80">{letter.company || '—'}</td>
-                  <td className="text-base-content/80">{letter.role || '—'}</td>
+                  <td className="text-base-content/80">{letter.company || '-'}</td>
+                  <td className="text-base-content/80">{letter.role || '-'}</td>
                   <td className="whitespace-nowrap text-base-content/70">
                     {labelFor(LETTER_TYPE_OPTIONS, letter.type)}
                   </td>

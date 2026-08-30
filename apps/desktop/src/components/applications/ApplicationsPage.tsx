@@ -18,7 +18,7 @@ type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecor
 
 interface PendingUndo {
   message: string;
-  /** Precomputed by `toApplicationInput` at delete time — undo is a fresh `createApplication`
+  /** Precomputed by `toApplicationInput` at delete time: undo is a fresh `createApplication`
    * call with the same field values, not a soft-delete restore, so the record this recreates
    * gets a new id. */
   input: ApplicationInput;
@@ -34,8 +34,8 @@ function describeError(err: unknown, fallback: string): string {
  * `ApplicationDrawer`, and delete through `ConfirmDialog` with a short undo window.
  *
  * Owns the whole lifecycle against `window.workspace`, in the same shape as `SavedJobsPage`.
- * Deliberately not wired into `App.tsx` here — exported standalone via `index.ts` so the shell's
- * router can pick it up once every page agent's work has landed.
+ * Deliberately not wired into `App.tsx` here. This page is exported standalone via `index.ts` so
+ * the shell's router can pick it up once every page agent's work has landed.
  */
 export function ApplicationsPage() {
   const [filter, setFilter] = useState<ApplicationFilter>('active');
@@ -54,7 +54,7 @@ export function ApplicationsPage() {
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
 
   // Linked-record dropdowns (saved job / CV / letter) load once, independently of the
-  // applications list itself — a failure here must never block the pipeline table from showing.
+  // applications list itself. A failure here must never block the pipeline table from showing.
   useEffect(() => {
     let cancelled = false;
     async function loadLinkedRecords() {

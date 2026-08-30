@@ -77,7 +77,7 @@ export interface ApplicationDrawerProps {
 }
 
 /**
- * Add/edit drawer for an application, docked to the right edge — daisyUI's `modal-end` variant
+ * Add/edit drawer for an application, docked to the right edge: daisyUI's `modal-end` variant
  * gives us that layout plus a themed scrim for free, so nothing here hardcodes an overlay color.
  * Field set mirrors the design reference's `drawerApp` block exactly (see
  * design-reference/export-src.html lines ~815-834): everything except the linked-record dropdowns,
@@ -161,10 +161,10 @@ export function ApplicationDrawer({
               value={draft.savedJobId}
               onChange={(e) => update('savedJobId', e.target.value)}
             >
-              <option value="">None — manual entry</option>
+              <option value="">None (manual entry)</option>
               {savedJobs.map((job) => (
                 <option key={job.id} value={job.id}>
-                  {job.role} — {job.company}
+                  {job.role}, {job.company}
                 </option>
               ))}
             </select>

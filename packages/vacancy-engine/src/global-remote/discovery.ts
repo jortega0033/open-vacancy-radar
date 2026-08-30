@@ -107,7 +107,7 @@ async function discoverJobicy(
       const job = record(raw);
       const title = stringValue(job?.jobTitle);
       const company = stringValue(job?.companyName);
-      const urlValue = httpUrl(job?.url); // http(s) only — see discoverHimalayas above
+      const urlValue = httpUrl(job?.url); // http(s) only (see discoverHimalayas above)
       if (job === null || title === null || company === null || urlValue === null) return [];
       return [discoveryAudit({
         key: `jobicy:${identifier(job.id, urlValue)}`,

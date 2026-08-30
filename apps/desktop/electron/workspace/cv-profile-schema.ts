@@ -2,7 +2,7 @@ import type { CvProfile } from './types.js';
 
 /**
  * The single definition of `CvProfile`'s field list, save-time length limits, and per-field
- * meaning — consumed by three otherwise-independent call sites that used to hardcode their own
+ * meaning: consumed by three otherwise-independent call sites that used to hardcode their own
  * copy of this shape: `validate.ts` (save-time allow-list, main process), `cv-ai-parse.ts`
  * (AI-response coercion, renderer), and `prompts.ts` (the LLM prompt's JSON-schema description,
  * renderer). A field renamed or added here now changes all three by construction instead of by
@@ -12,12 +12,12 @@ import type { CvProfile } from './types.js';
  * compile time): this file is bundled into both the renderer (plain Vite) and the Electron main
  * process (`vite-plugin-electron`), and the only thing that makes that safe is that it never
  * touches an Electron- or Node-only API at runtime. `eslint.config.js` enforces this file
- * specifically with a `no-restricted-imports` rule — keep it that way rather than relying on this
+ * specifically with a `no-restricted-imports` rule. Keep it that way rather than relying on this
  * comment alone.
  */
 
 /** Every `CvProfile` field whose value is a plain, single-line string. `skills` and `summary` are
- * handled separately below — `skills` is an array, and `summary` gets a longer length budget. */
+ * handled separately below: `skills` is an array, and `summary` gets a longer length budget. */
 export const CV_PROFILE_SHORT_FIELDS = ['title', 'years', 'location', 'languages', 'auth'] as const;
 
 export type CvProfileShortField = (typeof CV_PROFILE_SHORT_FIELDS)[number];
@@ -34,7 +34,7 @@ export const CV_PROFILE_LIMITS = {
 /**
  * Derived from `CvProfile` itself (`keyof`, erased at compile time) rather than hand-written, so a
  * field renamed or added on `CvProfile` is a compile error everywhere below until it's accounted
- * for — the whole point of this module — instead of a fifth place that can silently drift.
+ * for (the whole point of this module) instead of a fifth place that can silently drift.
  */
 export type CvProfileField = keyof CvProfile;
 
@@ -43,12 +43,12 @@ type AssertNever<T extends never> = T;
 /**
  * Compile-time proof that `CV_PROFILE_SHORT_FIELDS` plus `'skills'`/`'summary'` account for every
  * `CvProfileField` and nothing more. If this line stops compiling, a field was added to `CvProfile`
- * without deciding here whether it's a short string, `skills`, or `summary` — exactly the class of
- * silent drift this module exists to prevent.
+ * without deciding here whether it's a short string, `skills`, or `summary`. This is exactly the
+ * class of silent drift this module exists to prevent.
  */
 type _AllFieldsClassified = AssertNever<Exclude<CvProfileField, CvProfileShortField | 'skills' | 'summary'>>;
 
-/** Display order for the AI-parse prompt's JSON-shape line and bullet list — the field list a
+/** Display order for the AI-parse prompt's JSON-shape line and bullet list: the field list a
  * human reads, not the validation grouping above (which splits `skills`/`summary` out because
  * they need different handling, not because they belong at the end conceptually). */
 export const CV_PROFILE_FIELD_ORDER: readonly CvProfileField[] = [
@@ -61,7 +61,7 @@ export const CV_PROFILE_FIELD_ORDER: readonly CvProfileField[] = [
   'auth',
 ];
 
-/** Compile-time proof every `CvProfileField` actually appears in `CV_PROFILE_FIELD_ORDER` — a
+/** Compile-time proof every `CvProfileField` actually appears in `CV_PROFILE_FIELD_ORDER`. A
  * field missing from this array would otherwise compile fine and simply never appear in the
  * AI-parse prompt. */
 type _FieldOrderIsComplete = AssertNever<Exclude<CvProfileField, (typeof CV_PROFILE_FIELD_ORDER)[number]>>;

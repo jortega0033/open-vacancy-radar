@@ -55,7 +55,7 @@ export function CvLibraryTable({ documents, onEdit, onSetDefault, onDelete }: Cv
                 <td>
                   <span className="badge badge-outline whitespace-nowrap">{CV_KIND_LABEL[doc.kind]}</span>
                 </td>
-                <td className="text-base-content/80">{doc.targetRole || '—'}</td>
+                <td className="text-base-content/80">{doc.targetRole || '-'}</td>
                 <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.uploadedAt)}</td>
                 <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.updatedAt)}</td>
                 <td className={`whitespace-nowrap text-sm ${PARSE_STATUS_CLASS[parseStatus.tone]}`}>
