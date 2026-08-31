@@ -3,6 +3,15 @@ import type { WorkspaceCounts } from '../../window.js';
 import { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 import { NavIcon } from './NavIcon.js';
 import { badgeCount, PRIMARY_NAV, SECONDARY_NAV, type NavItem, type NavPage } from './nav.js';
+import type { RuntimeState } from './WorkspaceHeader.js';
+
+const RUNTIME_TEXT: Record<RuntimeState, string> = {
+  connecting: 'starting',
+  ready: 'ready',
+  unavailable: 'unavailable',
+  'not-installed': 'not installed',
+  'not-authenticated': 'not authenticated',
+};
 
 export interface AppSidebarProps {
   active: NavPage;
@@ -12,7 +21,9 @@ export interface AppSidebarProps {
   counts: WorkspaceCounts;
   /** e.g. "Claude Code": the provider the AI features would use right now. */
   runtimeLabel: string;
-  runtimeReady: boolean;
+  /** The one place this now shows: distinguishes an unreachable daemon from a daemon that's fine
+   * but has no CLI installed/authenticated, so this never claims "ready" when nothing is. */
+  runtimeState: RuntimeState;
 }
 
 /**
@@ -31,8 +42,9 @@ export function AppSidebar({
   onToggleCollapsed,
   counts,
   runtimeLabel,
-  runtimeReady,
+  runtimeState,
 }: AppSidebarProps) {
+  const runtimeReady = runtimeState === 'ready';
   const toggleLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 
   return (
@@ -87,7 +99,7 @@ export function AppSidebar({
           <div className="min-w-0">
             <div className="truncate text-xs font-medium">Local profile</div>
             <div className="truncate text-xs text-base-content/50">
-              {runtimeLabel} {runtimeReady ? 'ready' : 'unavailable'}
+              {runtimeLabel} {RUNTIME_TEXT[runtimeState]}
             </div>
           </div>
         )}

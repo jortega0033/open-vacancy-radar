@@ -16,6 +16,7 @@ import {
   headerCopy,
   isNavPage,
   type NavPage,
+  type RuntimeState,
 } from './components/shell/index.js';
 import { applyDensity, applyTheme } from './theme.js';
 
@@ -36,6 +37,11 @@ export function App() {
   // and header labels need it; RuntimePage owns the actual read/write of the setting and reports
   // changes back up via `onDefaultProviderChanged` so this label updates without a re-fetch.
   const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
+  // Whether `defaultProvider`'s CLI is actually installed/authenticated, not just whether the
+  // daemon sidecar is up: the daemon being ready says nothing about the CLI itself (see
+  // `RuntimePage`, which already tracks this separately per-provider). Without this, the shell
+  // status dot claimed "Ready" whenever the daemon started, even with no CLI installed at all.
+  const [providerRuntimeState, setProviderRuntimeState] = useState<RuntimeState>('connecting');
 
   // Settings hydration is async, so the user can already have clicked a nav item by the time it
   // lands. Restoring the remembered start page at that point would yank them off the page they
@@ -136,6 +142,33 @@ export function App() {
     };
   }, []);
 
+  // Mirrors daemonState directly while the daemon itself isn't ready (there's nothing more
+  // specific to say yet); once it is, checks the actual selected provider's real install/auth
+  // status instead of assuming "daemon up" means "AI features work". Re-runs whenever the
+  // provider changes (RuntimePage can change it without a page reload) so this doesn't go stale.
+  useEffect(() => {
+    if (daemonState !== 'ready') {
+      setProviderRuntimeState(daemonState);
+      return;
+    }
+    let cancelled = false;
+    window.agentDock
+      .listProviders()
+      .then((providers) => {
+        if (cancelled) return;
+        const status = providers.find((p) => p.id === defaultProvider);
+        if (!status?.installed) setProviderRuntimeState('not-installed');
+        else if (status.authenticated !== 'authenticated') setProviderRuntimeState('not-authenticated');
+        else setProviderRuntimeState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setProviderRuntimeState('unavailable');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [daemonState, defaultProvider]);
+
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
@@ -147,16 +180,11 @@ export function App() {
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
         runtimeLabel={PROVIDER_LABEL[defaultProvider]}
-        runtimeReady={daemonState === 'ready'}
+        runtimeState={providerRuntimeState}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <WorkspaceHeader
-          title={title}
-          subtitle={subtitle}
-          runtimeLabel={PROVIDER_LABEL[defaultProvider]}
-          runtimeState={daemonState}
-        />
+        <WorkspaceHeader title={title} subtitle={subtitle} />
 
         <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
           {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever

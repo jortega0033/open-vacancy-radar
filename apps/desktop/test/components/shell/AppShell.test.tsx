@@ -67,7 +67,7 @@ describe('AppSidebar', () => {
     onToggleCollapsed: NOOP,
     counts: { savedJobs: 3, activeApplications: 2, letters: 5 },
     runtimeLabel: 'Claude Code',
-    runtimeReady: true,
+    runtimeState: 'ready' as const,
   };
 
   it('renders all seven destinations as buttons', () => {
@@ -118,6 +118,23 @@ describe('AppSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
     expect(onNavigate).toHaveBeenCalledWith('letters');
   });
+
+  it('shows each runtime state in words, not only in color, and never claims "ready" without one', () => {
+    const { rerender } = render(<AppSidebar {...BASE} runtimeState="ready" />);
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code ready');
+
+    rerender(<AppSidebar {...BASE} runtimeState="not-installed" />);
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not installed');
+
+    rerender(<AppSidebar {...BASE} runtimeState="not-authenticated" />);
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code not authenticated');
+
+    rerender(<AppSidebar {...BASE} runtimeState="unavailable" />);
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code unavailable');
+
+    rerender(<AppSidebar {...BASE} runtimeState="connecting" />);
+    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code starting');
+  });
 });
 
 describe('OpenVacancyRadarMark', () => {
@@ -135,17 +152,15 @@ describe('OpenVacancyRadarMark', () => {
 });
 
 describe('WorkspaceHeader', () => {
-  it('shows the page title, contextual subtitle and runtime state', () => {
-    render(<WorkspaceHeader title="Saved Jobs" subtitle="3 saved" runtimeLabel="Claude Code" runtimeState="ready" />);
+  it('shows the page title and contextual subtitle', () => {
+    render(<WorkspaceHeader title="Saved Jobs" subtitle="3 saved" />);
     expect(screen.getByRole('heading', { name: 'Saved Jobs' })).toBeInTheDocument();
     expect(screen.getByText('3 saved')).toBeInTheDocument();
-    expect(screen.getByText(/Claude Code/)).toHaveTextContent('Claude Code Ready');
   });
 
-  it('says the runtime is unavailable in words, not only in color', () => {
-    render(<WorkspaceHeader title="Search Jobs" subtitle="" runtimeLabel="Codex" runtimeState="unavailable" />);
-    expect(screen.getByText(/Codex/)).toHaveTextContent('Codex Unavailable');
-  });
+  // Runtime status is no longer shown here: it moved entirely to AppSidebar's footer (see below),
+  // both to stop duplicating the same fact in two places and because AppSidebar's version can
+  // actually distinguish "no CLI installed" from "daemon down", which this component never could.
 });
 
 describe('headerCopy', () => {
