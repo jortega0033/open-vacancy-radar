@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isCandidateProfileConfigured, type CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
 import { SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 
@@ -139,7 +139,11 @@ export function SearchProfileSection() {
     );
   }
 
-  const unconfigured = !isCandidateProfileConfigured(profile);
+  // Mirrors isCandidateProfileConfigured in packages/vacancy-engine/src/candidate/profile.ts:
+  // duplicated rather than imported, because importing a value (not just a type) from that
+  // package here would pull the whole Node-only engine (fs, node:crypto, drizzle-orm) into the
+  // Vite-bundled renderer build.
+  const unconfigured = profile.targetRoles.length === 0 && profile.strongestSkills.length === 0;
 
   const field = <K extends keyof Draft>(key: K) => ({
     value: draft[key],
