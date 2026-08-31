@@ -62,6 +62,34 @@ test.describe('app shell', () => {
     expect(menu).toBeNull();
   });
 
+  test('grants only the clipboard-write permission the UI actually uses, denies everything else', async ({
+    window,
+    electronApp,
+  }) => {
+    // See letters.spec.ts for why this is needed under CI's headless-Linux/xvfb runner:
+    // `navigator.clipboard.writeText` requires real document focus, independent of the permission
+    // grant this test is actually checking.
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+
+    // Positive case: the "Copy to clipboard" features (CoverLetter.tsx, LetterGenerator.tsx,
+    // AboutSection.tsx) all call `navigator.clipboard.writeText`, which requests exactly
+    // `clipboard-sanitized-write`. main.ts's permission handler must keep granting this.
+    await expect(window.evaluate(() => navigator.clipboard.writeText('e2e-permission-check'))).resolves.toBeUndefined();
+
+    // Negative case: nothing in this app asks for geolocation, so it must still be denied, proving
+    // the fix is a narrow allowlist for the one permission actually used, not a blanket grant.
+    const geolocationResult = await window.evaluate(
+      () =>
+        new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve('granted'),
+            (error) => resolve(`denied: ${error.code}`),
+          );
+        }),
+    );
+    expect(geolocationResult).toMatch(/^denied:/);
+  });
+
   test('collapsed sidebar visual baseline', async ({ window }) => {
     // Regression guard for a real bug: NavGroup's collapsed nav buttons carried both
     // `justify-start` (unconditional) and `justify-center` (collapsed-only) at once, so the icon

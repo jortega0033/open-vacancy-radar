@@ -27,14 +27,9 @@ test.describe('Letters', () => {
     window,
     electronApp,
   }) => {
-    // Electron denies every permission request by default (main.ts's `setPermissionRequestHandler`
-    // callback(false)), which would make `navigator.clipboard.writeText` reject in this app just as
-    // it would for camera/mic/notifications. Granting it here is a test-only override, the renderer
-    // equivalent of `cv-library.spec.ts`'s `dialog.showOpenDialog` stub for the native file picker.
-    await electronApp.evaluate(({ session }) => {
-      session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(true));
-      session.defaultSession.setPermissionCheckHandler(() => true);
-    });
+    // No permission override here: main.ts's `setPermissionRequestHandler` grants exactly
+    // `clipboard-sanitized-write` (what `navigator.clipboard.writeText` requests) and denies
+    // everything else, so this test exercises the real production policy rather than masking it.
 
     // `window` is Playwright's `Page` fixture in this test's own scope (see `fixtures.ts`), which
     // would shadow the browser global of the same name inside an arrow function closed over it, so
