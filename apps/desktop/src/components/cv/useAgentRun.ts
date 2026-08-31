@@ -102,9 +102,22 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           break;
         }
         case 'error': {
-          // Not terminal on its own (the daemon still owes us session.failed/completed), but
-          // worth capturing so a completed-with-nothing run can explain itself.
-          setError((current) => current ?? event.message);
+          if (event.recoverable) {
+            // Not terminal on its own (the daemon still owes us session.failed/completed), but
+            // worth capturing so a completed-with-nothing run can explain itself.
+            setError((current) => current ?? event.message);
+            break;
+          }
+          // Non-recoverable means the daemon itself cannot send a terminal event for this
+          // session anymore (e.g. the SSE stream died because the daemon process died mid-run:
+          // see main.ts's forwardSessionEvents catch block, which synthesizes exactly this
+          // event since nothing else ever will). Waiting for session.failed/completed here would
+          // wait forever; the watchdog would eventually fire, but only after RUN_TIMEOUT_MS and
+          // with a generic message that discards this one, which is the real cause.
+          clearWatchdog();
+          sessionIdRef.current = undefined;
+          setStatus('failed');
+          setError(event.message);
           break;
         }
         case 'session.completed': {

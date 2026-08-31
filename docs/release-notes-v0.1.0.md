@@ -15,9 +15,10 @@ First packaged release. Windows only.
 - **AgentDock runtime**: BYOS model — features that use AI run through your own installed and
   authenticated `claude` or `codex` CLI. This app never holds an API key and never talks to an
   AI provider directly; see [README.md#what-this-is-not](../README.md#what-this-is-not).
-- **Optional MCP job-source providers**: connect additional providers with credentials stored in
-  your OS's native credential store, never in plaintext (see
-  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)).
+- **Optional MCP job-source providers**: no provider is registered in this release, so there is
+  nothing to connect from the app yet — see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)
+  for the current status and what the credential-storage mechanism does once one is registered.
 - No telemetry, no account, no cloud sync — see [privacy.md](privacy.md).
 
 ## Known limitations
@@ -35,6 +36,14 @@ First packaged release. Windows only.
   [daemon.md#single-instance-behavior](daemon.md#single-instance-behavior).
 - AI features require you to separately install and authenticate a `claude` or `codex` CLI
   yourself — this app doesn't bundle or provision one.
+- **No MCP job-source provider is registered yet** — see "Optional MCP job-source providers" above.
+- **A session's event history does not survive a daemon restart.** This was a deliberate scope
+  decision for this milestone, not an oversight; see [architecture.md](architecture.md), section
+  "Deliberate omissions (v0.2)". Verified against the real daemon and client: a client that
+  reconnects to a session id from before a restart gets a clean `404 session not found`, and a
+  session whose daemon connection is lost mid-run (rather than a stale id after the fact) now
+  surfaces that failure immediately as a normal error message, not a multi-minute stall — never a
+  silent hang or crash either way.
 
 ## Privacy implications
 

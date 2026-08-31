@@ -41,7 +41,9 @@ desktop app's local data.
 - **Optional MCP job-source providers**: if you connect one, search queries and your MCP credential
   for that provider go to that specific provider only (see
   [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)).
-  No MCP provider is contacted unless you've explicitly connected it.
+  No MCP provider is contacted unless you've explicitly connected it. No provider is registered in
+  this build, so there is currently nothing to connect — this describes the mechanism's behavior
+  once a provider is enabled in a future release.
 - **Everything else** — navigation, saved jobs, applications, settings — never leaves your machine.
   There is no account, no cloud sync, and no analytics endpoint this app talks to.
 

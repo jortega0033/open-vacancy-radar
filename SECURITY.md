@@ -150,13 +150,17 @@ different boundaries, are stored differently, and never mix:
    entry, config file, or session token — this project doesn't know or care which). Logging in and
    out happens directly with the CLI (`claude auth login` / `codex login`), never through this app.
    See [What this is not](README.md#what-this-is-not).
-3. **Optional MCP job-source credentials** — a user can connect an MCP-based job-source provider
-   (see [docs/mcp-source-policy.md](docs/mcp-source-policy.md)) that needs its own API key or token,
-   unrelated to either of the above. That credential is written through `PUT
-   /mcp/providers/:providerId/credential` (bearer-token-protected, like every other route) and
-   stored via `apps/daemon/src/mcp/credential-store.ts`, which delegates to the OS's native
-   credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret Service —
-   through `@napi-rs/keyring`, under a service name namespaced to this app
+3. **Optional MCP job-source credentials** — the daemon and desktop bridge already implement full
+   support for connecting an MCP-based job-source provider (see
+   [docs/mcp-source-policy.md](docs/mcp-source-policy.md)) that needs its own API key or token,
+   unrelated to either of the above, but **no provider is registered in this build**: the daemon
+   wires its `McpConnectionManager` with an empty policy list (`apps/daemon/src/index.ts`), so every
+   `/mcp/providers/:providerId/...` route currently answers "not allowlisted" for any id, and the
+   desktop app has no screen that calls it. Once a provider is registered, a credential would be
+   written through `PUT /mcp/providers/:providerId/credential` (bearer-token-protected, like every
+   other route) and stored via `apps/daemon/src/mcp/credential-store.ts`, which delegates to the
+   OS's native credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret
+   Service — through `@napi-rs/keyring`, under a service name namespaced to this app
    (`open-vacancy-radar.mcp`). No route ever reads a stored credential back out: the daemon can set
    one, delete one, and report a provider's connection *status* (connected/not), but there is no API
    that returns the credential value itself once it's been written.

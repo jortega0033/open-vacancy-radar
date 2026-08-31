@@ -154,6 +154,10 @@ local testing.
 | **macOS** | untested | untested | untested | not implemented | n/a |
 | **Linux** | untested | untested | untested | not implemented | n/a |
 
+**Supported OS/version**: Windows 10 or later, 64-bit (x64) only — `electron-builder.yml`'s `win.target.arch`
+is `[x64]` exclusively, and the bundled Electron 44 itself no longer supports Windows 7/8/8.1.
+32-bit Windows is not built or tested.
+
 Nothing in the code is deliberately Windows-only: path handling uses `node:path` throughout, and
 process management already has explicit POSIX branches (see
 [SECURITY.md](../SECURITY.md#process-hygiene)), but "should work" and "verified" are different

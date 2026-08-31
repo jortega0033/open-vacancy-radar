@@ -56,7 +56,9 @@ This desktop app relies on CLIs the user already has installed and authenticated
 subscription or API key: if a user already has `claude` or `codex` installed and logged in, Open
 Vacancy Radar can use that existing session for local AI workflows (gap analysis, letter drafting).
 The installed CLI stays the sole authentication and provider boundary; this project never receives
-a password, token, or API key.
+a password, token, or API key for those AI CLIs. (A separate, optional MCP job-source credential
+layer exists in the daemon for a future job-source provider; no provider is registered in this
+build, so it is not reachable from the app today — see [SECURITY.md](SECURITY.md).)
 
 ```
 Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──▶ Local Daemon (Fastify, protocol v1)
@@ -118,7 +120,14 @@ shell), reused across every page rather than redefined per feature.
 
 ## Requirements
 
-Install and authenticate the CLIs you want to use, independently of this project:
+- **OS**: Windows 10 or later, 64-bit (x64). The packaged installer is Windows-only for now; see
+  [docs/packaging.md#platform-matrix](docs/packaging.md#platform-matrix).
+- **Node.js**: `>=22` if you're running from source (see `engines` in `package.json`). Not needed
+  to just run the packaged installer.
+- **An AI provider CLI, for AI features only** (search, saved jobs, applications, and letters work
+  without one): install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or
+  [Codex](https://github.com/openai/codex) first, then authenticate the CLIs you want to use,
+  independently of this project:
 
 ```bash
 # Claude Code
@@ -130,8 +139,10 @@ codex login
 codex login status
 ```
 
-This project never automates account signup or handles credentials on your behalf. Do that
-directly with each CLI first.
+This project never automates account signup or handles credentials on your behalf, and never
+installs a CLI for you. Do all of that directly with each CLI first; see
+[docs/troubleshooting.md#claudecodex-not-detected-installed-false](docs/troubleshooting.md#claudecodex-not-detected-installed-false)
+if the app doesn't detect a CLI you've already installed.
 
 ## Getting started
 
@@ -267,8 +278,19 @@ contract suite, register it. No daemon, client, or desktop changes required.
 - [docs/assets.md](docs/assets.md): brand sources, icon generation, renderer mapping and rebranding
 - [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md): the design-token rules every component follows
 - [docs/troubleshooting.md](docs/troubleshooting.md): common problems and how to diagnose them
+- [docs/release-notes-v0.1.0.md](docs/release-notes-v0.1.0.md): what shipped, known limitations, privacy implications
+- [docs/privacy.md](docs/privacy.md): what data is stored, what leaves your machine and when, retention/deletion
+- [docs/release-checklist.md](docs/release-checklist.md): the repeatable pre-release verification checklist
 - [SECURITY.md](SECURITY.md): the daemon's threat model and local-auth mechanism
 - [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow and checklist
+
+## Support and reporting issues
+
+Found a bug, or something doesn't work as documented? Search
+[existing issues](https://github.com/jortega0033/open-vacancy-radar/issues) first, then open a new
+one using the issue forms — see [CONTRIBUTING.md](CONTRIBUTING.md) for what to include. Report a
+security vulnerability privately through the repository's **Security** tab, never through a public
+issue or pull request (see [SECURITY.md](SECURITY.md)).
 
 ## License
 
