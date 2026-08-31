@@ -125,7 +125,7 @@ export function SearchProfileSection() {
 
   if (loadError) {
     return (
-      <SettingsSection title="Search profile">
+      <SettingsSection title="Netherlands search profile">
         <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>
       </SettingsSection>
     );
@@ -133,7 +133,7 @@ export function SearchProfileSection() {
 
   if (!profile || !draft) {
     return (
-      <SettingsSection title="Search profile">
+      <SettingsSection title="Netherlands search profile">
         <div className="alert alert-info alert-soft mt-2 text-sm">Loading search profile…</div>
       </SettingsSection>
     );
@@ -177,7 +177,11 @@ export function SearchProfileSection() {
   };
 
   return (
-    <SettingsSection title="Search profile">
+    <SettingsSection title="Netherlands search profile">
+      <p className="mt-1 text-sm text-base-content/60">
+        Only the Netherlands (IND sponsor) pipeline scores results against a candidate profile.
+        The worldwide pipeline has no equivalent, so nothing here affects it.
+      </p>
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
           No target roles or strongest skills are set yet, so Netherlands search results are not

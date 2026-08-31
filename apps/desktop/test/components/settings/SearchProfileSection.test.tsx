@@ -18,6 +18,18 @@ afterEach(() => {
 });
 
 describe('SearchProfileSection', () => {
+  it('explains the profile only affects the Netherlands pipeline, not worldwide', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+
+    render(<SearchProfileSection />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Netherlands search profile' })).toBeInTheDocument();
+    expect(screen.getByText(/worldwide pipeline has no equivalent/)).toBeInTheDocument();
+  });
+
   it('shows the unconfigured warning when there are no target roles or strongest skills', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
