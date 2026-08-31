@@ -14,7 +14,7 @@
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
     "package": "electron-builder",
-    "package:win": "electron-builder --win nsis",
+    "package:win": "node scripts/download-vc-redist.mjs && electron-builder --win nsis",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "workspace:db:generate": "drizzle-kit generate --config drizzle.workspace.config.ts"
   },

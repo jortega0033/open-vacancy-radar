@@ -72,3 +72,6 @@ nsis:
   # A .blockmap is only useful for differential auto-update downloads, which this project doesn't
   # have. Skip generating one rather than ship a file with no purpose.
   differentialPackage: false
+  # Silently installs the VC++ redistributable if missing (see assets/app-icons/installer.nsh and
+  # scripts/download-vc-redist.mjs, run beforehand by the package:win script) -- see issue #62.
+  include: installer.nsh
