@@ -76,12 +76,20 @@ test.describe('Letters', () => {
     await expect(window.getByText('Saved to your letters.')).toBeVisible();
 
     // Round-trip through the library and back in, to prove the edit is really persisted (not just
-    // held in the editor's own local state) before exercising copy/export against it.
+    // held in the editor's own local state) before exercising copy/export against it. Reuses the
+    // `row`/`body` locators from above rather than re-querying: Playwright locators re-resolve
+    // lazily against the live DOM, so they remain valid across the tab switch and re-render.
     await window.getByRole('tab', { name: 'Library' }).click();
-    await expect(window.getByRole('row', { name: /Redwood Software/ })).toBeVisible();
-    await window.getByRole('row', { name: /Redwood Software/ }).getByRole('button', { name: 'Open', exact: true }).click();
-    await expect(window.getByRole('textbox', { name: /letter body/i })).toHaveValue(editedBody);
+    await expect(row).toBeVisible();
+    await row.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(body).toHaveValue(editedBody);
 
+    // CI runs this suite on headless Linux under xvfb with no window manager (see
+    // .github/workflows/e2e.yml), so the BrowserWindow is not guaranteed to already hold real
+    // input focus the way it would on a developer's desktop. `navigator.clipboard.writeText`
+    // additionally requires `document.hasFocus()`, independent of the permission grant above, so
+    // force it explicitly rather than assume the preceding clicks already established it.
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
     await window.getByRole('button', { name: /^copy$/i }).click();
     await expect(window.getByText('Copied to clipboard.')).toBeVisible();
 
@@ -96,8 +104,15 @@ test.describe('Letters', () => {
         dialog.showSaveDialog = async () => ({ canceled: false, filePath });
       }, exportPath);
 
+      // The export menu is a daisyUI CSS-`:focus`-driven dropdown, not a React-managed open flag
+      // (LetterGenerator.tsx's `dropdown dropdown-end`), so the menu item must be waited on
+      // explicitly rather than clicked immediately after the toggle: a click dispatched while the
+      // dropdown's focus state hasn't settled yet would otherwise be a flaky "not visible" timeout
+      // instead of a deterministic pass.
       await window.getByRole('button', { name: /^export$/i }).click();
-      await window.getByRole('button', { name: /markdown \(\.md\)/i }).click();
+      const markdownOption = window.getByRole('button', { name: /markdown \(\.md\)/i });
+      await expect(markdownOption).toBeVisible();
+      await markdownOption.click();
       await expect(window.getByText('Exported.')).toBeVisible();
     } finally {
       rmSync(exportDir, { recursive: true, force: true });

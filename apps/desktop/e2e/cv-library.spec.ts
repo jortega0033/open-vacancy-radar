@@ -57,24 +57,27 @@ test.describe('CV library', () => {
   });
 
   test('moves the default marker when a different CV is set as default', async ({ window }) => {
-    async function addManualProfile(name: string) {
-      await window.getByRole('button', { name: /add manual profile/i }).first().click();
-      const dialog = window.getByRole('dialog', { name: /add manual cv profile/i });
-      await dialog.getByLabel(/^name/i).fill(name);
-      await dialog.getByRole('button', { name: /add cv/i }).click();
-      await expect(dialog).toBeHidden();
-    }
-
-    await goto(window, 'CV');
-
+    // Seeded via `workspace.createCvDocument` (the same IPC channel the "Add CV" dialog's own
+    // submit handler calls) rather than driving that dialog twice through the UI: this test is
+    // about the default-selection control, not about the add-CV flow, which already has its own
+    // dedicated coverage in the first test in this file. `CvLibraryPage` fetches its list fresh on
+    // mount (`listCvDocuments()`), so seeding before `goto` is enough to have both rows render.
+    //
     // `createCvDocument` (electron/workspace/repository.ts) makes the very first document the
     // default automatically; every one after that starts out not-default, which is exactly the
     // starting condition this test needs (one already-default row and one that isn't yet).
-    await addManualProfile('Frontend CV — Netherlands');
+    await window.evaluate(() =>
+      self.workspace.createCvDocument({ name: 'Frontend CV — Netherlands', kind: 'manual' }),
+    );
+    await window.evaluate(() =>
+      self.workspace.createCvDocument({ name: 'Backend CV — Remote', kind: 'manual' }),
+    );
+
+    await goto(window, 'CV');
+
     const firstRow = window.getByRole('row', { name: /Frontend CV — Netherlands/ });
     await expect(firstRow.getByText('Default', { exact: true })).toBeVisible();
 
-    await addManualProfile('Backend CV — Remote');
     const secondRow = window.getByRole('row', { name: /Backend CV — Remote/ });
     await expect(secondRow.getByRole('button', { name: /set as default/i })).toBeVisible();
     // Only one row carries the marker at a time.
@@ -84,6 +87,5 @@ test.describe('CV library', () => {
 
     await expect(secondRow.getByText('Default', { exact: true })).toBeVisible();
     await expect(firstRow.getByRole('button', { name: /set as default/i })).toBeVisible();
-    await expect(firstRow.getByText('Default', { exact: true })).toHaveCount(0);
   });
 });

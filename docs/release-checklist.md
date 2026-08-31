@@ -56,12 +56,14 @@ Exercise the golden paths a real user would hit first, on the installed build sp
       `codex` CLI on the test machine).
 - [ ] Draft a letter for a saved application; confirm copy-to-clipboard and at least one export
       format (md/docx/pdf) work.
-- [ ] MCP job-source providers are not yet enabled in this build (empty policy registry — see
-      [docs/mcp-source-policy.md](mcp-source-policy.md) and
-      [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one));
-      there is nothing to connect from the app today, so skip this item. Once a provider is
-      registered, run the daemon's `apps/daemon/test/mcp-*.test.ts` integration suite and update
-      this line to a manual connect/save/search/disconnect pass.
+- [ ] MCP job-source providers: confirm the daemon's provider policy list matches what this release
+      actually ships (see
+      [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)
+      for what "registered" means). If it's still empty, as of this writing there is nothing to
+      connect — check the box once you've confirmed that's still true. If a provider has since been
+      registered, connect it and confirm credential save/search/disconnect all work before checking
+      this box (see the daemon's `apps/daemon/test/mcp-*.test.ts` for the equivalent automated
+      coverage).
 
 ## 6. Artifact hashes
 
