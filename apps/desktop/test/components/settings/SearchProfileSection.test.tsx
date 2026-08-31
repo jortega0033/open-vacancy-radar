@@ -16,12 +16,18 @@ function configuredProfile(overrides: Partial<CandidateProfile> = {}): Candidate
   };
 }
 
-/** `sponsorOnlyDefault` lives in `app_settings`, owned by `SettingsPage`, not this section's own
- * candidate-profile IPC, so every render here supplies it (and a no-op handler) explicitly. */
+/** `sponsorOnlyDefault` and `indVerificationEnabled` live in `app_settings`, owned by
+ * `SettingsPage`, not this section's own candidate-profile IPC; `onSaved`/`onSaveError` likewise
+ * belong to `SettingsPage`'s one shared toast now, not a toast this section renders itself. Every
+ * render here supplies all of them (with no-op handlers) explicitly. */
 function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchProfileSectionProps {
   return {
     sponsorOnlyDefault: true,
     onChangeSponsorOnlyDefault: vi.fn(),
+    indVerificationEnabled: true,
+    onChangeIndVerificationEnabled: vi.fn(),
+    onSaved: vi.fn(),
+    onSaveError: vi.fn(),
     ...overrides,
   };
 }
@@ -65,21 +71,25 @@ describe('SearchProfileSection', () => {
     expect(screen.queryByText(/not scored against anything/)).not.toBeInTheDocument();
   });
 
-  it('saves a text field on blur, sending only that field', async () => {
+  it('saves a text field on blur, sending only that field, and reports success through the shared toast callback', async () => {
     const saveSearchProfile = vi.fn().mockResolvedValue(configuredProfile({ candidateName: 'Jane Doe' }));
+    const onSaved = vi.fn();
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection {...baseProps()} />);
+    render(<SearchProfileSection {...baseProps({ onSaved })} />);
 
     const nameInput = await screen.findByLabelText('Name');
     fireEvent.change(nameInput, { target: { value: 'Jane Doe' } });
     fireEvent.blur(nameInput);
 
     await waitFor(() => expect(saveSearchProfile).toHaveBeenCalledWith({ candidateName: 'Jane Doe' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('Saved');
+    // No toast of its own any more: SettingsPage's one shared toast instance renders it instead,
+    // so two autosaving forms on the same tab can never pop overlapping toasts in the same corner.
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('does not save on blur when the field is unchanged', async () => {
@@ -132,21 +142,22 @@ describe('SearchProfileSection', () => {
     );
   });
 
-  it('reverts an optimistically-toggled switch when the save fails', async () => {
+  it('reverts an optimistically-toggled switch when the save fails, reporting the error upward', async () => {
     const saveSearchProfile = vi.fn().mockRejectedValue(new Error('disk write failed'));
+    const onSaveError = vi.fn();
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection {...baseProps()} />);
+    render(<SearchProfileSection {...baseProps({ onSaveError })} />);
 
     const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
     expect(toggle).not.toBeChecked();
     fireEvent.click(toggle);
 
     expect(toggle).toBeChecked();
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('disk write failed'));
+    await waitFor(() => expect(onSaveError).toHaveBeenCalledWith('disk write failed'));
     expect(toggle).not.toBeChecked();
   });
 
@@ -187,5 +198,33 @@ describe('SearchProfileSection', () => {
     fireEvent.click(toggle);
 
     expect(onChangeSponsorOnlyDefault).toHaveBeenCalledWith(false);
+  });
+
+  it('shows the IND verification toggle here too (moved from the old Market integrations section) and reports it through its own callback', async () => {
+    const onChangeIndVerificationEnabled = vi.fn();
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
+    });
+
+    render(<SearchProfileSection {...baseProps({ indVerificationEnabled: true, onChangeIndVerificationEnabled })} />);
+
+    const toggle = screen.getByRole('switch', { name: 'IND recognised sponsor verification' });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChangeIndVerificationEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it('groups the candidate-profile fields under Identity / Role matching / Constraints subheadings', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { level: 3, name: 'Identity' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Role matching' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Constraints' })).toBeInTheDocument();
   });
 });

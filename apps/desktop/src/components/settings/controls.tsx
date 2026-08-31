@@ -33,7 +33,7 @@ export interface SettingsRowProps {
 
 export function SettingsRow({ label, description, htmlFor, children }: SettingsRowProps) {
   return (
-    <div className="ovr-row flex items-center justify-between gap-4 border-b border-base-300">
+    <div className="ovr-row flex items-start justify-between gap-4 border-b border-base-300">
       <div className="min-w-0">
         {htmlFor ? (
           <label htmlFor={htmlFor} className="block text-sm font-medium">
@@ -44,8 +44,23 @@ export function SettingsRow({ label, description, htmlFor, children }: SettingsR
         )}
         {description && <div className="mt-0.5 text-xs text-base-content/60">{description}</div>}
       </div>
-      {children && <div className="flex-none">{children}</div>}
+      {/* `items-start` above keeps the control aligned to the label line rather than centered
+          against the whole label+description block, which floats it too low once a description
+          wraps to 2-3 lines; the top padding here re-centers it on that one line specifically. */}
+      {children && <div className="flex-none pt-0.5">{children}</div>}
     </div>
+  );
+}
+
+/** A lightweight heading for clustering related rows within one `SettingsSection`, one step
+ * quieter than the section's own `<h2>` (no border, no ovr-row spacing) — reuses the same
+ * caption style as `ProviderCard`'s "Capabilities" label and `RuntimePage`'s "Default runtime"
+ * caption, so the visual language for "small uppercase group label" stays consistent app-wide. */
+export function SettingsSubheading({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="mt-5 mb-1 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+      {children}
+    </h3>
   );
 }
 

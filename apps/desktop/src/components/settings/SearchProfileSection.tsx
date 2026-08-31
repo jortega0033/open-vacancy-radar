@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
-import { SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
-
-type SaveStatus = { kind: 'saved'; message: string } | { kind: 'error'; message: string };
+import { SettingsRow, SettingsSection, SettingsSubheading, ToggleSwitch } from './controls.js';
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -49,7 +47,18 @@ export interface SearchProfileSectionProps {
    * market-agnostic "Search defaults" section. */
   sponsorOnlyDefault: boolean;
   onChangeSponsorOnlyDefault: (next: boolean) => void;
+  /** `app_settings.ind_verification_enabled`: same story as `sponsorOnlyDefault` above. This used
+   * to sit in its own "Market integrations" section, which was really just this section's
+   * verification concern split out under a near-duplicate "Netherlands-only, doesn't apply to
+   * worldwide" disclaimer. */
+  indVerificationEnabled: boolean;
+  onChangeIndVerificationEnabled: (next: boolean) => void;
   disabled?: boolean;
+  /** Reports a candidate-profile save result upward so `SettingsPage` can show it through its one
+   * toast instance, instead of this section rendering a second, independent one: two autosaving
+   * forms on the same tab each popping their own toast in the same corner can overlap. */
+  onSaved: () => void;
+  onSaveError: (message: string) => void;
 }
 
 /**
@@ -65,15 +74,17 @@ export interface SearchProfileSectionProps {
 export function SearchProfileSection({
   sponsorOnlyDefault,
   onChangeSponsorOnlyDefault,
+  indVerificationEnabled,
+  onChangeIndVerificationEnabled,
   disabled,
+  onSaved,
+  onSaveError,
 }: SearchProfileSectionProps) {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string>();
-  const [status, setStatus] = useState<SaveStatus | null>(null);
 
   const saveSeq = useRef(0);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,16 +100,7 @@ export function SearchProfileSection({
     })();
     return () => {
       cancelled = true;
-      if (flashTimer.current !== undefined) clearTimeout(flashTimer.current);
     };
-  }, []);
-
-  const flash = useCallback((next: SaveStatus) => {
-    setStatus(next);
-    if (flashTimer.current !== undefined) clearTimeout(flashTimer.current);
-    if (next.kind === 'saved') {
-      flashTimer.current = setTimeout(() => setStatus(null), 2000);
-    }
   }, []);
 
   const commit = useCallback(
@@ -110,7 +112,7 @@ export function SearchProfileSection({
           if (seq !== saveSeq.current) return;
           setProfile(saved);
           setDraft(toDraft(saved));
-          flash({ kind: 'saved', message: 'Saved' });
+          onSaved();
         } catch (err) {
           if (seq !== saveSeq.current) return;
           // Reverts `profile` too, not just `draft`: `commitToggle` below updates `profile`
@@ -120,11 +122,11 @@ export function SearchProfileSection({
             setProfile(profile);
             setDraft(toDraft(profile));
           }
-          flash({ kind: 'error', message: describeError(err, 'could not save the search profile') });
+          onSaveError(describeError(err, 'could not save the search profile'));
         }
       })();
     },
-    [profile, flash],
+    [profile, onSaved, onSaveError],
   );
 
   const commitToggle = useCallback(
@@ -136,24 +138,46 @@ export function SearchProfileSection({
     [profile, commit],
   );
 
-  const sponsorOnlyDefaultRow = (
-    <SettingsRow
-      label="Recognised sponsors only by default"
-      description="Netherlands searches start with the IND recognised-sponsor filter switched on."
-    >
-      <ToggleSwitch
+  // Neither row depends on the candidate-profile fetch below (both are `app_settings` fields), so
+  // they render in every branch rather than waiting on `profile`/`draft` to resolve.
+  const verificationRows = (
+    <>
+      <SettingsSubheading>Search behavior</SettingsSubheading>
+      <SettingsRow
         label="Recognised sponsors only by default"
-        checked={sponsorOnlyDefault}
-        disabled={disabled}
-        onChange={onChangeSponsorOnlyDefault}
-      />
-    </SettingsRow>
+        description="Netherlands searches start with the IND recognised-sponsor filter switched on."
+      >
+        <ToggleSwitch
+          label="Recognised sponsors only by default"
+          checked={sponsorOnlyDefault}
+          disabled={disabled}
+          onChange={onChangeSponsorOnlyDefault}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="IND recognised sponsor verification"
+        description="Source: IND Public Register · checks employers of Netherlands vacancies."
+      >
+        <ToggleSwitch
+          label="IND recognised sponsor verification"
+          checked={indVerificationEnabled}
+          disabled={disabled}
+          onChange={onChangeIndVerificationEnabled}
+        />
+      </SettingsRow>
+      <p className="ovr-row border-b border-base-300 text-xs text-base-content/60">
+        Recruitee, Greenhouse, Teamtailor, SmartRecruiters, Lever and mapped company career sites
+        feed the Netherlands pipeline. No market-specific employer verification is configured for
+        Germany, Belgium, France, the United Kingdom or the United States; vacancy search, CV
+        matching, letters and application tracking still work for those markets.
+      </p>
+    </>
   );
 
   if (loadError) {
     return (
       <SettingsSection title="Netherlands search profile">
-        {sponsorOnlyDefaultRow}
+        {verificationRows}
         <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>
       </SettingsSection>
     );
@@ -162,7 +186,7 @@ export function SearchProfileSection({
   if (!profile || !draft) {
     return (
       <SettingsSection title="Netherlands search profile">
-        {sponsorOnlyDefaultRow}
+        {verificationRows}
         <div className="alert alert-info alert-soft mt-2 text-sm">Loading search profile…</div>
       </SettingsSection>
     );
@@ -212,7 +236,7 @@ export function SearchProfileSection({
         The worldwide pipeline has no equivalent, so nothing here affects it.
       </p>
 
-      {sponsorOnlyDefaultRow}
+      {verificationRows}
 
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
@@ -221,6 +245,7 @@ export function SearchProfileSection({
         </div>
       )}
 
+      <SettingsSubheading>Identity</SettingsSubheading>
       <SettingsRow label="Name" htmlFor="profile-candidate-name">
         <input
           id="profile-candidate-name"
@@ -258,63 +283,6 @@ export function SearchProfileSection({
           onBlur={commitExperienceYears}
         />
       </SettingsRow>
-      <SettingsRow
-        label="Strongest skills"
-        description="Comma-separated. Used to score matching vacancies."
-        htmlFor="profile-strongest-skills"
-      >
-        <input
-          id="profile-strongest-skills"
-          type="text"
-          className="input input-sm w-80"
-          {...field('strongestSkills')}
-          onBlur={() => commitText('strongestSkills', skillsToText(profile.strongestSkills))}
-        />
-      </SettingsRow>
-      <SettingsRow label="Additional skills" description="Comma-separated." htmlFor="profile-additional-skills">
-        <input
-          id="profile-additional-skills"
-          type="text"
-          className="input input-sm w-80"
-          {...field('additionalSkills')}
-          onBlur={() => commitText('additionalSkills', skillsToText(profile.additionalSkills))}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Target roles"
-        description="Comma-separated. Used to score matching vacancies."
-        htmlFor="profile-target-roles"
-      >
-        <input
-          id="profile-target-roles"
-          type="text"
-          className="input input-sm w-80"
-          {...field('targetRoles')}
-          onBlur={() => commitText('targetRoles', skillsToText(profile.targetRoles))}
-        />
-      </SettingsRow>
-      <SettingsRow label="Considered roles" description="Comma-separated." htmlFor="profile-considered-roles">
-        <input
-          id="profile-considered-roles"
-          type="text"
-          className="input input-sm w-80"
-          {...field('consideredRoles')}
-          onBlur={() => commitText('consideredRoles', skillsToText(profile.consideredRoles))}
-        />
-      </SettingsRow>
-      <SettingsRow
-        label="Excluded role families"
-        description="Comma-separated. Roles to never surface."
-        htmlFor="profile-excluded-role-families"
-      >
-        <input
-          id="profile-excluded-role-families"
-          type="text"
-          className="input input-sm w-80"
-          {...field('excludedRoleFamilies')}
-          onBlur={() => commitText('excludedRoleFamilies', skillsToText(profile.excludedRoleFamilies))}
-        />
-      </SettingsRow>
       <SettingsRow label="Professional language" htmlFor="profile-professional-language">
         <input
           id="profile-professional-language"
@@ -337,6 +305,67 @@ export function SearchProfileSection({
           onBlur={() => commitText('primaryCountry', profile.constraints.primaryCountry)}
         />
       </SettingsRow>
+
+      <SettingsSubheading>Role matching</SettingsSubheading>
+      <SettingsRow
+        label="Strongest skills"
+        description="Comma-separated. Used to score matching vacancies."
+        htmlFor="profile-strongest-skills"
+      >
+        <textarea
+          id="profile-strongest-skills"
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('strongestSkills')}
+          onBlur={() => commitText('strongestSkills', skillsToText(profile.strongestSkills))}
+        />
+      </SettingsRow>
+      <SettingsRow label="Additional skills" description="Comma-separated." htmlFor="profile-additional-skills">
+        <textarea
+          id="profile-additional-skills"
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('additionalSkills')}
+          onBlur={() => commitText('additionalSkills', skillsToText(profile.additionalSkills))}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="Target roles"
+        description="Comma-separated. Used to score matching vacancies."
+        htmlFor="profile-target-roles"
+      >
+        <textarea
+          id="profile-target-roles"
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('targetRoles')}
+          onBlur={() => commitText('targetRoles', skillsToText(profile.targetRoles))}
+        />
+      </SettingsRow>
+      <SettingsRow label="Considered roles" description="Comma-separated." htmlFor="profile-considered-roles">
+        <textarea
+          id="profile-considered-roles"
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('consideredRoles')}
+          onBlur={() => commitText('consideredRoles', skillsToText(profile.consideredRoles))}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="Excluded role families"
+        description="Comma-separated. Roles to never surface."
+        htmlFor="profile-excluded-role-families"
+      >
+        <textarea
+          id="profile-excluded-role-families"
+          rows={2}
+          className="textarea textarea-sm w-full max-w-md"
+          {...field('excludedRoleFamilies')}
+          onBlur={() => commitText('excludedRoleFamilies', skillsToText(profile.excludedRoleFamilies))}
+        />
+      </SettingsRow>
+
+      <SettingsSubheading>Constraints</SettingsSubheading>
       <SettingsRow
         label="Minimum monthly base (EUR)"
         description="Leave at 0 for no salary floor."
@@ -371,20 +400,6 @@ export function SearchProfileSection({
           onChange={(allowRemoteEuSupportingNetherlands) => commitToggle({ allowRemoteEuSupportingNetherlands })}
         />
       </SettingsRow>
-
-      {status && (
-        <div className="toast toast-end z-50">
-          {status.kind === 'saved' ? (
-            <div role="status" className="alert alert-success alert-soft py-2 text-sm">
-              {status.message}
-            </div>
-          ) : (
-            <div role="alert" className="alert alert-error py-2 text-sm">
-              {status.message}
-            </div>
-          )}
-        </div>
-      )}
     </SettingsSection>
   );
 }
