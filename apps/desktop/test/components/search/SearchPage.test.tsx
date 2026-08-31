@@ -55,6 +55,7 @@ function makeNetherlandsReport(
     generatedAt: '2026-08-29T10:00:00.000Z',
     candidateProfileVersion: 'candidate-profile-v1',
     profileConfigured: true,
+    indVerificationEnabled: true,
     deterministicScoringVersion: 'deterministic-relevance-v11',
     freshnessPolicy: { maximumPostingAgeDays: 30, cutoff: '2026-07-30T10:00:00.000Z' },
     officialSponsorSource: {
@@ -266,6 +267,22 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Recognised sponsor').length).toBeGreaterThan(0));
     expect(screen.getAllByText(/Redwood Software Netherlands B\.V\./).length).toBeGreaterThan(0);
     expect(screen.getByText(/matched with high confidence/i)).toBeInTheDocument();
+  });
+
+  it('shows verification as turned off, not as an unresolved sponsor match, when IND verification is disabled', async () => {
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(
+        makeNetherlandsReport([makeNetherlandsVacancy()], { indVerificationEnabled: false }),
+      ),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getAllByText('Verification turned off').length).toBeGreaterThan(0));
+    // The honest "we did not check" copy, never the "we checked and found nothing" wording that a
+    // genuinely unresolved sponsor match gets.
+    expect(screen.queryByText('Sponsor entity not resolved')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/turned off in Settings/i).length).toBeGreaterThan(0);
   });
 
   it('reports the missing worldwide verification as absent, never as an IND-style outcome', async () => {

@@ -672,9 +672,14 @@ ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
+      // Two separate databases, read here on every scan rather than cached: the workspace DB
+      // (app_settings) and the vacancy-engine DB (`db` above) are unrelated, and this setting can
+      // change between scans without anything else invalidating a cached copy.
+      const { indVerificationEnabled } = await workspace.getSettings(await ensureWorkspaceDb());
       const result = await runEndToEndScan(db, config, createLogger(config), lock, {
         // This is where the engine reads `config/candidate-profile-v1.json` and writes `reports/`.
         projectRoot: await vacancyEngineDataRoot(),
+        indVerificationEnabled,
       });
       if (result.status === 'skipped') throw new Error(SCAN_BUSY_OTHER_PROCESS);
       latestNetherlandsReport = result.report;

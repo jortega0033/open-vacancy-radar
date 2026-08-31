@@ -32,6 +32,9 @@ export type BuildReportOptions = {
   profilePath?: string;
   scanStatus?: JobRadarReport['scanStatus'];
   maximumPostingAgeDays?: number;
+  /** Defaults to `true`: every existing caller (the CLI, the company-discovery campaign pipeline)
+   * keeps the historical always-verified behavior unless it explicitly opts out. */
+  indVerificationEnabled?: boolean;
 };
 
 function emptyStatistics(): ReportStatistics {
@@ -127,6 +130,7 @@ export async function buildJobRadarReport(
   }
   const profile = await loadCandidateProfile(options.profilePath);
   const profileConfigured = isCandidateProfileConfigured(profile);
+  const indVerificationEnabled = options.indVerificationEnabled ?? true;
   const run = await resolveRun(database, options.scanRunId);
   const generatedAt = options.generatedAt ?? new Date();
   const maximumPostingAgeDays = options.maximumPostingAgeDays ?? 365;
@@ -143,6 +147,10 @@ export async function buildJobRadarReport(
         ),
       ),
   );
+  // Spread into the `and(...)` calls below alongside the existing `profileConfigured` spreads:
+  // an empty array contributes nothing to the filter, so disabling verification lets vacancies
+  // from companies with no resolved sponsor entity through, not just recognised-sponsor ones.
+  const sponsorFilter = indVerificationEnabled ? [hasActiveSponsorRelationship] : [];
 
   const [
     sponsorCounts,
@@ -213,7 +221,7 @@ export async function buildJobRadarReport(
               and(
                 eq(vacancies.active, true),
                 eq(companies.scanEnabled, true),
-                hasActiveSponsorRelationship,
+                ...sponsorFilter,
                 gte(vacancyScores.finalScore, RELEVANCE_THRESHOLD),
               ),
             )
@@ -238,7 +246,7 @@ export async function buildJobRadarReport(
               and(
                 eq(vacancies.active, true),
                 eq(companies.scanEnabled, true),
-                hasActiveSponsorRelationship,
+                ...sponsorFilter,
                 gte(vacancyScores.finalScore, minimumScore),
                 lt(vacancies.postedAt, freshnessCutoff),
               ),
@@ -251,7 +259,7 @@ export async function buildJobRadarReport(
               and(
                 eq(vacancies.active, true),
                 eq(companies.scanEnabled, true),
-                hasActiveSponsorRelationship,
+                ...sponsorFilter,
                 lt(vacancies.postedAt, freshnessCutoff),
               ),
             ),
@@ -310,7 +318,7 @@ export async function buildJobRadarReport(
       and(
         eq(vacancies.active, true),
         eq(companies.scanEnabled, true),
-        hasActiveSponsorRelationship,
+        ...sponsorFilter,
         ...(profileConfigured ? [gte(vacancyScores.finalScore, minimumScore)] : []),
         or(isNull(vacancies.postedAt), gte(vacancies.postedAt, freshnessCutoff)),
       ),
@@ -452,6 +460,7 @@ export async function buildJobRadarReport(
     generatedAt: generatedAt.toISOString(),
     candidateProfileVersion: profile.profileVersion,
     profileConfigured,
+    indVerificationEnabled,
     deterministicScoringVersion: DETERMINISTIC_SCORING_VERSION,
     freshnessPolicy: {
       maximumPostingAgeDays,

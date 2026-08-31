@@ -48,6 +48,26 @@ export interface VerificationSectionProps {
 export function VerificationSection({ result, sponsorSource, runId }: VerificationSectionProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  // Netherlands, but the user has turned IND verification off in Settings: the sponsor-entity
+  // panel below would show meaningless "Sponsor entity not resolved" copy (nothing was looked up,
+  // not "looked up and found nothing"), so this gets its own honest panel instead, one step short
+  // of the full detail panel but still distinct from the worldwide pipeline's own copy below (which
+  // references fields, like `result.official`, that only exist on a worldwide result).
+  if (result.market === 'netherlands' && result.verification.level === 'not_available') {
+    return (
+      <section className="mt-6">
+        <SectionHeading>Employer verification &amp; sources</SectionHeading>
+        <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
+          <div className="text-sm font-semibold">IND sponsor verification is turned off.</div>
+          <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
+            {result.verification.note} You can still compare this vacancy against your CV, save it,
+            generate a letter and track an application.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   if (result.market === 'netherlands') {
     const vacancy = result.raw;
     const pairs = [

@@ -278,6 +278,8 @@ export async function finishScanAndPublishReport(
  */
 export type EndToEndScanOptions = {
   projectRoot?: string;
+  /** Forwarded straight to `buildJobRadarReport`'s option of the same name; see its doc comment. */
+  indVerificationEnabled?: boolean;
 };
 
 function candidateProfilePathFor(projectRoot: string | undefined): string | undefined {
@@ -383,6 +385,9 @@ async function runUnlockedEndToEndScan(
       maximumPostingAgeDays: config.maxPostingAgeDays,
       statistics: fallbackStatistics,
       ...(profilePath === undefined ? {} : { profilePath }),
+      ...(options.indVerificationEnabled === undefined
+        ? {}
+        : { indVerificationEnabled: options.indVerificationEnabled }),
     });
     stage = 'scan_finalization_and_report_publication';
     const reportFiles = await finishScanAndPublishReport(

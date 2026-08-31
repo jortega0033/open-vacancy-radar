@@ -14,6 +14,7 @@ function reportWithScore(score: number, overrides: Partial<JobRadarReport['vacan
     generatedAt: '2026-08-28T12:00:00.000Z',
     candidateProfileVersion: 'candidate-profile-v1',
     profileConfigured: true,
+    indVerificationEnabled: true,
     deterministicScoringVersion: 'deterministic-v2',
     freshnessPolicy: {
       maximumPostingAgeDays: 365,
@@ -150,6 +151,13 @@ describe('report generation', () => {
     expect(html).toContain('older than 365 days are excluded');
     expect(html).toContain('Not verified in this scan (failed)');
     expect(html).toContain('Last seen:');
+  });
+
+  it('warns that vacancies are unfiltered by sponsor recognition when IND verification is disabled', () => {
+    const html = renderHtmlReport({ ...reportWithScore(80), indVerificationEnabled: false });
+    expect(html).toContain('IND recognised sponsor verification is turned off');
+    expect(html).toContain('not filtered by IND sponsor recognition');
+    expect(html).not.toContain('Ranked official vacancies at mapped IND-recognised sponsors.');
   });
 
   it('says Dutch requirement was never evaluated for an unscored vacancy, not "no requirement"', () => {
