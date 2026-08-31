@@ -91,7 +91,7 @@ describe('SettingsPage', () => {
       'General',
       'Appearance',
       'Search defaults',
-      'Search profile',
+      'Netherlands search profile',
       'Market integrations',
       'Documents',
       'Applications',
