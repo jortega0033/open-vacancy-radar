@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Info } from '@phosphor-icons/react';
 import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
@@ -98,9 +99,11 @@ function describeError(error: unknown, fallback: string): string {
  * never starts a network scan on its own. Scanning hits real external feeds and can take a couple
  * of minutes, so it is always something the user asked for.
  *
- * Filtering is entirely client-side over the loaded report: narrowing a search must never trigger
- * a scan, which is why "Search" only runs a scan when the selected market has nothing loaded yet,
- * and a separate "Rescan sources" action exists once it does.
+ * Filtering (role/keyword, location, chips) is entirely client-side over the loaded report and
+ * applies live as those fields change: narrowing a search must never itself trigger a scan. The
+ * one "Search" button is the single, always-the-same action for going and getting fresh data,
+ * whether or not a report is already loaded -- there is deliberately no second "just filter" vs.
+ * "rescan" button, which used to be confusing (one of the two did nothing once a report existed).
  */
 export function SearchPage() {
   const [engineState, setEngineState] = useState<EngineState>('checking');
@@ -148,6 +151,9 @@ export function SearchPage() {
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [assistantForKey, setAssistantForKey] = useState<string | null>(null);
+  // Collapsed by default: which sources came back partial/incomplete is useful detail, not
+  // something worth greeting every search with a wall of amber text for.
+  const [sourceWarningsOpen, setSourceWarningsOpen] = useState(false);
 
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
@@ -310,11 +316,14 @@ export function SearchPage() {
     }
   }, [market]);
 
-  // Filters apply live to the loaded report, so with a report in hand "Search" has nothing left to
-  // do. Without one there is nothing to filter, so the same action runs the market's scan.
+  // Filters (role/keyword, location, chips) already apply live to whatever report is loaded, with
+  // no button needed for that. "Search" only ever means one thing: go get fresh data, whether or
+  // not a report already exists -- there is deliberately no separate "just filter" vs. "rescan"
+  // action any more (the two used to be different buttons, one of which did nothing once a report
+  // was loaded, which read as a dead control rather than a real second action).
   const handleSearch = useCallback(() => {
-    if (!hasReport) void runScan();
-  }, [hasReport, runScan]);
+    void runScan();
+  }, [runScan]);
 
   const handleMarketChange = useCallback((next: SearchMarket) => {
     hasSwitchedMarketRef.current = true;
@@ -375,9 +384,6 @@ export function SearchPage() {
         sources={sources}
         employmentTypes={employmentTypes}
         busy={busy}
-        searchLabel={hasReport ? 'Search' : 'Run scan'}
-        canRescan={hasReport}
-        onRescan={() => void runScan()}
         salaryNote={SALARY_NOTE[market]}
       />
 
@@ -405,9 +411,21 @@ export function SearchPage() {
           </div>
         )}
         {sourceWarnings.length > 0 && (
-          <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+          <div className="mt-3">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs gap-1.5 text-warning"
+              onClick={() => setSourceWarningsOpen((open) => !open)}
+              aria-expanded={sourceWarningsOpen}
+            >
+              <Info size={14} aria-hidden="true" />
+              Source coverage warning ({sourceWarnings.length})
+            </button>
+          </div>
+        )}
+        {sourceWarnings.length > 0 && sourceWarningsOpen && (
+          <div className="alert alert-warning alert-soft mt-1.5 text-sm" role="status">
             <div>
-              <span className="font-semibold">Source coverage warning:</span>{' '}
               {sourceWarnings.map((source) => (
                 <span key={source.id} className="block">
                   {source.provider}: {source.error ?? source.status}

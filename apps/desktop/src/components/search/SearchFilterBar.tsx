@@ -12,6 +12,9 @@ export interface SearchFilterBarProps {
   onMarketChange: (market: SearchMarket) => void;
   filters: SearchFilters;
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
+  /** Always runs a fresh scan of this market's sources, whether or not one is already loaded --
+   * there is no separate "just filter" action, since typing in a filter field already re-filters
+   * the loaded report live (see the `onChange` handlers below), with no button needed for that. */
   onSearch: () => void;
   onClear: () => void;
   /** Provider ids present in the loaded report: never a hardcoded list. */
@@ -19,11 +22,6 @@ export interface SearchFilterBarProps {
   /** Employment types present in the loaded report (worldwide only). */
   employmentTypes: string[];
   busy: boolean;
-  /** "Search" before the first scan, "Rescan sources" once a report is loaded. */
-  searchLabel: string;
-  /** Whether a rescan is offered: only meaningful once something is already loaded. */
-  canRescan: boolean;
-  onRescan: () => void;
   /** One honest line about the money the current market's report actually carries. */
   salaryNote: string;
 }
@@ -47,9 +45,6 @@ export function SearchFilterBar({
   sources,
   employmentTypes,
   busy,
-  searchLabel,
-  canRescan,
-  onRescan,
   salaryNote,
 }: SearchFilterBarProps) {
   const supported = supportedFilters(market);
@@ -100,14 +95,8 @@ export function SearchFilterBar({
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
           {busy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-          {searchLabel}
+          Search
         </button>
-
-        {canRescan && (
-          <button className="btn btn-outline btn-sm" type="button" onClick={onRescan} disabled={busy}>
-            Rescan sources
-          </button>
-        )}
 
         {supported.sponsorOnly && (
           <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">

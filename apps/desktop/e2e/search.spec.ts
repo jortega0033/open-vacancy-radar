@@ -2,8 +2,9 @@ import { expect, goto, test } from './fixtures.js';
 
 /**
  * Search e2e coverage is deliberately scoped to UI mechanics that need no real data: this suite
- * never triggers "Run the first scan" / "Rescan sources", because both hit real external job-board
- * APIs (SearchPage.tsx's docstring: "Scanning hits real external feeds and can take a couple of
+ * never triggers "Search" / "Run the first scan" (the two buttons that can start a scan; there is
+ * no longer a separate, merely-filtering action), because both hit real external job-board APIs
+ * (SearchPage.tsx's docstring: "Scanning hits real external feeds and can take a couple of
  * minutes"), which would be slow, flaky, and inappropriate for CI. `window.vacancyRadar.getStatus`/
  * `getNetherlandsReport`/`getReport` are read-only IPC calls to the local engine config, not to any
  * external service, so hydrating a fresh workspace's (always-empty) report is safe to exercise here.
