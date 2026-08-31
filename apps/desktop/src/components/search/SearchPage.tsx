@@ -399,7 +399,7 @@ export function SearchPage() {
       if (market === 'netherlands') {
         setNetherlandsReport(await window.vacancyRadar.runNetherlandsScan());
       } else {
-        setWorldwideReport(await window.vacancyRadar.runScan());
+        setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
       }
       hydratedMarkets.current.add(market);
     } catch (error) {
@@ -407,7 +407,7 @@ export function SearchPage() {
     } finally {
       setScanning(false);
     }
-  }, [market]);
+  }, [market, filters.query]);
 
   // "Search" commits the draft filters (so the list reflects exactly what the form currently
   // shows) and goes to get fresh data, whether or not a report already exists -- there is

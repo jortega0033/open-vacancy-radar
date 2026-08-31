@@ -59,7 +59,12 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
-  runScan(): Promise<GlobalRemoteReport>;
+  /**
+   * `query` scopes each source's own server-side search parameter for this run (see
+   * `GlobalRemoteScanOptions.query` in the engine) instead of always harvesting the same static
+   * default and filtering everything client-side afterward. Omitted or blank keeps that default.
+   */
+  runScan(query?: string): Promise<GlobalRemoteReport>;
   /**
    * Netherlands pipeline: the IND recognised-sponsor scan. A separate pair of methods rather
    * than a `market` argument on the two above, because the two pipelines return genuinely
@@ -180,8 +185,8 @@ const vacancyApi: VacancyRadarBridge = {
   getReport() {
     return ipcRenderer.invoke('vacancy:get-report');
   },
-  runScan() {
-    return ipcRenderer.invoke('vacancy:run-scan');
+  runScan(query) {
+    return ipcRenderer.invoke('vacancy:run-scan', query);
   },
   getNetherlandsReport() {
     return ipcRenderer.invoke('vacancy:get-nl-report');

@@ -184,12 +184,19 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(report).toBeNull();
   });
 
-  it('runScan invokes only vacancy:run-scan, no arguments', async () => {
+  it('runScan invokes vacancy:run-scan with no query when called with none', async () => {
     invoke.mockResolvedValue({ runId: 'run-1' });
     const api = await loadPreload('vacancyRadar');
     await (api.runScan as () => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan');
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', undefined);
+  });
+
+  it('runScan forwards the query string to vacancy:run-scan unchanged', async () => {
+    invoke.mockResolvedValue({ runId: 'run-1' });
+    const api = await loadPreload('vacancyRadar');
+    await (api.runScan as (query?: string) => Promise<unknown>)('frontend engineer');
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
   });
 
   it('keeps the Netherlands scan on its own two channels, distinct from the global-remote pair', async () => {

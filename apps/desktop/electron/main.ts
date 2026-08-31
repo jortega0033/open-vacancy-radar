@@ -639,12 +639,14 @@ ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?:
 
 ipcMain.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
 
-ipcMain.handle('vacancy:run-scan', async (): Promise<GlobalRemoteReport> => {
+ipcMain.handle('vacancy:run-scan', async (_event, query: unknown): Promise<GlobalRemoteReport> => {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
-      const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot());
+      const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
+        query: typeof query === 'string' ? query : undefined,
+      });
       latestVacancyReport = result.report;
       return result.report;
     },

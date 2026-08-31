@@ -341,6 +341,26 @@ describe('SearchPage', () => {
     expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0);
   });
 
+  it('forwards the typed role/keyword to the worldwide scan itself, not just the local filter', async () => {
+    const bridge = installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    switchMarket('worldwide');
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      target: { value: 'backend engineer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith('backend engineer'));
+  });
+
   it('Clear filters applies immediately, with no separate Search click needed', async () => {
     const bothVacancies = makeNetherlandsReport([
       makeNetherlandsVacancy(),
