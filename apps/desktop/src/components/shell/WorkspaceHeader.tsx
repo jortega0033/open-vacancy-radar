@@ -42,7 +42,6 @@ export function WorkspaceHeader({ title, subtitle, runtimeLabel, runtimeState }:
             {runtimeLabel} <span className="font-normal text-base-content/50">{RUNTIME_TEXT[runtimeState]}</span>
           </span>
         </span>
-        <span className="text-base-content/50">Local data · no cloud sync</span>
       </div>
     </header>
   );
