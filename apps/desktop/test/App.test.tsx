@@ -89,6 +89,12 @@ describe('App', () => {
   });
 
   it("reflects the persisted default provider in the sidebar's runtime label", async () => {
+    installBridge({
+      listProviders: vi.fn().mockResolvedValue([
+        CLAUDE_INSTALLED,
+        { ...CLAUDE_INSTALLED, id: 'codex', name: 'Codex' } satisfies ProviderStatus,
+      ]),
+    });
     installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue({
         launchAtLogin: false,
