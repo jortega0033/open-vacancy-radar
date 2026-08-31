@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -67,6 +67,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // the product name shown everywhere else (the installer, the window title, the docs). Must run
 // before any `app.getPath(...)` call below, so it comes first, right after `app` becomes usable.
 app.setName('Open Vacancy Radar');
+
+// Electron's default application menu (File/Edit/View/Window) is generic boilerplate this app has
+// no use for: no menu-driven File action exists, and standard text-field editing (copy/paste/undo)
+// works through Chromium's native input handling regardless of whether an application menu is
+// installed, not through the menu's accelerators. Removing it entirely reads as a finished product
+// instead of an unconfigured Electron shell.
+Menu.setApplicationMenu(null);
 
 // Two AgentDock windows would each spawn their own daemon sidecar and race over the same
 // discovery file (the daemon's own single-instance guard, see SECURITY.md, would make the
