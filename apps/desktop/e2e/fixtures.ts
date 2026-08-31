@@ -57,10 +57,14 @@ export { expect } from '@playwright/test';
 /**
  * Selects a sidebar destination by its accessible name (`AppSidebar`'s `NavGroup` sets
  * `aria-label={item.label}` on every nav button: "Search", "Saved Jobs", "Applications", "CV",
- * "Letters", "AI Runtime", "Settings").
+ * "Letters", "AI Runtime", "Settings"). Scoped to the sidebar's own `aria-label="Main"` landmark:
+ * "Search" is also the accessible name of the Search page's own filter-bar button once that page
+ * is active, so a page-wide lookup is ambiguous.
  */
 export async function goto(window: Page, label: string): Promise<void> {
-  await window.getByRole('button', { name: label, exact: true }).click();
+  // AppSidebar.tsx renders a plain <aside aria-label="Main">, whose implicit ARIA role is
+  // "complementary" (an <aside> is not a <nav>), not "navigation".
+  await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: label, exact: true }).click();
 }
 
 /**

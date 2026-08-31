@@ -231,6 +231,23 @@ describe('SearchPage', () => {
     expect(screen.queryByText('Senior Frontend Architect')).not.toBeInTheDocument();
   });
 
+  it('clicking Search always runs a fresh scan, even with a report already loaded (no separate dead "Search" vs. "Rescan" split)', async () => {
+    const bridge = installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      runNetherlandsScan: vi.fn().mockResolvedValue(
+        makeNetherlandsReport([makeNetherlandsVacancy({ title: 'Rescanned Role' })]),
+      ),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() => expect(bridge.runNetherlandsScan).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
+  });
+
   it('surfaces partial worldwide source health and snapshot age', async () => {
     const warning =
       'stale parsed snapshot reused from 2026-08-30T10:00:00.000Z after rate_limited_status';
@@ -254,6 +271,9 @@ describe('SearchPage', () => {
     switchMarket('worldwide');
 
     await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
+    // Collapsed by default; the detail line only appears once the toggle is opened.
+    expect(screen.queryByText(`workable_global: ${warning}`)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
     expect(screen.getByText(`workable_global: ${warning}`)).toBeInTheDocument();
   });
 
@@ -316,10 +336,10 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
 
     await waitFor(() => expect(screen.getByText(/scanning live netherlands sources/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /run scan/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /run the first scan/i })).toBeDisabled();
 
     resolveScan(makeNetherlandsReport([makeNetherlandsVacancy({ title: 'Frontend Developer' })]));
 
@@ -336,10 +356,10 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
 
     await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Run scan' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeEnabled();
   });
 
   it('saves the selected vacancy through the workspace IPC', async () => {

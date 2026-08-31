@@ -229,7 +229,8 @@ describe('App shell routing', () => {
   it('opens on Search by default and shows the matching header', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('aria-current', 'page');
+    // The sidebar nav button, not SearchFilterBar's own "Search" button (same accessible name).
+    expect(screen.getByRole('button', { name: 'Search', current: 'page' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('switches page and header when a nav item is clicked', async () => {
