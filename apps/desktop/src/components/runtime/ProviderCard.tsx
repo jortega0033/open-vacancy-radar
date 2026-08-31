@@ -48,7 +48,13 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
         <div className="flex items-center justify-between">
-          <div className="text-sm font-bold">{status.name}</div>
+          <div className="flex items-center gap-1.5">
+            <div className="text-sm font-bold">{status.name}</div>
+            {/* Independent of whether the CLI is actually usable: the persisted default can point
+                at a provider that isn't installed (e.g. a fresh machine with no CLI yet), and that
+                is exactly the case this badge must still surface rather than hide. */}
+            {isDefault && <span className="badge badge-outline badge-sm">Default</span>}
+          </div>
           <div className="flex items-center gap-1.5 text-xs text-base-content/70">
             <span className={`size-1.5 rounded-full ${readyDotClass(status)}`} aria-hidden="true" />
             {readyLabel(status)}
@@ -89,7 +95,10 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
           disabled={!status.installed || isDefault || saving}
           onClick={onUseAsDefault}
         >
-          {isDefault ? 'Default ✓' : status.installed ? 'Use as default' : 'Not installed'}
+          {/* "Not installed" always wins: the "Default" badge above already covers the
+              is-this-the-configured-default case, and this button must never claim a CLI that
+              cannot run a session is ready just because it happens to be the persisted default. */}
+          {!status.installed ? 'Not installed' : isDefault ? 'Default ✓' : 'Use as default'}
         </button>
       </div>
     </div>

@@ -43,6 +43,15 @@ function toDraft(profile: CandidateProfile): Draft {
   };
 }
 
+export interface SearchProfileSectionProps {
+  /** `app_settings.sponsor_only_default`: owned by `SettingsPage`, not the candidate profile IPC
+   * this section otherwise talks to, but it is Netherlands-only, so it lives here, not in the
+   * market-agnostic "Search defaults" section. */
+  sponsorOnlyDefault: boolean;
+  onChangeSponsorOnlyDefault: (next: boolean) => void;
+  disabled?: boolean;
+}
+
 /**
  * Lets a user actually edit the Netherlands pipeline's candidate profile from the app, instead of
  * hand-editing `config/candidate-profile-v1.json`. Every field commits on blur (text/number/list
@@ -53,7 +62,11 @@ function toDraft(profile: CandidateProfile): Draft {
  * a fresh profile ships empty (see `config/candidate-profile-v1.json`), and this section only ever
  * writes back what the user actually typed.
  */
-export function SearchProfileSection() {
+export function SearchProfileSection({
+  sponsorOnlyDefault,
+  onChangeSponsorOnlyDefault,
+  disabled,
+}: SearchProfileSectionProps) {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string>();
@@ -123,9 +136,24 @@ export function SearchProfileSection() {
     [profile, commit],
   );
 
+  const sponsorOnlyDefaultRow = (
+    <SettingsRow
+      label="Recognised sponsors only by default"
+      description="Netherlands searches start with the IND recognised-sponsor filter switched on."
+    >
+      <ToggleSwitch
+        label="Recognised sponsors only by default"
+        checked={sponsorOnlyDefault}
+        disabled={disabled}
+        onChange={onChangeSponsorOnlyDefault}
+      />
+    </SettingsRow>
+  );
+
   if (loadError) {
     return (
       <SettingsSection title="Netherlands search profile">
+        {sponsorOnlyDefaultRow}
         <div className="alert alert-error alert-soft mt-2 text-sm">{loadError}</div>
       </SettingsSection>
     );
@@ -134,6 +162,7 @@ export function SearchProfileSection() {
   if (!profile || !draft) {
     return (
       <SettingsSection title="Netherlands search profile">
+        {sponsorOnlyDefaultRow}
         <div className="alert alert-info alert-soft mt-2 text-sm">Loading search profile…</div>
       </SettingsSection>
     );
@@ -182,6 +211,9 @@ export function SearchProfileSection() {
         Only the Netherlands (IND sponsor) pipeline scores results against a candidate profile.
         The worldwide pipeline has no equivalent, so nothing here affects it.
       </p>
+
+      {sponsorOnlyDefaultRow}
+
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
           No target roles or strongest skills are set yet, so Netherlands search results are not
