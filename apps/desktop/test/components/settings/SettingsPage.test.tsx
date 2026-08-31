@@ -96,15 +96,10 @@ describe('SettingsPage', () => {
     expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
 
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headingsNow()).toEqual(['Settings', 'General', 'Appearance']);
+    expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
 
     openTab('Search');
-    expect(headingsNow()).toEqual([
-      'Settings',
-      'Search defaults',
-      'Netherlands search profile',
-      'Market integrations',
-    ]);
+    expect(headingsNow()).toEqual(['Settings', 'Search defaults', 'Netherlands search profile']);
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);

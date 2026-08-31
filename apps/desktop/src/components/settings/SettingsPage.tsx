@@ -410,7 +410,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
       {activeTab === 'general' && (
         <>
-          <SettingsSection title="General">
+          <SettingsSection title="Startup">
             <SettingsRow
               label="Launch at login"
               description="Start Open Vacancy Radar automatically when you sign in to this computer. The system entry is registered by installed builds; in development only the preference is stored."
@@ -509,33 +509,12 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <SearchProfileSection
             sponsorOnlyDefault={settings.sponsorOnlyDefault}
             onChangeSponsorOnlyDefault={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
+            indVerificationEnabled={settings.indVerificationEnabled}
+            onChangeIndVerificationEnabled={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
             disabled={disabled}
+            onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
+            onSaveError={(message) => flash({ kind: 'error', message })}
           />
-
-          <SettingsSection title="Market integrations">
-            <SettingsRow
-              label="Netherlands: IND recognised sponsor verification"
-              description="Source: IND Public Register · checks employers of Netherlands vacancies."
-            >
-              <ToggleSwitch
-                label="IND recognised sponsor verification"
-                checked={settings.indVerificationEnabled}
-                disabled={disabled}
-                onChange={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Netherlands job sources"
-              description="Recruitee, Greenhouse, Teamtailor, SmartRecruiters, Lever and mapped company career sites."
-            >
-              <span className="badge badge-outline badge-sm">Configured</span>
-            </SettingsRow>
-            <p className="ovr-row border-b border-base-300 text-xs text-base-content/60">
-              No market-specific employer verification is configured for Germany, Belgium, France, the
-              United Kingdom or the United States. Vacancy search, CV matching, letters and application
-              tracking still work for those markets.
-            </p>
-          </SettingsSection>
         </>
       )}
 
