@@ -54,4 +54,15 @@ test.describe('app shell', () => {
     await goto(window, 'Search');
     await expect(window).toHaveScreenshot('search-page.png');
   });
+
+  test('collapsed sidebar visual baseline', async ({ window }) => {
+    // Regression guard for a real bug: NavGroup's collapsed nav buttons carried both
+    // `justify-start` (unconditional) and `justify-center` (collapsed-only) at once, so the icon
+    // sat pinned to the button's start edge inside its 44px `ovr-nav-icon` box instead of centered.
+    // Scoped to the sidebar element alone, not the full window, so this baseline is unaffected by
+    // whatever the main content pane happens to be showing.
+    await ensureLightTheme(window);
+    await window.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(window.getByRole('complementary', { name: 'Main' })).toHaveScreenshot('sidebar-collapsed.png');
+  });
 });
