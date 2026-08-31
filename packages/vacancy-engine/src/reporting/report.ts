@@ -85,6 +85,14 @@ export type JobRadarReport = {
    * "nothing was configured to score against" from "scored everything and nothing matched".
    */
   profileConfigured: boolean;
+  /**
+   * False when the user has turned off IND recognised-sponsor verification in Settings. `vacancies`
+   * then includes every discovered vacancy regardless of whether its employer has a resolved
+   * sponsor entity, not just ones at recognised sponsors -- this is what lets a caller distinguish
+   * "we checked and found no sponsor match" (`sponsorLegalNames: []` with this `true`) from "we
+   * never checked" (`sponsorLegalNames: []` with this `false`).
+   */
+  indVerificationEnabled: boolean;
   deterministicScoringVersion: string;
   freshnessPolicy: {
     maximumPostingAgeDays: number;
@@ -253,6 +261,10 @@ export function renderHtmlReport(report: JobRadarReport): string {
     ? ''
     : `<p class="lede notice">Your candidate profile has no target roles or strongest skills configured, so nothing below is scored. Every discovered vacancy is listed as-is; fill in the profile to see ranked matches.</p>`;
 
+  const verificationDisabledNotice = report.indVerificationEnabled
+    ? ''
+    : `<p class="lede notice">IND recognised sponsor verification is turned off in Settings, so vacancies below are not filtered to recognised sponsors and sponsor information may be incomplete.</p>`;
+
   const body = report.profileConfigured
     ? (['Excellent match', 'Strong match', 'Worth reviewing'] as const)
         .map((category) => {
@@ -273,10 +285,11 @@ export function renderHtmlReport(report: JobRadarReport): string {
 :root{color-scheme:light;--ink:#17211d;--muted:#617069;--line:#d9e1dc;--surface:#f4f7f5;--green:#0b6e4f;--red:#a51d2d;--amber:#855f00}*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;color:var(--ink);background:#fff}main{width:min(1100px,calc(100% - 32px));margin:48px auto 96px}h1{font-size:clamp(2rem,6vw,4.5rem);line-height:1;margin:.2em 0}h2{border-bottom:2px solid var(--ink);padding-bottom:.4rem;margin-top:3rem}h2 span{color:var(--muted);font-size:.8em}.lede{max-width:75ch}.lede.notice{color:var(--amber);font-weight:600}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:2rem 0}.stats div{background:#fff;padding:12px}.stats dt{color:var(--muted);font-size:.8rem}.stats dd{font-size:1.5rem;font-weight:700;margin:0}.job{display:grid;grid-template-columns:72px 1fr;gap:20px;padding:24px 0;border-bottom:1px solid var(--line)}.score{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:#fff;font-size:1.5rem;font-weight:800}.score-unscored{background:var(--surface);color:var(--muted)}.job h3{font-size:1.5rem;margin:.15rem 0}.eyebrow,.meta,.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.05em;font-size:.8rem}.meta{font-size:.82rem}.dimensions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.dimensions span{background:var(--surface);padding:4px 8px;border-radius:4px}details{margin:.5rem 0}details ul{margin:.5rem 0}.open{display:inline-block;background:var(--green);color:#fff;font-weight:800;text-decoration:none;padding:12px 18px;border-radius:5px;margin-top:8px}.open:focus,.open:hover{outline:3px solid #8dd7bd;outline-offset:2px}.danger,.unsafe{color:var(--red)}.warning{color:var(--amber)}@media(max-width:600px){.job{grid-template-columns:1fr}.score{width:52px;height:52px}}
 </style></head><body><main>
 <p class="eyebrow">Candidate ${escapeHtml(report.candidateProfileVersion)} · Scoring ${escapeHtml(report.deterministicScoringVersion)} · Run ${escapeHtml(report.scanStatus)}</p><h1>Open Vacancy Radar</h1>
-<p class="lede">Ranked official vacancies at mapped IND-recognised sponsors. Sponsor recognition does not guarantee that a particular vacancy offers sponsorship; always verify the vacancy and employment terms manually.</p>
+<p class="lede">${report.indVerificationEnabled ? 'Ranked official vacancies at mapped IND-recognised sponsors.' : 'Ranked official vacancies, not filtered by IND sponsor recognition (verification is turned off).'} Sponsor recognition does not guarantee that a particular vacancy offers sponsorship; always verify the vacancy and employment terms manually.</p>
 <p class="lede">Known posting dates older than ${report.freshnessPolicy.maximumPostingAgeDays} days are excluded. Vacancies without a posting date remain eligible and require manual freshness verification.</p>
 <p>Generated ${escapeHtml(formatDate(report.generatedAt))}. Official register update: ${escapeHtml(formatDate(report.officialSponsorSource.lastUpdated))}.</p>
 ${unconfiguredNotice}
+${verificationDisabledNotice}
 ${renderStatistics(report.statistics)}${body}
 </main></body></html>`;
 }

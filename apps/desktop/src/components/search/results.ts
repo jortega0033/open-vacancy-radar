@@ -129,7 +129,17 @@ export function orNotStated(value: string | null | undefined): string {
   return value && value.trim().length > 0 ? value : 'Not stated';
 }
 
-export function netherlandsVerification(vacancy: ReportVacancy): Verification {
+export const VERIFICATION_DISABLED: Verification = {
+  level: 'not_available',
+  label: 'Verification turned off',
+  tone: null,
+  note:
+    'IND recognised sponsor verification is turned off in Settings, so vacancies here are not filtered by (or checked against) the sponsor register. Nothing was verified about this employer: that is a disabled check, not a negative result.',
+};
+
+export function netherlandsVerification(vacancy: ReportVacancy, indVerificationEnabled: boolean): Verification {
+  if (!indVerificationEnabled) return VERIFICATION_DISABLED;
+
   const names = vacancy.sponsorLegalNames.filter((name) => name.trim().length > 0);
 
   if (names.length === 0) {
@@ -197,7 +207,7 @@ export function toNetherlandsResults(report: JobRadarReport): SearchResult[] {
     employmentType: null,
     salary: null,
     postedAt: vacancy.postedAt,
-    verification: netherlandsVerification(vacancy),
+    verification: netherlandsVerification(vacancy, report.indVerificationEnabled),
     // Undefined, not present, when the candidate profile wasn't configured for this run (see
     // JobRadarReport.profileConfigured) -- deterministic scoring never ran for this vacancy.
     profileScore: vacancy.score ?? null,

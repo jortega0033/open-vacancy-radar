@@ -1105,6 +1105,96 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
     });
     expect(gatedReport.vacancies).toEqual([]);
     expect(gatedReport.statistics.deterministicCandidates).toBe(0);
+    expect(gatedReport.indVerificationEnabled).toBe(true);
+  });
+
+  it('lets the report include vacancies with no active sponsor relationship when indVerificationEnabled is false', async () => {
+    // A company stays `scanEnabled: true` once curated-mapped; its sponsor going inactive (e.g. an
+    // IND register refresh, ahead of the next company-mapping sync noticing) is what actually
+    // makes `hasActiveSponsorRelationship` false for an otherwise still-scanned company -- unlike
+    // the "reports only current sponsor-eligible..." test's scenario above, where the company
+    // itself gets `scanEnabled: false` at sync time, independent of report-time verification.
+    const sponsorId = await insertRecognisedSponsor();
+    const sourceUrl = 'https://boards-api.greenhouse.io/v1/boards/verification-toggle/jobs';
+    await syncVerifiedCompanyMappings(
+      database(),
+      mappingFile({
+        version: 'verification-toggle-v1',
+        verifiedAt: '2026-08-28T08:00:00.000Z',
+        baseUrl: sourceUrl,
+      }),
+    );
+    const [company] = await database()
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.domain, 'mapping.integration.test'));
+    const [source] = await database()
+      .select({ id: careerSources.id })
+      .from(careerSources)
+      .where(eq(careerSources.baseUrl, sourceUrl));
+    if (company === undefined || source === undefined) {
+      throw new Error('Verification-toggle fixtures were not persisted');
+    }
+
+    await persistVacancyScan(database(), {
+      companyId: company.id,
+      careerSourceId: source.id,
+      vacancies: [vacancy('unsponsored-role')],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    const [persisted] = await database()
+      .select({ id: vacancies.id, contentHash: vacancies.contentHash })
+      .from(vacancies)
+      .where(eq(vacancies.companyId, company.id));
+    if (persisted === undefined) throw new Error('Verification-toggle vacancy was not persisted');
+    await database().insert(vacancyScores).values({
+      vacancyId: persisted.id,
+      candidateProfileVersion: candidateProfileVersion,
+      scoringVersion: DETERMINISTIC_SCORING_VERSION,
+      deterministicScore: 85,
+      finalScore: 85,
+      technicalFit: 90,
+      roleFit: 85,
+      seniorityFit: 90,
+      languageFit: 100,
+      locationFit: 100,
+      dutchRequired: false,
+      dutchPreferred: false,
+      languageEvidence: [],
+      primaryFit: 'Frontend product engineering',
+      matchingSkills: ['TypeScript', 'React'],
+      gaps: [],
+      reasons: ['Integration fixture'],
+      contentHash: persisted.contentHash,
+      scoredAt: new Date('2026-08-28T09:05:00.000Z'),
+    });
+    const [scanRun] = await database()
+      .insert(scanRuns)
+      .values({ command: 'verification-toggle', status: 'succeeded', finishedAt: new Date('2026-08-28T09:10:00.000Z') })
+      .returning({ id: scanRuns.id });
+    if (scanRun === undefined) throw new Error('Verification-toggle scan-run fixture was not persisted');
+
+    // The sponsor goes inactive without touching the company mapping at all.
+    await database().update(indSponsors).set({ active: false }).where(eq(indSponsors.id, sponsorId));
+
+    const buildOptions = {
+      scanRunId: scanRun.id,
+      generatedAt: new Date('2026-08-28T12:00:00.000Z'),
+      maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
+    };
+    const verifiedReport = await buildJobRadarReport(database(), buildOptions);
+    expect(verifiedReport.indVerificationEnabled).toBe(true);
+    expect(verifiedReport.vacancies).toEqual([]);
+
+    const unverifiedReport = await buildJobRadarReport(database(), {
+      ...buildOptions,
+      indVerificationEnabled: false,
+    });
+    expect(unverifiedReport.indVerificationEnabled).toBe(false);
+    expect(unverifiedReport.vacancies).toHaveLength(1);
+    expect(unverifiedReport.vacancies[0]?.sponsorLegalNames).toEqual([]);
   });
 
   it('returns every discovered vacancy unscored, not an empty list, when the candidate profile is unconfigured', async () => {
