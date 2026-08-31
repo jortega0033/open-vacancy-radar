@@ -479,7 +479,10 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
 
     await waitFor(() => expect(screen.getByText(/scanning live netherlands sources/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /run the first scan/i })).toBeDisabled();
+    // The "No search yet" empty state (with its now-stale CTA) is replaced by a loading skeleton
+    // while the scan is in flight, not left frozen underneath the scanning banner.
+    expect(screen.queryByRole('button', { name: /run the first scan/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/no search yet/i)).not.toBeInTheDocument();
 
     resolveScan(makeNetherlandsReport([makeNetherlandsVacancy({ title: 'Frontend Developer' })]));
 
