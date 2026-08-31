@@ -95,6 +95,15 @@ type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'una
 let daemonChild: ChildProcess | undefined;
 let client: AgentDockClient | undefined;
 let mainWindow: BrowserWindow | undefined;
+/**
+ * The single source of truth `daemon:get-status` reads from. Without this, that handler had to
+ * re-derive a status from `client` alone (set or not), which can only ever mean "ready" or
+ * "connecting" -- it has no way to represent "already failed", so a pull-based query made any time
+ * after a startup failure incorrectly reported "connecting" forever, no matter how long ago the
+ * daemon actually died. `sendStatus` is the only place that both updates this and pushes to the
+ * renderer, so the two can never disagree.
+ */
+let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
 let activeSessionId: string | undefined;
 let activeStreamAbort: AbortController | undefined;
 
@@ -248,6 +257,7 @@ function discoveryFilePath(): string {
 }
 
 function sendStatus(status: DaemonStatus): void {
+  latestDaemonStatus = status;
   sendToRenderer(mainWindow, 'daemon:status', status);
 }
 
@@ -457,7 +467,7 @@ function createWindow(): void {
   });
 }
 
-ipcMain.handle('daemon:get-status', (): DaemonStatus => (client ? { state: 'ready' } : { state: 'connecting' }));
+ipcMain.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
 
 ipcMain.handle('daemon:list-providers', async () => {
   if (!client) throw new Error('daemon is not ready yet');
