@@ -413,12 +413,15 @@ function createWindow(): void {
     openExternalIfSafe(url);
   });
 
-  // Deny every permission request by default: nothing in this UI currently asks for camera,
-  // microphone, geolocation, notifications, etc, so there's no legitimate request to allow.
-  // Electron's own per-permission/per-platform defaults are inconsistent; this makes the policy
-  // explicit and uniform instead of relying on them.
-  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
+  // Deny every permission request by default except the one this UI genuinely uses:
+  // `clipboard-sanitized-write`, requested by `navigator.clipboard.writeText` for the "Copy to
+  // clipboard" (CoverLetter.tsx, LetterGenerator.tsx) and "Copy diagnostics" (AboutSection.tsx)
+  // buttons. Nothing here reads the clipboard or asks for camera, microphone, geolocation,
+  // notifications, etc, so there's no other legitimate request to allow. Electron's own
+  // per-permission/per-platform defaults are inconsistent; this makes the policy explicit and
+  // uniform instead of relying on them.
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'clipboard-sanitized-write');
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
