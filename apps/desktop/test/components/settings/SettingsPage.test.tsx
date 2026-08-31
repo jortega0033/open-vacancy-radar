@@ -65,8 +65,7 @@ describe('SettingsPage', () => {
         startPage: 'applications',
         theme: 'dark',
         defaultMarket: 'worldwide',
-        defaultLocation: 'Amsterdam',
-        sponsorOnlyDefault: false,
+        defaultLocation: 'Germany',
         launchAtLogin: true,
       } satisfies AppSettingsRecord),
     });
@@ -78,13 +77,33 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
 
     openTab('Search');
-    expect(screen.getByLabelText('Default market')).toHaveValue('worldwide');
-    expect(screen.getByLabelText('Default location')).toHaveValue('Amsterdam');
-    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
-    expect(screen.getByRole('switch', { name: 'IND recognised sponsor verification' })).toBeChecked();
+    expect(screen.getByLabelText('Default search location')).toHaveValue('Germany');
+    // Worldwide default: the Netherlands-only IND toggles would just be clutter for a user whose
+    // default search location isn't Netherlands.
+    expect(screen.queryByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'IND recognised sponsor verification' })).not.toBeInTheDocument();
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('shows the IND-sponsor toggles only when the default search location is Netherlands', async () => {
+    setup({
+      getSettings: vi.fn().mockResolvedValue({
+        ...DEFAULT_SETTINGS,
+        defaultMarket: 'netherlands',
+        sponsorOnlyDefault: false,
+        indVerificationEnabled: true,
+      } satisfies AppSettingsRecord),
+    });
+
+    render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Search');
+
+    expect(screen.getByLabelText('Default search location')).toHaveValue('Netherlands');
+    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'IND recognised sponsor verification' })).toBeChecked();
   });
 
   it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
@@ -99,7 +118,7 @@ describe('SettingsPage', () => {
     expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
 
     openTab('Search');
-    expect(headingsNow()).toEqual(['Settings', 'Search defaults', 'Netherlands search profile']);
+    expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Netherlands search profile']);
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
@@ -108,15 +127,19 @@ describe('SettingsPage', () => {
     expect(headingsNow()).toEqual(['Settings', 'AI runtime', 'Data management', 'About']);
   });
 
-  it('offers exactly the two real markets, never a country list', async () => {
+  it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {
     setup();
     render(<SettingsPage />);
     await screen.findByLabelText('Start page');
     openTab('Search');
-    const select = await screen.findByLabelText('Default market');
+    const select = await screen.findByLabelText('Default search location');
 
     const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
-    expect(values).toEqual(['netherlands', 'worldwide']);
+    expect(values[0]).toBe('all');
+    expect(values).toContain('Netherlands');
+    expect(values).toContain('Germany');
+    // A real country list, not a two-item market picker in disguise.
+    expect(values.length).toBeGreaterThan(50);
   });
 
   it('autosaves a changed field with a patch containing only that field, and shows "Saved" only after the IPC call resolves', async () => {
@@ -216,22 +239,30 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
 
-  it('saves the default location on blur, and only when it actually changed', async () => {
+  it('saves the default search location immediately on change, resolving pipeline vs. country filter correctly', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
     await screen.findByLabelText('Start page');
     openTab('Search');
-    const input = await screen.findByLabelText('Default location');
+    const select = await screen.findByLabelText('Default search location');
 
-    fireEvent.blur(input); // unchanged, no save
-    expect(bridge.updateSettings).not.toHaveBeenCalled();
+    // A specific country: worldwide, pre-filtered to it.
+    fireEvent.change(select, { target: { value: 'Germany' } });
+    await waitFor(() =>
+      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'worldwide', defaultLocation: 'Germany' }),
+    );
 
-    fireEvent.change(input, { target: { value: 'Amsterdam' } });
-    expect(bridge.updateSettings).not.toHaveBeenCalled(); // not per keystroke
-    fireEvent.blur(input);
+    // Netherlands: the IND pipeline, not a worldwide search filtered to Dutch locations.
+    fireEvent.change(select, { target: { value: 'Netherlands' } });
+    await waitFor(() =>
+      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'netherlands', defaultLocation: '' }),
+    );
 
-    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Amsterdam' }));
-    expect(bridge.updateSettings).toHaveBeenCalledTimes(1);
+    // Back to no preference: worldwide, unfiltered.
+    fireEvent.change(select, { target: { value: 'all' } });
+    await waitFor(() =>
+      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'worldwide', defaultLocation: '' }),
+    );
   });
 
   it('lists the CV library in the default-CV select and saves the chosen id', async () => {

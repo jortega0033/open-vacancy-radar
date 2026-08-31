@@ -141,13 +141,26 @@ export function SearchPage() {
   // user would briefly, needlessly hit the worldwide report read before flipping to the real one.
   const [marketResolved, setMarketResolved] = useState(false);
 
+  // `filters` is the draft the form fields are bound to; `appliedFilters` is what actually drives
+  // `visible` below. They only sync on an explicit Search (or Clear) -- see the class doc comment.
+  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
+
   useEffect(() => {
     let cancelled = false;
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (cancelled) return;
-        if (!hasSwitchedMarketRef.current) setMarket(settings.defaultMarket);
+        if (cancelled || hasSwitchedMarketRef.current) return;
+        setMarket(settings.defaultMarket);
+        // Mirrors Settings' own unified "Default search location" selector: for worldwide, a
+        // persisted country pre-fills the same country filter this page's own selector writes to,
+        // so opening the page for the first time already reflects that choice.
+        if (settings.defaultMarket === 'worldwide' && settings.defaultLocation) {
+          const withCountry = { ...DEFAULT_FILTERS, country: settings.defaultLocation };
+          setFilters(withCountry);
+          setAppliedFilters(withCountry);
+        }
       })
       .catch(() => {
         // default market ('worldwide', set above) already applies
@@ -165,10 +178,6 @@ export function SearchPage() {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
 
-  // `filters` is the draft the form fields are bound to; `appliedFilters` is what actually drives
-  // `visible` below. They only sync on an explicit Search (or Clear) -- see the class doc comment.
-  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
-  const [appliedFilters, setAppliedFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [assistantForKey, setAssistantForKey] = useState<string | null>(null);
   const [page, setPage] = useState(0);

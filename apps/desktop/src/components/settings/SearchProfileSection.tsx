@@ -20,7 +20,6 @@ interface Draft {
   consideredRoles: string;
   excludedRoleFamilies: string;
   professionalLanguage: string;
-  primaryCountry: string;
   minimumMonthlyBaseEur: string;
 }
 
@@ -36,7 +35,6 @@ function toDraft(profile: CandidateProfile): Draft {
     consideredRoles: skillsToText(profile.consideredRoles),
     excludedRoleFamilies: skillsToText(profile.excludedRoleFamilies),
     professionalLanguage: profile.constraints.professionalLanguage,
-    primaryCountry: profile.constraints.primaryCountry,
     minimumMonthlyBaseEur: String(profile.constraints.minimumMonthlyBaseEur),
   };
 }
@@ -53,6 +51,11 @@ export interface SearchProfileSectionProps {
    * worldwide" disclaimer. */
   indVerificationEnabled: boolean;
   onChangeIndVerificationEnabled: (next: boolean) => void;
+  /** `settings.defaultMarket === 'netherlands'`: the two toggles above only matter once Netherlands
+   * is genuinely in play, and showing them regardless of the default search location just adds
+   * clutter for a user whose default location default is elsewhere. Netherlands stays fully
+   * reachable from the Search page either way; this only affects what Settings surfaces here. */
+  showIndOptions: boolean;
   disabled?: boolean;
   /** Reports a candidate-profile save result upward so `SettingsPage` can show it through its one
    * toast instance, instead of this section rendering a second, independent one: two autosaving
@@ -76,6 +79,7 @@ export function SearchProfileSection({
   onChangeSponsorOnlyDefault,
   indVerificationEnabled,
   onChangeIndVerificationEnabled,
+  showIndOptions,
   disabled,
   onSaved,
   onSaveError,
@@ -139,8 +143,9 @@ export function SearchProfileSection({
   );
 
   // Neither row depends on the candidate-profile fetch below (both are `app_settings` fields), so
-  // they render in every branch rather than waiting on `profile`/`draft` to resolve.
-  const verificationRows = (
+  // they render (when shown at all) in every branch rather than waiting on `profile`/`draft` to
+  // resolve. Gated on `showIndOptions`: see that prop's doc comment.
+  const verificationRows = showIndOptions && (
     <>
       <SettingsSubheading>Search behavior</SettingsSubheading>
       <SettingsRow
@@ -208,7 +213,7 @@ export function SearchProfileSection({
     if (next === current) return;
     if (key === 'strongestSkills' || key === 'additionalSkills' || key === 'targetRoles' || key === 'consideredRoles' || key === 'excludedRoleFamilies') {
       commit({ [key]: textToSkills(next) });
-    } else if (key === 'professionalLanguage' || key === 'primaryCountry') {
+    } else if (key === 'professionalLanguage') {
       commit({ constraints: { [key]: next } });
     } else {
       commit({ [key]: next });
@@ -292,20 +297,6 @@ export function SearchProfileSection({
           onBlur={() => commitText('professionalLanguage', profile.constraints.professionalLanguage)}
         />
       </SettingsRow>
-      <SettingsRow
-        label="Primary country"
-        description="Leave empty for worldwide / no country filter."
-        htmlFor="profile-primary-country"
-      >
-        <input
-          id="profile-primary-country"
-          type="text"
-          className="input input-sm w-64"
-          {...field('primaryCountry')}
-          onBlur={() => commitText('primaryCountry', profile.constraints.primaryCountry)}
-        />
-      </SettingsRow>
-
       <SettingsSubheading>Role matching</SettingsSubheading>
       <SettingsRow
         label="Strongest skills"

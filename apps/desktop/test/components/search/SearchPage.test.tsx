@@ -272,6 +272,28 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
   });
 
+  it('seeds the country filter from the persisted default search location on first load', async () => {
+    installBridges();
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultMarket: 'worldwide', defaultLocation: 'Germany' }),
+    });
+    installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([
+          makeWorldwideVacancy({ key: 'de-1', title: 'Backend Engineer', location: 'Munich, Germany' }),
+          makeWorldwideVacancy({ key: 'us-1', title: 'Frontend Engineer', location: 'Austin, United States' }),
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany'));
+    await waitFor(() => expect(screen.getAllByText('Backend Engineer').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Frontend Engineer')).not.toBeInTheDocument();
+  });
+
   it('clicking Search always runs a fresh scan, even with a report already loaded (no separate dead "Search" vs. "Rescan" split)', async () => {
     const bridge = installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),

@@ -11,6 +11,7 @@ import { AboutSection } from './AboutSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
+import { ALL_COUNTRIES } from '../search/countries.js';
 
 /**
  * Top-level "Settings" screen. Every control autosaves its own field through
@@ -76,11 +77,17 @@ const SIDEBAR_START_OPTIONS = [
   { value: 'remember_last', label: 'Remember last state' },
 ] as const;
 
-/** Exactly the two pipelines this app can search. Never a per-country list. */
-const MARKET_OPTIONS = [
-  { value: 'netherlands', label: 'Netherlands (IND sponsors)' },
-  { value: 'worldwide', label: 'Worldwide remote' },
-] as const;
+/**
+ * The one control for both "which pipeline" and "which country within it" a new search starts on
+ * -- mirrors SearchPage.tsx's own unified Country selector exactly, including the same special
+ * case: "Netherlands" opens the IND-recognised-sponsor pipeline (not a worldwide search merely
+ * filtered to Dutch locations), and every other value (including "All countries") opens the
+ * worldwide pipeline, pre-filtered to that country when one is picked.
+ */
+const DEFAULT_LOCATION_OPTIONS = [
+  { value: 'all', label: 'All countries' },
+  ...ALL_COUNTRIES.map((country) => ({ value: country, label: country })),
+];
 
 const LETTER_TYPE_OPTIONS = [
   { value: 'motivation_letter', label: 'Motivation letter' },
@@ -172,8 +179,6 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   const [cvDocuments, setCvDocuments] = useState<CvDocumentRecord[]>([]);
   const [cvListError, setCvListError] = useState<string>();
 
-  const [locationDraft, setLocationDraft] = useState('');
-
   const [status, setStatus] = useState<SaveStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<ResetTarget | null>(null);
@@ -189,7 +194,6 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         const loaded = await window.workspace.getSettings();
         if (cancelled) return;
         setSettings(loaded);
-        setLocationDraft(loaded.defaultLocation);
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'could not load settings'));
       }
@@ -235,12 +239,10 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           const updated = await window.workspace.updateSettings(patch);
           if (seq !== saveSeq.current) return;
           setSettings(updated);
-          setLocationDraft(updated.defaultLocation);
           flash({ kind: 'saved', message: 'Saved' });
         } catch (err) {
           if (seq !== saveSeq.current) return;
           setSettings(previous);
-          setLocationDraft(previous.defaultLocation);
           applyTheme(previous.theme);
           applyDensity(previous.density);
           flash({ kind: 'error', message: describeError(err, 'could not save this setting') });
@@ -289,22 +291,11 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
     [settings, flash],
   );
 
-  const commitLocation = useCallback(() => {
-    if (!settings) return;
-    const next = locationDraft.trim();
-    if (next === settings.defaultLocation) {
-      setLocationDraft(next);
-      return;
-    }
-    changeField({ defaultLocation: next });
-  }, [settings, locationDraft, changeField]);
-
   /** Restore every preference to its schema default. Data (jobs, applications, CVs, letters) stays. */
   const resetSettings = useCallback(async (): Promise<AppSettingsRecord> => {
     const updated = await window.workspace.updateSettings(SETTINGS_DEFAULTS);
     saveSeq.current += 1; // invalidate any in-flight per-field save
     setSettings(updated);
-    setLocationDraft(updated.defaultLocation);
     applyTheme(updated.theme);
     applyDensity(updated.density);
     try {
@@ -471,37 +462,22 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
       {activeTab === 'search' && (
         <>
-          <SettingsSection title="Search defaults">
+          <SettingsSection title="Default search location">
             <SettingsRow
-              label="Default market"
-              description="Which of the two search pipelines a new search starts on."
-              htmlFor="setting-default-market"
-            >
-              <SettingsSelect
-                id="setting-default-market"
-                value={settings.defaultMarket}
-                options={MARKET_OPTIONS}
-                disabled={disabled}
-                onChange={(defaultMarket) => changeField({ defaultMarket })}
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Default location"
-              description="Pre-filled location filter for new searches. Leave empty for no filter."
+              label="Default search location"
+              description="Which pipeline (and, for worldwide, which country) a new search starts on."
               htmlFor="setting-default-location"
             >
-              <input
+              <SettingsSelect
                 id="setting-default-location"
-                type="text"
-                className="input input-sm w-56"
-                placeholder="e.g. Amsterdam"
-                value={locationDraft}
+                value={settings.defaultMarket === 'netherlands' ? 'Netherlands' : settings.defaultLocation || 'all'}
+                options={DEFAULT_LOCATION_OPTIONS}
                 disabled={disabled}
-                onChange={(event) => setLocationDraft(event.currentTarget.value)}
-                onBlur={commitLocation}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') commitLocation();
-                }}
+                onChange={(value) =>
+                  value === 'Netherlands'
+                    ? changeField({ defaultMarket: 'netherlands', defaultLocation: '' })
+                    : changeField({ defaultMarket: 'worldwide', defaultLocation: value === 'all' ? '' : value })
+                }
               />
             </SettingsRow>
           </SettingsSection>
@@ -511,6 +487,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             onChangeSponsorOnlyDefault={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
             indVerificationEnabled={settings.indVerificationEnabled}
             onChangeIndVerificationEnabled={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
+            showIndOptions={settings.defaultMarket === 'netherlands'}
             disabled={disabled}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}
