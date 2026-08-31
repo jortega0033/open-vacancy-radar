@@ -45,12 +45,16 @@ function makeNetherlandsVacancy(overrides: Partial<ReportVacancy> = {}): ReportV
   };
 }
 
-function makeNetherlandsReport(vacancies: ReportVacancy[]): JobRadarReport {
+function makeNetherlandsReport(
+  vacancies: ReportVacancy[],
+  overrides: Partial<JobRadarReport> = {},
+): JobRadarReport {
   return {
     runId: 'nl-run-1',
     scanStatus: 'succeeded',
     generatedAt: '2026-08-29T10:00:00.000Z',
     candidateProfileVersion: 'candidate-profile-v1',
+    profileConfigured: true,
     deterministicScoringVersion: 'deterministic-relevance-v11',
     freshnessPolicy: { maximumPostingAgeDays: 30, cutoff: '2026-07-30T10:00:00.000Z' },
     officialSponsorSource: {
@@ -83,6 +87,7 @@ function makeNetherlandsReport(vacancies: ReportVacancy[]): JobRadarReport {
       durationMs: 1234,
     },
     vacancies,
+    ...overrides,
   };
 }
 
@@ -187,6 +192,19 @@ describe('SearchPage', () => {
     expect(bridge.runNetherlandsScan).not.toHaveBeenCalled();
     expect(bridge.runScan).not.toHaveBeenCalled();
     expect(bridge.getReport).not.toHaveBeenCalled();
+  });
+
+  it('shows a distinct empty state when the candidate profile has no targets configured', async () => {
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(
+        makeNetherlandsReport([makeNetherlandsVacancy()], { profileConfigured: false }),
+      ),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getByText("Your search profile isn't set up yet")).toBeInTheDocument());
+    expect(screen.queryByText('Senior Frontend Architect')).not.toBeInTheDocument();
   });
 
   it('switches to the worldwide pipeline report when the market changes', async () => {

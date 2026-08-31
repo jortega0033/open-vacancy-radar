@@ -13,6 +13,7 @@ function reportWithScore(score: number, overrides: Partial<JobRadarReport['vacan
     scanStatus: 'succeeded',
     generatedAt: '2026-08-28T12:00:00.000Z',
     candidateProfileVersion: 'candidate-profile-v1',
+    profileConfigured: true,
     deterministicScoringVersion: 'deterministic-v2',
     freshnessPolicy: {
       maximumPostingAgeDays: 365,
@@ -83,6 +84,35 @@ function reportWithScore(score: number, overrides: Partial<JobRadarReport['vacan
   };
 }
 
+/** A report as returned when the candidate profile has no target roles/strongest skills: every
+ * scoring field, including dutchRequired/dutchPreferred, is genuinely absent, not false. */
+function unscoredReport(): JobRadarReport {
+  const base = reportWithScore(0);
+  return {
+    ...base,
+    profileConfigured: false,
+    vacancies: [
+      {
+        id: base.vacancies[0]!.id,
+        title: base.vacancies[0]!.title,
+        company: base.vacancies[0]!.company,
+        location: base.vacancies[0]!.location,
+        remote: base.vacancies[0]!.remote,
+        workplaceMode: base.vacancies[0]!.workplaceMode,
+        provider: base.vacancies[0]!.provider,
+        url: base.vacancies[0]!.url,
+        sponsorLegalNames: base.vacancies[0]!.sponsorLegalNames,
+        mappingConfidence: base.vacancies[0]!.mappingConfidence,
+        firstSeenAt: base.vacancies[0]!.firstSeenAt,
+        lastSeenAt: base.vacancies[0]!.lastSeenAt,
+        postedAt: base.vacancies[0]!.postedAt,
+        verifiedInRun: base.vacancies[0]!.verifiedInRun,
+        sourceOutcomeStatus: base.vacancies[0]!.sourceOutcomeStatus,
+      },
+    ],
+  };
+}
+
 describe('report generation', () => {
   it.each([
     [90, 'Excellent match'],
@@ -120,6 +150,12 @@ describe('report generation', () => {
     expect(html).toContain('older than 365 days are excluded');
     expect(html).toContain('Not verified in this scan (failed)');
     expect(html).toContain('Last seen:');
+  });
+
+  it('says Dutch requirement was never evaluated for an unscored vacancy, not "no requirement"', () => {
+    const html = renderHtmlReport(unscoredReport());
+    expect(html).toContain('Dutch requirement not evaluated');
+    expect(html).not.toContain('No Dutch requirement detected');
   });
 
   it('keeps unknown and boundary-age postings but rejects anything older', () => {

@@ -31,11 +31,17 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
       { k: 'Posted', v: formatDate(vacancy.postedAt) },
       { k: 'First seen', v: formatDate(vacancy.firstSeenAt) },
       { k: 'Last seen', v: formatDate(vacancy.lastSeenAt) },
-      { k: 'Primary fit', v: vacancy.primaryFit },
-      { k: 'Profile score', v: `${vacancy.score} / 100` },
+      // Absent, not a fake number, when the candidate profile wasn't configured for this scan.
+      { k: 'Primary fit', v: vacancy.primaryFit ?? 'Not scored: search profile not configured' },
+      {
+        k: 'Profile score',
+        v: vacancy.score === undefined ? 'Not scored' : `${vacancy.score} / 100`,
+      },
       {
         k: 'Fit breakdown',
-        v: `technical ${vacancy.technicalFit} · role ${vacancy.roleFit} · seniority ${vacancy.seniorityFit} · language ${vacancy.languageFit} · location ${vacancy.locationFit}`,
+        v: vacancy.score === undefined
+          ? 'Not scored: search profile not configured'
+          : `technical ${vacancy.technicalFit} · role ${vacancy.roleFit} · seniority ${vacancy.seniorityFit} · language ${vacancy.languageFit} · location ${vacancy.locationFit}`,
       },
     ];
   }
@@ -167,11 +173,13 @@ export function VacancyDetail({
           {result.market === 'netherlands' ? (
             <Card label="Dutch language requirement">
               <div className="mt-1.5 text-sm font-semibold">
-                {result.raw.dutchRequired
-                  ? 'Dutch required'
-                  : result.raw.dutchPreferred
-                    ? 'Dutch preferred'
-                    : 'No Dutch requirement detected'}
+                {result.raw.dutchRequired === undefined
+                  ? 'Not evaluated: search profile not configured'
+                  : result.raw.dutchRequired
+                    ? 'Dutch required'
+                    : result.raw.dutchPreferred
+                      ? 'Dutch preferred'
+                      : 'No Dutch requirement detected'}
               </div>
               <p className="mt-1 text-xs leading-relaxed text-base-content/60">
                 Detected from the posting text. This app does not assess work-permit eligibility and

@@ -40,19 +40,24 @@ export type ReportVacancy = {
   workplaceMode: WorkplaceMode;
   provider: string;
   url: string;
-  score: number;
-  technicalFit: number;
-  roleFit: number;
-  seniorityFit: number;
-  languageFit: number;
-  locationFit: number;
-  dutchRequired: boolean;
-  dutchPreferred: boolean;
-  languageEvidence: string[];
-  primaryFit: string;
-  matchingSkills: string[];
-  gaps: string[];
-  reasons: string[];
+  /**
+   * Undefined, not a fake number, when the candidate profile wasn't configured for this run (see
+   * `JobRadarReport.profileConfigured`): deterministic scoring never ran, so there is nothing here
+   * to report, not a real score of e.g. 0.
+   */
+  score?: number;
+  technicalFit?: number;
+  roleFit?: number;
+  seniorityFit?: number;
+  languageFit?: number;
+  locationFit?: number;
+  dutchRequired?: boolean;
+  dutchPreferred?: boolean;
+  languageEvidence?: string[];
+  primaryFit?: string;
+  matchingSkills?: string[];
+  gaps?: string[];
+  reasons?: string[];
   sponsorLegalNames: string[];
   mappingConfidence: MappingConfidence;
   firstSeenAt: string;
@@ -73,6 +78,13 @@ export type JobRadarReport = {
   scanStatus: 'running' | 'succeeded' | 'partial' | 'failed';
   generatedAt: string;
   candidateProfileVersion: string;
+  /**
+   * False when the candidate profile has no target roles and no strongest skills (see
+   * `isCandidateProfileConfigured` in candidate/profile.ts). `vacancies` still lists every
+   * discovered vacancy in that case, just unscored -- this flag is what lets a caller distinguish
+   * "nothing was configured to score against" from "scored everything and nothing matched".
+   */
+  profileConfigured: boolean;
   deterministicScoringVersion: string;
   freshnessPolicy: {
     maximumPostingAgeDays: number;
@@ -126,7 +138,8 @@ export function isPostingFresh(
   return postedAt === null || postedAt >= postingFreshnessCutoff(generatedAt, maximumPostingAgeDays);
 }
 
-export function categoryForScore(score: number): 'Excellent match' | 'Strong match' | 'Worth reviewing' | null {
+export function categoryForScore(score: number | undefined): 'Excellent match' | 'Strong match' | 'Worth reviewing' | null {
+  if (score === undefined) return null;
   if (score >= 90) return 'Excellent match';
   if (score >= 80) return 'Strong match';
   if (score >= 70) return 'Worth reviewing';
@@ -151,11 +164,14 @@ function renderVacancy(vacancy: ReportVacancy): string {
         : vacancy.workplaceMode === 'onsite'
           ? 'On-site'
           : 'Remote/hybrid status unknown';
-  const languageFlag = vacancy.dutchRequired
-    ? '<strong class="danger">Dutch required</strong>'
-    : vacancy.dutchPreferred
-      ? '<strong class="warning">Dutch preferred</strong>'
-      : '<span>No Dutch requirement detected</span>';
+  const languageFlag =
+    vacancy.dutchRequired === undefined
+      ? '<span class="muted">Dutch requirement not evaluated: search profile not configured</span>'
+      : vacancy.dutchRequired
+        ? '<strong class="danger">Dutch required</strong>'
+        : vacancy.dutchPreferred
+          ? '<strong class="warning">Dutch preferred</strong>'
+          : '<span>No Dutch requirement detected</span>';
   const verificationFlag = vacancy.verifiedInRun
     ? '<span>Verified in this scan</span>'
     : `<strong class="warning">Not verified in this scan${
@@ -163,22 +179,35 @@ function renderVacancy(vacancy: ReportVacancy): string {
           ? ''
           : ` (${escapeHtml(vacancy.sourceOutcomeStatus.replaceAll('_', ' '))})`
       }</strong>`;
+  const scored = vacancy.score !== undefined;
+  const scoreBadge = scored
+    ? `<div class="score" aria-label="Score ${vacancy.score}">${vacancy.score}</div>`
+    : '<div class="score score-unscored" aria-label="Not yet scored">—</div>';
+  const dimensions = scored
+    ? `<div class="dimensions">
+        <span>Technical ${vacancy.technicalFit}</span><span>Role ${vacancy.roleFit}</span><span>Seniority ${vacancy.seniorityFit}</span><span>Language ${vacancy.languageFit}</span><span>Location ${vacancy.locationFit}</span>
+      </div>`
+    : '';
+  const primaryFitLine = vacancy.primaryFit !== undefined
+    ? `<p><strong>Primary fit:</strong> ${escapeHtml(vacancy.primaryFit)}</p>`
+    : '';
+  const scoringDetails = scored
+    ? `<details><summary>Why it ranked here</summary>${renderList(vacancy.reasons ?? [])}</details>
+      <details><summary>Matching skills</summary>${renderList(vacancy.matchingSkills ?? [])}</details>
+      <details><summary>Gaps</summary>${renderList(vacancy.gaps ?? [])}</details>`
+    : '<p class="muted">Not scored: the candidate profile has no target roles or strongest skills configured yet.</p>';
 
   return `<article class="job">
-    <div class="score" aria-label="Score ${vacancy.score}">${vacancy.score}</div>
+    ${scoreBadge}
     <div class="job-body">
       <p class="eyebrow">${escapeHtml(vacancy.company)} · ${escapeHtml(vacancy.provider)}</p>
       <h3>${escapeHtml(vacancy.title)}</h3>
       <p>${escapeHtml(vacancy.location ?? 'Location unknown')} · ${escapeHtml(remoteLabel)}</p>
       <p>${languageFlag}</p>
       <p>${verificationFlag}</p>
-      <p><strong>Primary fit:</strong> ${escapeHtml(vacancy.primaryFit)}</p>
-      <div class="dimensions">
-        <span>Technical ${vacancy.technicalFit}</span><span>Role ${vacancy.roleFit}</span><span>Seniority ${vacancy.seniorityFit}</span><span>Language ${vacancy.languageFit}</span><span>Location ${vacancy.locationFit}</span>
-      </div>
-      <details><summary>Why it ranked here</summary>${renderList(vacancy.reasons)}</details>
-      <details><summary>Matching skills</summary>${renderList(vacancy.matchingSkills)}</details>
-      <details><summary>Gaps</summary>${renderList(vacancy.gaps)}</details>
+      ${primaryFitLine}
+      ${dimensions}
+      ${scoringDetails}
       <p class="meta">IND sponsor legal entity: ${escapeHtml(vacancy.sponsorLegalNames.join(', ') || 'Mapping unavailable')} · Mapping confidence: ${escapeHtml(vacancy.mappingConfidence)} · First seen: ${escapeHtml(formatDate(vacancy.firstSeenAt))} · Last seen: ${escapeHtml(formatDate(vacancy.lastSeenAt))} · Posted: ${escapeHtml(formatDate(vacancy.postedAt))}</p>
       ${officialLink}
     </div>
@@ -216,28 +245,39 @@ function renderStatistics(statistics: ReportStatistics): string {
 }
 
 export function renderHtmlReport(report: JobRadarReport): string {
-  const sorted = [...report.vacancies].sort((left, right) => right.score - left.score || left.title.localeCompare(right.title));
-  const categories = ['Excellent match', 'Strong match', 'Worth reviewing'] as const;
-  const sections = categories
-    .map((category) => {
-      const matching = sorted.filter((vacancy) => categoryForScore(vacancy.score) === category);
-      return `<section><h2>${category} <span>${matching.length}</span></h2>${
-        matching.length > 0 ? matching.map(renderVacancy).join('') : '<p class="muted">No vacancies in this category.</p>'
+  const sorted = [...report.vacancies].sort(
+    (left, right) => (right.score ?? -1) - (left.score ?? -1) || left.title.localeCompare(right.title),
+  );
+
+  const unconfiguredNotice = report.profileConfigured
+    ? ''
+    : `<p class="lede notice">Your candidate profile has no target roles or strongest skills configured, so nothing below is scored. Every discovered vacancy is listed as-is; fill in the profile to see ranked matches.</p>`;
+
+  const body = report.profileConfigured
+    ? (['Excellent match', 'Strong match', 'Worth reviewing'] as const)
+        .map((category) => {
+          const matching = sorted.filter((vacancy) => categoryForScore(vacancy.score) === category);
+          return `<section><h2>${category} <span>${matching.length}</span></h2>${
+            matching.length > 0 ? matching.map(renderVacancy).join('') : '<p class="muted">No vacancies in this category.</p>'
+          }</section>`;
+        })
+        .join('')
+    : `<section><h2>All discovered vacancies <span>${sorted.length}</span></h2>${
+        sorted.length > 0 ? sorted.map(renderVacancy).join('') : '<p class="muted">No vacancies discovered in this run.</p>'
       }</section>`;
-    })
-    .join('');
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Open Vacancy Radar, ${escapeHtml(formatDate(report.generatedAt))}</title>
 <style>
-:root{color-scheme:light;--ink:#17211d;--muted:#617069;--line:#d9e1dc;--surface:#f4f7f5;--green:#0b6e4f;--red:#a51d2d;--amber:#855f00}*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;color:var(--ink);background:#fff}main{width:min(1100px,calc(100% - 32px));margin:48px auto 96px}h1{font-size:clamp(2rem,6vw,4.5rem);line-height:1;margin:.2em 0}h2{border-bottom:2px solid var(--ink);padding-bottom:.4rem;margin-top:3rem}h2 span{color:var(--muted);font-size:.8em}.lede{max-width:75ch}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:2rem 0}.stats div{background:#fff;padding:12px}.stats dt{color:var(--muted);font-size:.8rem}.stats dd{font-size:1.5rem;font-weight:700;margin:0}.job{display:grid;grid-template-columns:72px 1fr;gap:20px;padding:24px 0;border-bottom:1px solid var(--line)}.score{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:#fff;font-size:1.5rem;font-weight:800}.job h3{font-size:1.5rem;margin:.15rem 0}.eyebrow,.meta,.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.05em;font-size:.8rem}.meta{font-size:.82rem}.dimensions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.dimensions span{background:var(--surface);padding:4px 8px;border-radius:4px}details{margin:.5rem 0}details ul{margin:.5rem 0}.open{display:inline-block;background:var(--green);color:#fff;font-weight:800;text-decoration:none;padding:12px 18px;border-radius:5px;margin-top:8px}.open:focus,.open:hover{outline:3px solid #8dd7bd;outline-offset:2px}.danger,.unsafe{color:var(--red)}.warning{color:var(--amber)}@media(max-width:600px){.job{grid-template-columns:1fr}.score{width:52px;height:52px}}
+:root{color-scheme:light;--ink:#17211d;--muted:#617069;--line:#d9e1dc;--surface:#f4f7f5;--green:#0b6e4f;--red:#a51d2d;--amber:#855f00}*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;color:var(--ink);background:#fff}main{width:min(1100px,calc(100% - 32px));margin:48px auto 96px}h1{font-size:clamp(2rem,6vw,4.5rem);line-height:1;margin:.2em 0}h2{border-bottom:2px solid var(--ink);padding-bottom:.4rem;margin-top:3rem}h2 span{color:var(--muted);font-size:.8em}.lede{max-width:75ch}.lede.notice{color:var(--amber);font-weight:600}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:2rem 0}.stats div{background:#fff;padding:12px}.stats dt{color:var(--muted);font-size:.8rem}.stats dd{font-size:1.5rem;font-weight:700;margin:0}.job{display:grid;grid-template-columns:72px 1fr;gap:20px;padding:24px 0;border-bottom:1px solid var(--line)}.score{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:#fff;font-size:1.5rem;font-weight:800}.score-unscored{background:var(--surface);color:var(--muted)}.job h3{font-size:1.5rem;margin:.15rem 0}.eyebrow,.meta,.muted{color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.05em;font-size:.8rem}.meta{font-size:.82rem}.dimensions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.dimensions span{background:var(--surface);padding:4px 8px;border-radius:4px}details{margin:.5rem 0}details ul{margin:.5rem 0}.open{display:inline-block;background:var(--green);color:#fff;font-weight:800;text-decoration:none;padding:12px 18px;border-radius:5px;margin-top:8px}.open:focus,.open:hover{outline:3px solid #8dd7bd;outline-offset:2px}.danger,.unsafe{color:var(--red)}.warning{color:var(--amber)}@media(max-width:600px){.job{grid-template-columns:1fr}.score{width:52px;height:52px}}
 </style></head><body><main>
 <p class="eyebrow">Candidate ${escapeHtml(report.candidateProfileVersion)} · Scoring ${escapeHtml(report.deterministicScoringVersion)} · Run ${escapeHtml(report.scanStatus)}</p><h1>Open Vacancy Radar</h1>
 <p class="lede">Ranked official vacancies at mapped IND-recognised sponsors. Sponsor recognition does not guarantee that a particular vacancy offers sponsorship; always verify the vacancy and employment terms manually.</p>
 <p class="lede">Known posting dates older than ${report.freshnessPolicy.maximumPostingAgeDays} days are excluded. Vacancies without a posting date remain eligible and require manual freshness verification.</p>
 <p>Generated ${escapeHtml(formatDate(report.generatedAt))}. Official register update: ${escapeHtml(formatDate(report.officialSponsorSource.lastUpdated))}.</p>
-${renderStatistics(report.statistics)}${sections}
+${unconfiguredNotice}
+${renderStatistics(report.statistics)}${body}
 </main></body></html>`;
 }
 

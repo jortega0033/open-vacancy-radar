@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +66,33 @@ import { persistVacancyScan } from '../../src/vacancies/repository.js';
 const migrationsFolder = fileURLToPath(new URL('../../drizzle', import.meta.url));
 const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'vacancy-engine-lifecycle-'));
 const testDatabasePath = path.join(temporaryDirectory, 'lifecycle-test.db');
+// A fixture profile, independent of the shipped default (which is intentionally empty -- see
+// issue #56 -- and would make every report in this file look like an unconfigured-profile run
+// regardless of the real vacancyScores rows these tests seed directly).
+const testProfilePath = path.join(temporaryDirectory, 'candidate-profile-v1.json');
+writeFileSync(
+  testProfilePath,
+  JSON.stringify({
+    profileVersion: 'candidate-profile-lifecycle-test',
+    candidateName: 'Test Candidate',
+    currentRole: 'Frontend Engineer',
+    location: 'Netherlands',
+    experienceYears: 5,
+    strongestSkills: ['TypeScript'],
+    additionalSkills: [],
+    targetRoles: ['Frontend Engineer'],
+    consideredRoles: [],
+    excludedRoleFamilies: [],
+    constraints: {
+      professionalLanguage: 'English',
+      dutchRequired: false,
+      primaryCountry: 'Netherlands',
+      allowRemoteEuSupportingNetherlands: true,
+      minimumMonthlyBaseEur: 4000,
+    },
+  }),
+  'utf8',
+);
 
 /**
  * Child-first order so `restrict` and `cascade` references stay satisfied while
@@ -224,7 +251,7 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
   beforeAll(async () => {
     client = createDatabaseClient(testDatabasePath);
     await migrateDatabase(client.db, migrationsFolder);
-    candidateProfileVersion = (await loadCandidateProfile()).profileVersion;
+    candidateProfileVersion = (await loadCandidateProfile(testProfilePath)).profileVersion;
   }, 30_000);
 
   beforeEach(() => {
@@ -995,6 +1022,7 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
       scanRunId: scanRun.id,
       generatedAt: new Date('2026-08-28T12:00:00.000Z'),
       maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
     });
     expect(report.statistics).toMatchObject({
       deterministicCandidates: 3,
@@ -1026,6 +1054,7 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
       scanRunId: scanRun.id,
       generatedAt: new Date('2026-08-28T12:00:00.000Z'),
       maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
     });
     expect(laterSuccessfulReport.vacancies[0]).toMatchObject({
       verifiedInRun: false,
@@ -1046,6 +1075,7 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
       scanRunId: scanRun.id,
       generatedAt: new Date('2026-08-28T12:00:00.000Z'),
       maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
     });
     expect(incompleteReport.statistics).toMatchObject({
       careerSourcesScanned: 0,
@@ -1071,9 +1101,92 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
       scanRunId: scanRun.id,
       generatedAt: new Date('2026-08-28T12:00:00.000Z'),
       maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
     });
     expect(gatedReport.vacancies).toEqual([]);
     expect(gatedReport.statistics.deterministicCandidates).toBe(0);
+  });
+
+  it('returns every discovered vacancy unscored, not an empty list, when the candidate profile is unconfigured', async () => {
+    await insertRecognisedSponsor();
+    const sourceUrl = 'https://boards-api.greenhouse.io/v1/boards/unconfigured-profile/jobs';
+    await syncVerifiedCompanyMappings(
+      database(),
+      mappingFile({
+        version: 'unconfigured-profile-v1',
+        verifiedAt: '2026-08-28T08:00:00.000Z',
+        baseUrl: sourceUrl,
+      }),
+    );
+    const [company] = await database()
+      .select({ id: companies.id })
+      .from(companies)
+      .where(eq(companies.domain, 'mapping.integration.test'));
+    const [source] = await database()
+      .select({ id: careerSources.id })
+      .from(careerSources)
+      .where(eq(careerSources.baseUrl, sourceUrl));
+    if (company === undefined || source === undefined) {
+      throw new Error('Unconfigured-profile report fixtures were not persisted');
+    }
+    await persistVacancyScan(database(), {
+      companyId: company.id,
+      careerSourceId: source.id,
+      vacancies: [vacancy('unscored-role')],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    // Deliberately no vacancyScores insert: an unconfigured profile means scoring never ran.
+    const [scanRun] = await database()
+      .insert(scanRuns)
+      .values({ command: 'integration-report', status: 'succeeded', finishedAt: new Date('2026-08-28T09:10:00.000Z') })
+      .returning({ id: scanRuns.id });
+    if (scanRun === undefined) throw new Error('Unconfigured-profile scan-run fixture was not persisted');
+
+    const emptyProfilePath = path.join(temporaryDirectory, 'candidate-profile-unconfigured.json');
+    writeFileSync(
+      emptyProfilePath,
+      JSON.stringify({
+        profileVersion: 'candidate-profile-unconfigured-test',
+        candidateName: '',
+        currentRole: '',
+        location: '',
+        experienceYears: 0,
+        strongestSkills: [],
+        additionalSkills: [],
+        targetRoles: [],
+        consideredRoles: [],
+        excludedRoleFamilies: [],
+        constraints: {
+          professionalLanguage: '',
+          dutchRequired: false,
+          primaryCountry: '',
+          allowRemoteEuSupportingNetherlands: true,
+          minimumMonthlyBaseEur: 0,
+        },
+      }),
+      'utf8',
+    );
+
+    const report = await buildJobRadarReport(database(), {
+      scanRunId: scanRun.id,
+      generatedAt: new Date('2026-08-28T12:00:00.000Z'),
+      maximumPostingAgeDays: 365,
+      profilePath: emptyProfilePath,
+    });
+
+    expect(report.profileConfigured).toBe(false);
+    // The bug this test guards against: an inner join on vacancyScores (which has zero rows for
+    // this profile version) would silently return an empty list here, indistinguishable from a
+    // real "nothing matched" result.
+    expect(report.vacancies).toHaveLength(1);
+    expect(report.vacancies[0]?.title).toBe('Senior TypeScript Engineer');
+    expect(report.vacancies[0]?.score).toBeUndefined();
+    expect(report.vacancies[0]?.matchingSkills).toBeUndefined();
+    expect(report.statistics.deterministicCandidates).toBe(0);
+    // The vacancy above is real (score !== undefined would make it "relevant"), but nothing was
+    // ever scored against the empty profile, so it must not be counted as a relevance match.
+    expect(report.statistics.relevantVacancies).toBe(0);
   });
 
   it('seeds trusted discovery inventory and commits bounded attempts atomically without promoting candidates', async () => {

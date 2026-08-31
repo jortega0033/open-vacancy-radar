@@ -1,6 +1,6 @@
 import { and, desc, eq, exists, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
-import { loadCandidateProfile } from '../candidate/profile.js';
+import { isCandidateProfileConfigured, loadCandidateProfile } from '../candidate/profile.js';
 import type { Database } from '../db/client.js';
 import {
   careerSources,
@@ -126,6 +126,7 @@ export async function buildJobRadarReport(
     throw new RangeError('Report minimum score must be an integer from 70 through 100');
   }
   const profile = await loadCandidateProfile(options.profilePath);
+  const profileConfigured = isCandidateProfileConfigured(profile);
   const run = await resolveRun(database, options.scanRunId);
   const generatedAt = options.generatedAt ?? new Date();
   const maximumPostingAgeDays = options.maximumPostingAgeDays ?? 365;
@@ -191,49 +192,69 @@ export async function buildJobRadarReport(
         .from(indSponsors)
         .orderBy(desc(indSponsors.sourceRetrievedAt))
         .limit(1),
-      database
-        .select({ count: sql<number>`count(*)` })
-        .from(vacancies)
-        .innerJoin(companies, eq(vacancies.companyId, companies.id))
-        .innerJoin(
-          vacancyScores,
-          and(
-            eq(vacancyScores.vacancyId, vacancies.id),
-            eq(vacancyScores.contentHash, vacancies.contentHash),
-            eq(vacancyScores.candidateProfileVersion, profile.profileVersion),
-            eq(vacancyScores.scoringVersion, DETERMINISTIC_SCORING_VERSION),
-          ),
-        )
-        .where(
-          and(
-            eq(vacancies.active, true),
-            eq(companies.scanEnabled, true),
-            hasActiveSponsorRelationship,
-            gte(vacancyScores.finalScore, RELEVANCE_THRESHOLD),
-          ),
-        ),
-      database
-        .select({ count: sql<number>`count(*)` })
-        .from(vacancies)
-        .innerJoin(companies, eq(vacancies.companyId, companies.id))
-        .innerJoin(
-          vacancyScores,
-          and(
-            eq(vacancyScores.vacancyId, vacancies.id),
-            eq(vacancyScores.contentHash, vacancies.contentHash),
-            eq(vacancyScores.candidateProfileVersion, profile.profileVersion),
-            eq(vacancyScores.scoringVersion, DETERMINISTIC_SCORING_VERSION),
-          ),
-        )
-        .where(
-          and(
-            eq(vacancies.active, true),
-            eq(companies.scanEnabled, true),
-            hasActiveSponsorRelationship,
-            gte(vacancyScores.finalScore, minimumScore),
-            lt(vacancies.postedAt, freshnessCutoff),
-          ),
-        ),
+      // "Passed deterministic filter": meaningless when scoring never ran (no profile
+      // configured), since there is no threshold to have passed. Skip the query entirely rather
+      // than joining against a vacancyScores table that has no rows for this profile version.
+      profileConfigured
+        ? database
+            .select({ count: sql<number>`count(*)` })
+            .from(vacancies)
+            .innerJoin(companies, eq(vacancies.companyId, companies.id))
+            .innerJoin(
+              vacancyScores,
+              and(
+                eq(vacancyScores.vacancyId, vacancies.id),
+                eq(vacancyScores.contentHash, vacancies.contentHash),
+                eq(vacancyScores.candidateProfileVersion, profile.profileVersion),
+                eq(vacancyScores.scoringVersion, DETERMINISTIC_SCORING_VERSION),
+              ),
+            )
+            .where(
+              and(
+                eq(vacancies.active, true),
+                eq(companies.scanEnabled, true),
+                hasActiveSponsorRelationship,
+                gte(vacancyScores.finalScore, RELEVANCE_THRESHOLD),
+              ),
+            )
+        : Promise.resolve([{ count: 0 }]),
+      // "Known stale postings excluded": with no scores, there's no score-passing candidate to
+      // have excluded for staleness, so this becomes a plain freshness count with no score join.
+      profileConfigured
+        ? database
+            .select({ count: sql<number>`count(*)` })
+            .from(vacancies)
+            .innerJoin(companies, eq(vacancies.companyId, companies.id))
+            .innerJoin(
+              vacancyScores,
+              and(
+                eq(vacancyScores.vacancyId, vacancies.id),
+                eq(vacancyScores.contentHash, vacancies.contentHash),
+                eq(vacancyScores.candidateProfileVersion, profile.profileVersion),
+                eq(vacancyScores.scoringVersion, DETERMINISTIC_SCORING_VERSION),
+              ),
+            )
+            .where(
+              and(
+                eq(vacancies.active, true),
+                eq(companies.scanEnabled, true),
+                hasActiveSponsorRelationship,
+                gte(vacancyScores.finalScore, minimumScore),
+                lt(vacancies.postedAt, freshnessCutoff),
+              ),
+            )
+        : database
+            .select({ count: sql<number>`count(*)` })
+            .from(vacancies)
+            .innerJoin(companies, eq(vacancies.companyId, companies.id))
+            .where(
+              and(
+                eq(vacancies.active, true),
+                eq(companies.scanEnabled, true),
+                hasActiveSponsorRelationship,
+                lt(vacancies.postedAt, freshnessCutoff),
+              ),
+            ),
     ]);
 
   const vacancyRows = await database
@@ -270,7 +291,13 @@ export async function buildJobRadarReport(
     .from(vacancies)
     .innerJoin(companies, eq(vacancies.companyId, companies.id))
     .innerJoin(careerSources, eq(vacancies.careerSourceId, careerSources.id))
-    .innerJoin(
+    // Left, not inner: with no profile configured there are no vacancyScores rows for this
+    // profile version at all, and an inner join would silently return zero vacancies -- exactly
+    // the "looks like nothing matched" bug this whole change exists to fix. A left join degrades
+    // to a uniformly-null score for every row, which the minimumScore filter below (skipped when
+    // unconfigured) and the mapping further down both already treat as "not scored" rather than
+    // "failed to score".
+    .leftJoin(
       vacancyScores,
       and(
         eq(vacancyScores.vacancyId, vacancies.id),
@@ -284,7 +311,7 @@ export async function buildJobRadarReport(
         eq(vacancies.active, true),
         eq(companies.scanEnabled, true),
         hasActiveSponsorRelationship,
-        gte(vacancyScores.finalScore, minimumScore),
+        ...(profileConfigured ? [gte(vacancyScores.finalScore, minimumScore)] : []),
         or(isNull(vacancies.postedAt), gte(vacancies.postedAt, freshnessCutoff)),
       ),
     )
@@ -310,7 +337,7 @@ export async function buildJobRadarReport(
   const deduplicatedVacancyRows = [...safeVacancyRows]
     .sort(
       (left, right) =>
-        right.score - left.score ||
+        (right.score ?? -1) - (left.score ?? -1) ||
         (right.postedAt?.getTime() ?? 0) - (left.postedAt?.getTime() ?? 0) ||
         right.firstSeenAt.getTime() - left.firstSeenAt.getTime() ||
         left.id.localeCompare(right.id),
@@ -322,6 +349,30 @@ export async function buildJobRadarReport(
       return true;
     });
   const reportVacancies: ReportVacancy[] = deduplicatedVacancyRows.map((vacancy) => {
+    // Left-joined scoring columns: null (no matching vacancyScores row -- either an unconfigured
+    // profile or a genuinely stale cache) means the whole scoring group is omitted from the
+    // object, not assigned `undefined` -- `exactOptionalPropertyTypes` treats those differently,
+    // and "not scored" must mean the key is absent, never a fake 0 or an explicit undefined.
+    const scoring = vacancy.score === null
+      ? {}
+      : {
+          // Non-null assertions: these columns all come from the same joined vacancyScores row
+          // `vacancy.score === null` already ruled out being absent -- they're all-or-nothing
+          // together, never independently null.
+          score: vacancy.score,
+          technicalFit: vacancy.technicalFit!,
+          roleFit: vacancy.roleFit!,
+          seniorityFit: vacancy.seniorityFit!,
+          languageFit: vacancy.languageFit!,
+          locationFit: vacancy.locationFit!,
+          dutchRequired: vacancy.dutchRequired!,
+          dutchPreferred: vacancy.dutchPreferred!,
+          languageEvidence: vacancy.languageEvidence!,
+          primaryFit: vacancy.primaryFit!,
+          matchingSkills: vacancy.matchingSkills!,
+          gaps: vacancy.gaps!,
+          reasons: vacancy.reasons!,
+        };
     return {
       id: vacancy.id,
       title: vacancy.title,
@@ -331,19 +382,7 @@ export async function buildJobRadarReport(
       workplaceMode: vacancy.workplaceMode,
       provider: vacancy.provider,
       url: vacancy.url,
-      score: vacancy.score,
-      technicalFit: vacancy.technicalFit,
-      roleFit: vacancy.roleFit,
-      seniorityFit: vacancy.seniorityFit,
-      languageFit: vacancy.languageFit,
-      locationFit: vacancy.locationFit,
-      dutchRequired: vacancy.dutchRequired,
-      dutchPreferred: vacancy.dutchPreferred,
-      languageEvidence: vacancy.languageEvidence,
-      primaryFit: vacancy.primaryFit,
-      matchingSkills: vacancy.matchingSkills,
-      gaps: vacancy.gaps,
-      reasons: vacancy.reasons,
+      ...scoring,
       mappingConfidence: vacancy.mappingConfidence,
       sponsorLegalNames: sponsorsByCompany.get(vacancy.companyId) ?? [],
       firstSeenAt: vacancy.firstSeenAt.toISOString(),
@@ -394,8 +433,12 @@ export async function buildJobRadarReport(
     staleVacanciesExcluded: numericCount(staleVacancyCount?.count),
     duplicateVacanciesCollapsed: safeVacancyRows.length - reportVacancies.length,
     semanticScored: 0,
-    relevantVacancies: reportVacancies.length,
-    excellentMatches: reportVacancies.filter((vacancy) => vacancy.score >= 90).length,
+    // `reportVacancies` already passed the minimumScore filter when the profile is configured (the
+    // query only applies that filter in that case), so its length is the relevant count. When the
+    // profile is unconfigured every discovered vacancy is included unscored, so none is "relevant"
+    // in the deterministic-relevance sense -- the same 0 the deterministicCandidates count uses.
+    relevantVacancies: profileConfigured ? reportVacancies.length : 0,
+    excellentMatches: reportVacancies.filter((vacancy) => (vacancy.score ?? 0) >= 90).length,
     errorCount: Math.max(baseStatistics.errorCount, numericCount(errorCountRow?.count)),
     requestCount:
       baseStatistics.requestCount ||
@@ -408,6 +451,7 @@ export async function buildJobRadarReport(
     scanStatus: options.scanStatus ?? run.status,
     generatedAt: generatedAt.toISOString(),
     candidateProfileVersion: profile.profileVersion,
+    profileConfigured,
     deterministicScoringVersion: DETERMINISTIC_SCORING_VERSION,
     freshnessPolicy: {
       maximumPostingAgeDays,
