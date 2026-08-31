@@ -26,13 +26,15 @@ test.describe('Search', () => {
 
     // Netherlands-only filter chips must be absent on the default market ...
     await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toHaveCount(0);
-    // ... and worldwide-only ones don't appear until a report with rows exists (no employment types
-    // are known yet), but the country filter is static and always offered for this market.
-    await expect(window.getByRole('combobox', { name: 'Country' })).toBeVisible();
+    // ... and the unified Country selector (there is no separate Market control any more; picking
+    // "Netherlands" from this same dropdown is what switches pipelines) is always offered.
+    const countrySelect = window.getByRole('combobox', { name: 'Country' });
+    await expect(countrySelect).toBeVisible();
+    await expect(countrySelect).toHaveValue('all');
 
-    // Switching market must swap in that market's own empty-state copy (SALARY_NOTE and the
+    // Picking "Netherlands" must swap in that pipeline's own empty-state copy (SALARY_NOTE and the
     // EmptyState description are both keyed by market), not just relabel the selector.
-    await window.getByRole('combobox', { name: 'Market' }).selectOption('netherlands');
+    await countrySelect.selectOption('Netherlands');
 
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
     await expect(
@@ -42,8 +44,8 @@ test.describe('Search', () => {
     await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toBeVisible();
     await expect(window.getByText('No salary in the Netherlands report')).toBeVisible();
 
-    // Switching back to worldwide restores its own copy and its own filter chips.
-    await window.getByRole('combobox', { name: 'Market' }).selectOption('worldwide');
+    // Picking "All countries" switches back to worldwide, restoring its own copy and chips.
+    await window.getByRole('combobox', { name: 'Country' }).selectOption('all');
     await expect(
       window.getByText(/No Worldwide \/ Remote scan has been run yet, so there is nothing to filter/i),
     ).toBeVisible();

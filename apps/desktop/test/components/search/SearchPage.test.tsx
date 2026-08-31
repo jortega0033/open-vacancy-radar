@@ -177,8 +177,12 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
   });
 }
 
+// The Market selector was folded into the Country dropdown: picking "Netherlands" switches to
+// that pipeline, anything else (here, "All countries") switches to (or stays on) worldwide.
 function switchMarket(value: 'netherlands' | 'worldwide') {
-  fireEvent.change(screen.getByLabelText('Market'), { target: { value } });
+  fireEvent.change(screen.getByLabelText('Country'), {
+    target: { value: value === 'netherlands' ? 'Netherlands' : 'all' },
+  });
 }
 
 afterEach(() => {
@@ -231,7 +235,7 @@ describe('SearchPage', () => {
     expect(screen.queryByText('Senior Frontend Architect')).not.toBeInTheDocument();
   });
 
-  it('shows the free-text City or region box only for Netherlands, never alongside the worldwide Country dropdown', async () => {
+  it('shows the free-text City or region box only for Netherlands; the unified Country dropdown handles worldwide instead', async () => {
     installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
@@ -240,7 +244,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
     expect(screen.getByRole('textbox', { name: 'City or region' })).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Country' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Netherlands');
 
     switchMarket('worldwide');
 
@@ -248,7 +252,24 @@ describe('SearchPage', () => {
     // Worldwide's own structured Country filter replaces it -- two controls for the same job
     // (a free-text box and a full country list) was the actual complaint.
     expect(screen.queryByRole('textbox', { name: 'City or region' })).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Country' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('all');
+  });
+
+  it('there is no separate Market selector any more: picking a specific country while on Netherlands switches straight to worldwide filtered to it', async () => {
+    const bridge = installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ location: 'Berlin, Germany' })])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('combobox', { name: 'Market' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+
+    await waitFor(() => expect(bridge.getReport).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
   });
 
   it('clicking Search always runs a fresh scan, even with a report already loaded (no separate dead "Search" vs. "Rescan" split)', async () => {

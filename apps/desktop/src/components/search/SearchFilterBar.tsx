@@ -1,17 +1,20 @@
 import type { KeyboardEvent } from 'react';
-import {
-  countryOptions,
-  MARKET_OPTIONS,
-  supportedFilters,
-  type SearchFilters,
-  type SearchMarket,
-} from './results.js';
+import { countryOptions, supportedFilters, type SearchFilters, type SearchMarket } from './results.js';
 
 export interface SearchFilterBarProps {
   market: SearchMarket;
-  onMarketChange: (market: SearchMarket) => void;
   filters: SearchFilters;
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
+  /**
+   * The one control for both "which pipeline" and "which country within it": there is no separate
+   * Market selector any more. Netherlands is a plain entry in the same country list every other
+   * country is (see `countries.ts`'s `ALL_COUNTRIES`), special-cased only in what picking it does:
+   * it switches to the IND-recognised-sponsor pipeline (immediately, not staged behind Search --
+   * see SearchPage.tsx), rather than filtering the worldwide pipeline down to Dutch-located roles.
+   * Any other value (including "all") switches to (or stays on) the worldwide pipeline, with that
+   * value as the country filter.
+   */
+  onLocationChange: (value: string) => void;
   /** Always runs a fresh scan of this market's sources, whether or not one is already loaded --
    * there is no separate "just filter" action, since typing in a filter field already re-filters
    * the loaded report live (see the `onChange` handlers below), with no button needed for that. */
@@ -27,8 +30,8 @@ export interface SearchFilterBarProps {
 }
 
 /**
- * The search header: role/keyword, market, city/region, the search action, and (for the
- * Netherlands only) the IND sponsor filter, plus the secondary client-side filter chips.
+ * The search header: role/keyword, the unified country/pipeline selector, the search action, and
+ * (for Netherlands only) the IND sponsor filter, plus the secondary client-side filter chips.
  *
  * Which secondary filters appear is driven by `supportedFilters(market)`, i.e. by what the
  * selected pipeline's data actually carries. The prototype's "experience level" chip is
@@ -37,9 +40,9 @@ export interface SearchFilterBarProps {
  */
 export function SearchFilterBar({
   market,
-  onMarketChange,
   filters,
   onFiltersChange,
+  onLocationChange,
   onSearch,
   onClear,
   sources,
@@ -70,21 +73,22 @@ export function SearchFilterBar({
 
         <select
           className="select select-sm w-48"
-          aria-label="Market"
-          value={market}
-          onChange={(event) => onMarketChange(event.target.value as SearchMarket)}
+          aria-label="Country"
+          value={market === 'netherlands' ? 'Netherlands' : filters.country}
+          onChange={(event) => onLocationChange(event.target.value)}
           disabled={busy}
         >
-          {MARKET_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
+          <option value="all">All countries</option>
+          {countryOptions().map((country) => (
+            <option key={country} value={country}>
+              {country}
             </option>
           ))}
         </select>
 
-        {/* Netherlands only: worldwide has its own structured Country filter below (a full
-            country list, `supported.country`), and having both a free-text location box and a
-            country dropdown active for the same market was two controls doing the same job. */}
+        {/* Netherlands only: the unified Country selector above is already scoped to one country
+            there, so it can't answer "which city", unlike worldwide where a specific-country
+            selection already narrows that far and a second free-text box would just duplicate it. */}
         {!supported.country && (
           <input
             className="input input-sm w-40"
@@ -176,22 +180,6 @@ export function SearchFilterBar({
             {employmentTypes.map((type) => (
               <option key={type} value={type}>
                 {type}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {supported.country && (
-          <select
-            className="select select-xs w-40"
-            aria-label="Country"
-            value={filters.country}
-            onChange={(event) => onFiltersChange({ country: event.target.value })}
-          >
-            <option value="all">All countries</option>
-            {countryOptions().map((country) => (
-              <option key={country} value={country}>
-                {country}
               </option>
             ))}
           </select>
