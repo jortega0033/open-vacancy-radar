@@ -104,6 +104,38 @@ function describeError(error: unknown, fallback: string): string {
 }
 
 /**
+ * Shown instead of the "No search yet" empty state while a scan/hydration is actually in flight
+ * with no report loaded yet: a static illustration sitting still under a spinner banner for up to
+ * a couple of minutes reads as frozen, not "working". Mimics the real two-pane layout's shape
+ * (row list + detail cards) so the page doesn't visibly jump once real content replaces it.
+ */
+function SearchLoadingSkeleton() {
+  return (
+    <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row" aria-hidden="true">
+      <div className="flex flex-none flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index} className="ovr-row space-y-2 border-b border-base-300 px-4">
+            <div className="skeleton h-4 w-3/4" />
+            <div className="skeleton h-3 w-1/2" />
+            <div className="skeleton h-3 w-2/3" />
+          </div>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1 space-y-4 px-6 py-5">
+        <div className="skeleton h-6 w-1/3" />
+        <div className="skeleton h-4 w-1/4" />
+        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+          <div className="skeleton h-24" />
+          <div className="skeleton h-24" />
+          <div className="skeleton h-24" />
+        </div>
+        <div className="skeleton h-32 w-full" />
+      </div>
+    </div>
+  );
+}
+
+/**
  * Top-level Search screen: one market selector over two genuinely different scan pipelines, a
  * client-side filter bar, a results list and a detail pane.
  *
@@ -551,10 +583,15 @@ export function SearchPage() {
       </div>
 
       {hydrating && !hasReport ? (
-        <div className="alert alert-info alert-soft mt-3 text-sm">
-          <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-          Loading the latest {marketLabel(market)} report…
-        </div>
+        <>
+          <div className="alert alert-info alert-soft mt-3 text-sm">
+            <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
+            Loading the latest {marketLabel(market)} report…
+          </div>
+          <SearchLoadingSkeleton />
+        </>
+      ) : scanning && !hasReport ? (
+        <SearchLoadingSkeleton />
       ) : !hasReport ? (
         <EmptyState
           illustration={emptySearchIllustration}
