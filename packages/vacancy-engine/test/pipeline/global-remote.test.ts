@@ -29,6 +29,7 @@ function vacancy(
     decision: 'salary_unverified',
     reasons: ['Salary is not stated.'],
     contentHash: key.padEnd(64, '0').slice(0, 64),
+    description: null,
   };
 }
 

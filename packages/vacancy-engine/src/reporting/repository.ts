@@ -384,6 +384,7 @@ export async function buildJobRadarReport(
     return {
       id: vacancy.id,
       title: vacancy.title,
+      description: vacancy.description,
       company: vacancy.company,
       location: vacancy.location,
       remote: vacancy.remote,

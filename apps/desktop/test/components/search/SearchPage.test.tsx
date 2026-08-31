@@ -15,6 +15,7 @@ function makeNetherlandsVacancy(overrides: Partial<ReportVacancy> = {}): ReportV
   return {
     id: 'nl-1',
     title: 'Senior Frontend Architect',
+    description: 'Lead the frontend architecture for our flagship product.',
     company: 'Redwood Software',
     location: 'Amsterdam',
     remote: false,
@@ -108,6 +109,7 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
     decision: 'official_review_candidate',
     reasons: ['Explicit frontend role'],
     contentHash: 'hash-ww-1',
+    description: 'Join our fully-remote engineering team building the next generation of tooling.',
     ...overrides,
   };
 }
