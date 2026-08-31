@@ -35,10 +35,19 @@ export function AboutSection() {
   }, []);
 
   const copyDiagnostics = async () => {
+    // Fetched fresh here rather than threaded down as a prop: this is the one place in the app
+    // that needs the daemon's status purely to report it, not to react to it, and a user hitting
+    // "daemon failed to start" needs exactly this in what they paste into a bug report -- the
+    // AI Runtime page's own banner shows the same text, but isn't copyable as structured text.
+    const daemonStatus = await window.agentDock.getDaemonStatus().catch((err: unknown) => ({
+      state: 'unavailable' as const,
+      error: err instanceof Error ? err.message : 'could not read daemon status',
+    }));
     const diagnostics = {
       application: 'Open Vacancy Radar',
       version: version ?? 'unknown',
       platform: navigator.userAgent,
+      daemonStatus,
     };
     try {
       await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
