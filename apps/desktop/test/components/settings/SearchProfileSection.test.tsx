@@ -26,6 +26,7 @@ function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchPr
     onChangeSponsorOnlyDefault: vi.fn(),
     indVerificationEnabled: true,
     onChangeIndVerificationEnabled: vi.fn(),
+    showIndOptions: true,
     onSaved: vi.fn(),
     onSaveError: vi.fn(),
     ...overrides,
@@ -213,6 +214,19 @@ describe('SearchProfileSection', () => {
     fireEvent.click(toggle);
 
     expect(onChangeIndVerificationEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it('hides the Search behavior toggles entirely when the default search location is not Netherlands', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+
+    render(<SearchProfileSection {...baseProps({ showIndOptions: false })} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.queryByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'IND recognised sponsor verification' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Search behavior')).not.toBeInTheDocument();
   });
 
   it('groups the candidate-profile fields under Identity / Role matching / Constraints subheadings', async () => {
