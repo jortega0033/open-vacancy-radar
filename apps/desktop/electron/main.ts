@@ -267,20 +267,42 @@ function spawnDaemon(): void {
     windowsHide: true,
   });
 
+  // Bounded, matching the same snippet-size convention `run-session.ts` uses for a provider CLI's
+  // stderr: a crash reason (missing native module, a thrown error on require(), a missing system
+  // library) is almost always in the first couple thousand characters, and this is forwarded to
+  // the renderer's "Daemon unavailable" banner, not just logged, so it must stay short.
+  let stderrSnippet = '';
   daemonChild.stdout?.on('data', (chunk: Buffer) => {
     // The daemon's own logger already redacts secrets; forward for local debugging only.
     console.log(`[daemon] ${chunk.toString('utf8').trim()}`);
   });
   daemonChild.stderr?.on('data', (chunk: Buffer) => {
-    console.error(`[daemon] ${chunk.toString('utf8').trim()}`);
+    const text = chunk.toString('utf8');
+    console.error(`[daemon] ${text.trim()}`);
+    if (stderrSnippet.length < 2000) stderrSnippet = (stderrSnippet + text).slice(0, 2000);
   });
+
+  // If the daemon exits before ever becoming ready, `waitForDaemonReady` below would otherwise run
+  // out its full timeout and report a generic "timed out" message, discarding the one piece of
+  // information that actually explains what happened: the exit code and whatever the process
+  // printed to stderr before dying (a thrown require() error, a missing native module, a missing
+  // system library). Racing this against `waitForDaemonReady` lets whichever failure is real win.
+  let rejectOnEarlyExit!: (error: Error) => void;
+  const earlyExit = new Promise<never>((_resolve, reject) => {
+    rejectOnEarlyExit = reject;
+  });
+
   daemonChild.on('exit', (code, signal) => {
-    if (!client) return; // never became ready; startup error already reported
+    if (!client) {
+      const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
+      rejectOnEarlyExit(new Error(`process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`));
+      return;
+    }
     client = undefined;
     sendStatus({ state: 'unavailable', error: `daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})` });
   });
 
-  waitForDaemonReady(spawnedAt).catch((err: Error) => {
+  Promise.race([waitForDaemonReady(spawnedAt), earlyExit]).catch((err: Error) => {
     sendStatus({ state: 'unavailable', error: `daemon failed to start: ${err.message}` });
   });
 }
