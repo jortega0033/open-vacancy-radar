@@ -360,14 +360,19 @@ export function SearchPage() {
     void runScan();
   }, [filters, runScan]);
 
+  /** `countryOverride`: set when a market switch is itself triggered by picking a specific
+   * country out of `handleLocationChange` below (e.g. going straight from Netherlands to "United
+   * States"), so that country lands as the new market's active filter instead of being reset to
+   * "all" by `keepTypedFilters`. */
   const handleMarketChange = useCallback(
-    (next: SearchMarket) => {
+    (next: SearchMarket, countryOverride?: string) => {
       hasSwitchedMarketRef.current = true;
       setMarketResolved(true);
       setMarket(next);
       const carried = keepTypedFilters(filters, next);
-      setFilters(carried);
-      setAppliedFilters(carried);
+      const withCountry = countryOverride === undefined ? carried : { ...carried, country: countryOverride };
+      setFilters(withCountry);
+      setAppliedFilters(withCountry);
       setSelectedKey(null);
       setAssistantForKey(null);
       setScanError(undefined);
@@ -378,6 +383,35 @@ export function SearchPage() {
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
   }, []);
+
+  /**
+   * The filter bar's single country/pipeline selector. "Netherlands" is the one value that means
+   * something more than "filter the worldwide pipeline to this country": it switches the whole
+   * pipeline to the IND-recognised-sponsor one, immediately (not staged behind Search), the same
+   * way the old, now-removed Market selector worked -- picking a market/pipeline is a structural
+   * choice, unlike the other filter chips that wait for an explicit Search click.
+   */
+  const handleLocationChange = useCallback(
+    (value: string) => {
+      // Marked here too, not only inside handleMarketChange below: staying on worldwide and just
+      // changing which country is still a deliberate choice made through this control, and without
+      // this the not-yet-resolved settings-hydration effect could still later overwrite it with the
+      // persisted default market, clobbering a selection the user already made.
+      hasSwitchedMarketRef.current = true;
+      setMarketResolved(true);
+      if (value === 'Netherlands') {
+        handleMarketChange('netherlands');
+        return;
+      }
+      if (market !== 'worldwide') {
+        handleMarketChange('worldwide', value);
+        return;
+      }
+      setFilters((current) => ({ ...current, country: value }));
+      setAppliedFilters((current) => ({ ...current, country: value }));
+    },
+    [market, handleMarketChange],
+  );
 
   // The one filter action that applies immediately, with no separate Search click: an explicit
   // reset is already a deliberate commitment, not a still-being-typed draft.
@@ -425,7 +459,7 @@ export function SearchPage() {
     <div className="flex h-full min-h-0 flex-col">
       <SearchFilterBar
         market={market}
-        onMarketChange={handleMarketChange}
+        onLocationChange={handleLocationChange}
         filters={filters}
         onFiltersChange={handleFiltersChange}
         onSearch={handleSearch}
