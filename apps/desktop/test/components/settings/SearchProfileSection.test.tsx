@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
-import { SearchProfileSection } from '../../../src/components/settings/SearchProfileSection.js';
+import {
+  SearchProfileSection,
+  type SearchProfileSectionProps,
+} from '../../../src/components/settings/SearchProfileSection.js';
 import { DEFAULT_CANDIDATE_PROFILE, installVacancyRadarBridge } from '../../workspace-bridge.js';
 
 function configuredProfile(overrides: Partial<CandidateProfile> = {}): CandidateProfile {
@@ -9,6 +12,16 @@ function configuredProfile(overrides: Partial<CandidateProfile> = {}): Candidate
     ...DEFAULT_CANDIDATE_PROFILE,
     targetRoles: ['Frontend Engineer'],
     strongestSkills: ['TypeScript', 'React'],
+    ...overrides,
+  };
+}
+
+/** `sponsorOnlyDefault` lives in `app_settings`, owned by `SettingsPage`, not this section's own
+ * candidate-profile IPC, so every render here supplies it (and a no-op handler) explicitly. */
+function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchProfileSectionProps {
+  return {
+    sponsorOnlyDefault: true,
+    onChangeSponsorOnlyDefault: vi.fn(),
     ...overrides,
   };
 }
@@ -23,7 +36,7 @@ describe('SearchProfileSection', () => {
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'Netherlands search profile' })).toBeInTheDocument();
@@ -35,7 +48,7 @@ describe('SearchProfileSection', () => {
       getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
     expect(screen.getByText(/not scored against anything/)).toBeInTheDocument();
@@ -46,7 +59,7 @@ describe('SearchProfileSection', () => {
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
     expect(screen.queryByText(/not scored against anything/)).not.toBeInTheDocument();
@@ -59,7 +72,7 @@ describe('SearchProfileSection', () => {
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     const nameInput = await screen.findByLabelText('Name');
     fireEvent.change(nameInput, { target: { value: 'Jane Doe' } });
@@ -76,7 +89,7 @@ describe('SearchProfileSection', () => {
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     const nameInput = await screen.findByLabelText('Name');
     fireEvent.blur(nameInput);
@@ -91,7 +104,7 @@ describe('SearchProfileSection', () => {
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     const targetRoles = await screen.findByLabelText('Target roles');
     fireEvent.change(targetRoles, { target: { value: 'Frontend, Backend' } });
@@ -109,7 +122,7 @@ describe('SearchProfileSection', () => {
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
     fireEvent.click(toggle);
@@ -126,7 +139,7 @@ describe('SearchProfileSection', () => {
       saveSearchProfile,
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
     expect(toggle).not.toBeChecked();
@@ -142,9 +155,37 @@ describe('SearchProfileSection', () => {
       getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
     });
 
-    render(<SearchProfileSection />);
+    render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByText('disk read failed')).toBeInTheDocument());
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+  });
+
+  it('shows the sponsor-only-default toggle here (moved from Search defaults, since it is Netherlands-only) even before the profile loads', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
+    });
+
+    render(<SearchProfileSection {...baseProps({ sponsorOnlyDefault: false })} />);
+
+    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
+  });
+
+  it('reports a sponsor-only-default toggle through the callback, not the candidate-profile IPC', async () => {
+    const onChangeSponsorOnlyDefault = vi.fn();
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+
+    render(<SearchProfileSection {...baseProps({ sponsorOnlyDefault: true, onChangeSponsorOnlyDefault })} />);
+
+    // Wait for the profile-loaded render (not just the toggle's own early appearance in the
+    // loading branch): the toggle row is present in both, but clicking before the swap can hit a
+    // node from the loading branch that React has since replaced.
+    await screen.findByLabelText('Name');
+    const toggle = screen.getByRole('switch', { name: 'Recognised sponsors only by default' });
+    fireEvent.click(toggle);
+
+    expect(onChangeSponsorOnlyDefault).toHaveBeenCalledWith(false);
   });
 });

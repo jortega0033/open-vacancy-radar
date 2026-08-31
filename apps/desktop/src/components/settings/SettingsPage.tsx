@@ -504,20 +504,13 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
                 }}
               />
             </SettingsRow>
-            <SettingsRow
-              label="Recognised sponsors only by default"
-              description="Netherlands searches start with the IND recognised-sponsor filter switched on."
-            >
-              <ToggleSwitch
-                label="Recognised sponsors only by default"
-                checked={settings.sponsorOnlyDefault}
-                disabled={disabled}
-                onChange={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
-              />
-            </SettingsRow>
           </SettingsSection>
 
-          <SearchProfileSection />
+          <SearchProfileSection
+            sponsorOnlyDefault={settings.sponsorOnlyDefault}
+            onChangeSponsorOnlyDefault={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
+            disabled={disabled}
+          />
 
           <SettingsSection title="Market integrations">
             <SettingsRow

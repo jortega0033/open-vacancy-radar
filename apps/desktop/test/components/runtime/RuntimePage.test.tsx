@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { RuntimePage } from '../../../src/components/runtime/index.js';
@@ -122,6 +122,29 @@ describe('RuntimePage', () => {
 
     expect(await screen.findByText(/is installed but not authenticated/i)).toBeInTheDocument();
     expect(screen.queryByText(/executable detected/i)).not.toBeInTheDocument();
+  });
+
+  it('never claims "Default" readiness for a configured default that is not installed', async () => {
+    // The persisted default (schema default: 'claude') can point at a CLI that was never
+    // installed on this machine, e.g. a fresh Windows Sandbox run. The card must say so plainly
+    // instead of the button reading "Default ✓" as if the CLI were ready to use.
+    installAgentDockBridge({
+      listProviders: vi.fn().mockResolvedValue([{ ...CLAUDE, installed: false, authenticated: 'unknown' }, CODEX_NOT_INSTALLED]),
+    });
+    installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: 'claude' }) });
+
+    render(<RuntimePage daemonState="ready" />);
+    await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+
+    expect(screen.queryByText('Default ✓')).not.toBeInTheDocument();
+    // Still surfaced as the configured default, just not via a button implying it is ready.
+    expect(screen.getByText('Default')).toBeInTheDocument();
+    // "Claude Code" also appears in the "Default runtime" summary panel below the card grid, so
+    // scope to the card specifically (the first occurrence, per that DOM order) rather than the
+    // ambiguous name text.
+    const claudeCard = screen.getAllByText('Claude Code')[0]!.closest('.card');
+    expect(claudeCard).not.toBeNull();
+    expect(within(claudeCard as HTMLElement).getByRole('button', { name: 'Not installed' })).toBeDisabled();
   });
 
   it('surfaces a provider-listing failure without crashing', async () => {

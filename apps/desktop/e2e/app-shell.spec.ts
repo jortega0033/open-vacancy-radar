@@ -29,11 +29,12 @@ test.describe('app shell', () => {
     }
   });
 
-  test('the sidebar profile indicator carries no fake identity', async ({ window }) => {
-    // Regression guard for the hardcoded "JO" avatar bug: whatever the sidebar's profile footer
-    // renders, it must never be literal initials with no real data behind them.
+  test('the sidebar footer carries no fake identity', async ({ window }) => {
+    // Regression guard for the hardcoded "JO" avatar bug: whatever the sidebar's footer renders,
+    // it must never be literal initials with no real data behind them. The footer itself is the
+    // AI runtime status, not an account/profile (this app has no login or online profile concept).
     await expect(window.getByText('JO', { exact: true })).toHaveCount(0);
-    await expect(window.getByText('Local profile')).toBeVisible();
+    await expect(window.getByText('AI runtime', { exact: true })).toBeVisible();
   });
 
   test('Search and Settings page visual baselines', async ({ window }) => {
