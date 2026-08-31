@@ -15,9 +15,10 @@ First packaged release. Windows only.
 - **AgentDock runtime**: BYOS model — features that use AI run through your own installed and
   authenticated `claude` or `codex` CLI. This app never holds an API key and never talks to an
   AI provider directly; see [README.md#what-this-is-not](../README.md#what-this-is-not).
-- **Optional MCP job-source providers**: connect additional providers with credentials stored in
-  your OS's native credential store, never in plaintext (see
+- **Optional MCP job-source providers**: infrastructure exists to connect additional providers,
+  with credentials stored in your OS's native credential store, never in plaintext (see
   [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)).
+  No provider is registered in this release, so there is nothing to connect from the app yet.
 - No telemetry, no account, no cloud sync — see [privacy.md](privacy.md).
 
 ## Known limitations
@@ -35,6 +36,14 @@ First packaged release. Windows only.
   [daemon.md#single-instance-behavior](daemon.md#single-instance-behavior).
 - AI features require you to separately install and authenticate a `claude` or `codex` CLI
   yourself — this app doesn't bundle or provision one.
+- **No MCP job-source provider is registered yet.** The credential-storage and routing
+  infrastructure exists, but the daemon's provider policy list is currently empty and no
+  in-app screen surfaces it; see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one).
+- **A session's event history does not survive a daemon restart.** This was a deliberate scope
+  decision for this milestone, not an oversight; see [architecture.md](architecture.md), section
+  "Deliberate omissions (v0.2)". A client that reconnects to a session id from before a restart
+  gets a clean `404 session not found`, never a hang or crash.
 
 ## Privacy implications
 

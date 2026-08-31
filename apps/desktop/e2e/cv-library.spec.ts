@@ -55,4 +55,35 @@ test.describe('CV library', () => {
     await expect(window.getByText('sample-cv.txt')).toBeVisible();
     await expect(window.getByText('Parsed', { exact: true })).toBeVisible();
   });
+
+  test('moves the default marker when a different CV is set as default', async ({ window }) => {
+    async function addManualProfile(name: string) {
+      await window.getByRole('button', { name: /add manual profile/i }).first().click();
+      const dialog = window.getByRole('dialog', { name: /add manual cv profile/i });
+      await dialog.getByLabel(/^name/i).fill(name);
+      await dialog.getByRole('button', { name: /add cv/i }).click();
+      await expect(dialog).toBeHidden();
+    }
+
+    await goto(window, 'CV');
+
+    // `createCvDocument` (electron/workspace/repository.ts) makes the very first document the
+    // default automatically; every one after that starts out not-default, which is exactly the
+    // starting condition this test needs (one already-default row and one that isn't yet).
+    await addManualProfile('Frontend CV — Netherlands');
+    const firstRow = window.getByRole('row', { name: /Frontend CV — Netherlands/ });
+    await expect(firstRow.getByText('Default', { exact: true })).toBeVisible();
+
+    await addManualProfile('Backend CV — Remote');
+    const secondRow = window.getByRole('row', { name: /Backend CV — Remote/ });
+    await expect(secondRow.getByRole('button', { name: /set as default/i })).toBeVisible();
+    // Only one row carries the marker at a time.
+    await expect(secondRow.getByText('Default', { exact: true })).toHaveCount(0);
+
+    await secondRow.getByRole('button', { name: /set as default/i }).click();
+
+    await expect(secondRow.getByText('Default', { exact: true })).toBeVisible();
+    await expect(firstRow.getByRole('button', { name: /set as default/i })).toBeVisible();
+    await expect(firstRow.getByText('Default', { exact: true })).toHaveCount(0);
+  });
 });

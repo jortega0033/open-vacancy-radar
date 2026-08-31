@@ -211,8 +211,11 @@ each is also listed as out of scope in [CONTRIBUTING.md](../CONTRIBUTING.md#scop
   products built on this boilerplate coexist by using different app ids, but two instances of the
   *same* product still can't run side by side. A richer scheme (e.g. a random per-launch id) isn't
   needed for what this boilerplate currently supports.
-- **No API-key/cloud provider mode.** Everything here assumes a locally authenticated CLI; adding a
-  second auth model is a different product shape, not an extension of this one.
+- **No API-key/cloud provider mode for AI agent providers.** Everything here assumes a locally
+  authenticated CLI; adding a second auth model is a different product shape, not an extension of
+  this one. (This is separate from the optional MCP job-source credential layer — see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)
+  — which is unrelated infrastructure with no bearing on agent-provider authentication.)
 - **No auto-update, telemetry, or crash reporting.** Each adds its own trust and privacy surface
   that doesn't belong in boilerplate meant to be forked as-is.
 - **Packaging targets Windows only** (see [packaging.md#platform-matrix](packaging.md#platform-matrix)).

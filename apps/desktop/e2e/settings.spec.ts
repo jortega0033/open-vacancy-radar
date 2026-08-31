@@ -57,4 +57,34 @@ test.describe('Settings', () => {
       rmSync(userDataDir, { recursive: true, force: true });
     }
   });
+
+  test('reset settings restores schema defaults, behind a confirm dialog', async ({ window }) => {
+    // Schema defaults (SettingsPage.tsx's `SETTINGS_DEFAULTS`, mirroring electron/workspace/schema.ts):
+    // theme 'system' and density 'comfortable'. `theme.ts`'s `applyTheme`/`applyDensity` remove the
+    // `data-theme`/`data-density` attributes entirely for those defaults rather than naming them, so
+    // "the attribute is absent" *is* the documented default state, not just one more value to check.
+    await goto(window, 'Settings');
+
+    await window.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' }).click();
+    await expect(window.locator('html')).toHaveAttribute('data-theme', 'openvacancyradar-dark');
+    await window.getByRole('group', { name: 'Density' }).getByRole('button', { name: 'Compact' }).click();
+    await expect(window.locator('html')).toHaveAttribute('data-density', 'compact');
+
+    await window.getByRole('button', { name: 'Reset settings' }).click();
+    const confirm = window.getByRole('alertdialog');
+    await expect(confirm).toContainText(/reset settings\?/i);
+    await confirm.getByRole('button', { name: 'Reset settings' }).click();
+
+    const toast = window.getByRole('status').filter({ hasText: 'Settings reset' });
+    await expect(toast).toBeVisible();
+
+    await expect(window.locator('html')).not.toHaveAttribute('data-theme');
+    await expect(window.locator('html')).not.toHaveAttribute('data-density');
+    await expect(
+      window.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'System' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      window.getByRole('group', { name: 'Density' }).getByRole('button', { name: 'Comfortable' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
 });
