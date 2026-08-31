@@ -190,8 +190,12 @@ export function SearchPage() {
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
 
+  const [engineCheckTick, setEngineCheckTick] = useState(0);
+  const [checkingEngine, setCheckingEngine] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
+    setCheckingEngine(true);
     void (async () => {
       try {
         const status = await window.vacancyRadar.getStatus();
@@ -205,12 +209,21 @@ export function SearchPage() {
         if (cancelled) return;
         setEngineState('unavailable');
         setEngineError(describeError(error, 'failed to reach the vacancy engine'));
+      } finally {
+        if (!cancelled) setCheckingEngine(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [engineCheckTick]);
+
+  const retryEngineCheck = useCallback(() => setEngineCheckTick((tick) => tick + 1), []);
+
+  // Bumped by `retryLoad` to force the hydration effect below to re-run even though `market` and
+  // `marketResolved` haven't changed: deleting from the `hydratedMarkets` ref alone doesn't, since
+  // ref mutations don't trigger re-renders or re-run effects.
+  const [reloadTick, setReloadTick] = useState(0);
 
   // Hydrate the market's last report. Both branches are `getReport`-style reads of stored output;
   // neither runs a scan, so opening the page costs nothing and shows what is already known. Waits
@@ -250,7 +263,12 @@ export function SearchPage() {
     return () => {
       cancelled = true;
     };
-  }, [market, marketResolved]);
+  }, [market, marketResolved, reloadTick]);
+
+  const retryLoad = useCallback(() => {
+    hydratedMarkets.current.delete(market);
+    setReloadTick((tick) => tick + 1);
+  }, [market]);
 
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
@@ -482,30 +500,61 @@ export function SearchPage() {
       <div className="flex-none">
         {engineState === 'unavailable' && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
-            shown, but no new scan can run.
+            <span>
+              Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still
+              be shown, but no new scan can run.
+            </span>
+            <button
+              type="button"
+              className="btn btn-outline btn-xs ml-auto flex-none"
+              onClick={retryEngineCheck}
+              disabled={checkingEngine}
+            >
+              {checkingEngine && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              Retry
+            </button>
           </div>
         )}
         {scanning && (
           <div className="alert alert-info alert-soft mt-3 text-sm">
+            <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             Scanning live {marketLabel(market)} sources: this hits real external APIs and feeds, and
             can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.
           </div>
         )}
         {scanError && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            Scan failed: {scanError}
+            <span>Scan failed: {scanError}</span>
+            <button
+              type="button"
+              className="btn btn-outline btn-xs ml-auto flex-none"
+              onClick={() => void runScan()}
+              disabled={busy}
+            >
+              Retry
+            </button>
           </div>
         )}
         {loadError && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            {loadError}
+            <span>{loadError}</span>
+            <button
+              type="button"
+              className="btn btn-outline btn-xs ml-auto flex-none"
+              onClick={retryLoad}
+              disabled={busy}
+            >
+              Retry
+            </button>
           </div>
         )}
       </div>
 
       {hydrating && !hasReport ? (
-        <div className="alert alert-info mt-3 text-sm">Loading the latest {marketLabel(market)} report…</div>
+        <div className="alert alert-info alert-soft mt-3 text-sm">
+          <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
+          Loading the latest {marketLabel(market)} report…
+        </div>
       ) : !hasReport ? (
         <EmptyState
           illustration={emptySearchIllustration}
@@ -528,7 +577,13 @@ export function SearchPage() {
           description={`${results.length} vacancies were found, but none were scored: the search profile has no target roles or strongest skills configured, so there's nothing to match them against. Fill it in under Settings to see ranked matches.`}
         />
       ) : (
-        <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row">
+        // Dimmed, not hidden or disabled, while a rescan is in flight: the results/detail pane
+        // still shows the last-known data (real, just about to be replaced), and staying
+        // interactive lets someone keep reading/saving from it during a scan that can take up to a
+        // couple of minutes, rather than locking the page for that whole time.
+        <div
+          className={`mt-3 flex min-h-0 flex-1 flex-col lg:flex-row ${scanning ? 'opacity-60 transition-opacity' : ''}`}
+        >
           <SearchResultList
             results={pageItems}
             totalCount={results.length}
