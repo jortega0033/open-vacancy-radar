@@ -172,6 +172,9 @@ export type DiscoveryVacancyAudit = {
   decision: DiscoveryDecision;
   reasons: string[];
   contentHash: string;
+  /** Null where the source's raw response carried no description text at all (not every worldwide
+   * feed does), never an empty string standing in for "missing". */
+  description: string | null;
 };
 
 export type DiscoverySourceAudit = {

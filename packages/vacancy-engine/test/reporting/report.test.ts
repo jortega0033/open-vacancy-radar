@@ -53,6 +53,7 @@ function reportWithScore(score: number, overrides: Partial<JobRadarReport['vacan
       {
         id: 'job-1',
         title: 'Senior Frontend Engineer',
+        description: 'We are looking for a senior frontend engineer to join our product team.',
         company: 'Example',
         location: null,
         remote: null,
@@ -96,6 +97,7 @@ function unscoredReport(): JobRadarReport {
       {
         id: base.vacancies[0]!.id,
         title: base.vacancies[0]!.title,
+        description: base.vacancies[0]!.description,
         company: base.vacancies[0]!.company,
         location: base.vacancies[0]!.location,
         remote: base.vacancies[0]!.remote,

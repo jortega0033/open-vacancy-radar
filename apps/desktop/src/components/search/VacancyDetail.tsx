@@ -276,10 +276,16 @@ export function VacancyDetail({
 
         <section className="mt-6">
           <SectionHeading>Job description</SectionHeading>
-          <p className="mt-3 text-sm leading-relaxed text-base-content/70">
-            Neither scan pipeline stores the posting text, so there is no description to show here.
-            Open the vacancy at its source to read it in full.
-          </p>
+          {result.description ? (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-base-content/70">
+              {result.description}
+            </p>
+          ) : (
+            <p className="mt-3 text-sm leading-relaxed text-base-content/70">
+              This source did not include description text for this vacancy. Open it at its source
+              to read it in full.
+            </p>
+          )}
         </section>
 
         <VerificationSection result={result} sponsorSource={sponsorSource} runId={runId} />

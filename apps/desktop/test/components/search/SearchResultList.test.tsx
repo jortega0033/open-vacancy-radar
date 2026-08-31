@@ -19,6 +19,7 @@ function worldwideResult(key: string, title: string): SearchResult {
     employmentType: null,
     salary: null,
     postedAt: null,
+    description: null,
     verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
     profileScore: null,
     strongPoints: [],

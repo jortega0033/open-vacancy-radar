@@ -211,6 +211,7 @@ describe('credential-free JSON and RSS discovery feeds', () => {
         key: 'remotive:2091000',
         company: 'Remotive Co',
         url: 'https://remotive.com/remote-jobs/software-development/senior-frontend-engineer-2091000',
+        description: 'Build accessible interfaces. Annual base salary $150,000 per year.',
       });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_remotely'))
       .toMatchObject({ company: 'Unspecified employer (JobRemotely)' });
@@ -238,7 +239,7 @@ describe('credential-free JSON and RSS discovery feeds', () => {
         url: 'https://careers.un.org/jobSearchDescription/283900?language=en',
       });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'un_careers'))
-      .not.toHaveProperty('description');
+      .toMatchObject({ description: null });
   });
 
   it('records a blocked feed and continues every other provider', async () => {

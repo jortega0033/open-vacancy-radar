@@ -34,6 +34,7 @@ export type ReportStatistics = {
 export type ReportVacancy = {
   id: string;
   title: string;
+  description: string;
   company: string;
   location: string | null;
   remote: boolean | null;

@@ -87,6 +87,8 @@ interface CommonResult {
   salary: string | null;
   /** ISO-8601, or null where the pipeline carries no posting date. */
   postedAt: string | null;
+  /** Null where the source carried no description text at all, never an empty string. */
+  description: string | null;
   verification: Verification;
   /**
    * The Netherlands pipeline's deterministic relevance score. This is scored against the engine's
@@ -207,6 +209,7 @@ export function toNetherlandsResults(report: JobRadarReport): SearchResult[] {
     employmentType: null,
     salary: null,
     postedAt: vacancy.postedAt,
+    description: vacancy.description,
     verification: netherlandsVerification(vacancy, report.indVerificationEnabled),
     // Undefined, not present, when the candidate profile wasn't configured for this run (see
     // JobRadarReport.profileConfigured) -- deterministic scoring never ran for this vacancy.
@@ -246,6 +249,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     salary: formatDiscoverySalary(vacancy),
     // Discovery rows carry no posting date at all.
     postedAt: null,
+    description: vacancy.description,
     verification: WORLDWIDE_VERIFICATION,
     profileScore: null,
     strongPoints: [],
