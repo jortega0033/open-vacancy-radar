@@ -128,7 +128,18 @@ export type GlobalRemoteScanResult = {
   files: GlobalRemoteReportFiles;
 };
 
-export type GlobalRemoteScanOptions = { officialOnly?: boolean; offlineReclassify?: boolean };
+export type GlobalRemoteScanOptions = {
+  officialOnly?: boolean;
+  offlineReclassify?: boolean;
+  /**
+   * Overrides the checked-in profile's static `discovery.roleQuery` for this run only, so the
+   * role/keyword a caller actually searched for scopes each source's own server-side search
+   * parameter (see the `config.discovery.roleQuery` reads across global-remote/*.ts) instead of
+   * always fetching the same static default and filtering everything client-side afterward.
+   * Ignored when empty/whitespace-only, which keeps the static default.
+   */
+  query?: string;
+};
 
 async function loadPreviousDiscovery(projectRoot: string): Promise<{
   sources: DiscoverySourceAudit[];
@@ -198,6 +209,16 @@ async function loadPreviousOfficial(
   return { audits, requestCount: 0 };
 }
 
+/**
+ * A blank/whitespace-only override keeps the checked-in profile's static default rather than
+ * clearing it, and `globalRemoteConfigSchema.discovery.roleQuery` caps at 200 characters, so an
+ * override longer than that would otherwise pass validation on load but violate it on this path.
+ */
+export function resolveRoleQuery(staticRoleQuery: string, queryOverride: string | undefined): string {
+  const trimmed = queryOverride?.trim();
+  return trimmed ? trimmed.slice(0, 200) : staticRoleQuery;
+}
+
 export async function runGlobalRemoteScan(
   database: Database,
   appConfig: AppConfig,
@@ -212,6 +233,7 @@ export async function runGlobalRemoteScan(
     ...loadedProfile,
     discovery: {
       ...loadedProfile.discovery,
+      roleQuery: resolveRoleQuery(loadedProfile.discovery.roleQuery, options.query),
       adzunaAppId: appConfig.keyedDiscovery.adzunaAppId,
       adzunaAppKey: appConfig.keyedDiscovery.adzunaAppKey,
       joobleApiKey: appConfig.keyedDiscovery.joobleApiKey,

@@ -27,7 +27,9 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
-  runScan(): Promise<GlobalRemoteReport>;
+  /** `query` scopes each source's own server-side search parameter for this run; omitted or blank
+   * keeps the checked-in profile's static default. */
+  runScan(query?: string): Promise<GlobalRemoteReport>;
   /** Netherlands pipeline: the IND recognised-sponsor scan. */
   getNetherlandsReport(): Promise<JobRadarReport | null>;
   runNetherlandsScan(): Promise<JobRadarReport>;

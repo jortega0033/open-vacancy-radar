@@ -6,7 +6,7 @@ import type {
   GlobalRemoteReport,
 } from '../../src/global-remote/models.js';
 import { renderGlobalRemoteHtml } from '../../src/global-remote/report.js';
-import { uniqueDiscovery } from '../../src/pipeline/global-remote.js';
+import { resolveRoleQuery, uniqueDiscovery } from '../../src/pipeline/global-remote.js';
 
 function vacancy(
   provider: DiscoveryProvider,
@@ -116,5 +116,25 @@ describe('global remote discovery aggregation', () => {
     expect(html).toContain('2026-08-30T10:00:00.000Z');
     expect(html).toContain('&lt;unsafe&gt;');
     expect(html).not.toContain('<unsafe>');
+  });
+});
+
+describe('resolveRoleQuery', () => {
+  it('uses the caller-supplied query, trimmed, when one is given', () => {
+    expect(resolveRoleQuery('frontend', '  backend engineer  ')).toBe('backend engineer');
+  });
+
+  it('falls back to the static profile default when no override is given', () => {
+    expect(resolveRoleQuery('frontend', undefined)).toBe('frontend');
+  });
+
+  it('falls back to the static default for a blank or whitespace-only override', () => {
+    expect(resolveRoleQuery('frontend', '')).toBe('frontend');
+    expect(resolveRoleQuery('frontend', '   ')).toBe('frontend');
+  });
+
+  it('caps an override at 200 characters, matching the profile schema limit', () => {
+    const tooLong = 'x'.repeat(250);
+    expect(resolveRoleQuery('frontend', tooLong)).toBe('x'.repeat(200));
   });
 });
