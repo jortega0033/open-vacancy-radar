@@ -1,13 +1,17 @@
 import type { ReactNode } from 'react';
+import { Check, Warning } from '@phosphor-icons/react';
 import type { JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
 import { formatDate, isWebUrl, orNotStated, type SearchResult } from './results.js';
 
 export type SaveState = 'idle' | 'saving' | 'saved';
 
+/** `flex h-full flex-col`: the three cards sit in one grid row of uneven content (only "CV match"
+ * carries a trailing button), so without a shared height each card's border box would size to its
+ * own content and visibly mismatch its neighbors. */
 function Card({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="rounded-box border border-base-300 p-3.5">
+    <div className="flex h-full flex-col rounded-box border border-base-300 p-3.5">
       <div className="text-xs font-semibold tracking-wide text-base-content/60 uppercase">{label}</div>
       {children}
     </div>
@@ -165,7 +169,7 @@ export function VacancyDetail({
               against {defaultCvName ? `your default CV (${defaultCvName})` : 'a CV you load'} using
               your own Claude Code CLI.
             </p>
-            <button className="btn btn-outline btn-xs mt-2" type="button" onClick={onToggleAssistant}>
+            <button className="btn btn-outline btn-xs mt-auto self-start" type="button" onClick={onToggleAssistant}>
               Analyse against my CV
             </button>
           </Card>
@@ -229,9 +233,7 @@ export function VacancyDetail({
                 ) : (
                   result.strongPoints.map((item) => (
                     <div key={item} className="flex gap-2 py-0.5 text-sm">
-                      <span className="flex-none text-success" aria-hidden="true">
-                        ✓
-                      </span>
+                      <Check className="flex-none text-success" size={16} aria-hidden="true" />
                       {item}
                     </div>
                   ))
@@ -244,9 +246,7 @@ export function VacancyDetail({
                 ) : (
                   result.gaps.map((item) => (
                     <div key={item} className="flex gap-2 py-0.5 text-sm">
-                      <span className="flex-none text-warning" aria-hidden="true">
-                        △
-                      </span>
+                      <Warning className="flex-none text-warning" size={16} aria-hidden="true" />
                       {item}
                     </div>
                   ))

@@ -87,8 +87,16 @@ export function savedJobInputFor(result: SearchResult): SavedJobInput {
  * employment types and the market-only chips are all derived from one pipeline's data, so carrying
  * them across would silently filter the new market's results on a value it never produces.
  */
-function keepTypedFilters(filters: SearchFilters): SearchFilters {
-  return { ...DEFAULT_FILTERS, query: filters.query, location: filters.location };
+function keepTypedFilters(filters: SearchFilters, nextMarket: SearchMarket): SearchFilters {
+  return {
+    ...DEFAULT_FILTERS,
+    query: filters.query,
+    // "City or region" free text is Netherlands-only now (see SearchFilterBar.tsx -- worldwide
+    // uses the structured Country filter instead, and showing both was two controls doing the
+    // same job). Carrying it into worldwide would leave an invisible filter active with no
+    // control left on screen to see or clear it.
+    location: nextMarket === 'netherlands' ? filters.location : '',
+  };
 }
 
 function describeError(error: unknown, fallback: string): string {
@@ -357,7 +365,7 @@ export function SearchPage() {
       hasSwitchedMarketRef.current = true;
       setMarketResolved(true);
       setMarket(next);
-      const carried = keepTypedFilters(filters);
+      const carried = keepTypedFilters(filters, next);
       setFilters(carried);
       setAppliedFilters(carried);
       setSelectedKey(null);
@@ -436,7 +444,7 @@ export function SearchPage() {
           </div>
         )}
         {scanning && (
-          <div className="alert alert-info mt-3 text-sm">
+          <div className="alert alert-info alert-soft mt-3 text-sm">
             Scanning live {marketLabel(market)} sources: this hits real external APIs and feeds, and
             can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.
           </div>
@@ -450,35 +458,6 @@ export function SearchPage() {
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
             {loadError}
           </div>
-        )}
-        {sourceWarnings.length > 0 && (
-          <div className="mt-3">
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs gap-1.5 text-warning"
-              onClick={() => setSourceWarningsOpen((open) => !open)}
-              aria-expanded={sourceWarningsOpen}
-            >
-              <Info size={14} aria-hidden="true" />
-              Source coverage warning ({sourceWarnings.length})
-            </button>
-          </div>
-        )}
-        {sourceWarnings.length > 0 && sourceWarningsOpen && (
-          <div className="alert alert-warning alert-soft mt-1.5 text-sm" role="status">
-            <div>
-              {sourceWarnings.map((source) => (
-                <span key={source.id} className="block">
-                  {source.provider}: {source.error ?? source.status}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-        {report && (
-          <p className="mt-2 text-xs text-base-content/60">
-            Run {report.runId} · generated {new Date(report.generatedAt).toLocaleString()}
-          </p>
         )}
       </div>
 
@@ -543,6 +522,43 @@ export function SearchPage() {
                 description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
               />
             </div>
+          )}
+        </div>
+      )}
+
+      {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits
+          outside the scrollable results/detail area above), for diagnostic/provenance metadata
+          that's useful on demand but not worth greeting every visit with above the results. */}
+      {(sourceWarnings.length > 0 || report) && (
+        <div className="flex-none border-t border-base-300 px-1 pt-2">
+          {sourceWarnings.length > 0 && (
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs gap-1.5 text-warning"
+                onClick={() => setSourceWarningsOpen((open) => !open)}
+                aria-expanded={sourceWarningsOpen}
+              >
+                <Info size={14} aria-hidden="true" />
+                Source coverage warning ({sourceWarnings.length})
+              </button>
+              {sourceWarningsOpen && (
+                <div className="alert alert-warning alert-soft mt-1.5 text-sm" role="status">
+                  <div>
+                    {sourceWarnings.map((source) => (
+                      <span key={source.id} className="block">
+                        {source.provider}: {source.error ?? source.status}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {report && (
+            <p className="px-2 pb-1.5 text-xs text-base-content/60">
+              Run {report.runId} · generated {new Date(report.generatedAt).toLocaleString()}
+            </p>
           )}
         </div>
       )}

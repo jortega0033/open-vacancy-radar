@@ -82,16 +82,21 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        <input
-          className="input input-sm w-40"
-          type="text"
-          aria-label="City or region"
-          placeholder="City or region"
-          value={filters.location}
-          onChange={(event) => onFiltersChange({ location: event.target.value })}
-          onKeyDown={handleKeyDown}
-          disabled={busy}
-        />
+        {/* Netherlands only: worldwide has its own structured Country filter below (a full
+            country list, `supported.country`), and having both a free-text location box and a
+            country dropdown active for the same market was two controls doing the same job. */}
+        {!supported.country && (
+          <input
+            className="input input-sm w-40"
+            type="text"
+            aria-label="City or region"
+            placeholder="City or region"
+            value={filters.location}
+            onChange={(event) => onFiltersChange({ location: event.target.value })}
+            onKeyDown={handleKeyDown}
+            disabled={busy}
+          />
+        )}
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
           {busy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
@@ -192,9 +197,13 @@ export function SearchFilterBar({
           </select>
         )}
 
+        {/* Separates the filter chips (narrow what's shown) from the trailing meta+reset pair
+            (explain/undo), so the row reads as two groups rather than one undifferentiated run. */}
+        <div className="mx-1 hidden h-5 w-px self-center bg-base-300 md:block" aria-hidden="true" />
+
         <span className="badge badge-ghost badge-sm font-normal">{salaryNote}</span>
 
-        <button className="btn btn-ghost btn-xs" type="button" onClick={onClear}>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={onClear}>
           Clear filters
         </button>
       </div>

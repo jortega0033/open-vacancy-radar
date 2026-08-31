@@ -231,6 +231,26 @@ describe('SearchPage', () => {
     expect(screen.queryByText('Senior Frontend Architect')).not.toBeInTheDocument();
   });
 
+  it('shows the free-text City or region box only for Netherlands, never alongside the worldwide Country dropdown', async () => {
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    expect(screen.getByRole('textbox', { name: 'City or region' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Country' })).not.toBeInTheDocument();
+
+    switchMarket('worldwide');
+
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    // Worldwide's own structured Country filter replaces it -- two controls for the same job
+    // (a free-text box and a full country list) was the actual complaint.
+    expect(screen.queryByRole('textbox', { name: 'City or region' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Country' })).toBeInTheDocument();
+  });
+
   it('clicking Search always runs a fresh scan, even with a report already loaded (no separate dead "Search" vs. "Rescan" split)', async () => {
     const bridge = installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
