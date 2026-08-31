@@ -38,7 +38,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   sidebarStart: 'remember_last',
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
-  defaultMarket: 'netherlands',
+  defaultMarket: 'worldwide',
   defaultLocation: '',
   sponsorOnlyDefault: true,
   indVerificationEnabled: true,

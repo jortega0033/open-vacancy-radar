@@ -25,7 +25,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   sidebarStart: 'remember_last',
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
-  defaultMarket: 'netherlands',
+  defaultMarket: 'worldwide',
   defaultLocation: '',
   sponsorOnlyDefault: true,
   indVerificationEnabled: true,

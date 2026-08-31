@@ -105,7 +105,7 @@ export const appSettings = sqliteTable('app_settings', {
   sidebarStart: text('sidebar_start', { enum: ['expanded', 'collapsed', 'remember_last'] }).notNull().default('remember_last'),
   sidebarCollapsed: integer('sidebar_collapsed', { mode: 'boolean' }).notNull().default(false),
   lastOpenedPage: text('last_opened_page').notNull().default('search'),
-  defaultMarket: text('default_market', { enum: ['netherlands', 'worldwide'] }).notNull().default('netherlands'),
+  defaultMarket: text('default_market', { enum: ['netherlands', 'worldwide'] }).notNull().default('worldwide'),
   defaultLocation: text('default_location').notNull().default(''),
   sponsorOnlyDefault: integer('sponsor_only_default', { mode: 'boolean' }).notNull().default(true),
   indVerificationEnabled: integer('ind_verification_enabled', { mode: 'boolean' }).notNull().default(true),
