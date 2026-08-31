@@ -14,13 +14,16 @@ import {
 } from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
 import {
+  candidateProfileSchema,
   createDatabaseClient,
   createLogger,
   createScanLock,
+  loadCandidateProfile,
   loadConfig,
   migrateDatabase,
   runEndToEndScan,
   runGlobalRemoteScan,
+  type CandidateProfile,
   type Database,
   type GlobalRemoteReport,
   type JobRadarReport,
@@ -52,6 +55,7 @@ import {
   parseSavedJobPatch,
   parseSettingsPatch,
 } from './workspace/validate.js';
+import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -635,6 +639,34 @@ ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
     },
     { takeAdvisoryLock: false },
   );
+});
+
+async function candidateProfilePath(): Promise<string> {
+  return join(await vacancyEngineDataRoot(), 'config', 'candidate-profile-v1.json');
+}
+
+ipcMain.handle('vacancy:get-search-profile', async (): Promise<CandidateProfile> => {
+  return loadCandidateProfile(await candidateProfilePath());
+});
+
+/**
+ * Merges an allow-listed patch (see vacancy-profile-validate.ts) onto the profile currently on
+ * disk and writes the result back. `profileVersion` is always stamped fresh here, never taken
+ * from the caller: `scoreActiveVacancies` keys its cached deterministic scores off this version,
+ * so a save that left it unchanged would let stale scores survive a profile edit.
+ */
+ipcMain.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
+  const patch = parseCandidateProfilePatch(rawPatch);
+  const path = await candidateProfilePath();
+  const current = await loadCandidateProfile(path);
+  const next: CandidateProfile = candidateProfileSchema.parse({
+    ...current,
+    ...patch,
+    constraints: { ...current.constraints, ...patch.constraints },
+    profileVersion: `candidate-profile-${Date.now()}`,
+  });
+  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  return next;
 });
 
 /*

@@ -67,7 +67,7 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
       { k: 'Scan run', v: runId ?? 'Unknown' },
       { k: 'First seen', v: formatDate(vacancy.firstSeenAt) },
       { k: 'Last seen', v: formatDate(vacancy.lastSeenAt) },
-      { k: 'Language evidence', v: vacancy.languageEvidence.join('; ') || 'None captured' },
+      { k: 'Language evidence', v: (vacancy.languageEvidence ?? []).join('; ') || 'None captured' },
     ];
 
     return (

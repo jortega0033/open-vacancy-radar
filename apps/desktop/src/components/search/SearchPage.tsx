@@ -252,6 +252,9 @@ export function SearchPage() {
   );
 
   const report = market === 'netherlands' ? netherlandsReport : worldwideReport;
+  // Only the Netherlands pipeline scores against a candidate profile; the worldwide pipeline has
+  // no such concept, so this is never true for it regardless of GlobalRemoteReport's own shape.
+  const profileNotConfigured = market === 'netherlands' && netherlandsReport !== null && !netherlandsReport.profileConfigured;
   const sourceWarnings =
     market === 'worldwide'
       ? (worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [])
@@ -400,6 +403,16 @@ export function SearchPage() {
               Run the first scan
             </button>
           }
+        />
+      ) : profileNotConfigured ? (
+        // Distinct from "No search yet": a scan genuinely ran and found vacancies, but scoring
+        // never ran because the candidate profile has no target roles or strongest skills. Showing
+        // the normal results view here would render "0 of N vacancies" -- indistinguishable from a
+        // real, exhaustive search that found nothing -- rather than the actionable truth.
+        <EmptyState
+          illustration={emptySearchIllustration}
+          title="Your search profile isn't set up yet"
+          description={`${results.length} vacancies were found, but none were scored: the search profile has no target roles or strongest skills configured, so there's nothing to match them against. Fill it in under Settings to see ranked matches.`}
         />
       ) : (
         <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row">

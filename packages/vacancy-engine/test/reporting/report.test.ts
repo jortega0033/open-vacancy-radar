@@ -13,6 +13,7 @@ function reportWithScore(score: number, overrides: Partial<JobRadarReport['vacan
     scanStatus: 'succeeded',
     generatedAt: '2026-08-28T12:00:00.000Z',
     candidateProfileVersion: 'candidate-profile-v1',
+    profileConfigured: true,
     deterministicScoringVersion: 'deterministic-v2',
     freshnessPolicy: {
       maximumPostingAgeDays: 365,

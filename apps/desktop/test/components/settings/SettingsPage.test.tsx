@@ -9,7 +9,12 @@ import type {
   LetterRecord,
   SavedJobRecord,
 } from '../../../src/window.js';
-import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+import {
+  DEFAULT_SETTINGS,
+  installSystemBridge,
+  installVacancyRadarBridge,
+  installWorkspaceBridge,
+} from '../../workspace-bridge.js';
 
 /**
  * `updateSettings` here answers like the real repository: the stored record with the patch
@@ -23,6 +28,7 @@ function mergingUpdateSettings(base: AppSettingsRecord = DEFAULT_SETTINGS) {
 function setup(overrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   const system = installSystemBridge();
   const bridge = installWorkspaceBridge({ updateSettings: mergingUpdateSettings(), ...overrides });
+  installVacancyRadarBridge();
   return { bridge, system };
 }
 
@@ -85,6 +91,7 @@ describe('SettingsPage', () => {
       'General',
       'Appearance',
       'Search defaults',
+      'Search profile',
       'Market integrations',
       'Documents',
       'Applications',

@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type {
   AppSettingsRecord,
   SystemBridge,
@@ -39,6 +40,27 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
 };
 
 export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
+
+/** Mirrors the shipped `config/candidate-profile-v1.json`: empty, not a plausible-looking default. */
+export const DEFAULT_CANDIDATE_PROFILE: CandidateProfile = {
+  profileVersion: 'candidate-profile-test',
+  candidateName: '',
+  currentRole: '',
+  location: '',
+  experienceYears: 0,
+  strongestSkills: [],
+  additionalSkills: [],
+  targetRoles: [],
+  consideredRoles: [],
+  excludedRoleFamilies: [],
+  constraints: {
+    professionalLanguage: 'English',
+    dutchRequired: false,
+    primaryCountry: '',
+    allowRemoteEuSupportingNetherlands: true,
+    minimumMonthlyBaseEur: 0,
+  },
+};
 
 export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {}): WorkspaceBridge {
   const bridge: WorkspaceBridge = {
@@ -92,6 +114,8 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     runScan: vi.fn(),
     getNetherlandsReport: vi.fn().mockResolvedValue(null),
     runNetherlandsScan: vi.fn(),
+    getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;

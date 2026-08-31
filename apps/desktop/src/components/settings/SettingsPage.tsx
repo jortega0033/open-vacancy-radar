@@ -10,6 +10,7 @@ import { ConfirmDialog } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
+import { SearchProfileSection } from './SearchProfileSection.js';
 
 /**
  * Top-level "Settings" screen. Every control autosaves its own field through
@@ -481,6 +482,8 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           />
         </SettingsRow>
       </SettingsSection>
+
+      <SearchProfileSection />
 
       <SettingsSection title="Market integrations">
         <SettingsRow

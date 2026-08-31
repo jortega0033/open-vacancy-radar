@@ -150,10 +150,18 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the five documented capability functions and nothing else', async () => {
+  it('exposes exactly the seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
-      ['getReport', 'getStatus', 'runScan', 'getNetherlandsReport', 'runNetherlandsScan'].sort(),
+      [
+        'getReport',
+        'getStatus',
+        'runScan',
+        'getNetherlandsReport',
+        'runNetherlandsScan',
+        'getSearchProfile',
+        'saveSearchProfile',
+      ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');

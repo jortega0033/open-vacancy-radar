@@ -198,10 +198,12 @@ export function toNetherlandsResults(report: JobRadarReport): SearchResult[] {
     salary: null,
     postedAt: vacancy.postedAt,
     verification: netherlandsVerification(vacancy),
-    profileScore: vacancy.score,
-    strongPoints: vacancy.matchingSkills,
-    gaps: vacancy.gaps,
-    reasons: vacancy.reasons,
+    // Undefined, not present, when the candidate profile wasn't configured for this run (see
+    // JobRadarReport.profileConfigured) -- deterministic scoring never ran for this vacancy.
+    profileScore: vacancy.score ?? null,
+    strongPoints: vacancy.matchingSkills ?? [],
+    gaps: vacancy.gaps ?? [],
+    reasons: vacancy.reasons ?? [],
     lead: {
       title: vacancy.title,
       company: vacancy.company,

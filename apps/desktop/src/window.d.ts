@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
-import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
 
@@ -30,6 +31,9 @@ export interface VacancyRadarBridge {
   /** Netherlands pipeline: the IND recognised-sponsor scan. */
   getNetherlandsReport(): Promise<JobRadarReport | null>;
   runNetherlandsScan(): Promise<JobRadarReport>;
+  /** The Netherlands pipeline's candidate profile: what deterministic scoring matches against. */
+  getSearchProfile(): Promise<CandidateProfile>;
+  saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
 }
 
 export interface CvFile {
