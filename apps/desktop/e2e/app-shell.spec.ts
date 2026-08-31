@@ -55,6 +55,13 @@ test.describe('app shell', () => {
     await expect(window).toHaveScreenshot('search-page.png');
   });
 
+  test('has no native application menu', async ({ electronApp }) => {
+    // Regression guard: Electron's default File/Edit/View/Window menu is boilerplate this app
+    // never wired any items into. `Menu.setApplicationMenu(null)` in main.ts removes it entirely.
+    const menu = await electronApp.evaluate(({ Menu }) => Menu.getApplicationMenu());
+    expect(menu).toBeNull();
+  });
+
   test('collapsed sidebar visual baseline', async ({ window }) => {
     // Regression guard for a real bug: NavGroup's collapsed nav buttons carried both
     // `justify-start` (unconditional) and `justify-center` (collapsed-only) at once, so the icon
