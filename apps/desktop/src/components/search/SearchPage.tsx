@@ -25,6 +25,11 @@ import {
 
 type EngineState = 'checking' | 'ready' | 'unavailable';
 
+/** How many rows the results list shows per page. A loaded report can carry thousands of
+ * vacancies (a worldwide scan easily clears 1000+), and rendering all of them at once with no
+ * pagination is both a real DOM-size performance problem and a "where did the rest go" UX gap. */
+const PAGE_SIZE = 25;
+
 /**
  * One line per market about the money its report actually carries. Shown in the filter bar so the
  * absence of a salary on a Netherlands row reads as "this pipeline has no salary field", not as
@@ -99,11 +104,15 @@ function describeError(error: unknown, fallback: string): string {
  * never starts a network scan on its own. Scanning hits real external feeds and can take a couple
  * of minutes, so it is always something the user asked for.
  *
- * Filtering (role/keyword, location, chips) is entirely client-side over the loaded report and
- * applies live as those fields change: narrowing a search must never itself trigger a scan. The
- * one "Search" button is the single, always-the-same action for going and getting fresh data,
+ * Filtering (role/keyword, location, chips) is entirely client-side over the loaded report, but
+ * deliberately does not apply as those fields change: the form fields are a draft (`filters`)
+ * separate from what's actually driving the list (`appliedFilters`), and only clicking "Search"
+ * (or pressing Enter in a text field) commits the draft and re-scans. The one "Search" button is
+ * the single, always-the-same action for both applying the form and going to get fresh data,
  * whether or not a report is already loaded -- there is deliberately no second "just filter" vs.
  * "rescan" button, which used to be confusing (one of the two did nothing once a report existed).
+ * "Clear filters" is the one exception: it resets and re-applies immediately, since an explicit
+ * reset needs no confirmation click of its own.
  */
 export function SearchPage() {
   const [engineState, setEngineState] = useState<EngineState>('checking');
@@ -148,9 +157,13 @@ export function SearchPage() {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
 
+  // `filters` is the draft the form fields are bound to; `appliedFilters` is what actually drives
+  // `visible` below. They only sync on an explicit Search (or Clear) -- see the class doc comment.
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [assistantForKey, setAssistantForKey] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   // Collapsed by default: which sources came back partial/incomplete is useful detail, not
   // something worth greeting every search with a wall of amber text for.
   const [sourceWarningsOpen, setSourceWarningsOpen] = useState(false);
@@ -265,10 +278,23 @@ export function SearchPage() {
     return worldwideReport ? sortResults(toWorldwideResults(worldwideReport)) : [];
   }, [market, netherlandsReport, worldwideReport]);
 
-  const visible = useMemo(() => filterResults(results, filters), [results, filters]);
+  const visible = useMemo(() => filterResults(results, appliedFilters), [results, appliedFilters]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageItems = useMemo(
+    () => visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [visible, page],
+  );
 
   const sources = useMemo(() => sourceOptions(results), [results]);
   const employmentTypes = useMemo(() => employmentOptions(results), [results]);
+
+  // A new filtered set (a fresh search, a rescan, or a market switch) always starts back on page
+  // one: a page index left over from a longer previous list could point past the end of a shorter
+  // new one.
+  useEffect(() => {
+    setPage(0);
+  }, [visible]);
 
   // Keep the selection on a row that is actually in the list, so the detail pane and the list can
   // never disagree about what is selected after a filter change or a rescan.
@@ -316,30 +342,41 @@ export function SearchPage() {
     }
   }, [market]);
 
-  // Filters (role/keyword, location, chips) already apply live to whatever report is loaded, with
-  // no button needed for that. "Search" only ever means one thing: go get fresh data, whether or
-  // not a report already exists -- there is deliberately no separate "just filter" vs. "rescan"
-  // action any more (the two used to be different buttons, one of which did nothing once a report
-  // was loaded, which read as a dead control rather than a real second action).
+  // "Search" commits the draft filters (so the list reflects exactly what the form currently
+  // shows) and goes to get fresh data, whether or not a report already exists -- there is
+  // deliberately no separate "just filter" vs. "rescan" action any more (the two used to be
+  // different buttons, one of which did nothing once a report was loaded, which read as a dead
+  // control rather than a real second action).
   const handleSearch = useCallback(() => {
+    setAppliedFilters(filters);
     void runScan();
-  }, [runScan]);
+  }, [filters, runScan]);
 
-  const handleMarketChange = useCallback((next: SearchMarket) => {
-    hasSwitchedMarketRef.current = true;
-    setMarketResolved(true);
-    setMarket(next);
-    setFilters(keepTypedFilters);
-    setSelectedKey(null);
-    setAssistantForKey(null);
-    setScanError(undefined);
-  }, []);
+  const handleMarketChange = useCallback(
+    (next: SearchMarket) => {
+      hasSwitchedMarketRef.current = true;
+      setMarketResolved(true);
+      setMarket(next);
+      const carried = keepTypedFilters(filters);
+      setFilters(carried);
+      setAppliedFilters(carried);
+      setSelectedKey(null);
+      setAssistantForKey(null);
+      setScanError(undefined);
+    },
+    [filters],
+  );
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
   }, []);
 
-  const handleClearFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
+  // The one filter action that applies immediately, with no separate Search click: an explicit
+  // reset is already a deliberate commitment, not a still-being-typed draft.
+  const handleClearFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+    setAppliedFilters(DEFAULT_FILTERS);
+  }, []);
 
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
@@ -368,8 +405,12 @@ export function SearchPage() {
     : 'idle';
   const saveError = selected ? saveErrors[selected.key] : undefined;
 
+  // The count of what is actually shown after filtering, not the raw size of the loaded report:
+  // the latter isn't a number a user can do anything with here (there is no "browse everything"
+  // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
+  // rather than useful context.
   const summary = hasReport
-    ? `${visible.length} of ${results.length} vacancies · ${marketLabel(market)}`
+    ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'} · ${marketLabel(market)}`
     : `No ${marketLabel(market)} report loaded`;
 
   return (
@@ -467,12 +508,15 @@ export function SearchPage() {
       ) : (
         <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row">
           <SearchResultList
-            results={visible}
+            results={pageItems}
             totalCount={results.length}
             selectedKey={selectedKey}
             onSelect={handleSelect}
             savedKeys={savedKeys}
             summary={summary}
+            page={page}
+            pageCount={pageCount}
+            onPageChange={setPage}
           />
 
           {selected ? (

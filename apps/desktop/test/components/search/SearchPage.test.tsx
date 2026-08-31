@@ -248,6 +248,83 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
   });
 
+  it('does not filter the list while typing; only applies once Search is clicked', async () => {
+    const bothVacancies = makeNetherlandsReport([
+      makeNetherlandsVacancy(),
+      makeNetherlandsVacancy({ id: 'nl-2', title: 'Frontend Developer', company: 'Freeday' }),
+    ]);
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(bothVacancies),
+      runNetherlandsScan: vi.fn().mockResolvedValue(bothVacancies),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      target: { value: 'Architect' },
+    });
+
+    // Still both rows: typing alone must not narrow the list.
+    expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0);
+  });
+
+  it('Clear filters applies immediately, with no separate Search click needed', async () => {
+    const bothVacancies = makeNetherlandsReport([
+      makeNetherlandsVacancy(),
+      makeNetherlandsVacancy({ id: 'nl-2', title: 'Frontend Developer', company: 'Freeday' }),
+    ]);
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(bothVacancies),
+      runNetherlandsScan: vi.fn().mockResolvedValue(bothVacancies),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      target: { value: 'Architect' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+  });
+
+  it('paginates the results list instead of rendering every row at once', async () => {
+    const manyVacancies = Array.from({ length: 30 }, (_, index) =>
+      makeNetherlandsVacancy({ id: `nl-${index}`, title: `Frontend Role ${index}` }),
+    );
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport(manyVacancies)),
+    });
+
+    render(<SearchPage />);
+
+    // Scoped to `getAllByRole('button', ...)`, not `getAllByText`: the detail pane's own <h2>
+    // repeats whichever row is selected, which would otherwise double-count that one row.
+    await waitFor(() => expect(screen.getByText(/^30 vacancies/)).toBeInTheDocument());
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(25);
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(5);
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
   it('surfaces partial worldwide source health and snapshot age', async () => {
     const warning =
       'stale parsed snapshot reused from 2026-08-30T10:00:00.000Z after rate_limited_status';

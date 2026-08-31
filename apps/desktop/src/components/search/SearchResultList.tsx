@@ -61,6 +61,7 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
 }
 
 export interface SearchResultListProps {
+  /** Already sliced to the current page: `page * pageSize` .. `(page + 1) * pageSize`. */
   results: SearchResult[];
   /** How many rows the loaded report had before the client-side filters ran. */
   totalCount: number;
@@ -69,6 +70,10 @@ export interface SearchResultListProps {
   /** `vacancyKey`s already in the workspace database, so a saved row can say so. */
   savedKeys: ReadonlySet<string>;
   summary: string;
+  /** 0-indexed. */
+  page: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
 }
 
 export function SearchResultList({
@@ -78,33 +83,62 @@ export function SearchResultList({
   onSelect,
   savedKeys,
   summary,
+  page,
+  pageCount,
+  onPageChange,
 }: SearchResultListProps) {
   return (
-    <div className="min-h-0 overflow-y-auto border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
+    <div className="flex min-h-0 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
       <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 px-4 py-2 text-xs text-base-content/60">
         {summary}
       </div>
 
-      {results.length === 0 ? (
-        <EmptyState
-          illustration={noResultsIllustration}
-          title="No vacancies found"
-          description={
-            totalCount > 0
-              ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
-              : 'The latest report for this market contains no vacancies.'
-          }
-        />
-      ) : (
-        results.map((result) => (
-          <SearchResultRow
-            key={result.key}
-            result={result}
-            selected={result.key === selectedKey}
-            onSelect={onSelect}
-            saved={savedKeys.has(result.key)}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {results.length === 0 ? (
+          <EmptyState
+            illustration={noResultsIllustration}
+            title="No vacancies found"
+            description={
+              totalCount > 0
+                ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
+                : 'The latest report for this market contains no vacancies.'
+            }
           />
-        ))
+        ) : (
+          results.map((result) => (
+            <SearchResultRow
+              key={result.key}
+              result={result}
+              selected={result.key === selectedKey}
+              onSelect={onSelect}
+              saved={savedKeys.has(result.key)}
+            />
+          ))
+        )}
+      </div>
+
+      {pageCount > 1 && (
+        <div className="flex flex-none items-center justify-between gap-2 border-t border-base-300 bg-base-100 px-4 py-2 text-xs">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => onPageChange(page - 1)}
+            disabled={page <= 0}
+          >
+            Previous
+          </button>
+          <span className="text-base-content/60">
+            Page {page + 1} of {pageCount}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => onPageChange(page + 1)}
+            disabled={page >= pageCount - 1}
+          >
+            Next
+          </button>
+        </div>
       )}
     </div>
   );
