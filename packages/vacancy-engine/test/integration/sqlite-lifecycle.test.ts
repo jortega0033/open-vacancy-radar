@@ -1184,6 +1184,9 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
     expect(report.vacancies[0]?.score).toBeUndefined();
     expect(report.vacancies[0]?.matchingSkills).toBeUndefined();
     expect(report.statistics.deterministicCandidates).toBe(0);
+    // The vacancy above is real (score !== undefined would make it "relevant"), but nothing was
+    // ever scored against the empty profile, so it must not be counted as a relevance match.
+    expect(report.statistics.relevantVacancies).toBe(0);
   });
 
   it('seeds trusted discovery inventory and commits bounded attempts atomically without promoting candidates', async () => {

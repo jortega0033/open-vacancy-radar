@@ -100,7 +100,13 @@ export function SearchProfileSection() {
           flash({ kind: 'saved', message: 'Saved' });
         } catch (err) {
           if (seq !== saveSeq.current) return;
-          if (profile) setDraft(toDraft(profile));
+          // Reverts `profile` too, not just `draft`: `commitToggle` below updates `profile`
+          // optimistically before this call resolves, so on failure both must roll back together
+          // or a failed toggle save leaves the switch showing the unsaved value indefinitely.
+          if (profile) {
+            setProfile(profile);
+            setDraft(toDraft(profile));
+          }
           flash({ kind: 'error', message: describeError(err, 'could not save the search profile') });
         }
       })();
@@ -305,9 +311,12 @@ export function SearchProfileSection() {
           onBlur={commitMinimumMonthlyBaseEur}
         />
       </SettingsRow>
-      <SettingsRow label="Dutch required" description="Only score vacancies that require Dutch.">
+      <SettingsRow
+        label="I can take Dutch-required roles"
+        description="When off, vacancies that require Dutch score as a poor match. Turn this on only if you're comfortable working in Dutch."
+      >
         <ToggleSwitch
-          label="Dutch required"
+          label="I can take Dutch-required roles"
           checked={profile.constraints.dutchRequired}
           onChange={(dutchRequired) => commitToggle({ dutchRequired })}
         />

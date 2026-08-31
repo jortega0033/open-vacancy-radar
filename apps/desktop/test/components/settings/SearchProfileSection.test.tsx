@@ -99,12 +99,30 @@ describe('SearchProfileSection', () => {
 
     render(<SearchProfileSection />);
 
-    const toggle = await screen.findByRole('switch', { name: 'Dutch required' });
+    const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
     fireEvent.click(toggle);
 
     await waitFor(() =>
       expect(saveSearchProfile).toHaveBeenCalledWith({ constraints: { dutchRequired: true } }),
     );
+  });
+
+  it('reverts an optimistically-toggled switch when the save fails', async () => {
+    const saveSearchProfile = vi.fn().mockRejectedValue(new Error('disk write failed'));
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+      saveSearchProfile,
+    });
+
+    render(<SearchProfileSection />);
+
+    const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(toggle).toBeChecked();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('disk write failed'));
+    expect(toggle).not.toBeChecked();
   });
 
   it('shows a load error instead of the form when the profile fails to load', async () => {

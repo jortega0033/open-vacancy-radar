@@ -164,11 +164,14 @@ function renderVacancy(vacancy: ReportVacancy): string {
         : vacancy.workplaceMode === 'onsite'
           ? 'On-site'
           : 'Remote/hybrid status unknown';
-  const languageFlag = vacancy.dutchRequired
-    ? '<strong class="danger">Dutch required</strong>'
-    : vacancy.dutchPreferred
-      ? '<strong class="warning">Dutch preferred</strong>'
-      : '<span>No Dutch requirement detected</span>';
+  const languageFlag =
+    vacancy.dutchRequired === undefined
+      ? '<span class="muted">Dutch requirement not evaluated: search profile not configured</span>'
+      : vacancy.dutchRequired
+        ? '<strong class="danger">Dutch required</strong>'
+        : vacancy.dutchPreferred
+          ? '<strong class="warning">Dutch preferred</strong>'
+          : '<span>No Dutch requirement detected</span>';
   const verificationFlag = vacancy.verifiedInRun
     ? '<span>Verified in this scan</span>'
     : `<strong class="warning">Not verified in this scan${

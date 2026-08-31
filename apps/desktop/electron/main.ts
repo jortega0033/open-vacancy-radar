@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -650,23 +651,64 @@ ipcMain.handle('vacancy:get-search-profile', async (): Promise<CandidateProfile>
 });
 
 /**
+ * Every field in the Settings > Search profile UI autosaves independently (on blur, or
+ * immediately for a toggle), so two edits made in quick succession reach this handler as two
+ * concurrent invocations. Without serializing them, both would read the same on-disk profile
+ * before either write lands, and whichever write finished second would silently discard the
+ * other's field. `profileSaveQueue` chains every save onto the previous one (success or failure)
+ * so the read-modify-write in the handler below is never interleaved with another.
+ */
+let profileSaveQueue: Promise<unknown> = Promise.resolve();
+
+function withProfileSaveQueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = profileSaveQueue.then(task, task);
+  profileSaveQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/** Monotonically increasing even across same-millisecond saves, so `scoreActiveVacancies` (which
+ * keys cached scores on an exact `candidateProfileVersion` match) can never see two different
+ * profile contents share one version string. */
+let lastProfileVersionStamp = 0;
+function nextProfileVersion(): string {
+  const now = Date.now();
+  lastProfileVersionStamp = now > lastProfileVersionStamp ? now : lastProfileVersionStamp + 1;
+  return `candidate-profile-${lastProfileVersionStamp}`;
+}
+
+/**
  * Merges an allow-listed patch (see vacancy-profile-validate.ts) onto the profile currently on
- * disk and writes the result back. `profileVersion` is always stamped fresh here, never taken
- * from the caller: `scoreActiveVacancies` keys its cached deterministic scores off this version,
- * so a save that left it unchanged would let stale scores survive a profile edit.
+ * disk and writes the result back through a temp-file-then-rename, the same atomic-write idiom
+ * `writeReportFiles`/`writeDomainCandidateCatalog` use elsewhere in the engine: a crash mid-write
+ * (more likely here than for a full scan, since this can fire on every field blur) must never
+ * leave `candidate-profile-v1.json` truncated, since there is no recovery path for a corrupt file.
+ * `profileVersion` is always stamped fresh here, never taken from the caller: `scoreActiveVacancies`
+ * keys its cached deterministic scores off this version, so a save that left it unchanged would let
+ * stale scores survive a profile edit.
  */
 ipcMain.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
   const patch = parseCandidateProfilePatch(rawPatch);
-  const path = await candidateProfilePath();
-  const current = await loadCandidateProfile(path);
-  const next: CandidateProfile = candidateProfileSchema.parse({
-    ...current,
-    ...patch,
-    constraints: { ...current.constraints, ...patch.constraints },
-    profileVersion: `candidate-profile-${Date.now()}`,
+  return withProfileSaveQueue(async () => {
+    const path = await candidateProfilePath();
+    const current = await loadCandidateProfile(path);
+    const next: CandidateProfile = candidateProfileSchema.parse({
+      ...current,
+      ...patch,
+      constraints: { ...current.constraints, ...patch.constraints },
+      profileVersion: nextProfileVersion(),
+    });
+    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    return next;
   });
-  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  return next;
 });
 
 /*

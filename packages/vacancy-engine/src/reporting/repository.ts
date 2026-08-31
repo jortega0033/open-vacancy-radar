@@ -433,7 +433,11 @@ export async function buildJobRadarReport(
     staleVacanciesExcluded: numericCount(staleVacancyCount?.count),
     duplicateVacanciesCollapsed: safeVacancyRows.length - reportVacancies.length,
     semanticScored: 0,
-    relevantVacancies: reportVacancies.length,
+    // `reportVacancies` already passed the minimumScore filter when the profile is configured (the
+    // query only applies that filter in that case), so its length is the relevant count. When the
+    // profile is unconfigured every discovered vacancy is included unscored, so none is "relevant"
+    // in the deterministic-relevance sense -- the same 0 the deterministicCandidates count uses.
+    relevantVacancies: profileConfigured ? reportVacancies.length : 0,
     excellentMatches: reportVacancies.filter((vacancy) => (vacancy.score ?? 0) >= 90).length,
     errorCount: Math.max(baseStatistics.errorCount, numericCount(errorCountRow?.count)),
     requestCount:
