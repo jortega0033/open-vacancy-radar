@@ -119,8 +119,13 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
             {...(isActive ? { 'aria-current': 'page' as const } : {})}
             onClick={() => onNavigate(item.id)}
             className={[
-              'btn btn-ghost btn-sm justify-start gap-2.5 font-medium',
-              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full',
+              'btn btn-ghost btn-sm gap-2.5 font-medium',
+              // `justify-start` and `justify-center` must never both be present at once: Tailwind
+              // resolves conflicting utilities by generated-CSS order, not by class-string order,
+              // so having both here left the collapsed icon pinned to the button's start edge
+              // instead of centered in its 44px `ovr-nav-icon` box, overriding daisyUI's own
+              // centered-by-default `.btn` layout.
+              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full justify-start',
               isActive ? 'bg-base-300 text-base-content' : 'text-base-content/70',
             ].join(' ')}
           >
