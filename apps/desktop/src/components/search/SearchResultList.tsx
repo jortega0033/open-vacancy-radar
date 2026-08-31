@@ -21,7 +21,11 @@ export interface SearchResultRowProps {
 }
 
 export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
-  const meta = [result.company, orNotStated(result.location), result.arrangement]
+  // Salary folds into the same line rather than always getting its own: it's absent for every
+  // Netherlands row and for most worldwide rows too (advertised only where the source states it),
+  // so a dedicated "Salary not published" line on nearly every row was a full row of noise, not
+  // information -- the filter bar's own salary note already sets that expectation once per market.
+  const meta = [result.company, orNotStated(result.location), result.arrangement, result.salary]
     .filter((part): part is string => !!part)
     .join(' · ');
 
@@ -44,7 +48,6 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
       </div>
 
       <div className="mt-0.5 text-xs text-base-content/60">{meta}</div>
-      <div className="mt-0.5 text-xs text-base-content/70">{result.salary ?? 'Salary not published'}</div>
 
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <span className="badge badge-outline badge-sm gap-1.5 font-normal">
