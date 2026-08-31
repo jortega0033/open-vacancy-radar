@@ -30,7 +30,7 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   return {
     role: job?.role ?? '',
     company: job?.company ?? '',
-    market: job?.market ?? 'netherlands',
+    market: job?.market ?? 'worldwide',
     location: job?.location ?? '',
     salary: job?.salary ?? '',
     arrangement: job?.arrangement ?? '',

@@ -106,12 +106,39 @@ export function SearchPage() {
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
-  const [market, setMarket] = useState<SearchMarket>('netherlands');
+  const [market, setMarket] = useState<SearchMarket>('worldwide');
   const [netherlandsReport, setNetherlandsReport] = useState<JobRadarReport | null>(null);
   const [worldwideReport, setWorldwideReport] = useState<GlobalRemoteReport | null>(null);
   // Markets whose stored report has already been read once. A pipeline that has never been run
   // legitimately answers `null`, so "did we ask?" cannot be inferred from the report state itself.
   const hydratedMarkets = useRef<Set<SearchMarket>>(new Set());
+  // Settings hydration is async, so the user can already have switched tabs by the time it lands.
+  // Restoring the persisted default at that point would yank them off the tab they deliberately
+  // picked, so hydration only ever sets the market if the user hasn't touched the tabs yet.
+  const hasSwitchedMarketRef = useRef(false);
+  // `market` starts at a placeholder ('worldwide') until the persisted default loads; the report
+  // hydration effect below must not read against that placeholder; otherwise a netherlands-default
+  // user would briefly, needlessly hit the worldwide report read before flipping to the real one.
+  const [marketResolved, setMarketResolved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        if (!hasSwitchedMarketRef.current) setMarket(settings.defaultMarket);
+      })
+      .catch(() => {
+        // default market ('worldwide', set above) already applies
+      })
+      .finally(() => {
+        if (!cancelled) setMarketResolved(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [hydrating, setHydrating] = useState(true);
   const [loadError, setLoadError] = useState<string>();
@@ -150,8 +177,11 @@ export function SearchPage() {
   }, []);
 
   // Hydrate the market's last report. Both branches are `getReport`-style reads of stored output;
-  // neither runs a scan, so opening the page costs nothing and shows what is already known.
+  // neither runs a scan, so opening the page costs nothing and shows what is already known. Waits
+  // for `marketResolved` so it never reads against the placeholder market from before settings load.
   useEffect(() => {
+    if (!marketResolved) return;
+
     if (hydratedMarkets.current.has(market)) {
       setHydrating(false);
       return;
@@ -184,7 +214,7 @@ export function SearchPage() {
     return () => {
       cancelled = true;
     };
-  }, [market]);
+  }, [market, marketResolved]);
 
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
@@ -287,6 +317,8 @@ export function SearchPage() {
   }, [hasReport, runScan]);
 
   const handleMarketChange = useCallback((next: SearchMarket) => {
+    hasSwitchedMarketRef.current = true;
+    setMarketResolved(true);
     setMarket(next);
     setFilters(keepTypedFilters);
     setSelectedKey(null);

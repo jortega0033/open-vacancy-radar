@@ -9,7 +9,7 @@ import type {
 import { SearchPage } from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
 import { installBridges } from '../../cv-bridges.js';
-import { installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+import { DEFAULT_SETTINGS, installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 
 function makeNetherlandsVacancy(overrides: Partial<ReportVacancy> = {}): ReportVacancy {
   return {
@@ -161,9 +161,15 @@ function makeWorldwideReport(
 /**
  * Every bridge the page (and the CV assistant it can open) touches, with the vacancy engine
  * reported ready. The interesting failure modes here are report-shaped, not engine-shaped.
+ *
+ * Most tests below exercise the Netherlands pipeline specifically and never touch the market
+ * tabs, so the persisted setting here is pinned to 'netherlands' rather than left at
+ * `installBridges()`'s own 'worldwide' default — a test-fixture choice, not a claim about what
+ * the app should default to for a real user.
  */
 function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): VacancyRadarBridge {
   installBridges();
+  installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultMarket: 'netherlands' }) });
   return installVacancyRadarBridge({
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
     ...overrides,
@@ -339,7 +345,10 @@ describe('SearchPage', () => {
       status: 'considering',
       savedAt: '2026-08-29T12:00:00.000Z',
     };
-    const workspace = installWorkspaceBridge({ createSavedJob: vi.fn().mockResolvedValue(created) });
+    const workspace = installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultMarket: 'netherlands' }),
+      createSavedJob: vi.fn().mockResolvedValue(created),
+    });
 
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument());
@@ -366,7 +375,10 @@ describe('SearchPage', () => {
     installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
     });
-    installWorkspaceBridge({ createSavedJob: vi.fn().mockRejectedValue(new Error('workspace database is locked')) });
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultMarket: 'netherlands' }),
+      createSavedJob: vi.fn().mockRejectedValue(new Error('workspace database is locked')),
+    });
 
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument());
