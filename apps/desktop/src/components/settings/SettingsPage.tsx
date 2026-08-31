@@ -152,9 +152,22 @@ export interface SettingsPageProps {
   onNavigateToRuntime?: () => void;
 }
 
+type SettingsTab = 'general' | 'search' | 'workspace' | 'advanced';
+
+const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: string }> = [
+  { id: 'general', label: 'General' },
+  { id: 'search', label: 'Search' },
+  { id: 'workspace', label: 'Workspace' },
+  { id: 'advanced', label: 'Advanced' },
+];
+
 export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<AppSettingsRecord | null>(null);
   const [loadError, setLoadError] = useState<string>();
+
+  // Plain local state, not persisted: like LettersPage's own tabs, nothing here needs to survive a
+  // restart, and always landing on General keeps "open Settings" a predictable, single behavior.
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   const [cvDocuments, setCvDocuments] = useState<CvDocumentRecord[]>([]);
   const [cvListError, setCvListError] = useState<string>();
@@ -380,243 +393,274 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
         Changes are saved automatically as you make them.
       </p>
 
-      <SettingsSection title="General">
-        <SettingsRow
-          label="Launch at login"
-          description="Start Open Vacancy Radar automatically when you sign in to this computer. The system entry is registered by installed builds; in development only the preference is stored."
-        >
-          <ToggleSwitch
-            label="Launch at login"
-            checked={settings.launchAtLogin}
-            disabled={disabled}
-            onChange={changeLaunchAtLogin}
-          />
-        </SettingsRow>
-        <SettingsRow label="Start page" description="The page shown when the app opens." htmlFor="setting-start-page">
-          <SettingsSelect
-            id="setting-start-page"
-            value={settings.startPage}
-            options={START_PAGE_OPTIONS}
-            disabled={disabled}
-            onChange={(startPage) => changeField({ startPage })}
-          />
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="Appearance">
-        <SettingsRow label="Theme" description="System follows the operating system's light/dark preference, live.">
-          <SegmentedControl
-            label="Theme"
-            value={settings.theme}
-            options={THEME_OPTIONS}
-            disabled={disabled}
-            onChange={(theme) => changeField({ theme })}
-          />
-        </SettingsRow>
-        <SettingsRow label="Density" description="Compact tightens list and table rows to fit more on screen.">
-          <SegmentedControl
-            label="Density"
-            value={settings.density}
-            options={DENSITY_OPTIONS}
-            disabled={disabled}
-            onChange={(density) => changeField({ density })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Sidebar on launch"
-          description="Whether the sidebar starts expanded, collapsed, or however you last left it."
-          htmlFor="setting-sidebar-start"
-        >
-          <SettingsSelect
-            id="setting-sidebar-start"
-            value={settings.sidebarStart}
-            options={SIDEBAR_START_OPTIONS}
-            disabled={disabled}
-            onChange={(sidebarStart) => changeField({ sidebarStart })}
-          />
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="Search defaults">
-        <SettingsRow
-          label="Default market"
-          description="Which of the two search pipelines a new search starts on."
-          htmlFor="setting-default-market"
-        >
-          <SettingsSelect
-            id="setting-default-market"
-            value={settings.defaultMarket}
-            options={MARKET_OPTIONS}
-            disabled={disabled}
-            onChange={(defaultMarket) => changeField({ defaultMarket })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Default location"
-          description="Pre-filled location filter for new searches. Leave empty for no filter."
-          htmlFor="setting-default-location"
-        >
-          <input
-            id="setting-default-location"
-            type="text"
-            className="input input-sm w-56"
-            placeholder="e.g. Amsterdam"
-            value={locationDraft}
-            disabled={disabled}
-            onChange={(event) => setLocationDraft(event.currentTarget.value)}
-            onBlur={commitLocation}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') commitLocation();
-            }}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Recognised sponsors only by default"
-          description="Netherlands searches start with the IND recognised-sponsor filter switched on."
-        >
-          <ToggleSwitch
-            label="Recognised sponsors only by default"
-            checked={settings.sponsorOnlyDefault}
-            disabled={disabled}
-            onChange={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
-          />
-        </SettingsRow>
-      </SettingsSection>
-
-      <SearchProfileSection />
-
-      <SettingsSection title="Market integrations">
-        <SettingsRow
-          label="Netherlands: IND recognised sponsor verification"
-          description="Source: IND Public Register · checks employers of Netherlands vacancies."
-        >
-          <ToggleSwitch
-            label="IND recognised sponsor verification"
-            checked={settings.indVerificationEnabled}
-            disabled={disabled}
-            onChange={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Netherlands job sources"
-          description="Recruitee, Greenhouse, Teamtailor, SmartRecruiters, Lever and mapped company career sites."
-        >
-          <span className="badge badge-outline badge-sm">Configured</span>
-        </SettingsRow>
-        <p className="ovr-row border-b border-base-300 text-xs text-base-content/60">
-          No market-specific employer verification is configured for Germany, Belgium, France, the
-          United Kingdom or the United States. Vacancy search, CV matching, letters and application
-          tracking still work for those markets.
-        </p>
-      </SettingsSection>
-
-      <SettingsSection title="Documents">
-        <SettingsRow
-          label="Default CV"
-          description={
-            cvListError
-              ? `The CV library could not be loaded: ${cvListError}`
-              : cvDocuments.length === 0
-                ? 'No CVs in the library yet. Add one on the CV page first.'
-                : 'Pre-selected CV for gap analysis and letter generation.'
-          }
-          htmlFor="setting-default-cv"
-        >
-          <SettingsSelect
-            id="setting-default-cv"
-            value={settings.defaultCvId ?? ''}
-            options={[
-              { value: '', label: 'No default' },
-              ...cvDocuments.map((cv) => ({ value: cv.id, label: cv.name })),
-            ]}
-            disabled={disabled || Boolean(cvListError) || cvDocuments.length === 0}
-            onChange={(next) => changeField({ defaultCvId: next === '' ? null : next })}
-          />
-        </SettingsRow>
-        <SettingsRow label="Default letter type" htmlFor="setting-letter-type">
-          <SettingsSelect
-            id="setting-letter-type"
-            value={settings.defaultLetterType}
-            options={LETTER_TYPE_OPTIONS}
-            disabled={disabled}
-            onChange={(defaultLetterType) => changeField({ defaultLetterType })}
-          />
-        </SettingsRow>
-        <SettingsRow label="Default letter tone" htmlFor="setting-letter-tone">
-          <SettingsSelect
-            id="setting-letter-tone"
-            value={settings.defaultLetterTone}
-            options={LETTER_TONE_OPTIONS}
-            disabled={disabled}
-            onChange={(defaultLetterTone) => changeField({ defaultLetterTone })}
-          />
-        </SettingsRow>
-        <SettingsRow label="Default letter length" htmlFor="setting-letter-length">
-          <SettingsSelect
-            id="setting-letter-length"
-            value={settings.defaultLetterLength}
-            options={LETTER_LENGTH_OPTIONS}
-            disabled={disabled}
-            onChange={(defaultLetterLength) => changeField({ defaultLetterLength })}
-          />
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="Applications">
-        <SettingsRow
-          label="Default status for new applications"
-          htmlFor="setting-application-status"
-        >
-          <SettingsSelect
-            id="setting-application-status"
-            value={settings.defaultApplicationStatus}
-            options={APPLICATION_STATUS_OPTIONS}
-            disabled={disabled}
-            onChange={(defaultApplicationStatus) => changeField({ defaultApplicationStatus })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Confirm before deleting"
-          description="Ask for confirmation before permanently deleting an application."
-        >
-          <ToggleSwitch
-            label="Confirm before deleting"
-            checked={settings.confirmApplicationDelete}
-            disabled={disabled}
-            onChange={(confirmApplicationDelete) => changeField({ confirmApplicationDelete })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Auto-archive rejected applications"
-          description="Move applications to the archive automatically when their status becomes Rejected."
-        >
-          <ToggleSwitch
-            label="Auto-archive rejected applications"
-            checked={settings.autoArchiveRejected}
-            disabled={disabled}
-            onChange={(autoArchiveRejected) => changeField({ autoArchiveRejected })}
-          />
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="AI runtime">
-        <SettingsRow
-          label="Runtime provider"
-          description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
-        >
-          <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
-            Manage in AI Runtime
+      <div role="tablist" className="tabs tabs-box mt-4 w-fit" aria-label="Settings sections">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            role="tab"
+            type="button"
+            className={`tab ${activeTab === tab.id ? 'tab-active' : ''}`}
+            aria-selected={activeTab === tab.id}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
           </button>
-        </SettingsRow>
-      </SettingsSection>
+        ))}
+      </div>
 
-      <DataManagement
-        busy={busy}
-        onRequestResetSettings={() => setConfirmTarget('settings')}
-        onRequestResetData={() => setConfirmTarget('data')}
-      />
+      {activeTab === 'general' && (
+        <>
+          <SettingsSection title="General">
+            <SettingsRow
+              label="Launch at login"
+              description="Start Open Vacancy Radar automatically when you sign in to this computer. The system entry is registered by installed builds; in development only the preference is stored."
+            >
+              <ToggleSwitch
+                label="Launch at login"
+                checked={settings.launchAtLogin}
+                disabled={disabled}
+                onChange={changeLaunchAtLogin}
+              />
+            </SettingsRow>
+            <SettingsRow label="Start page" description="The page shown when the app opens." htmlFor="setting-start-page">
+              <SettingsSelect
+                id="setting-start-page"
+                value={settings.startPage}
+                options={START_PAGE_OPTIONS}
+                disabled={disabled}
+                onChange={(startPage) => changeField({ startPage })}
+              />
+            </SettingsRow>
+          </SettingsSection>
 
-      <AboutSection />
+          <SettingsSection title="Appearance">
+            <SettingsRow label="Theme" description="System follows the operating system's light/dark preference, live.">
+              <SegmentedControl
+                label="Theme"
+                value={settings.theme}
+                options={THEME_OPTIONS}
+                disabled={disabled}
+                onChange={(theme) => changeField({ theme })}
+              />
+            </SettingsRow>
+            <SettingsRow label="Density" description="Compact tightens list and table rows to fit more on screen.">
+              <SegmentedControl
+                label="Density"
+                value={settings.density}
+                options={DENSITY_OPTIONS}
+                disabled={disabled}
+                onChange={(density) => changeField({ density })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Sidebar on launch"
+              description="Whether the sidebar starts expanded, collapsed, or however you last left it."
+              htmlFor="setting-sidebar-start"
+            >
+              <SettingsSelect
+                id="setting-sidebar-start"
+                value={settings.sidebarStart}
+                options={SIDEBAR_START_OPTIONS}
+                disabled={disabled}
+                onChange={(sidebarStart) => changeField({ sidebarStart })}
+              />
+            </SettingsRow>
+          </SettingsSection>
+        </>
+      )}
+
+      {activeTab === 'search' && (
+        <>
+          <SettingsSection title="Search defaults">
+            <SettingsRow
+              label="Default market"
+              description="Which of the two search pipelines a new search starts on."
+              htmlFor="setting-default-market"
+            >
+              <SettingsSelect
+                id="setting-default-market"
+                value={settings.defaultMarket}
+                options={MARKET_OPTIONS}
+                disabled={disabled}
+                onChange={(defaultMarket) => changeField({ defaultMarket })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Default location"
+              description="Pre-filled location filter for new searches. Leave empty for no filter."
+              htmlFor="setting-default-location"
+            >
+              <input
+                id="setting-default-location"
+                type="text"
+                className="input input-sm w-56"
+                placeholder="e.g. Amsterdam"
+                value={locationDraft}
+                disabled={disabled}
+                onChange={(event) => setLocationDraft(event.currentTarget.value)}
+                onBlur={commitLocation}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') commitLocation();
+                }}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Recognised sponsors only by default"
+              description="Netherlands searches start with the IND recognised-sponsor filter switched on."
+            >
+              <ToggleSwitch
+                label="Recognised sponsors only by default"
+                checked={settings.sponsorOnlyDefault}
+                disabled={disabled}
+                onChange={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
+              />
+            </SettingsRow>
+          </SettingsSection>
+
+          <SearchProfileSection />
+
+          <SettingsSection title="Market integrations">
+            <SettingsRow
+              label="Netherlands: IND recognised sponsor verification"
+              description="Source: IND Public Register · checks employers of Netherlands vacancies."
+            >
+              <ToggleSwitch
+                label="IND recognised sponsor verification"
+                checked={settings.indVerificationEnabled}
+                disabled={disabled}
+                onChange={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Netherlands job sources"
+              description="Recruitee, Greenhouse, Teamtailor, SmartRecruiters, Lever and mapped company career sites."
+            >
+              <span className="badge badge-outline badge-sm">Configured</span>
+            </SettingsRow>
+            <p className="ovr-row border-b border-base-300 text-xs text-base-content/60">
+              No market-specific employer verification is configured for Germany, Belgium, France, the
+              United Kingdom or the United States. Vacancy search, CV matching, letters and application
+              tracking still work for those markets.
+            </p>
+          </SettingsSection>
+        </>
+      )}
+
+      {activeTab === 'workspace' && (
+        <>
+          <SettingsSection title="Documents">
+            <SettingsRow
+              label="Default CV"
+              description={
+                cvListError
+                  ? `The CV library could not be loaded: ${cvListError}`
+                  : cvDocuments.length === 0
+                    ? 'No CVs in the library yet. Add one on the CV page first.'
+                    : 'Pre-selected CV for gap analysis and letter generation.'
+              }
+              htmlFor="setting-default-cv"
+            >
+              <SettingsSelect
+                id="setting-default-cv"
+                value={settings.defaultCvId ?? ''}
+                options={[
+                  { value: '', label: 'No default' },
+                  ...cvDocuments.map((cv) => ({ value: cv.id, label: cv.name })),
+                ]}
+                disabled={disabled || Boolean(cvListError) || cvDocuments.length === 0}
+                onChange={(next) => changeField({ defaultCvId: next === '' ? null : next })}
+              />
+            </SettingsRow>
+            <SettingsRow label="Default letter type" htmlFor="setting-letter-type">
+              <SettingsSelect
+                id="setting-letter-type"
+                value={settings.defaultLetterType}
+                options={LETTER_TYPE_OPTIONS}
+                disabled={disabled}
+                onChange={(defaultLetterType) => changeField({ defaultLetterType })}
+              />
+            </SettingsRow>
+            <SettingsRow label="Default letter tone" htmlFor="setting-letter-tone">
+              <SettingsSelect
+                id="setting-letter-tone"
+                value={settings.defaultLetterTone}
+                options={LETTER_TONE_OPTIONS}
+                disabled={disabled}
+                onChange={(defaultLetterTone) => changeField({ defaultLetterTone })}
+              />
+            </SettingsRow>
+            <SettingsRow label="Default letter length" htmlFor="setting-letter-length">
+              <SettingsSelect
+                id="setting-letter-length"
+                value={settings.defaultLetterLength}
+                options={LETTER_LENGTH_OPTIONS}
+                disabled={disabled}
+                onChange={(defaultLetterLength) => changeField({ defaultLetterLength })}
+              />
+            </SettingsRow>
+          </SettingsSection>
+
+          <SettingsSection title="Applications">
+            <SettingsRow
+              label="Default status for new applications"
+              htmlFor="setting-application-status"
+            >
+              <SettingsSelect
+                id="setting-application-status"
+                value={settings.defaultApplicationStatus}
+                options={APPLICATION_STATUS_OPTIONS}
+                disabled={disabled}
+                onChange={(defaultApplicationStatus) => changeField({ defaultApplicationStatus })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Confirm before deleting"
+              description="Ask for confirmation before permanently deleting an application."
+            >
+              <ToggleSwitch
+                label="Confirm before deleting"
+                checked={settings.confirmApplicationDelete}
+                disabled={disabled}
+                onChange={(confirmApplicationDelete) => changeField({ confirmApplicationDelete })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Auto-archive rejected applications"
+              description="Move applications to the archive automatically when their status becomes Rejected."
+            >
+              <ToggleSwitch
+                label="Auto-archive rejected applications"
+                checked={settings.autoArchiveRejected}
+                disabled={disabled}
+                onChange={(autoArchiveRejected) => changeField({ autoArchiveRejected })}
+              />
+            </SettingsRow>
+          </SettingsSection>
+        </>
+      )}
+
+      {activeTab === 'advanced' && (
+        <>
+          <SettingsSection title="AI runtime">
+            <SettingsRow
+              label="Runtime provider"
+              description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
+            >
+              <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
+                Manage in AI Runtime
+              </button>
+            </SettingsRow>
+          </SettingsSection>
+
+          <DataManagement
+            busy={busy}
+            onRequestResetSettings={() => setConfirmTarget('settings')}
+            onRequestResetData={() => setConfirmTarget('data')}
+          />
+
+          <AboutSection />
+        </>
+      )}
 
       {confirmTarget === 'settings' && (
         <ConfirmDialog

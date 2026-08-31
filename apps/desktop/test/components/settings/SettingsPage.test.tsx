@@ -32,6 +32,11 @@ function setup(overrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   return { bridge, system };
 }
 
+/** Settings is now tabbed (General/Search/Workspace/Advanced); a field only renders once its tab is active. */
+function openTab(name: 'General' | 'Search' | 'Workspace' | 'Advanced') {
+  fireEvent.click(screen.getByRole('tab', { name }));
+}
+
 function makeCv(id: string, name: string): CvDocumentRecord {
   return {
     id,
@@ -70,40 +75,49 @@ describe('SettingsPage', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Start page')).toHaveValue('applications'));
     expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
+
+    openTab('Search');
     expect(screen.getByLabelText('Default market')).toHaveValue('worldwide');
     expect(screen.getByLabelText('Default location')).toHaveValue('Amsterdam');
     expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
-    expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
     expect(screen.getByRole('switch', { name: 'IND recognised sponsor verification' })).toBeChecked();
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('renders exactly these sections, no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
-    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual([
+    const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
+    expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
+
+    const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headingsNow()).toEqual(['Settings', 'General', 'Appearance']);
+
+    openTab('Search');
+    expect(headingsNow()).toEqual([
       'Settings',
-      'General',
-      'Appearance',
       'Search defaults',
       'Netherlands search profile',
       'Market integrations',
-      'Documents',
-      'Applications',
-      'AI runtime',
-      'Data management',
-      'About',
     ]);
+
+    openTab('Workspace');
+    expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
+
+    openTab('Advanced');
+    expect(headingsNow()).toEqual(['Settings', 'AI runtime', 'Data management', 'About']);
   });
 
   it('offers exactly the two real markets, never a country list', async () => {
     setup();
     render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Search');
     const select = await screen.findByLabelText('Default market');
 
     const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
@@ -210,6 +224,8 @@ describe('SettingsPage', () => {
   it('saves the default location on blur, and only when it actually changed', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Search');
     const input = await screen.findByLabelText('Default location');
 
     fireEvent.blur(input); // unchanged, no save
@@ -229,6 +245,8 @@ describe('SettingsPage', () => {
     });
 
     render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Workspace');
     const select = await screen.findByLabelText('Default CV');
     await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3));
 
@@ -241,6 +259,8 @@ describe('SettingsPage', () => {
     setup({ listCvDocuments: vi.fn().mockResolvedValue([]) });
     render(<SettingsPage />);
 
+    await screen.findByLabelText('Start page');
+    openTab('Workspace');
     const select = await screen.findByLabelText('Default CV');
     expect(select).toBeDisabled();
     expect(screen.getByText(/no cvs in the library yet/i)).toBeInTheDocument();
@@ -261,6 +281,7 @@ describe('SettingsPage', () => {
       expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true'),
     );
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /reset settings/i }));
@@ -278,6 +299,7 @@ describe('SettingsPage', () => {
         }),
       ),
     );
+    openTab('General');
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true'),
     );
@@ -304,6 +326,7 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
@@ -325,6 +348,7 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
