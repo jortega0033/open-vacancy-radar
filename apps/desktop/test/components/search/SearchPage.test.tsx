@@ -502,6 +502,60 @@ describe('SearchPage', () => {
     expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeEnabled();
   });
 
+  it('a scan-failure Retry button re-runs the scan and clears the error on success', async () => {
+    const runNetherlandsScan = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network unreachable'))
+      .mockResolvedValueOnce(makeNetherlandsReport([makeNetherlandsVacancy()]));
+    installAllBridges({ runNetherlandsScan });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(runNetherlandsScan).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument());
+    expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0);
+  });
+
+  it('a report-load-failure Retry button re-attempts hydration for the current market', async () => {
+    const getNetherlandsReport = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('workspace database is locked'))
+      .mockResolvedValueOnce(makeNetherlandsReport([makeNetherlandsVacancy()]));
+    installAllBridges({ getNetherlandsReport });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText('workspace database is locked')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(getNetherlandsReport).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    expect(screen.queryByText('workspace database is locked')).not.toBeInTheDocument();
+  });
+
+  it('an engine-unavailable Retry button rechecks status and recovers once the engine reports ready', async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ ready: false, error: 'engine binary missing' } satisfies VacancyEngineStatus)
+      .mockResolvedValueOnce({ ready: true } satisfies VacancyEngineStatus);
+    installAllBridges({ getStatus });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/vacancy engine unavailable: engine binary missing/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText(/vacancy engine unavailable/i)).not.toBeInTheDocument(),
+    );
+  });
+
   it('saves the selected vacancy through the workspace IPC', async () => {
     installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
