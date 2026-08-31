@@ -272,7 +272,7 @@ describe('SettingsPage', () => {
           startPage: 'search',
           theme: 'system',
           density: 'comfortable',
-          defaultMarket: 'netherlands',
+          defaultMarket: 'worldwide',
           defaultCvId: null,
           confirmApplicationDelete: true,
         }),

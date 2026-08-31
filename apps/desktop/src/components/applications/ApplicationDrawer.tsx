@@ -89,7 +89,7 @@ export function ApplicationDrawer({
   savedJobs,
   cvDocuments,
   letters,
-  defaultMarket = 'netherlands',
+  defaultMarket = 'worldwide',
   onCancel,
   onSubmit,
 }: ApplicationDrawerProps) {

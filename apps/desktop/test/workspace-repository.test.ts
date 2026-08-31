@@ -35,7 +35,7 @@ describe('settings', () => {
     expect(settings.startPage).toBe('search');
     expect(settings.theme).toBe('system');
     expect(settings.density).toBe('comfortable');
-    expect(settings.defaultMarket).toBe('netherlands');
+    expect(settings.defaultMarket).toBe('worldwide');
     expect(settings.sidebarCollapsed).toBe(false);
   });
 

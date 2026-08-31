@@ -15,6 +15,13 @@
       "when": 1788082564345,
       "tag": "0001_misty_hobgoblin",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788168296035,
+      "tag": "0002_brainy_morgan_stark",
+      "breakpoints": true
     }
   ]
 }
