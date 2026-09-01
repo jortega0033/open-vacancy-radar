@@ -4,6 +4,7 @@ import {
   filterResults,
   countryOptions,
   isStalePosting,
+  sortResults,
   type SearchResult,
 } from '../../../src/components/search/results.js';
 import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
@@ -117,5 +118,84 @@ describe('isStalePosting', () => {
 
   it('is false for an unparseable date rather than throwing', () => {
     expect(isStalePosting('not-a-date', now)).toBe(false);
+  });
+});
+
+describe('sortResults', () => {
+  function sortableResult(overrides: {
+    key: string;
+    profileScore?: number | null;
+    postedAt?: string | null;
+    title?: string;
+  }): SearchResult {
+    return {
+      market: 'worldwide' as const,
+      raw: {} as never,
+      official: null,
+      key: overrides.key,
+      title: overrides.title ?? overrides.key,
+      company: 'Acme',
+      location: null,
+      url: 'https://example.com/job',
+      provider: 'jobicy',
+      arrangement: null,
+      arrangementValue: 'unknown',
+      employmentType: null,
+      salary: null,
+      postedAt: overrides.postedAt ?? null,
+      description: null,
+      verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
+      profileScore: overrides.profileScore ?? null,
+      strongPoints: [],
+      gaps: [],
+      reasons: [],
+      lead: { title: overrides.title ?? overrides.key, company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
+    };
+  }
+
+  it('sorts worldwide rows (no profile score) by most recently posted first', () => {
+    const results = [
+      sortableResult({ key: 'old', postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'new', postedAt: '2026-08-20T00:00:00.000Z' }),
+      sortableResult({ key: 'mid', postedAt: '2026-08-10T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual(['new', 'mid', 'old']);
+  });
+
+  it('sorts a row with an unknown posting date after every row with a known one', () => {
+    const results = [
+      sortableResult({ key: 'unknown', postedAt: null }),
+      sortableResult({ key: 'known', postedAt: '2026-08-01T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual(['known', 'unknown']);
+  });
+
+  it('falls back to title order when neither row has a posting date', () => {
+    const results = [
+      sortableResult({ key: 'b', title: 'Backend Engineer' }),
+      sortableResult({ key: 'a', title: 'Analyst' }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual(['a', 'b']);
+  });
+
+  it('ranks a higher profile score first (Netherlands), ahead of posting date', () => {
+    const results = [
+      sortableResult({ key: 'low-score-newer', profileScore: 40, postedAt: '2026-08-20T00:00:00.000Z' }),
+      sortableResult({ key: 'high-score-older', profileScore: 90, postedAt: '2026-08-01T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual(['high-score-older', 'low-score-newer']);
+  });
+
+  it('breaks a tied profile score by posting date', () => {
+    const results = [
+      sortableResult({ key: 'older', profileScore: 80, postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'newer', profileScore: 80, postedAt: '2026-08-20T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual(['newer', 'older']);
   });
 });
