@@ -409,13 +409,35 @@ export function filterResults(
   });
 }
 
-/** Netherlands rows arrive scored; worldwide rows have no score, so their report order is kept. */
+function postedAtTimestamp(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Highest profile score first (Netherlands only -- worldwide never scores a vacancy against the
+ * candidate profile), then most recently posted first among ties or scoreless rows, then title.
+ * A row with no known posting date sorts after every row that has one, never assumed recent.
+ */
 export function sortResults(results: SearchResult[]): SearchResult[] {
   return [...results].sort((left, right) => {
-    if (left.profileScore != null && right.profileScore != null) {
-      return right.profileScore - left.profileScore || left.title.localeCompare(right.title);
+    if (
+      left.profileScore != null &&
+      right.profileScore != null &&
+      left.profileScore !== right.profileScore
+    ) {
+      return right.profileScore - left.profileScore;
     }
-    return 0;
+    const leftPosted = postedAtTimestamp(left.postedAt);
+    const rightPosted = postedAtTimestamp(right.postedAt);
+    if (leftPosted !== null && rightPosted !== null && leftPosted !== rightPosted) {
+      return rightPosted - leftPosted;
+    }
+    if ((leftPosted === null) !== (rightPosted === null)) {
+      return leftPosted === null ? 1 : -1;
+    }
+    return left.title.localeCompare(right.title);
   });
 }
 

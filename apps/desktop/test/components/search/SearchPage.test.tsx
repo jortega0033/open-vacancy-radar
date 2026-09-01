@@ -275,6 +275,54 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
   });
 
+  it('picking "Netherlands" from the worldwide Country filter narrows the existing results instantly, without switching pipelines or scanning', async () => {
+    const bridge = installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([
+        makeWorldwideVacancy({ key: 'ww-nl', title: 'Frontend Engineer NL', location: 'Amsterdam, Netherlands' }),
+        makeWorldwideVacancy({ key: 'ww-de', title: 'Frontend Engineer DE', location: 'Berlin, Germany' }),
+      ])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    switchMarket('worldwide');
+    await waitFor(() => expect(screen.getAllByText('Frontend Engineer NL').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Frontend Engineer DE').length).toBeGreaterThan(0);
+    vi.mocked(bridge.getReport).mockClear();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Netherlands' } });
+
+    expect(screen.getAllByText('Frontend Engineer NL').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Frontend Engineer DE')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Netherlands');
+    // Still worldwide: no pipeline switch, no new report fetch, no scan -- a plain client-side filter.
+    expect(bridge.getReport).not.toHaveBeenCalled();
+    expect(bridge.getNetherlandsReport).toHaveBeenCalledTimes(1);
+    expect(bridge.runScan).not.toHaveBeenCalled();
+    expect(bridge.runNetherlandsScan).not.toHaveBeenCalled();
+  });
+
+  it('offers an explicit, separate switch to the Netherlands pipeline from worldwide, distinct from the Country filter', async () => {
+    const bridge = installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    switchMarket('worldwide');
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: /switch to netherlands/i }));
+
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Netherlands');
+    await waitFor(() => expect(screen.getAllByText('Senior Frontend Architect').length).toBeGreaterThan(0));
+    // Already hydrated once at mount, so switching back re-shows the same stored report rather
+    // than fetching again.
+    expect(bridge.getNetherlandsReport).toHaveBeenCalledTimes(1);
+  });
+
   it('seeds the country filter from the persisted default search location on first load', async () => {
     installBridges();
     installWorkspaceBridge({

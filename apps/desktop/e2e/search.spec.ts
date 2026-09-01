@@ -26,15 +26,16 @@ test.describe('Search', () => {
 
     // Netherlands-only filter chips must be absent on the default market ...
     await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toHaveCount(0);
-    // ... and the unified Country selector (there is no separate Market control any more; picking
-    // "Netherlands" from this same dropdown is what switches pipelines) is always offered.
+    // ... and the Country selector is always offered, as a plain filter -- picking "Netherlands"
+    // there narrows the worldwide report, it does not switch pipelines any more.
     const countrySelect = window.getByRole('combobox', { name: 'Country' });
     await expect(countrySelect).toBeVisible();
     await expect(countrySelect).toHaveValue('all');
 
-    // Picking "Netherlands" must swap in that pipeline's own empty-state copy (SALARY_NOTE and the
-    // EmptyState description are both keyed by market), not just relabel the selector.
-    await countrySelect.selectOption('Netherlands');
+    // The only way to reach the Netherlands/IND pipeline is the explicit, separate switch. It must
+    // swap in that pipeline's own empty-state copy (SALARY_NOTE and the EmptyState description are
+    // both keyed by market), not just relabel the selector.
+    await window.getByRole('button', { name: /switch to netherlands/i }).click();
 
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
     await expect(

@@ -444,11 +444,12 @@ export function SearchPage() {
   }, []);
 
   /**
-   * The filter bar's single country/pipeline selector. "Netherlands" is the one value that means
-   * something more than "filter the worldwide pipeline to this country": it switches the whole
-   * pipeline to the IND-recognised-sponsor one, immediately (not staged behind Search), the same
-   * way the old, now-removed Market selector worked -- picking a market/pipeline is a structural
-   * choice, unlike the other filter chips that wait for an explicit Search click.
+   * The filter bar's country selector: always a plain, instant, client-side filter over whatever
+   * is already loaded -- including "Netherlands", which used to hijack this control into switching
+   * the whole pipeline. Leaving the Netherlands *pipeline* for a specific country still has to
+   * switch to worldwide (that pipeline has no non-Dutch data at all), but arriving at "Netherlands"
+   * from worldwide no longer does the reverse; see `handleSwitchToNetherlandsPipeline` for the
+   * explicit, separate way to reach the IND-recognised-sponsor pipeline.
    */
   const handleLocationChange = useCallback(
     (value: string) => {
@@ -458,11 +459,8 @@ export function SearchPage() {
       // persisted default market, clobbering a selection the user already made.
       hasSwitchedMarketRef.current = true;
       setMarketResolved(true);
-      if (value === 'Netherlands') {
-        handleMarketChange('netherlands');
-        return;
-      }
-      if (market !== 'worldwide') {
+      if (market === 'netherlands') {
+        if (value === 'Netherlands') return;
         handleMarketChange('worldwide', value);
         return;
       }
@@ -471,6 +469,12 @@ export function SearchPage() {
     },
     [market, handleMarketChange],
   );
+
+  /** The one remaining, explicit way to reach the IND-recognised-sponsor pipeline: a deliberate
+   * action distinct from the Country filter, not a side effect of picking "Netherlands" there. */
+  const handleSwitchToNetherlandsPipeline = useCallback(() => {
+    handleMarketChange('netherlands');
+  }, [handleMarketChange]);
 
   // The one filter action that applies immediately, with no separate Search click: an explicit
   // reset is already a deliberate commitment, not a still-being-typed draft.
@@ -519,6 +523,7 @@ export function SearchPage() {
       <SearchFilterBar
         market={market}
         onLocationChange={handleLocationChange}
+        onSwitchToNetherlandsPipeline={handleSwitchToNetherlandsPipeline}
         filters={filters}
         onFiltersChange={handleFiltersChange}
         onSearch={handleSearch}
