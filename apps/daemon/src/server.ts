@@ -7,6 +7,24 @@ import { registerSessionRoutes } from './routes/sessions.js';
 import type { SessionManager } from './session-manager.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import type { McpConnectionManager } from './mcp/manager.js';
+import { registerV2ProviderRoutes } from './routes/v2-providers.js';
+import { registerV2SessionRoutes } from './routes/v2-sessions.js';
+import type { ActiveSessionLimiter } from './active-session-limiter.js';
+import type { SessionLineageStore } from './session-lineage-store.js';
+
+/**
+ * Present only when the daemon has a working durable store this run.
+ *
+ * Its absence is the whole downgrade mechanism: when `index.ts` cannot open the store (because it
+ * was written by a newer build), it omits this option, and the consequence is not a flag check
+ * scattered through handlers but the v2 routes never being registered at all. `GET /v2/...` then
+ * 404s through the ordinary not-found handler, and `/health` advertises `[1]`. There is no path by
+ * which a v2 route can exist without the store it reads from.
+ */
+export interface BuildServerV2Options {
+  store: SessionLineageStore;
+  limiter: ActiveSessionLimiter;
+}
 
 export interface BuildServerOptions {
   registry: ProviderRegistry;
@@ -14,6 +32,7 @@ export interface BuildServerOptions {
   token: string;
   logger: Logger;
   mcpManager?: McpConnectionManager;
+  v2?: BuildServerV2Options;
 }
 
 /**
@@ -58,10 +77,14 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
     }
   });
 
-  registerHealthRoute(app, startedAt);
+  registerHealthRoute(app, startedAt, { v2Enabled: !!opts.v2 });
   registerProviderRoutes(app, opts.registry);
   registerSessionRoutes(app, opts.sessionManager, opts.registry);
   if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
+  if (opts.v2) {
+    registerV2ProviderRoutes(app, opts.registry, opts.v2.limiter);
+    registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter);
+  }
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
     // Fastify's own body-parsing errors (malformed JSON, payload-too-large, ...) carry a real

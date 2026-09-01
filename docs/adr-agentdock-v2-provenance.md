@@ -292,6 +292,14 @@ retry could duplicate a side effect in the user's working directory. Persisting 
 restarts is **ADI-05's job**, and the ticket that does it should treat this paragraph as the
 requirement.
 
+**Closed by ADI-05.** `apps/daemon/src/session-lineage-store.ts` now persists accepted-work state
+across a restart, driven by the same `SessionLaunchProbe` seam described above, and
+`session-manager.ts` wires that seam on every session. See
+[ADI-05's section below](#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
+for what it records and for the one deliberate narrowing it makes: `'not_accepted'` is never written
+to disk, because it is a positive safety claim that stops being provable the moment a record exists
+at all.
+
 ### Limitation: `accountEvidence: 'cli_owned'` is not an account fingerprint
 
 `FrozenLaunchScope` carries the literal `accountEvidence: 'cli_owned'`. This is a documented
@@ -327,3 +335,134 @@ that rejection and reports it as `SupervisedOutcome.reaped: false` rather than r
 caller learns the working directory may still be occupied instead of receiving an exception it is
 likely to log and discard. Every pre-existing test in `packages/agent-runtime/test/`,
 `apps/daemon/test/`, and `apps/desktop/test/` passes unchanged against this.
+
+## ADI-05: durable session state, active-session limits, and the v2 read surface
+
+ADI-05 (issue #123) is the ticket the ADI-04 limitation note above pointed at: it makes
+accepted-work state survive a daemon restart. It also adds the first v2 HTTP surface this repo has,
+and the first admission control on session creation.
+
+Unlike ADI-03 and ADI-04, **this ticket is wired in**. `apps/daemon/src/index.ts` constructs the
+store and the limiter, `session-manager.ts` uses both on every session, and the v2 routes are
+registered whenever the store opened successfully. This is the first ADI change that alters the
+behavior of a live session, and the shipped-dormant pattern the previous two used no longer applied:
+a persistence layer with no caller persists nothing.
+
+### What was ported, and what was reinvented smaller
+
+| Area | Provenance |
+|---|---|
+| `apps/daemon/src/state-directory.ts` | **Ported in shape** from upstream's state-directory resolution (env override, then platform-native per-app-id root, 0700 creation). The product-database overlap guard is this repo's own: upstream has no `workspace.db`/`vacancy-engine.db` to collide with. App-id validation reuses `discovery-file.ts`'s existing `sanitizeAppId` rather than adding a second rule |
+| `apps/daemon/src/durable-store/atomic-fs.ts` | **Ported in shape**: the temp-write / fsync / rename / fsync-parent sequence and the quarantine-never-delete rule are upstream's mechanics. The short-write retry loop and the `assertContainedIn` traversal guard are additions |
+| `apps/daemon/src/session-lineage-store.ts` | **Reinvented, much smaller.** Upstream's equivalent is an execution-graph store built around interactive transports, mid-turn commands, and approval round-trips. This is a lineage-of-sessions store over the one transport this repo has, with the same durability contract and none of the graph |
+| `apps/daemon/src/persisted-session-schema.ts` | **New.** There is no upstream counterpart: upstream persists richer event payloads, and this repo's rule is that no event content reaches the disk at all |
+| `apps/daemon/src/active-session-limiter.ts` | **New.** Upstream's concurrency control is bound up with its session facade; this is a standalone, synchronous admission gate |
+| `apps/daemon/src/routes/v2-providers.ts`, `routes/v2-sessions.ts`, `v2-legacy-provider.ts` | **Reinvented, much smaller.** Read-only projections over v1 data, with none of upstream's capability catalog |
+| `packages/shared/src/session-v2.ts` | **New**, and deliberately not a port of upstream's `protocol-v2.ts` (see below) |
+
+### What was explicitly deferred, and why
+
+- **`POST /v2/sessions`.** Creating a session over v2 means accepting a capability-negotiation
+  request schema. This repo has `capabilities-v2.ts` and `negotiation-v2.ts` from ADI-02, but no
+  reviewed *request* shape for "start a session with these negotiated capabilities" — and inventing
+  one inside a persistence ticket would freeze a public contract nobody scoped. Session creation
+  stays on `POST /sessions` (v1), which now carries an optional `protocolVersion` internally so a
+  future v2 create path shares one active-session budget with v1 rather than getting its own.
+- **`v2-session-facade.ts` and `provider-v2.ts`.** Both exist upstream to mediate between rich
+  transports and the store. With exactly one transport (`legacy-one-shot`) there is nothing to
+  mediate, and `v2-legacy-provider.ts` — roughly seventy lines mapping a `ProviderStatus` plus a
+  compatibility-manifest lookup into a read view — covers everything a read-only client can act on.
+- **Upstream's `protocol-v2.ts`.** `session-v2.ts` models only the *read view* the five shipped
+  routes return. Importing upstream's full v2 protocol would have brought a session-creation
+  vocabulary with no producer, no consumer, and no test able to distinguish a correct implementation
+  from a plausible one.
+
+### ADI-04's accepted-work handoff is now closed
+
+The "Limitation: accepted-work state is in memory only" section above records the gap this ticket
+was asked to close: `AcceptedWorkLatch` lived in the supervisor object, and a crash lost it, leaving
+a recovered session unable to say whether its provider had already been handed the prompt.
+
+That is now resolved, with one deliberate narrowing. On disk, `acceptedWork` has only **two**
+values, not three: `'unknown'` and `'accepted'`. `'not_accepted'` is structurally absent, and its
+absence is the safety property. `'not_accepted'` is a positive claim that nothing was delivered and
+retrying is safe, and the only moment that claim is provable is *before the record exists at all* --
+by the time a record is on disk the daemon has already committed to launching, and a crash in the
+next microsecond leaves nobody able to prove the prompt did not reach the CLI. So a record is
+created `'unknown'` (fail-closed) and the single permitted transition is `unknown -> accepted`,
+driven by the same `SessionLaunchProbe` seam ADI-04 added. Recovery carries the value across
+verbatim and never downgrades it.
+
+`session-manager.ts` wires the probe directly rather than going through
+`superviseProviderSession()`. The supervisor's remaining machinery — the fallback gate, the frozen
+scope comparison — still has no daemon-side consumer, and routing every live session through it to
+reach one latch would have changed far more of the running system than this ticket needed. Wiring
+the full supervisor in remains a later ticket; the seam it introduced is what made this one small.
+
+The unknown-frame ledger is the one piece of that machinery the daemon does now consume, and it
+consumes it the same way: `SessionManager` builds its own `UnknownFrameLedger` per session and
+feeds it from the probe's `onUnknownFrame` callback, then writes `ledger.entries()` into the record
+immediately before finalizing it. That keeps the persisted `unknownFrames` field honest (it was
+otherwise designed, schema'd, and served by the v2 read routes while being permanently empty)
+without a second copy of the bounding and hashing rules that make the field safe to store at all.
+
+### Two stop conditions, both proven rather than asserted
+
+1. **No event content on disk.** Enforced three ways: a `never` check in `redactEnvelope`'s default
+   branch (a new `AgentEvent` variant without a redaction rule is a compile error), a runtime test
+   that extracts the literal `type` values out of `agentEventEnvelopeSchema` and requires the
+   redactor's covered set to match exactly, and `.strict()` Zod schemas that reject a record
+   carrying `prompt` or `error`. A sentinel sweep fills every string field of every variant with a
+   unique marker, runs it through the real store, and greps the entire on-disk tree.
+
+   Digesting is not the only mechanism, because not every kept field *can* be digested. `model`,
+   `providerSessionId`, and `toolCallId` are identifiers a reader acts on, so they are kept — and
+   therefore **byte-capped at 256**, everywhere they are copied, exactly as `status` and `toolName`
+   already were. A field that is kept verbatim and unbounded is a place to put content, however
+   short its legitimate values are; the sentinel sweep covers these three too, asserting the
+   oversized value is truncated to its cap rather than merely absent.
+2. **A future schema version mutates nothing.** The store's constructor runs a read-only preflight
+   before creating a directory or opening any file for writing.
+   `session-lineage-store.schema.test.ts` asserts this with a recursive content+mtime snapshot
+   *and* with `node:fs` spies showing zero write, rename, or unlink calls — including in the case
+   where corruption is present alongside the future version, where the corrupt file must be left
+   un-quarantined because quarantining is itself a mutation.
+
+   The preflight's coverage is defined by what the *rest of startup* would touch, not by what is
+   convenient to parse: the manifest, every record, every tombstone, every stray `.tmp`, every
+   `events/*.jsonl`, and everything staged under `.trash/`. The last two are the ones a
+   `schemaVersion`-only sweep misses. An event log carries `v` per line rather than a top-level
+   `schemaVersion`, and a newer build's lines would fail *this* build's line schema — which
+   `#repairEventLog` would read as a torn tail and rewrite. A `.trash/` entry is an eviction the
+   newer build had not committed, which recovery either renames back into `lineages/` or deletes
+   outright. Both are mutations on state belonging to software this build does not understand, so
+   both are now scanned first. Lines that merely fail to parse, or that carry no numeric `v`, are
+   deliberately *not* treated as a version conflict: that is ordinary corruption, and the corruption
+   path is where it belongs.
+
+### The event counter keeps its meaning past the truncation cap
+
+`eventCount` is documented to answer "how many events did this session emit", which is a different
+question from "how many lines are on disk" — the pair `eventCount: 40000, eventsTruncated: true`
+means something a line count cannot say. Below the 5,000-line cap the record is only checkpointed
+(at the truncation flip, accepted-work, scope refinement, finalization) and recovery reconciles with
+`max(persisted eventCount, lines on disk)`, because the log is durable per line and can speak for
+the counter.
+
+Above the cap that stops being true: no line is appended, so `max(...)` would freeze at exactly
+5,000 forever no matter how many more events arrived, collapsing the distinction back into the line
+count. So every *suppressed* event now checkpoints the record. The cost lands only on a session that
+has already persisted 5,000 events, and it replaces an append to a growing log with a replace of one
+small fixed-size record; the common case is untouched.
+
+### Known limitation: the state-directory overlap guard is not enforced for the daemon's own default
+
+`resolveStateDirectory` refuses a state root that overlaps `workspace.db` or `vacancy-engine.db` --
+but only for a caller that can name those paths. The daemon cannot: both live under Electron's
+`app.getPath('userData')`, which is not resolvable from a plain Node process. What actually keeps
+them apart in the shipped app is `apps/desktop/electron/main.ts` setting `AGENT_DOCK_STATE_DIR` to a
+dedicated `agentdock-state/` subdirectory. `open-durable-store.ts` passes no reserved paths and says
+so in a comment rather than inventing a check against guessed paths, which would look like
+protection while verifying nothing. Closing this properly needs the desktop app to pass its database
+paths to the daemon explicitly; that is a real gap this ticket leaves open, not one it claims to
+close.

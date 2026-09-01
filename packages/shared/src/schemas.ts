@@ -159,9 +159,11 @@ export const healthResponseSchema = z
     status: z.literal('ok'),
     uptimeSeconds: z.number(),
     protocolVersion: z.number(),
-    /** Absent from a pre-v2 daemon (including this repo's own daemon today, which has no v2 routes
-     * to advertise). A daemon that adds v2 routes emits `[1, 2]` here; `protocolVersion` above stays
-     * `1` forever regardless, so an old client reading only that field never sees a change. */
+    /** Absent from a pre-v2 daemon; still optional so a client can validate one. This repo's own
+     * daemon reports `[1, 2]` when its durable session store opened and the v2 read routes are
+     * mounted, and `[1]` when it fell back to memory-only operation (ADI-05). `protocolVersion`
+     * above stays `1` forever regardless, so an old client reading only that field never sees a
+     * change. */
     supportedProtocolVersions: supportedProtocolVersionsSchema.optional(),
   })
   .superRefine((health, ctx) => {

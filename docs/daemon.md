@@ -78,10 +78,10 @@ another app id's daemon, since they're different files. See
 
 | Route | Auth | Behavior |
 |---|---|---|
-| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion }` -- this daemon has no v2 routes, so it never adds the optional `supportedProtocolVersions` field a v1/v2 daemon would (see [protocol-v1.md](protocol-v1.md)) |
+| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion, supportedProtocolVersions }`. `protocolVersion` is frozen at `1` forever; `supportedProtocolVersions` is `[1, 2]` when the durable store opened, and `[1]` when it did not (see [v2 read routes](#v2-read-routes) and [protocol-v1.md](protocol-v1.md)) |
 | `GET /providers` | required | `{ providers: ProviderStatus[] }`: runs each adapter's `detect()` |
 | `GET /providers/:providerId` | required | One `ProviderStatus`, or `404` for an unregistered id |
-| `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, or a `cwd` that doesn't exist. `201` + `AgentSession` on success |
+| `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, or a `cwd` that doesn't exist. `409` when the [active-session limit](#active-session-limits) is reached, `507` when the session store has no room. `201` + `AgentSession` on success |
 | `GET /sessions/:sessionId` | required | Current `AgentSession` record, or `404` |
 | `GET /sessions/:sessionId/events` | required | SSE stream (see [Event history and replay](#event-history-and-replay) below) |
 | `POST /sessions/:sessionId/cancel` | required | `202` + `{ status: 'cancelling' }`. `404` for an unknown id **or** a session that's already terminal: cancelling a finished session is never reported as a success |
@@ -95,6 +95,62 @@ never a stack trace. See the full request-validation and error-handler behavior 
 
 Wire shapes (route bodies, the `AgentEvent`/`AgentEventEnvelope` format) are documented in
 [protocol-v1.md](protocol-v1.md), not duplicated here.
+
+### v2 read routes
+
+ADI-05 adds five **read-only** routes, registered only when the durable session store opened
+successfully (see [Durable session state](#durable-session-state) below). When it did not, none of
+them exist and every path below returns the ordinary `404`.
+
+| Route | Behavior |
+|---|---|
+| `GET /v2/providers` | `{ schemaVersion: 1, providers: [...] }`: the v1 `detect()` result plus the transport id, whether the installed CLI version is in the reviewed compatibility manifest, its accepted-work boundary, and current capacity |
+| `GET /v2/providers/:providerId` | One provider view. `400 { code: 'invalid_provider_id' }` for a malformed id, `404 { code: 'provider_not_found' }` for a well-formed but unregistered one |
+| `GET /v2/sessions?cursor=&limit=` | `{ schemaVersion: 1, sessions, nextCursor?, capacity }`, newest-first. Default `limit` 50, maximum 100. `400 { code: 'invalid_cursor' }` for a malformed cursor or one addressing an evicted record |
+| `GET /v2/sessions/:sessionId` | One session view, or `404 { code: 'session_not_found' }` |
+| `GET /v2/sessions/:sessionId/events?cursor=&limit=` | A **JSON page** of the durable, redacted event log -- not an SSE stream. The live v1 stream at `GET /sessions/:id/events` is unchanged and remains the way to watch a session in progress |
+
+There is deliberately **no `POST /v2/sessions`**, no `DELETE`, and no v2 cancel. Creating a session
+over v2 means accepting a capability-negotiation request shape this repo does not have, and
+inventing one here would freeze a public request contract nobody has reviewed. Session creation and
+control stay on the v1 routes. See
+[the ADR](adr-agentdock-v2-provenance.md#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
+for the full deferral note.
+
+### Active session limits
+
+A session is one provider CLI process spawned into the user's working directory, so the daemon caps
+how many may run at once: **4 globally, 2 per provider**
+(`ACTIVE_SESSION_LIMITS` in `apps/daemon/src/active-session-limiter.ts`). Exceeding either returns
+`409`:
+
+```json
+{
+  "error": "too many active sessions",
+  "code": "active_session_limit",
+  "scope": "global",
+  "capacity": { "global": { "active": 4, "limit": 4 }, "provider": { "active": 2, "limit": 2 } }
+}
+```
+
+`scope` is `"global"` when the machine-wide cap is what refused the request and `"provider"` when
+only that provider's bucket is full -- the global check runs first, because "switch providers" is
+useless advice when the machine itself is at capacity.
+
+A refused request leaves **no trace**: the reservation is taken before any durable record is written
+and before `startSession` is called, so nothing was spawned and nothing needs cleaning up. The
+reservation is returned in `SessionManager.consume()`'s `finally`, which is the single release site
+covering every terminal path -- completion, failure, cancellation, `DELETE`, `cancel-all`, shutdown,
+a provider generator that throws, and an abandoned stream.
+
+The check-then-reserve step is synchronous and contains no `await`, which is what makes it
+un-raceable on Node's single thread: no second request can observe the counters between the check
+and the increment. `apps/daemon/test/server.limits.test.ts` proves this with genuinely concurrent
+HTTP requests parked inside the route's real `await providerImpl.detect()`.
+
+`507 { code: 'storage_full' }` is the other refusal: the durable store's retention budget is
+exhausted and every remaining lineage is still active, so there is nothing evictable. Like the
+`409`, it is raised before anything irreversible happens.
 
 ## Session lifecycle: SessionManager, SessionStore
 
@@ -116,18 +172,110 @@ interface SessionStore {
 }
 ```
 
-`MemorySessionStore` is the only implementation and the daemon's default, fully synchronous (so is
-the interface), and **sessions do not survive a daemon restart**. Persistence is explicitly out of
-scope for this milestone: swapping in a real store (e.g. a future `SQLiteSessionStore`) should only
-require implementing this interface, not touching `SessionManager`'s lifecycle logic, but the
-interface would likely need to become `async` at that point, a deliberately larger change left for
-when it's actually needed.
+`MemorySessionStore` is the only implementation of this interface and remains the daemon's live
+source of truth for the v1 `AgentSession` shape, fully synchronous (so is the interface).
 
 The store owns only the `AgentSession` record. A session's live process handle (an
 `AsyncGenerator` plus a `cancel()` closure, not serializable at all) and its buffered event
 history are kept as separate, non-persistable runtime state inside `SessionManager`, specifically
 so `SessionStore` never grows into an accidental event-history database with its own
 schema-design questions.
+
+## Durable session state
+
+ADI-05 adds a second, *parallel* store rather than a persistent `SessionStore` implementation:
+`SessionLineageStore` (`apps/daemon/src/session-lineage-store.ts`). The two answer different
+questions, which is why neither replaced the other -- `MemorySessionStore` answers "what is this
+session doing right now, in v1's vocabulary", and the lineage store answers "what happened, and is
+it safe to run it again".
+
+### What it is for
+
+The one question it exists to answer across a crash is **whether the provider had already been
+handed the user's prompt**. A session interrupted by a restart is otherwise indistinguishable from
+one that never started, and an automatic retry of work that already ran duplicates a side effect in
+the user's own working directory. This closes the gap ADI-04 left open explicitly (see
+[the ADR](adr-agentdock-v2-provenance.md#limitation-accepted-work-state-is-in-memory-only)).
+
+### Where it lives
+
+Under `AGENT_DOCK_STATE_DIR` when set (the desktop app sets it to
+`<userData>/agentdock-state`), otherwise the platform's per-user application-data root for the app
+id: `%LOCALAPPDATA%\<appId>` on Windows, `~/Library/Application Support/<appId>` on macOS,
+`$XDG_STATE_HOME/<appId>` elsewhere. `resolveStateDirectory` refuses any root that overlaps a
+product database path, so the store can never be carried off by a backup, a migration, or a
+workspace reset.
+
+```
+<stateRoot>/sessions-v1/
+  manifest.json                     {"schemaVersion":1}
+  lineages/<rootSessionId>/
+    records/<sessionId>.json        session metadata, atomically replaced
+    events/<sessionId>.jsonl        one redacted event per line, append-only
+  tombstones/<rootSessionId>.json   the commit record of an eviction
+  quarantine/                       anything corrupt. Never auto-deleted
+  .trash/                           two-phase eviction staging only
+```
+
+### What is never written
+
+No event content, ever: prompt text, assistant messages, thinking deltas, tool inputs and results,
+and error messages are all replaced by a `{ bytes, sha256 }` pair before anything reaches the disk.
+This is enforced structurally, not by convention -- see
+`apps/daemon/src/persisted-session-schema.ts` for the exhaustive switch (adding an `AgentEvent`
+variant without a redaction rule is a compile error) and
+`apps/daemon/test/persisted-session-schema.test.ts` for the runtime coverage check and the
+sentinel sweep over the whole on-disk tree.
+
+Three identifiers *are* kept verbatim, because a reader acts on them: `model`, `providerSessionId`,
+and `toolCallId`. All three are **capped at 256 UTF-8 bytes** on the way in (the same treatment
+`status` and `toolName` already got), everywhere they are copied -- into an event line, into the
+session record, and in the store's own `setProviderSessionId`. A real value is a handful of bytes,
+so the cap costs nothing legitimate; what it removes is the one route by which an oversized value
+from a provider's stdout, or from a client request body, could park content in a store whose whole
+point is that it holds none.
+
+The bounded, content-free `unknownFrames` ledger (one `{kind, eventType, bytes, sha256,
+occurrences}` entry per distinct kind of provider output this repo could not interpret, never the
+line itself) is written into the record when a session reaches a terminal state.
+
+### Restart recovery
+
+Recovery runs **synchronously in the store's constructor**, which `index.ts` calls before
+`buildServer()` and `app.listen()`. "Recovery finishes before the daemon accepts new work" is
+therefore structural rather than a convention: the server cannot exist until the constructor
+returns.
+
+A session found `starting`/`running` with no terminal event in its log gets a synthetic
+`session.interrupted` event and is recorded as `status: 'interrupted'`,
+`terminalReason: 'daemon_restart'`. Its `acceptedWork` is carried across **verbatim** and is never
+downgraded. `'interrupted'` exists only in v2's vocabulary; a v1 client reading
+`GET /sessions/:id` sees `status: 'failed'` with
+`error: "daemon restarted before the session completed"`.
+
+### Corruption, retention, and future versions
+
+- **Corrupt metadata record** → the whole lineage is quarantined (a half-loaded lineage would serve
+  a record whose parent link points at a session the store cannot describe). Siblings are
+  unaffected.
+- **Torn or out-of-order event tail** → the log is truncated to its last good line and the removed
+  bytes are quarantined separately. The lineage survives.
+- **Nothing is ever deleted by corruption handling.** Quarantine is a move, not a delete.
+- **Retention**: 30 days, 500 records, or 64 MB, whichever binds first, evicting whole lineages
+  oldest-terminal-first. An active lineage is never evicted. Eviction is two-phase -- rename into
+  `.trash/`, write the tombstone (**the commit point**), delete the trashed copy -- so an interrupted
+  eviction is either rolled back or completed on the next start, never left half-done.
+- **Event log past 5,000 lines** → further events are counted but not stored (`eventsTruncated`
+  flips to `true`). Because the log can no longer speak for the counter, every suppressed event
+  checkpoints the record's `eventCount`, so a crash after the cap recovers the true count rather
+  than the frozen line count.
+- **A future schema version anywhere** → a read-only preflight throws before any directory is
+  created or any file opened for writing, the daemon logs it and starts on the memory store alone,
+  and the newer state is left byte-identical. "Anywhere" covers the manifest, every record, every
+  tombstone, every `events/*.jsonl` line (which carries `v`, not `schemaVersion`), any stray `.tmp`
+  beside either, and everything staged under `.trash/` -- each of which a later startup step would
+  otherwise quarantine, rewrite, restore, or delete. See
+  [the rollback runbook](rollback-runbook-agentdock-v2.md#agentdock-state-the-v2-durable-session-store-adi-05).
 
 ## Event history and replay
 
@@ -163,6 +311,12 @@ oldest (and its `AgentSession` record with it) once a 51st completes. This is a 
 a cache-replacement policy: the daemon is local and single-user, and a bound that's simple to
 reason about was preferred over one that's optimal. `DELETE /sessions/:id` removes a session
 immediately regardless of this cap, and removes it from the retention tracking too.
+
+Sessions recovered from the durable store at startup enter the same FIFO, in completion order, and
+are trimmed by the same pass -- otherwise a store holding its full 500-record budget would seed all
+500 into memory and keep them for the daemon's lifetime, reaching the exact unbounded growth this
+cap exists to prevent by way of a restart. The trim is in-memory only: durable retention is a
+separate and deliberately more permissive policy, so nothing leaves the disk.
 
 `SessionManager.cancel()` also refuses to report success for a session that's already terminal
 (see the routes table above), so a stale UI action against a long-finished session gets `404`, not

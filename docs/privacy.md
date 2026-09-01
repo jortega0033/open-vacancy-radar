@@ -20,6 +20,32 @@ Everything the app stores lives in Electron's per-user application-data director
 - **`.cache/http`**: a local HTTP response cache for the vacancy-discovery pipeline, to avoid
   re-fetching the same public pages repeatedly. Contains fetched public job-listing pages, not
   personal data.
+- **`agentdock-state/`**: the runtime's durable record of AI CLI *sessions* — see the next section
+  for exactly what it does and does not contain.
+
+### `agentdock-state/`: session history without session content
+
+When the app runs an AI CLI session (gap analysis, letter drafting), the local runtime daemon keeps
+a small durable record of that session so it can answer one specific question after a crash or
+restart: **had the CLI already been handed your prompt?** Without that record, a session interrupted
+by a restart is indistinguishable from one that never started, and an automatic retry could run the
+same work twice in your working directory.
+
+What it holds, per session: the session id, which provider and model ran, the working directory, the
+start and end timestamps, the final status, and a per-event line recording the event's *type*, its
+sequence number, its timestamp, and — for any event that carried content — the content's **byte
+length and SHA-256 hash**.
+
+What it never holds: your prompt text, the assistant's replies, reasoning text, tool inputs or
+outputs, or error messages. Those fields are replaced by the length-and-hash pair before anything is
+written, structurally rather than by convention — the on-disk record has no field they could be
+stored in, and the daemon's own tests fail the build if any event type is added without a redaction
+rule for it. A SHA-256 hash cannot be reversed into the text it came from; it exists so two reports
+of the same unexplained output can be recognized as the same one.
+
+It lives in its own subdirectory, deliberately separate from `workspace.db` and `vacancy-engine.db`,
+and the daemon refuses to start its store in any directory that overlaps them — so a backup, a
+database migration, or a workspace reset can never take it along by accident.
 
 None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
 plain SQLite file on your own disk, readable by anything running as your OS user, same as any other
@@ -64,6 +90,12 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   uninstaller does and does not remove from `%APPDATA%`.
 - **MCP credentials**: removed via the app's own "disconnect provider" action, which calls the same
   OS-credential-store deletion described in SECURITY.md — not simply left behind by uninstalling.
+- **Session history (`agentdock-state/`)**: pruned automatically, oldest-first, on every daemon
+  start. Three bounds apply and whichever is reached first wins: **30 days**, **500 retained
+  sessions**, or **64 MB**. A session that is still running is never pruned, and pruning removes a
+  session together with any sessions resumed from it rather than leaving a broken chain. Deleting
+  the `agentdock-state/` directory yourself is safe at any time the app is closed: it holds no
+  personal data and nothing in the app reads it except the restart-recovery check described above.
 
 ## What this project cannot promise
 

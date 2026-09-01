@@ -9,8 +9,10 @@ import {
   writeDiscoveryFile,
 } from './discovery-file.js';
 import { buildProviderRegistry } from './providers.js';
-import { buildServer } from './server.js';
+import { buildServer, type BuildServerV2Options } from './server.js';
 import { SessionManager } from './session-manager.js';
+import { ActiveSessionLimiter } from './active-session-limiter.js';
+import { openDurableStore } from './open-durable-store.js';
 import type { McpCredentialStore } from './mcp/types.js';
 import { OsMcpCredentialStore } from './mcp/credential-store.js';
 import { McpConnectionManager } from './mcp/manager.js';
@@ -40,12 +42,15 @@ async function main() {
   const appId = process.env.AGENT_DOCK_APP_ID?.trim() || DEFAULT_APP_ID;
   assertNoLiveDaemon(appId);
   const registry = buildProviderRegistry(logger);
-  const sessionManager = new SessionManager(registry, logger);
+  const limiter = new ActiveSessionLimiter();
+  const durable = openDurableStore(appId, logger);
+  const sessionManager = new SessionManager(registry, logger, undefined, limiter, durable);
   const token = generateToken();
   const mcpCredentials = new OsMcpCredentialStore();
   const mcpManager = buildMcpManager(mcpCredentials, logger);
 
-  const app = buildServer({ registry, sessionManager, token, logger, mcpManager });
+  const v2: BuildServerV2Options | undefined = durable ? { store: durable, limiter } : undefined;
+  const app = buildServer({ registry, sessionManager, token, logger, mcpManager, ...(v2 ? { v2 } : {}) });
 
   const requestedPort = Number(process.env.AGENT_DOCK_PORT ?? '0');
   await app.listen({ port: requestedPort, host: '127.0.0.1' });

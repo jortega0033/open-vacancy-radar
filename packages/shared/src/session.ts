@@ -9,8 +9,12 @@ export type SessionStatus = 'starting' | 'running' | 'completed' | 'failed' | 'c
  * `POST /sessions` request to continue that thread, for providers whose `capabilities.resume` is
  * true (see docs/providers.md#provider-capabilities).
  *
- * Sessions live behind the daemon's SessionStore (in-memory by default, see
- * docs/daemon.md#session-lifecycle-sessionmanager-sessionstore) and do not survive a daemon restart.
+ * Sessions live behind the daemon's SessionStore (in-memory, see
+ * docs/daemon.md#session-lifecycle-sessionmanager-sessionstore). A daemon with the v2 durable store
+ * enabled (ADI-05) additionally recovers a session that was still running when it stopped, and
+ * presents it here as `status: 'failed'` with an explanatory `error` -- v1's status vocabulary has
+ * no `interrupted` member and is frozen, so that is the nearest honest projection. The richer state
+ * is available on the v2 read routes; see docs/daemon.md#durable-session-state.
  */
 export interface AgentSession {
   id: string;
