@@ -175,6 +175,9 @@ export type DiscoveryVacancyAudit = {
   /** Null where the source's raw response carried no description text at all (not every worldwide
    * feed does), never an empty string standing in for "missing". */
   description: string | null;
+  /** Null where the source's raw response carried no posting date at all. Never derived or
+   * estimated -- a wrong staleness signal is worse than an honestly absent one. */
+  postedAt: string | null;
 };
 
 export type DiscoverySourceAudit = {

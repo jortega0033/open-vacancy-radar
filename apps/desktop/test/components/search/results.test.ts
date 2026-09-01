@@ -3,6 +3,7 @@ import {
   DEFAULT_FILTERS,
   filterResults,
   countryOptions,
+  isStalePosting,
   type SearchResult,
 } from '../../../src/components/search/results.js';
 import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
@@ -96,5 +97,25 @@ describe('countryOptions', () => {
     expect(options).toContain('Netherlands');
     expect(options).toContain('United States');
     expect(options[options.length - 1]).toBe(UNSPECIFIED_LOCATION);
+  });
+});
+
+describe('isStalePosting', () => {
+  const now = new Date('2026-09-01T00:00:00.000Z');
+
+  it('is false for an unknown posting date -- absence is never treated as staleness', () => {
+    expect(isStalePosting(null, now)).toBe(false);
+  });
+
+  it('is false for a posting within the last 30 days', () => {
+    expect(isStalePosting('2026-08-15T00:00:00.000Z', now)).toBe(false);
+  });
+
+  it('is true for a posting older than 30 days', () => {
+    expect(isStalePosting('2026-07-01T00:00:00.000Z', now)).toBe(true);
+  });
+
+  it('is false for an unparseable date rather than throwing', () => {
+    expect(isStalePosting('not-a-date', now)).toBe(false);
   });
 });

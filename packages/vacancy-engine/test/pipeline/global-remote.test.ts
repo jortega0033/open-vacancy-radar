@@ -30,6 +30,7 @@ function vacancy(
     reasons: ['Salary is not stated.'],
     contentHash: key.padEnd(64, '0').slice(0, 64),
     description: null,
+    postedAt: null,
   };
 }
 

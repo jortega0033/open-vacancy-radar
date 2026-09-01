@@ -60,8 +60,8 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
         <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
           <div className="text-sm font-semibold">IND sponsor verification is turned off.</div>
           <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
-            {result.verification.note} You can still compare this vacancy against your CV, save it,
-            generate a letter and track an application.
+            You can still compare this vacancy against your CV, save it, generate a letter and
+            track an application.
           </p>
         </div>
       </section>
@@ -140,9 +140,9 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
           Employer verification is not available for {marketLabel(result.market)}.
         </div>
         <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
-          {result.verification.note} You can still compare this vacancy against your CV, save it,
-          generate a letter and track an application. Discovery source: {result.provider}. Discovery
-          decision: {result.raw.decision.replace(/_/g, ' ')}.
+          You can still compare this vacancy against your CV, save it, generate a letter and track
+          an application. Discovery source: {result.provider}. Discovery decision:{' '}
+          {result.raw.decision.replace(/_/g, ' ')}.
         </p>
       </div>
 

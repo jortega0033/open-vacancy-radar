@@ -110,6 +110,7 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
     reasons: ['Explicit frontend role'],
     contentHash: 'hash-ww-1',
     description: 'Join our fully-remote engineering team building the next generation of tooling.',
+    postedAt: null,
     ...overrides,
   };
 }

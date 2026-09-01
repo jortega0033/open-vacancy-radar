@@ -343,6 +343,7 @@ async function discoverJobgether(
           currency: salary.currency,
           salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
           advertisedMinimum: salary.minimum,
+          postedAt: stringValue(job.postedAt),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));

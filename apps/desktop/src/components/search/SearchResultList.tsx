@@ -1,17 +1,6 @@
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { EmptyState } from '../shell/index.js';
-import { formatDate, orNotStated, type SearchResult } from './results.js';
-
-/** Status dot for a verification outcome. Never rendered for a market with no verification step. */
-function VerificationDot({ tone }: { tone: 'success' | 'warning' | null }) {
-  if (tone === null) return null;
-  return (
-    <span
-      className={`size-1.5 rounded-full ${tone === 'success' ? 'bg-success' : 'bg-warning'}`}
-      aria-hidden="true"
-    />
-  );
-}
+import { decisionLabel, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
 
 export interface SearchResultRowProps {
   result: SearchResult;
@@ -21,43 +10,73 @@ export interface SearchResultRowProps {
 }
 
 export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
-  // Salary folds into the same line rather than always getting its own: it's absent for every
-  // Netherlands row and for most worldwide rows too (advertised only where the source states it),
-  // so a dedicated "Salary not published" line on nearly every row was a full row of noise, not
-  // information -- the filter bar's own salary note already sets that expectation once per market.
-  const meta = [result.company, orNotStated(result.location), result.arrangement, result.salary]
-    .filter((part): part is string => !!part)
-    .join(' · ');
+  const stale = isStalePosting(result.postedAt);
+  // A market with no verification concept at all (worldwide) has the identical tone on every row,
+  // so the badge would carry zero per-row information -- it is already explained once, correctly,
+  // in the detail pane. Only a real per-row outcome (Netherlands) earns a badge here.
+  const badges = [
+    result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
+    result.arrangement ? { text: result.arrangement, tone: null } : null,
+    result.employmentType ? { text: result.employmentType, tone: null } : null,
+    result.salary ? { text: result.salary, tone: null } : null,
+    result.market === 'worldwide' ? { text: decisionLabel(result.raw.decision), tone: null } : null,
+  ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (
     <button
       type="button"
       aria-current={selected}
       onClick={() => onSelect(result)}
-      className={`ovr-row w-full border-b border-base-300 px-4 text-left hover:bg-base-200 ${
+      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left hover:bg-base-200 ${
         selected ? 'bg-base-200' : ''
       }`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold">{result.title}</span>
-        {result.profileScore != null && (
-          <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
-            {result.profileScore}
-          </span>
-        )}
+      <div className="avatar avatar-placeholder flex-none pt-0.5" aria-hidden="true">
+        <div className="w-8 rounded-full bg-neutral text-neutral-content">
+          <span className="text-xs">{result.company.charAt(0).toUpperCase() || '?'}</span>
+        </div>
       </div>
 
-      <div className="mt-0.5 text-xs text-base-content/60">{meta}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-sm font-semibold">{result.title}</span>
+          {result.profileScore != null && (
+            <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
+              {result.profileScore}
+            </span>
+          )}
+        </div>
+        <div className="truncate text-xs font-medium text-base-content/70">
+          {result.company} · {orNotStated(result.location)}
+        </div>
 
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span className="badge badge-outline badge-sm gap-1.5 font-normal">
-          <VerificationDot tone={result.verification.tone} />
-          {result.verification.label}
-        </span>
-        <span className="flex-none text-xs text-base-content/50">
-          {saved ? 'Saved · ' : ''}
-          {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'} · {result.provider}
-        </span>
+        {badges.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {badges.map((badge) => (
+              <span
+                key={badge.text}
+                className={`badge badge-xs font-normal ${
+                  badge.tone === 'success'
+                    ? 'badge-success badge-soft'
+                    : badge.tone === 'warning'
+                      ? 'badge-warning badge-soft'
+                      : 'badge-ghost'
+                }`}
+              >
+                {badge.text}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <span className={`flex-none text-xs ${stale ? 'text-warning' : 'text-base-content/50'}`}>
+            {saved ? 'Saved · ' : ''}
+            {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
+            {stale ? ' (over a month old)' : ''}
+          </span>
+          <span className="flex-none text-xs text-base-content/50">{result.provider}</span>
+        </div>
       </div>
     </button>
   );

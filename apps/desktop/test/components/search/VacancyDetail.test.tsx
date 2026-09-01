@@ -22,6 +22,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
       reasons: [],
       contentHash: 'hash-ww-1',
       description: null,
+      postedAt: null,
     },
     official: null,
     key: 'ww-1',
@@ -69,9 +70,9 @@ describe('VacancyDetail', () => {
     expect(screen.getByText('Join our fully-remote engineering team.')).toBeInTheDocument();
   });
 
-  it('says the source provided no description text, rather than blaming the pipeline, when there is none', () => {
-    renderDetail(worldwideResult({ description: null }));
+  it('names the source, rather than blaming the pipeline, when it provided no description text', () => {
+    renderDetail(worldwideResult({ description: null, provider: 'remotive' }));
 
-    expect(screen.getByText(/this source did not include description text/i)).toBeInTheDocument();
+    expect(screen.getByText(/remotive did not include description text/i)).toBeInTheDocument();
   });
 });

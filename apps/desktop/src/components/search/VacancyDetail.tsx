@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { Check, Warning } from '@phosphor-icons/react';
+import { Check, FileDashed, Warning } from '@phosphor-icons/react';
 import type { JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
-import { formatDate, isWebUrl, orNotStated, type SearchResult } from './results.js';
+import { formatDate, isStalePosting, isWebUrl, orNotStated, type SearchResult } from './results.js';
 
 export type SaveState = 'idle' | 'saving' | 'saved';
 
@@ -60,7 +60,12 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
       k: 'Annualised minimum (USD)',
       v: vacancy.annualizedMinimumUsd == null ? 'Not derivable' : vacancy.annualizedMinimumUsd.toLocaleString(),
     },
-    { k: 'Posted', v: 'Not recorded by this pipeline' },
+    {
+      k: 'Posted',
+      v: vacancy.postedAt
+        ? formatDate(vacancy.postedAt) + (isStalePosting(vacancy.postedAt) ? ' (over a month old)' : '')
+        : 'Not stated by this source',
+    },
     { k: 'Discovery decision', v: vacancy.decision.replace(/_/g, ' ') },
   ];
 }
@@ -194,12 +199,33 @@ export function VacancyDetail({
             <Card label="Vacancy source">
               <div className="mt-1.5 text-sm font-semibold">{result.provider}</div>
               <p className="mt-1 text-xs leading-relaxed text-base-content/60">
-                Discovery feed. This pipeline records no posting date, so freshness must be checked
-                on the vacancy itself.
+                Discovery feed. Most sources here do not report a posting date, so check freshness
+                on the vacancy itself when the date above is unknown.
               </p>
             </Card>
           )}
         </div>
+
+        <section className="mt-6">
+          <SectionHeading>Job description</SectionHeading>
+          {result.description ? (
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-base-content/70">
+              {result.description}
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-col items-center gap-2 rounded-box border border-dashed border-base-300 py-8 text-center">
+              <FileDashed size={28} className="text-base-content/30" aria-hidden="true" />
+              <p className="text-sm text-base-content/60">
+                {result.provider} did not include description text for this vacancy.
+              </p>
+              {isWebUrl(result.url) && (
+                <a className="link link-primary text-sm" href={result.url} target="_blank" rel="noopener noreferrer">
+                  Read the full posting at the source
+                </a>
+              )}
+            </div>
+          )}
+        </section>
 
         <section className="mt-6">
           <SectionHeading>Overview</SectionHeading>
@@ -271,20 +297,6 @@ export function VacancyDetail({
                 ))}
               </ul>
             </div>
-          )}
-        </section>
-
-        <section className="mt-6">
-          <SectionHeading>Job description</SectionHeading>
-          {result.description ? (
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-base-content/70">
-              {result.description}
-            </p>
-          ) : (
-            <p className="mt-3 text-sm leading-relaxed text-base-content/70">
-              This source did not include description text for this vacancy. Open it at its source
-              to read it in full.
-            </p>
           )}
         </section>
 
