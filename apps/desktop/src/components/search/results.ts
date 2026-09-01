@@ -20,8 +20,10 @@ import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countri
  *   legal entities matched to the employer plus the confidence of that mapping. It carries no
  *   salary and no employment type.
  * - `GlobalRemoteReport.discoveryAudit: DiscoveryVacancyAudit[]`: the worldwide/remote pipeline.
- *   Carries advertised salary, employment type and a discovery decision. It has no posting date, no
- *   workplace mode, no score, and **no employer-verification concept at all**.
+ *   Carries advertised salary, employment type and a discovery decision. It has no workplace mode
+ *   and **no employer-verification concept at all**. It now carries a deterministic profile score
+ *   too (technical/role/seniority fit only -- no Dutch-language or Netherlands-location dimension
+ *   applies to a worldwide-remote vacancy), computed the same way the Netherlands pipeline's is.
  *
  * The single most important rule encoded here: the absence of employer verification in the
  * worldwide pipeline is reported as *absent*, never as a negative result. "We did not check" and
@@ -91,9 +93,10 @@ interface CommonResult {
   description: string | null;
   verification: Verification;
   /**
-   * The Netherlands pipeline's deterministic relevance score. This is scored against the engine's
-   * configured candidate profile, **not** against any CV in the CV library, so it must never be
-   * labelled "CV match". Null for worldwide, which computes no score.
+   * The engine's deterministic relevance score, scored against the configured candidate profile,
+   * **not** against any CV in the CV library, so it must never be labelled "CV match". Both
+   * pipelines can produce one now; each still returns null rather than a real-looking zero when the
+   * candidate profile has no target roles or strongest skills configured for that run.
    */
   profileScore: number | null;
   /** Deterministic engine findings, where the pipeline produces them. */
@@ -251,7 +254,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     postedAt: vacancy.postedAt,
     description: vacancy.description,
     verification: WORLDWIDE_VERIFICATION,
-    profileScore: null,
+    profileScore: vacancy.profileScore,
     strongPoints: [],
     gaps: [],
     reasons: vacancy.reasons,
@@ -416,9 +419,9 @@ function postedAtTimestamp(value: string | null): number | null {
 }
 
 /**
- * Highest profile score first (Netherlands only -- worldwide never scores a vacancy against the
- * candidate profile), then most recently posted first among ties or scoreless rows, then title.
- * A row with no known posting date sorts after every row that has one, never assumed recent.
+ * Highest profile score first, on either market -- then most recently posted first among ties or
+ * scoreless rows, then title. A row with no known posting date sorts after every row that has one,
+ * never assumed recent.
  */
 export function sortResults(results: SearchResult[]): SearchResult[] {
   return [...results].sort((left, right) => {

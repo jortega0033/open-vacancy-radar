@@ -3,7 +3,7 @@ import {
   type DeterministicScore,
   type NormalizedVacancy,
 } from '../domain/models.js';
-import type { CandidateProfile } from '../candidate/profile.js';
+import { isCandidateProfileConfigured, type CandidateProfile } from '../candidate/profile.js';
 import { assessNetherlandsSalary } from './compensation.js';
 
 export const DETERMINISTIC_SCORING_VERSION = 'deterministic-relevance-v11';
@@ -358,7 +358,10 @@ function skillPattern(skill: string): RegExp {
   return new RegExp(`(?:^|[^a-z0-9])${source}(?=$|[^a-z0-9])`, 'i');
 }
 
-function findMatchingSkills(vacancy: NormalizedVacancy, profile: CandidateProfile): string[] {
+function findMatchingSkills(
+  vacancy: Pick<NormalizedVacancy, 'title' | 'description'>,
+  profile: CandidateProfile,
+): string[] {
   const haystack = normalizeForMatching(`${vacancy.title}\n${plainText(vacancy.description)}`);
   const seen = new Set<string>();
   const matching: string[] = [];
@@ -392,7 +395,7 @@ function countResponsibilitySignals(
 }
 
 function classifyPrimaryRole(
-  vacancy: NormalizedVacancy,
+  vacancy: Pick<NormalizedVacancy, 'title'>,
   evidence: readonly ConceptEvidence[],
   segments: readonly TextSegment[],
 ): RoleAssessment {
@@ -605,7 +608,10 @@ function assessTechnicalFit(
   return { score: rounded, reason };
 }
 
-function assessSeniority(vacancy: NormalizedVacancy, profile: CandidateProfile): DimensionAssessment {
+function assessSeniority(
+  vacancy: Pick<NormalizedVacancy, 'title' | 'description'>,
+  profile: CandidateProfile,
+): DimensionAssessment {
   const title = normalizeForMatching(vacancy.title);
   const text = normalizeForMatching(`${vacancy.title}\n${plainText(vacancy.description)}`);
 
@@ -896,4 +902,109 @@ export function scoreVacancy(
     gaps,
     reasons,
   });
+}
+
+export type WorldwideDeterministicScore = {
+  relevant: boolean;
+  deterministicScore: number;
+  technicalFit: number;
+  roleFit: number;
+  seniorityFit: number;
+  primaryFit: string;
+  matchingSkills: string[];
+  gaps: string[];
+  reasons: string[];
+};
+
+export type WorldwideScorableVacancy = {
+  title: string;
+  /** Null where the source carried no description text at all -- see `DiscoveryVacancyAudit`. */
+  description: string | null;
+  /** Null where no deterministic USD/annual figure could be established -- see `annualizedMinimumUsd`. */
+  annualizedMinimumUsd: number | null;
+};
+
+/**
+ * The worldwide-pipeline counterpart to `scoreVacancy`. Reuses only the sub-assessors that never
+ * encoded a Netherlands assumption -- technical fit, role classification, and seniority fit -- plus
+ * the excluded-role-family hard cap, which is candidate-profile data, not NL-specific. Dutch
+ * language fit and Netherlands location fit are dropped entirely rather than stubbed to a neutral
+ * value: there is nothing honest to assess on either dimension for a worldwide-remote vacancy. Their
+ * combined 0.25 weight (0.15 language + 0.10 location) is dropped, and the three remaining
+ * dimensions are re-weighted so the composite still sums to 100 while keeping their original
+ * relative order (technical > role > seniority): technical 0.45, role 0.40, seniority 0.15. This is
+ * not a proportional scaling of the original 0.35/0.30/0.10 ratio -- it's a deliberate new weighting
+ * for a scorer with three dimensions instead of five.
+ *
+ * The salary gate is the worldwide pipeline's own USD/annual floor
+ * (`GlobalRemoteConfig.criteria.minimumAnnualBaseUsd`, passed in as `minimumAnnualBaseUsd`), never
+ * the Netherlands EUR/monthly floor -- `CandidateProfile` carries no worldwide salary field at all.
+ *
+ * Returns null, never a real-looking zero, when the candidate profile has no target roles and no
+ * strongest skills configured (see `isCandidateProfileConfigured`): every dimension would be
+ * scoring against an absence rather than a real preference.
+ */
+export function scoreWorldwideVacancy(
+  vacancy: WorldwideScorableVacancy,
+  profile: CandidateProfile,
+  minimumAnnualBaseUsd: number | null,
+): WorldwideDeterministicScore | null {
+  if (!isCandidateProfileConfigured(profile)) return null;
+
+  const description = vacancy.description ?? '';
+  const segments = createSegments(description);
+  const conceptEvidence = collectConceptEvidence(vacancy.title, segments);
+  const matchingSkills = findMatchingSkills({ title: vacancy.title, description }, profile);
+  const role = classifyPrimaryRole({ title: vacancy.title }, conceptEvidence, segments);
+  const technical = assessTechnicalFit(role, conceptEvidence, matchingSkills);
+  const seniority = assessSeniority({ title: vacancy.title, description }, profile);
+  const excludedPrimaryFamily = isExcludedPrimaryFamily(role.family, profile);
+
+  const weightedScore = Math.round(
+    technical.score * 0.45 + role.score * 0.4 + seniority.score * 0.15,
+  );
+  let deterministicScore = weightedScore;
+  if (excludedPrimaryFamily) deterministicScore = Math.min(deterministicScore, 45);
+
+  const salaryBelowThreshold =
+    vacancy.annualizedMinimumUsd !== null &&
+    minimumAnnualBaseUsd !== null &&
+    vacancy.annualizedMinimumUsd < minimumAnnualBaseUsd;
+  if (salaryBelowThreshold) deterministicScore = Math.min(deterministicScore, 69);
+
+  const gaps: string[] = [];
+  if (matchingSkills.length === 0) gaps.push('No explicit candidate skill match found');
+  if (seniority.score < 80) gaps.push('Advertised seniority is below the candidate’s experience');
+  if (excludedPrimaryFamily) gaps.push(`Excluded primary role family: ${role.primaryFit}`);
+  if (vacancy.annualizedMinimumUsd === null) {
+    gaps.push('Minimum USD annual base salary is not advertised');
+  } else if (salaryBelowThreshold) {
+    gaps.push('Advertised USD annual base salary is below the configured minimum');
+  }
+
+  const reasons = [
+    `Technical fit (${technical.score}): ${technical.reason}`,
+    `Role fit (${role.score}): ${role.reason}`,
+    `Seniority fit (${seniority.score}): ${seniority.reason}`,
+  ];
+  if (excludedPrimaryFamily) {
+    reasons.push(`Hard cap applied because “${role.primaryFit}” matches a configured excluded role family.`);
+  }
+  if (salaryBelowThreshold) {
+    reasons.push('Eligibility cap applied because the advertised USD annual base salary is below the configured minimum.');
+  } else if (vacancy.annualizedMinimumUsd === null) {
+    reasons.push('No salary eligibility cap applied because vacancies with an unadvertised USD base floor remain reviewable.');
+  }
+
+  return {
+    relevant: isDeterministicallyRelevant(deterministicScore),
+    deterministicScore,
+    technicalFit: technical.score,
+    roleFit: role.score,
+    seniorityFit: seniority.score,
+    primaryFit: role.primaryFit,
+    matchingSkills,
+    gaps,
+    reasons,
+  };
 }

@@ -111,6 +111,7 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
     contentHash: 'hash-ww-1',
     description: 'Join our fully-remote engineering team building the next generation of tooling.',
     postedAt: null,
+    profileScore: null,
     ...overrides,
   };
 }

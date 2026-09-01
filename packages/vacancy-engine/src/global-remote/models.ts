@@ -178,6 +178,9 @@ export type DiscoveryVacancyAudit = {
   /** Null where the source's raw response carried no posting date at all. Never derived or
    * estimated -- a wrong staleness signal is worse than an honestly absent one. */
   postedAt: string | null;
+  /** Null until `applyWorldwideProfileScores` runs after discovery (no candidate profile configured,
+   * or the run hasn't scored yet), never a real-looking zero. See `scoreWorldwideVacancy`. */
+  profileScore: number | null;
 };
 
 export type DiscoverySourceAudit = {

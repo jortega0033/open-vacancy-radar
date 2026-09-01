@@ -56,7 +56,13 @@ export function locations(value: unknown, emptyFallback = 'Worldwide'): string {
 export function discoveryAudit(
   input: Omit<
     DiscoveryVacancyAudit,
-    'decision' | 'reasons' | 'annualizedMinimumUsd' | 'contentHash' | 'description' | 'postedAt'
+    | 'decision'
+    | 'reasons'
+    | 'annualizedMinimumUsd'
+    | 'contentHash'
+    | 'description'
+    | 'postedAt'
+    | 'profileScore'
   > & {
     raw: unknown;
     minimumAnnualBaseUsd: number | null;
@@ -94,6 +100,11 @@ export function discoveryAudit(
     contentHash: createHash('sha256').update(JSON.stringify(input.raw)).digest('hex'),
     description: input.description ?? null,
     postedAt: input.postedAt ?? null,
+    // Always null at discovery time: unlike `description`/`postedAt`, a profile score needs the
+    // candidate profile and the pipeline's own salary floor, neither of which any individual
+    // discovery source has. `applyWorldwideProfileScores` fills this in once, after discovery, in
+    // `runGlobalRemoteScan`.
+    profileScore: null,
   };
 }
 

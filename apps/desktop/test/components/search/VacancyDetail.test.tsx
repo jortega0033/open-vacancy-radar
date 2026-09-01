@@ -23,6 +23,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
       contentHash: 'hash-ww-1',
       description: null,
       postedAt: null,
+      profileScore: null,
     },
     official: null,
     key: 'ww-1',
