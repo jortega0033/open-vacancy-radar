@@ -78,7 +78,7 @@ another app id's daemon, since they're different files. See
 
 | Route | Auth | Behavior |
 |---|---|---|
-| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion }` |
+| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion }` -- this daemon has no v2 routes, so it never adds the optional `supportedProtocolVersions` field a v1/v2 daemon would (see [protocol-v1.md](protocol-v1.md)) |
 | `GET /providers` | required | `{ providers: ProviderStatus[] }`: runs each adapter's `detect()` |
 | `GET /providers/:providerId` | required | One `ProviderStatus`, or `404` for an unregistered id |
 | `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, or a `cwd` that doesn't exist. `201` + `AgentSession` on success |
