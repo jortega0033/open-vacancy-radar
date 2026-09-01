@@ -5,13 +5,19 @@ This is the daemon's public wire contract: the HTTP+SSE API shape and the `Agent
 depends on exactly this document being accurate. If you change any of it, update the version
 constant and this file together.
 
-`AGENT_DOCK_PROTOCOL_VERSION` (`packages/shared/src/protocol.ts`, currently `1`) is reported at
-`GET /health`. `@agent-dock/client` checks it automatically before the first real request (see
-[client-sdk.md](client-sdk.md)) and throws `ProtocolMismatchError` on a mismatch: deliberately an
-exact-match comparison, not a semver range or a negotiation handshake, since this is a boilerplate
-shipping one daemon and one bundled client together, not a multi-version ecosystem yet. Bump the
-constant only when you make a *breaking* change to either the route shapes below or the
-`AgentEvent` union.
+`AGENT_DOCK_PROTOCOL_VERSION` (`packages/shared/src/protocol.ts`) is frozen at `1` forever and is
+reported at `GET /health`. Bump it only if this document's route shapes or the `AgentEvent` union
+ever need a genuinely breaking change -- something that hasn't happened yet.
+
+`GET /health` also reports an optional `supportedProtocolVersions` array. `@agent-dock/client`
+checks compatibility automatically before the first real request (see
+[client-sdk.md](client-sdk.md)): it negotiates the highest version both the client and the daemon
+list, and throws `ProtocolMismatchError` when they share none at all. A pre-v2 daemon (this repo's
+own daemon today) omits the array entirely, which the client treats as "the daemon speaks exactly
+`protocolVersion`" -- against such a daemon, negotiation always settles on `1`, so this is
+unchanged from the plain exact-match check v1 originally shipped with. See
+[client-sdk.md#public-exports](client-sdk.md#public-exports) for `client.v2`, the negotiation-only
+namespace this enables.
 
 ## HTTP + SSE routes
 
@@ -22,7 +28,7 @@ section is the protocol-level shape.
 
 | Route | Purpose |
 |---|---|
-| `GET /health` | `{ status: 'ok', uptimeSeconds, protocolVersion }` (no auth required) |
+| `GET /health` | `{ status: 'ok', uptimeSeconds, protocolVersion, supportedProtocolVersions? }` (no auth required) |
 | `GET /providers` | `{ providers: ProviderStatus[] }` |
 | `GET /providers/:providerId` | One `ProviderStatus` |
 | `POST /sessions` | Body: `CreateSessionRequest`. Creates and starts a session, returns `AgentSession` |

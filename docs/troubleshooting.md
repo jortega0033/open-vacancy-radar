@@ -49,14 +49,15 @@ not treat this as a workaround to reach for by default; understand why the lock 
 
 ## Protocol mismatch
 
-`ProtocolMismatchError` from `@agent-dock/client` means the client's `AGENT_DOCK_PROTOCOL_VERSION`
-and the running daemon's don't match. In this repo, the client and daemon are built from the same
-workspace and versioned together, so this should only happen if you're running a daemon built from
-a different checkout than the desktop app (e.g. an old `pnpm daemon` left running from before a
-protocol-affecting change, still holding the discovery file). Stop the stale daemon and let the
-current one start (see [Daemon fails to start](#daemon-fails-to-start) above if that's the
-symptom). See [protocol-v1.md](protocol-v1.md) for what counts as a breaking, version-bumping
-change.
+`ProtocolMismatchError` from `@agent-dock/client` means the client and the running daemon share no
+protocol version at all -- the client negotiates the highest version both sides list (see
+[protocol-v1.md](protocol-v1.md)), and this is what it throws when that negotiation comes up empty.
+In this repo, the client and daemon are built from the same workspace and versioned together, so
+this should only happen if you're running a daemon built from a different checkout than the desktop
+app (e.g. an old `pnpm daemon` left running from before a protocol-affecting change, still holding
+the discovery file). Stop the stale daemon and let the current one start (see
+[Daemon fails to start](#daemon-fails-to-start) above if that's the symptom). See
+[protocol-v1.md](protocol-v1.md) for what counts as a breaking, version-bumping change.
 
 ## Session starts but no events arrive
 

@@ -137,8 +137,44 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const healthResponseSchema = z.object({
-  status: z.literal('ok'),
-  uptimeSeconds: z.number(),
-  protocolVersion: z.number(),
-});
+/**
+ * A daemon's advertised protocol versions. `.max(16)` on the array and `.max(9999)` on each entry
+ * are both comfortable headroom over the two real versions (`[1, 2]`) this repo will ever emit, and
+ * exist so this schema itself satisfies "strict v2 schemas reject unbounded ... input" -- an
+ * unbounded integer, or an unbounded array of them, from a network response is exactly the shape
+ * that requirement is about, even though no real daemon here could produce one.
+ */
+export const supportedProtocolVersionsSchema = z
+  .array(z.number().int().positive().max(9999))
+  .min(1)
+  .max(16)
+  .superRefine((versions, ctx) => {
+    if (new Set(versions).size !== versions.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'supported protocol versions must be unique' });
+    }
+  });
+
+export const healthResponseSchema = z
+  .object({
+    status: z.literal('ok'),
+    uptimeSeconds: z.number(),
+    protocolVersion: z.number(),
+    /** Absent from a pre-v2 daemon (including this repo's own daemon today, which has no v2 routes
+     * to advertise). A daemon that adds v2 routes emits `[1, 2]` here; `protocolVersion` above stays
+     * `1` forever regardless, so an old client reading only that field never sees a change. */
+    supportedProtocolVersions: supportedProtocolVersionsSchema.optional(),
+  })
+  .superRefine((health, ctx) => {
+    // A daemon that still supports v1 must say so in both fields consistently: `protocolVersion`
+    // frozen at its historical value AND listed in `supportedProtocolVersions` when that field is
+    // present. Without this check, a self-contradictory response (protocolVersion: 1 but an array
+    // that omits 1) would parse successfully and then silently fail every v1 request downstream --
+    // a confusing outage instead of a clear validation error at the boundary where it belongs.
+    if (health.supportedProtocolVersions && !health.supportedProtocolVersions.includes(health.protocolVersion)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'supportedProtocolVersions must include protocolVersion',
+        path: ['supportedProtocolVersions'],
+      });
+    }
+  });

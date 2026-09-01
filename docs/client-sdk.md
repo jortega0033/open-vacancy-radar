@@ -20,12 +20,17 @@ convention. Only what `index.ts` exports is the public surface.
 
 ```ts
 import { AgentDockClient } from '@agent-dock/client';
-import type { AgentDockClientOptions, HealthResponse, SessionEventsOptions } from '@agent-dock/client';
+import type {
+  AgentDockClientOptions,
+  HealthResponse,
+  ProtocolSupport, // what client.v2 negotiated -- see "Protocol v2 negotiation" below
+  SessionEventsOptions,
+} from '@agent-dock/client';
 import {
   AgentDockClientError, // base class every error below extends
   DaemonError,          // any other non-2xx response
   DaemonUnavailableError, // fetch itself failed, or the daemon didn't respond
-  ProtocolMismatchError,  // GET /health reported a different AGENT_DOCK_PROTOCOL_VERSION
+  ProtocolMismatchError,  // this client and the daemon share no protocol version at all
   ProviderUnavailableError, // 404 on a /providers/:id route
   SessionNotFoundError,     // 404 on a /sessions/:id route
   UnauthorizedError,        // 401: bad or missing token
@@ -81,12 +86,30 @@ try {
 
 Full API: `providers.list()`, `providers.get(id)`, `sessions.create(input)`, `sessions.get(id)`,
 `sessions.events(id, options?)`, `sessions.cancel(id)`, `sessions.delete(id)`,
-`sessions.cancelAll()`, and `health()`. `SessionEventsOptions` accepts an `AbortSignal` (to stop
-consuming early) and a `lastEventId` (to resume a stream instead of replaying from the start; see
+`sessions.cancelAll()`, `health()`, and `v2.*` (see below). `SessionEventsOptions` accepts an
+`AbortSignal` (to stop consuming early) and a `lastEventId` (to resume a stream instead of
+replaying from the start; see
 [protocol-v1.md](protocol-v1.md#ordering-guarantees)). `sessions.cancelAll()` exists specifically
 for a desktop shutdown path (Electron calls it before force-killing the daemon on Windows, where a
 process signal alone can't reach the daemon's own graceful-shutdown handler; see
 [daemon.md#shutdown](daemon.md#shutdown)); most callers only ever need `sessions.cancel(id)`.
+
+## Protocol v2 negotiation
+
+`client.v2` is negotiation only, not a route caller -- this repo's daemon has no `/v2` routes yet,
+so `client.v2` issues no request beyond the one `GET /health` call every method already makes:
+
+```ts
+const supported = await client.v2.isSupported(); // boolean, never throws for a reachable v1-only daemon
+const support: ProtocolSupport = await client.v2.support(); // { clientVersions, daemonVersions, selected }
+await client.v2.require(); // throws ProtocolMismatchError unless protocol 2 is actually usable
+```
+
+Every top-level v1 method (`providers.*`, `sessions.*`, `mcp.*`, `health()`) is completely
+unaffected by this: they still hit their original v1 routes, gated by the same
+`ProtocolMismatchError` check as before v2 negotiation existed. `client.v2` exists so a later change
+can add real v2 methods behind `client.v2.require()` without ever shipping a method that calls a
+route the connected daemon doesn't actually have.
 
 ## Design decisions
 
@@ -94,9 +117,13 @@ Worth knowing if you're extending this package:
 
 - **The compatibility check is lazy, not in the constructor.** `new AgentDockClient(...)` is
   synchronous and does no I/O; the first call to `health()` (or any other method) runs the
-  `GET /health` + protocol-version check once, caches the result for the client's lifetime, and
-  retries on the next call if it failed. A daemon still starting up shouldn't permanently poison a
-  client instance created a moment too early.
+  `GET /health` + negotiation once and caches the result for the client's lifetime. An unreachable
+  daemon or a malformed response retries on the next call rather than permanently poisoning a
+  client instance created a moment too early. A successful negotiation is cached even when it
+  determines a specific version isn't usable (e.g. a daemon that stopped supporting v1): that
+  outcome reflects the daemon's actual advertised state at the time, not a transient failure, so it
+  is not retried on its own -- construct a new client if the daemon's version support changes
+  while a client instance is still alive.
 - **No automatic reconnect.** `sessions.events()` opens exactly one SSE connection and ends when
   the daemon closes it (the session's terminal event) or the caller's `AbortSignal` fires. If the
   connection drops for any other reason, the generator throws and the caller decides whether to
