@@ -28,6 +28,7 @@ function worldwideResult(
       description: null,
       postedAt: null,
       profileScore: null,
+      worldwideSponsorMatch: null,
     },
     official: null,
     key,

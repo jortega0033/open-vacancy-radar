@@ -92,7 +92,9 @@ type ParsedBinding = {
   hostnameKey: string;
 };
 
-function normalizeKvk(value: string): string | null {
+/** Exported for reuse by `wikidata-name-source.ts`, which needs the same KVK-format validation for
+ * a name-search-derived P3220 claim as this file already applies to a SPARQL-derived one. */
+export function normalizeKvk(value: string): string | null {
   const trimmed = value.trim();
   if (!/^\d{7,8}$/u.test(trimmed)) return null;
   return trimmed.padStart(8, '0');
@@ -112,7 +114,9 @@ function normalizeItemUrl(value: string): string | null {
   }
 }
 
-function normalizeWebsiteUrl(value: string): { url: string; hostnameKey: string } | null {
+/** Exported for reuse by `wikidata-name-source.ts` -- same URL safety/normalization rules apply
+ * regardless of whether the P856 statement was reached via a KVK-keyed or a name-keyed lookup. */
+export function normalizeWebsiteUrl(value: string): { url: string; hostnameKey: string } | null {
   try {
     const url = new URL(value.trim());
     if (!['http:', 'https:'].includes(url.protocol)) return null;
@@ -149,7 +153,9 @@ function websiteRank(value: string): readonly [number, number, number, string] {
   return [url.protocol === 'https:' ? 0 : 1, url.pathname === '/' ? 0 : 1, url.pathname.length, value];
 }
 
-function compareWebsite(left: string, right: string): number {
+/** Exported for reuse by `wikidata-name-source.ts` to deterministically pick one URL among several
+ * valid ones on the same host. */
+export function compareWebsite(left: string, right: string): number {
   const leftRank = websiteRank(left);
   const rightRank = websiteRank(right);
   return (

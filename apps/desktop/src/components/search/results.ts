@@ -21,15 +21,21 @@ import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countri
  *   salary and no employment type.
  * - `GlobalRemoteReport.discoveryAudit: DiscoveryVacancyAudit[]`: the worldwide/remote pipeline.
  *   Carries advertised salary, employment type and a discovery decision. It has no workplace mode
- *   and **no employer-verification concept at all**. It now carries a deterministic profile score
- *   too (technical/role/seniority fit only -- no Dutch-language or Netherlands-location dimension
- *   applies to a worldwide-remote vacancy), computed the same way the Netherlands pipeline's is.
+ *   and, for almost every row, no employer-verification concept at all -- the one exception is a
+ *   Netherlands-located row where a best-effort Wikidata name search happened to cross-check
+ *   cleanly against the IND register (see `worldwideVerification` below); every other row keeps
+ *   the plain "not available for this market" claim it always had. It now carries a deterministic
+ *   profile score too (technical/role/seniority fit only -- no Dutch-language or
+ *   Netherlands-location dimension applies to a worldwide-remote vacancy), computed the same way
+ *   the Netherlands pipeline's is.
  *
  * The single most important rule encoded here: the absence of employer verification in the
  * worldwide pipeline is reported as *absent*, never as a negative result. "We did not check" and
  * "we checked and the employer is not a recognised sponsor" are different claims, and only the
  * Netherlands pipeline is capable of making the second one. Likewise "no sponsor entity was
- * matched" is a missing match, not a finding of non-recognition.
+ * matched" is a missing match, not a finding of non-recognition. This applies just as much to the
+ * worldwide pipeline's own best-effort check: a match it does find is capped at
+ * `possible_sponsor_match`, never the Netherlands pipeline's `recognised_sponsor`.
  */
 
 export type SearchMarket = Market;
@@ -174,6 +180,32 @@ export function netherlandsVerification(vacancy: ReportVacancy, indVerificationE
   };
 }
 
+/**
+ * Best-effort worldwide counterpart to `netherlandsVerification`, reporting a match from
+ * `vacancy.worldwideSponsorMatch` (computed once, engine-side, in `applyWorldwideSponsorMatches` --
+ * see `packages/vacancy-engine/src/companies/worldwide-sponsor-match.ts`). Every non-match row --
+ * which includes every non-Netherlands-located row, since the engine never even attempts the
+ * lookup for those -- falls back to exactly `WORLDWIDE_VERIFICATION` unchanged, so "not the
+ * Netherlands" and "checked and found nothing" render identically here too (see
+ * `resolveWorldwideSponsorMatch`'s own reasoning for treating both as one honest `null`).
+ *
+ * A match is capped at `possible_sponsor_match`, the same level (and the same warning tone) the
+ * Netherlands pipeline uses for anything short of its own high-confidence mapping -- never
+ * `recognised_sponsor`, since a name-keyed Wikidata search carries none of that pipeline's
+ * evidence-chain rigor.
+ */
+export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verification {
+  const match = vacancy.worldwideSponsorMatch;
+  if (match === null) return WORLDWIDE_VERIFICATION;
+
+  return {
+    level: 'possible_sponsor_match',
+    label: 'Possible sponsor match (best effort)',
+    tone: 'warning',
+    note: `A best-effort Wikidata name search matched this employer to ${match.legalName} (KVK ${match.kvkNumber}) on the IND public register. This is far less certain than the Netherlands pipeline's own sponsor mapping, which this worldwide pipeline does not otherwise run at all: confirm the legal entity yourself before relying on sponsorship.`,
+  };
+}
+
 export function formatDiscoverySalary(vacancy: DiscoveryVacancyAudit): string | null {
   if (vacancy.advertisedMinimum == null) return null;
   const currency = vacancy.currency ?? '';
@@ -253,7 +285,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     // Null for most sources, which genuinely carry no posting date; real for the sources that do.
     postedAt: vacancy.postedAt,
     description: vacancy.description,
-    verification: WORLDWIDE_VERIFICATION,
+    verification: worldwideVerification(vacancy),
     profileScore: vacancy.profileScore,
     strongPoints: [],
     gaps: [],

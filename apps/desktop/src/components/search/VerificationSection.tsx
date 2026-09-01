@@ -39,11 +39,14 @@ export interface VerificationSectionProps {
  * there is a genuine result to show: including which entity, at what mapping confidence, and
  * whether this vacancy was re-verified in the run that produced the report.
  *
- * Worldwide: the pipeline has no employer-verification step whatsoever. The panel says that
- * plainly instead of borrowing the Netherlands vocabulary; there is no "possible match" or "not
- * found" to report, because nothing was looked up. Where the same run happened to verify this
- * exact URL against an official employer/ATS source, that separate (vacancy-level, not
- * employer-level) evidence is shown for what it is.
+ * Worldwide: the pipeline has no employer-verification step for almost every row, and the panel
+ * says that plainly rather than borrowing the Netherlands vocabulary. The one exception is a
+ * Netherlands-located row where `worldwideVerification` found a best-effort Wikidata sponsor
+ * match (see `results.ts`) -- that row's own `result.verification.label`/`.note` already say so
+ * honestly (and far more tentatively than the Netherlands panel above), so they are shown as-is
+ * instead of the fixed "not available" copy. Where the same run happened to verify this exact URL
+ * against an official employer/ATS source, that separate (vacancy-level, not employer-level)
+ * evidence is shown for what it is, regardless of the sponsor-match outcome.
  */
 export function VerificationSection({ result, sponsorSource, runId }: VerificationSectionProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -137,8 +140,13 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
 
       <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
         <div className="text-sm font-semibold">
-          Employer verification is not available for {marketLabel(result.market)}.
+          {result.verification.level === 'possible_sponsor_match'
+            ? 'A best-effort sponsor match was found -- see the summary card above.'
+            : `Employer verification is not available for ${marketLabel(result.market)}.`}
         </div>
+        {/* Neither branch repeats `result.verification.note` here: the summary card above
+            (VacancyDetail.tsx's "Employer verification" Card) already shows the label and note
+            unconditionally, for every level, so doing it again here would duplicate it verbatim. */}
         <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
           You can still compare this vacancy against your CV, save it, generate a letter and track
           an application. Discovery source: {result.provider}. Discovery decision:{' '}

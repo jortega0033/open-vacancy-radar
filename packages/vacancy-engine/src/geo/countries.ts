@@ -1,21 +1,11 @@
 /**
- * A static, complete list of countries for the worldwide-market country filter -- not derived from
- * scan results, not a curated shortlist of "major" markets. The worldwide pipeline's sources are
- * genuinely unbounded (see docs/job-source-policy.md); a vacancy from any country is possible, so
- * the filter options must cover every country regardless of whether one has ever shown up yet.
- *
- * Filtering itself happens over each vacancy's own free-text `location` field (see
- * `normalizeCountry` below) -- the list here is only the set of selectable options.
- *
- * Deliberately duplicated, not re-exported, from `packages/vacancy-engine/src/geo/countries.ts`
- * (which needs the same logic engine-side to gate the worldwide sponsor-match check to
- * Netherlands-located vacancies -- see `worldwide-sponsor-match.ts`). Importing any real (non-type)
- * value from `@open-vacancy-radar/vacancy-engine`'s root barrel pulls that package's whole module
- * graph into Vite's renderer bundle, including Node-only code (`db/schema.ts`'s `node:crypto`
- * import) that fails to build for the browser target -- confirmed by trying exactly that and
- * watching `pnpm --filter @agent-dock/desktop run build` fail. The package has no subpath export
- * map to import just this file instead, so two copies is the correct tradeoff for now, not an
- * oversight -- keep them in sync by hand if this list or the matching logic ever changes.
+ * A static, complete list of countries -- not derived from scan results, not a curated shortlist
+ * of "major" markets. Ported from `apps/desktop/src/components/search/countries.ts` (pure,
+ * dependency-free) so the engine itself can normalize a free-text `location` string without going
+ * through the desktop UI layer -- e.g. to gate the worldwide-pipeline Wikidata sponsor-match check
+ * (see `src/companies/worldwide-sponsor-match.ts`) to vacancies located in the Netherlands. The
+ * desktop package re-exports from here for its own worldwide-market country filter, rather than
+ * keeping a second copy, since `apps/desktop` already depends on this package.
  */
 export const ALL_COUNTRIES: readonly string[] = [
   'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda', 'Argentina',
@@ -89,7 +79,7 @@ function escapeRegExp(value: string): string {
  * call: this list is checked against every vacancy's location on every filter-bar keystroke (any
  * filter change re-runs the whole result set, not just a country change), and re-compiling ~200
  * regexes per vacancy per keystroke measured in the hundreds of milliseconds on a worldwide
- * report's typical vacancy count -- long enough to visibly stall typing.
+ * report's typical vacancy count — long enough to visibly stall typing.
  */
 const MATCH_TERMS: readonly { pattern: RegExp; country: string }[] = [
   ...ALL_COUNTRIES.map((country) => ({ term: country.toLowerCase(), country })),
@@ -107,8 +97,9 @@ const normalizeCache = new Map<string, string | null>();
 /**
  * Matches a country name/alias as a whole word within free-text location, so "Ireland" doesn't
  * false-positive inside "Irelandville" and "US" doesn't match inside "Business". Returns the
- * canonical `ALL_COUNTRIES` name, or `null` when nothing matches confidently -- the caller renders
- * that as "Unspecified location" rather than guessing.
+ * canonical `ALL_COUNTRIES` name, or `null` when nothing matches confidently — the caller renders
+ * that as "Unspecified location" (or, for a gate like the worldwide sponsor-match check, treats it
+ * as "not the Netherlands") rather than guessing.
  */
 export function normalizeCountry(location: string | null | undefined): string | null {
   if (!location) return null;

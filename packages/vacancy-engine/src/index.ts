@@ -27,3 +27,5 @@ export {
 
 export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit } from './global-remote/models.js';
 export type { JobRadarReport, ReportVacancy } from './reporting/report.js';
+
+export { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './geo/countries.js';

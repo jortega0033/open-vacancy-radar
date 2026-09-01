@@ -1,3 +1,4 @@
+import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
@@ -5,9 +6,35 @@ import {
   countryOptions,
   isStalePosting,
   sortResults,
+  worldwideVerification,
+  WORLDWIDE_VERIFICATION,
   type SearchResult,
 } from '../../../src/components/search/results.js';
 import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
+
+function discoveryVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
+  return {
+    key: 'ww-1',
+    provider: 'jobicy',
+    company: 'Acme',
+    title: 'Frontend Engineer',
+    url: 'https://example.com/job',
+    location: 'Amsterdam, Netherlands',
+    employmentType: null,
+    currency: null,
+    salaryPeriod: null,
+    advertisedMinimum: null,
+    annualizedMinimumUsd: null,
+    decision: 'official_review_candidate',
+    reasons: [],
+    contentHash: 'hash-ww-1',
+    description: null,
+    postedAt: null,
+    profileScore: null,
+    worldwideSponsorMatch: null,
+    ...overrides,
+  };
+}
 
 function worldwideResult(overrides: { key: string; location: string | null }): SearchResult {
   return {
@@ -197,5 +224,34 @@ describe('sortResults', () => {
     ];
 
     expect(sortResults(results).map((r) => r.key)).toEqual(['newer', 'older']);
+  });
+});
+
+describe('worldwideVerification', () => {
+  it('falls back to exactly WORLDWIDE_VERIFICATION when the engine found no sponsor match', () => {
+    expect(worldwideVerification(discoveryVacancy({ worldwideSponsorMatch: null }))).toBe(
+      WORLDWIDE_VERIFICATION,
+    );
+  });
+
+  it('falls back to WORLDWIDE_VERIFICATION for every non-Netherlands-located row too', () => {
+    // The engine never even attempts the lookup for these, but this function does not re-derive
+    // that -- it trusts `worldwideSponsorMatch` alone, which is null for exactly this reason.
+    expect(
+      worldwideVerification(discoveryVacancy({ location: 'Remote (United States)', worldwideSponsorMatch: null })),
+    ).toBe(WORLDWIDE_VERIFICATION);
+  });
+
+  it('reports a match as possible_sponsor_match, never recognised_sponsor, with a warning tone', () => {
+    const verification = worldwideVerification(
+      discoveryVacancy({
+        worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '01234567' },
+      }),
+    );
+
+    expect(verification.level).toBe('possible_sponsor_match');
+    expect(verification.tone).toBe('warning');
+    expect(verification.note).toContain('Acme Technologies B.V.');
+    expect(verification.note).toContain('01234567');
   });
 });

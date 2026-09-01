@@ -4,7 +4,9 @@ import path from 'node:path';
 
 import type { Logger } from 'pino';
 
+import type { AtsHttpClient } from '../ats/http.js';
 import { loadCandidateProfile, type CandidateProfile } from '../candidate/profile.js';
+import { resolveWorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/client.js';
 import { runGlobalRemoteDiscovery } from '../global-remote/discovery.js';
@@ -132,6 +134,59 @@ export function applyWorldwideProfileScores(
     profileScore:
       scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd)?.deterministicScore ?? null,
   }));
+}
+
+/** Rows processed at once by `applyWorldwideSponsorMatches`. `resolveWorldwideSponsorMatch` already
+ * returns immediately (no network call) for every non-Netherlands-located row, so this only bounds
+ * how many *actual* Wikidata lookups run concurrently -- a courtesy to a public API this feature
+ * reuses, not one built for this volume of traffic. */
+const WORLDWIDE_SPONSOR_MATCH_CONCURRENCY = 4;
+
+/**
+ * Computed once here, after discovery, mirroring `applyWorldwideProfileScores` immediately above --
+ * but async and network/database-backed, since resolving a match needs a Wikidata name search and
+ * an `indSponsors` read (see `worldwide-sponsor-match.ts`), neither of which belongs inside any
+ * individual `discoveryAudit()` call site in global-remote/*.ts.
+ */
+export async function applyWorldwideSponsorMatches(
+  vacancies: readonly DiscoveryVacancyAudit[],
+  http: AtsHttpClient,
+  database: Database,
+  logger?: Pick<Logger, 'debug'>,
+): Promise<DiscoveryVacancyAudit[]> {
+  const results = [...vacancies];
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= results.length) return;
+      const vacancy = results[index]!;
+      // A failed or malformed Wikidata call for one company must never fail the whole worldwide
+      // scan over a best-effort enrichment -- every other discovery source in this package already
+      // catches its own network/parse errors (see `sourceFailure` throughout global-remote/*.ts)
+      // rather than letting them propagate. A lookup failure is indistinguishable here from "found
+      // nothing" for the same reason `resolveWorldwideSponsorMatch`'s own doc comment gives: neither
+      // has a meaningful claim beyond "nothing to show". Logged, not silently discarded, though --
+      // a genuine coding bug must not become permanently indistinguishable from a network hiccup.
+      let worldwideSponsorMatch: DiscoveryVacancyAudit['worldwideSponsorMatch'] = null;
+      try {
+        worldwideSponsorMatch = await resolveWorldwideSponsorMatch({
+          http,
+          database,
+          companyName: vacancy.company,
+          location: vacancy.location,
+        });
+      } catch (error) {
+        logger?.debug({ error, company: vacancy.company }, 'worldwide sponsor match lookup failed');
+      }
+      results[index] = { ...vacancy, worldwideSponsorMatch };
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(WORLDWIDE_SPONSOR_MATCH_CONCURRENCY, results.length) }, worker),
+  );
+  return results;
 }
 
 function groupOfficial(
@@ -301,6 +356,12 @@ export async function runGlobalRemoteScan(
     candidateProfile,
     profile.minimumAnnualBaseUsd,
   );
+  const sponsorMatchedDiscoveryAudit = await applyWorldwideSponsorMatches(
+    scoredDiscoveryAudit,
+    http,
+    database,
+    logger,
+  );
   const officialAudit = [...official.audits].sort(
     (left, right) =>
       left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
@@ -348,7 +409,7 @@ export async function runGlobalRemoteScan(
     discoverySources: discovery.sources,
     ...groups,
     officialAudit,
-    discoveryAudit: scoredDiscoveryAudit,
+    discoveryAudit: sponsorMatchedDiscoveryAudit,
     methodology: [
       'Free remote-job APIs are discovery inputs only; their geography and salary labels never create a strict match.',
       'Current official ATS APIs or normal employer HTML are fetched with bounded concurrency, timeouts, retries, conditional caching, and a descriptive User-Agent.',
