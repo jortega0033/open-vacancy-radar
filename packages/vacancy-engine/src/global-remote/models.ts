@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { WorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
+
 const reviewAnswerSchema = z.enum(['yes', 'no', 'uncertain']);
 
 export const globalRemoteSourceSchema = z.object({
@@ -181,6 +183,15 @@ export type DiscoveryVacancyAudit = {
   /** Null until `applyWorldwideProfileScores` runs after discovery (no candidate profile configured,
    * or the run hasn't scored yet), never a real-looking zero. See `scoreWorldwideVacancy`. */
   profileScore: number | null;
+  /**
+   * Null until `applyWorldwideSponsorMatches` runs after discovery, and null afterwards too unless
+   * this vacancy's `location` normalizes to "Netherlands" *and* a best-effort Wikidata name search
+   * found an unambiguous employer whose KVK number is an active IND-recognised sponsor (see
+   * `worldwide-sponsor-match.ts`). Never a stand-in for `recognised_sponsor` confidence -- the
+   * desktop UI's `worldwideVerification()` reports a non-null value here as `possible_sponsor_match`
+   * at most, matching this path's much weaker evidence chain than the Netherlands pipeline's.
+   */
+  worldwideSponsorMatch: WorldwideSponsorMatch | null;
 };
 
 export type DiscoverySourceAudit = {

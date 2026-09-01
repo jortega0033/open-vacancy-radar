@@ -7,11 +7,14 @@ import type {
   GlobalRemoteReport,
 } from '../../src/global-remote/models.js';
 import { renderGlobalRemoteHtml } from '../../src/global-remote/report.js';
+import type { Database } from '../../src/db/client.js';
 import {
   applyWorldwideProfileScores,
+  applyWorldwideSponsorMatches,
   resolveRoleQuery,
   uniqueDiscovery,
 } from '../../src/pipeline/global-remote.js';
+import { FixtureHttpClient } from '../ats/helpers.js';
 
 function vacancy(
   provider: DiscoveryProvider,
@@ -38,6 +41,7 @@ function vacancy(
     description: null,
     postedAt: null,
     profileScore: null,
+    worldwideSponsorMatch: null,
     ...overrides,
   };
 }
@@ -220,5 +224,53 @@ describe('applyWorldwideProfileScores', () => {
 
     expect(scored[0]!.profileScore).not.toBeNull();
     expect(scored[0]!.profileScore).toBeLessThanOrEqual(69);
+  });
+});
+
+describe('applyWorldwideSponsorMatches', () => {
+  it('leaves every row null and never touches the network or database for non-Netherlands locations', async () => {
+    const http = new FixtureHttpClient(new Map());
+    const vacancies = [
+      vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer', {
+        company: 'Acme Corp',
+        location: 'Remote (United States)',
+      }),
+      vacancy('jobicy', 'jobicy:2', 'https://example.test/2', 'Backend Engineer', {
+        company: 'Widgets Inc',
+        location: 'Worldwide',
+      }),
+    ];
+
+    // A poisoned database stand-in: every row here is gated out before any database read, so this
+    // throwing on access would fail the test rather than silently passing on a false negative.
+    const result = await applyWorldwideSponsorMatches(vacancies, http, undefined as unknown as Database);
+
+    expect(result.map((item) => item.worldwideSponsorMatch)).toEqual([null, null]);
+    expect(http.requestedUrls).toEqual([]);
+    // Every other field stays untouched.
+    expect(result[0]).toMatchObject({ key: 'himalayas:1', company: 'Acme Corp' });
+  });
+
+  it('never fails the whole batch when a single Wikidata lookup throws, and still processes every other row', async () => {
+    // No routes registered at all: the one Netherlands-located row's lookup throws immediately
+    // (FixtureHttpClient's "Unexpected fixture URL" for any request), simulating a network/parse
+    // failure a real Wikidata call could produce.
+    const http = new FixtureHttpClient(new Map());
+    const vacancies = [
+      vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer', {
+        company: 'Acme Corp',
+        location: 'Amsterdam, Netherlands',
+      }),
+      vacancy('jobicy', 'jobicy:2', 'https://example.test/2', 'Backend Engineer', {
+        company: 'Widgets Inc',
+        location: 'Worldwide',
+      }),
+    ];
+
+    const result = await applyWorldwideSponsorMatches(vacancies, http, undefined as unknown as Database);
+
+    expect(result.map((item) => item.worldwideSponsorMatch)).toEqual([null, null]);
+    expect(result[0]).toMatchObject({ key: 'himalayas:1', company: 'Acme Corp' });
+    expect(result[1]).toMatchObject({ key: 'jobicy:2', company: 'Widgets Inc' });
   });
 });

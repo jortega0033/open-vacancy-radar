@@ -112,6 +112,7 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
     description: 'Join our fully-remote engineering team building the next generation of tooling.',
     postedAt: null,
     profileScore: null,
+    worldwideSponsorMatch: null,
     ...overrides,
   };
 }

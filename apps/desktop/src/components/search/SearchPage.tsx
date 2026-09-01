@@ -58,9 +58,10 @@ export function toVacancyLead(result: SearchResult): VacancyLead {
 /**
  * `SearchResult` → the `savedJobs` row input.
  *
- * `verification` stores the label the search page itself showed, so a worldwide row is saved as
- * "Not available for this market" rather than as an empty (and later re-readable as "unverified")
- * cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score (a real
+ * `verification` stores the label the search page itself showed, so an unmatched worldwide row is
+ * saved as "Not available for this market" (or, for a Netherlands-located row with a best-effort
+ * sponsor match, that match's own label) rather than as an empty (and later re-readable as
+ * "unverified") cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score (a real
  * 0-100 figure against the engine's configured candidate profile) and stays null for worldwide,
  * which computes no score. It is not a comparison against any CV in the library; the only real CV
  * comparison in this app is the on-demand gap analysis.

@@ -63,6 +63,7 @@ export function discoveryAudit(
     | 'description'
     | 'postedAt'
     | 'profileScore'
+    | 'worldwideSponsorMatch'
   > & {
     raw: unknown;
     minimumAnnualBaseUsd: number | null;
@@ -105,6 +106,10 @@ export function discoveryAudit(
     // discovery source has. `applyWorldwideProfileScores` fills this in once, after discovery, in
     // `runGlobalRemoteScan`.
     profileScore: null,
+    // Always null at discovery time, for the same reason as `profileScore` above: resolving it
+    // needs a network round trip and a database read, neither of which belongs in a per-source
+    // adapter. `applyWorldwideSponsorMatches` fills this in once, after discovery.
+    worldwideSponsorMatch: null,
   };
 }
 
