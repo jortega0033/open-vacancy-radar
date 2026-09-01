@@ -78,6 +78,7 @@ describe('Arbetsförmedlingen JobSearch discovery', () => {
         url: 'https://careers.example.se/jobs/frontend-engineer',
         location: 'Remote or partly remote · Stockholm, Stockholms län, Sweden, Europe',
         decision: 'salary_unverified',
+        postedAt: '2026-08-27T14:05:00.000Z',
       }),
       expect.objectContaining({
         key: 'jobtech_sweden:jobtech-backend-1',

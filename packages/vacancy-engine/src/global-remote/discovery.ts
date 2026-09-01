@@ -8,6 +8,8 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
+  isoPostedAtFromUnixSeconds,
   locations,
   numberValue,
   parsedRoot,
@@ -74,6 +76,7 @@ export async function discoverHimalayas(
             currency: stringValue(job.currency)?.toUpperCase() ?? null,
             salaryPeriod: stringValue(job.salaryPeriod),
             advertisedMinimum: numberValue(job.minSalary),
+            postedAt: isoPostedAtFromUnixSeconds(numberValue(job.pubDate)),
             raw,
             minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
           }));
@@ -129,6 +132,7 @@ export async function discoverJobicy(
         currency: stringValue(job.salaryCurrency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(job.salaryPeriod),
         advertisedMinimum: numberValue(job.salaryMin),
+        postedAt: isoPostedAt(stringValue(job.pubDate)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];

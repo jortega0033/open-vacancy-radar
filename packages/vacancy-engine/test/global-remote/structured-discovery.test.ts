@@ -65,6 +65,7 @@ describe('structured global-remote discovery', () => {
           regions: ['global'],
           countries: [],
           description: 'Build the customer-facing application.',
+          posted_at: '2026-08-20T09:00:00Z',
           enrichment: {
             employment_type: 'full_time',
             salary_min: 140000,
@@ -94,6 +95,7 @@ describe('structured global-remote discovery', () => {
         salary_min: 125000,
         salary_currency: 'USD',
         salary_period: 'year',
+        posted_at: '2026-08-21T09:00:00Z',
         apply_url: 'https://jobs.lever.co/ledger/frontend',
         source_type: 'ats',
         field_sources: { salary: 'published', remote: 'published' },
@@ -112,6 +114,7 @@ describe('structured global-remote discovery', () => {
         location: 'Europe',
         type: 'Full-time',
         salary: '$145k–155k / yr',
+        postedDate: '2026-08-22',
         applyUrl: 'https://boards.greenhouse.io/landers/jobs/1',
       }],
     }));
@@ -125,6 +128,7 @@ describe('structured global-remote discovery', () => {
         remote: 'Full Remote',
         contractType: 'Full time',
         salaryRange: '110000-150000 USD',
+        postedAt: '2026-08-23T09:00:00.000Z',
       }],
       pagination: { page: 1, limit: 25, hasMore: false },
     }));
@@ -146,8 +150,14 @@ describe('structured global-remote discovery', () => {
       'official_review_candidate',
     ]);
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_landers'))
-      .toMatchObject({ advertisedMinimum: 145_000, annualizedMinimumUsd: 145_000 });
+      .toMatchObject({ advertisedMinimum: 145_000, annualizedMinimumUsd: 145_000, postedAt: '2026-08-22T00:00:00.000Z' });
     expect(result.vacancies.some((vacancy) => vacancy.url.includes('.invalid'))).toBe(false);
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'freehire'))
+      .toMatchObject({ postedAt: '2026-08-20T09:00:00.000Z' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_opportunities'))
+      .toMatchObject({ postedAt: '2026-08-21T09:00:00.000Z' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobgether'))
+      .toMatchObject({ postedAt: '2026-08-23T09:00:00.000Z' });
   });
 
   it('records a blocked source without aborting the other providers', async () => {

@@ -72,6 +72,31 @@ describe('discoverHimalayas', () => {
 
     expect(result.sources[0]).toMatchObject({ id: 'himalayas:backend', status: 'success' });
   });
+
+  it('converts the unix-seconds pubDate to an ISO posting date', async () => {
+    const routes = new Map([
+      [
+        'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+        JSON.stringify({
+          jobs: [{
+            guid: 'himalayas-1',
+            title: 'Frontend Engineer',
+            companyName: 'Himalayas Co',
+            applicationLink: 'https://himalayas.app/jobs/himalayas-1',
+            pubDate: 1788188988,
+          }],
+          totalCount: 1,
+        }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const result = await discoverHimalayas(http, config({ himalayasQueries: [] }));
+
+    expect(result.vacancies).toEqual([
+      expect.objectContaining({ provider: 'himalayas', postedAt: '2026-08-31T15:09:48.000Z' }),
+    ]);
+  });
 });
 
 describe('discoverJobicy', () => {
@@ -92,5 +117,24 @@ describe('discoverJobicy', () => {
     const result = await discoverJobicy(http, config({ roleQuery: 'backend' }));
 
     expect(result.sources[0]).toMatchObject({ status: 'success' });
+  });
+
+  it('normalizes the offset-bearing pubDate to an ISO posting date', async () => {
+    const url = 'https://jobicy.com/api/v2/remote-jobs?count=1';
+    const http = new FixtureHttpClient(new Map([[url, JSON.stringify({
+      jobs: [{
+        id: 'jobicy-1',
+        jobTitle: 'Frontend Engineer',
+        companyName: 'Jobicy Co',
+        url: 'https://jobicy.com/jobs/jobicy-1',
+        pubDate: '2026-08-31T20:08:43+00:00',
+      }],
+    })]]));
+
+    const result = await discoverJobicy(http, config());
+
+    expect(result.vacancies).toEqual([
+      expect.objectContaining({ provider: 'jobicy', postedAt: '2026-08-31T20:08:43.000Z' }),
+    ]);
   });
 });

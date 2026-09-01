@@ -76,6 +76,7 @@ describe('keyed discovery sources (configuration-required until a project key is
           salary_min: 65000,
           salary_max: 80000,
           contract_time: 'full_time',
+          created: '2026-08-05T00:00:00Z',
           redirect_url: 'https://www.adzuna.co.uk/jobs/details/adz-1',
         }],
       })],
@@ -103,6 +104,7 @@ describe('keyed discovery sources (configuration-required until a project key is
           minimumSalary: 60000,
           maximumSalary: 75000,
           currency: 'GBP',
+          date: '25/08/2026',
           jobUrl: 'https://www.reed.co.uk/jobs/frontend-developer/901',
           jobDescription: 'Build accessible web interfaces.',
         }],
@@ -138,11 +140,11 @@ describe('keyed discovery sources (configuration-required until a project key is
     expect(result.sources.every((source) => source.status === 'success')).toBe(true);
     expect(result.vacancies).toHaveLength(4);
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'adzuna'))
-      .toMatchObject({ company: 'Adzuna Co', location: 'London, UK', decision: 'location_restricted' });
+      .toMatchObject({ company: 'Adzuna Co', location: 'London, UK', decision: 'location_restricted', postedAt: '2026-08-05T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jooble'))
-      .toMatchObject({ company: 'Jooble Co', location: 'Worldwide', decision: 'official_review_candidate' });
+      .toMatchObject({ company: 'Jooble Co', location: 'Worldwide', decision: 'official_review_candidate', postedAt: '2026-08-01T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'reed'))
-      .toMatchObject({ company: 'Reed Co', location: 'London', decision: 'location_restricted' });
+      .toMatchObject({ company: 'Reed Co', location: 'London', decision: 'location_restricted', postedAt: '2026-08-25T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobspipe'))
       .toMatchObject({ company: 'JobsPipe Co', location: 'Worldwide', decision: 'salary_unverified' });
   });

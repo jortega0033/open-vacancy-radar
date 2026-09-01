@@ -5,6 +5,7 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
   numberValue,
   parsedRoot,
   record,
@@ -17,7 +18,7 @@ const JOBTECH_PROVIDER = 'jobtech_sweden' as const;
 const JOBTECH_PAGE_SIZE = 100;
 const JOBTECH_FIELDS = [
   'total{value}',
-  'hits{id,headline,webpage_url,application_deadline,employment_type{label},salary_description,employer{name},application_details{url},workplace_address{municipality,region,country,city},removed,removed_date}',
+  'hits{id,headline,webpage_url,application_deadline,employment_type{label},salary_description,employer{name},application_details{url},workplace_address{municipality,region,country,city},removed,removed_date,publication_date}',
 ].join(',');
 
 function jobtechSearchUrl(roleQuery: string): string {
@@ -92,6 +93,7 @@ function normalizedVacancy(
     currency: null,
     salaryPeriod: null,
     advertisedMinimum: null,
+    postedAt: isoPostedAt(stringValue(job.publication_date)),
     raw: safeFingerprint(job, url),
     minimumAnnualBaseUsd,
   });

@@ -139,6 +139,75 @@ export function parseSalaryText(value: string | null): ParsedSalary {
   return { minimum, currency, period };
 }
 
+/**
+ * Normalizes a source's raw posting-date string to ISO-8601. Handles every format actually seen
+ * across worldwide sources: RFC 822 (`Thu, 27 Aug 2026 14:36:09 GMT`) and offset-bearing ISO parse
+ * correctly as-is; a date-only string (`2026-08-31`) is UTC per spec already. The one real
+ * ambiguity is a date-TIME string with no timezone marker at all (e.g. JobTech Sweden's
+ * `publication_date`), which JS otherwise treats as the *local* machine's timezone -- appending
+ * `Z` pins it to UTC instead, so the same raw value renders the same date for every user
+ * regardless of their machine's timezone. A few sources report their own local time this way
+ * (JobTech Sweden is Europe/Stockholm), so the exact hour can be off by that source's UTC offset;
+ * this only matters for day-level display and a 30-day staleness check, where an hour or two never
+ * changes the answer.
+ */
+export function isoPostedAt(value: string | null): string | null {
+  if (value === null) return null;
+  // A space-separated date-time (e.g. Jooble's `2026-08-31 14:05:00`) is normalized to the
+  // standard `T` separator before the timezone check below, rather than left to whatever a given
+  // JS engine happens to do with the non-standard form.
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/u.test(value) ? value.replace(' ', 'T') : value;
+  const hasTimezoneMarker = /(?:Z|[+-]\d{2}:?\d{2})$/u.test(normalized);
+  const isOffsetlessDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(normalized) && !hasTimezoneMarker;
+  const parsed = new Date(isOffsetlessDateTime ? `${normalized}Z` : normalized);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/**
+ * For sources reporting the posting date as `dd/mm/yyyy` (e.g. Reed) rather than any ISO variant.
+ * Parses the three numeric parts explicitly instead of handing the ambiguous string to `new
+ * Date()`, which would silently read it as the wrong calendar date (US month-first order) on some
+ * inputs rather than failing loudly.
+ */
+export function isoPostedAtFromDdMmYyyy(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/u.exec(value);
+  if (match === null) return null;
+  const [, dayText, monthText, year] = match;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/** For sources reporting the posting date as a unix timestamp in seconds (e.g. arbeitnow, himalayas). */
+export function isoPostedAtFromUnixSeconds(value: number | null): string | null {
+  if (value === null) return null;
+  const parsed = new Date(value * 1000);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/**
+ * For a source reporting `mm/dd/yyyy` (US month-first order, e.g. UN Careers) at the start of an
+ * otherwise free-text value (UN Careers' "Posted Date" metadata also carries a local time-of-day
+ * and timezone label after the date, e.g. "08/15/2026 10:00:00 AM"). Only the leading date is
+ * used -- the time-of-day is dropped rather than guessed at, since converting a named local
+ * timezone to UTC correctly requires knowing its DST rules for that date, which is unnecessary
+ * precision for a day-level display and a 30-day staleness check.
+ */
+export function isoPostedAtFromMmDdYyyyPrefix(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})\b/u.exec(value);
+  if (match === null) return null;
+  const [, monthText, dayText, year] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
 export function httpUrl(value: unknown): string | null {
   const raw = stringValue(value);
   if (raw === null) return null;

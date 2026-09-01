@@ -100,6 +100,7 @@ describe('Additional public and configuration-gated discovery', () => {
         jobLocation: { displayName: 'Remote' },
         workplaceTypes: ['Remote'],
         employmentType: ['Full-time'],
+        postedDate: '2026-08-26T11:59:36Z',
       }])],
       [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
     ]);
@@ -117,6 +118,7 @@ describe('Additional public and configuration-gated discovery', () => {
       company: 'Dice Co',
       title: 'Senior Frontend Developer',
       advertisedMinimum: 150_000,
+      postedAt: '2026-08-26T11:59:36.000Z',
     });
     expect(http.requestedOptions[0]?.headers).toMatchObject({
       Accept: 'application/json, text/event-stream',
@@ -139,6 +141,7 @@ describe('Additional public and configuration-gated discovery', () => {
           company: { name: 'Muse Co' },
           locations: [{ name: 'Flexible / Remote' }],
           refs: { landing_page: 'https://www.themuse.com/jobs/muse-co/frontend-engineer' },
+          publication_date: '2026-07-30T00:20:58Z',
         }],
       })],
     ]);
@@ -146,7 +149,9 @@ describe('Additional public and configuration-gated discovery', () => {
     const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
 
     expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'remoote', 'the_muse']);
-    expect(result.vacancies).toEqual([expect.objectContaining({ provider: 'the_muse', company: 'Muse Co' })]);
+    expect(result.vacancies).toEqual([
+      expect.objectContaining({ provider: 'the_muse', company: 'Muse Co', postedAt: '2026-07-30T00:20:58.000Z' }),
+    ]);
   });
 
   it('keeps every researched source visible without mislabeling gated portals as active', () => {
