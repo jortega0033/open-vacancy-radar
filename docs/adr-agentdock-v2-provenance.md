@@ -166,3 +166,164 @@ found and fixed: the validator's exact-file-set check for `assets/app-icons/` ha
 after PR #89 added `installer.nsh` and `vc_redist.x64.exe` to that directory, so the validator
 failed on an unrelated, correct state. `check_exact_files` now accepts an `allow_extra` parameter,
 and the `ICON_ROOT` check allowlists those two files.
+
+## ADI-04: the v2 session supervisor over the v1 one-shot transport
+
+ADI-04 (issue #122) adds a v2 "session supervisor" that wraps the existing v1 provider adapters
+without changing them. Like ADI-03's `model-select.ts`, the supervisor itself ships with **no
+daemon caller** — nothing in `apps/daemon/src/session-manager.ts` constructs one, so no live
+session goes through it, and wiring it in is a later ticket. `session-manager.ts` does carry one
+small, deliberate change unrelated to the supervisor: `cancel()`, `remove()`, and `cancelAll()` now
+isolate a rejecting `handle.cancel()` (which can happen since `ProviderSessionHandle.cancel()` now
+awaits a confirmed process-tree reap, see below, rather than always resolving once it merely
+initiated termination) so one session's reap-confirmation timeout can never abort another session's
+cancellation, crash the daemon's shutdown handler, or turn a cancel/delete HTTP request into an
+unhandled 500. This is the one place ADI-04 touches existing v1 daemon code, and it is a strict
+robustness fix, not a behavior change to any session's actual lifecycle.
+
+### What was ported, and from which upstream commit
+
+| Ported into | From upstream | Fidelity |
+|---|---|---|
+| `apps/daemon/native/windows/AgentDock.JobHost.cs` | `8d0d9ef`, same path | Near-verbatim; only a provenance header comment added |
+| `packages/agent-runtime/src/process/windows-job-host.ts` | `8d0d9ef`, same path | Near-verbatim; comments expanded, logic unchanged |
+| `packages/agent-runtime/src/process/spawn-process.ts` | `8d0d9ef`, same path | Near-verbatim rewrite of this repo's existing file |
+| `apps/daemon/scripts/build-windows-job-host.mjs` | `8d0d9ef`, same path | Near-verbatim |
+| `test/fixtures/fake-orphaning-{leader,intermediate}.mjs`, `fake-marker-writer.mjs` | `8d0d9ef`, same paths | Verbatim |
+| `packages/agent-runtime/test/spawn-process.test.ts` | `8d0d9ef`, same path | Adapted, plus a Windows negative-control test not present upstream |
+| `packages/agent-runtime/src/providers/compatibility-manifest.ts` | `7aec0f1`, same path | Subsetted and re-pinned (see below) |
+
+The Windows Job Object host is the one genuinely hard piece here, and it was taken as-is on purpose.
+Windows has no process group that outlives its leader, so `taskkill /T` — which walks the *live*
+parent-PID chain — cannot reach a grandchild whose intermediate parent has already exited. That
+grandchild is not merely hard to find; it is no longer in the tree at all. The host closes this by
+creating the provider inside an unnamed Job Object at process-creation time (via
+`PROC_THREAD_ATTRIBUTE_JOB_LIST`, suspended then resumed, so there is no window in which the
+provider exists outside the job) with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and by holding the only
+handle to that job. Killing the host closes the handle, and the kernel terminates every job member
+atomically, orphans included.
+
+That this gap is real in *this* repo, and not merely in upstream's, is pinned by a **negative
+control** test that upstream does not have: `spawn-process.test.ts` runs the same orphan fixture
+chain through a plain `child_process.spawn` plus `taskkill /pid <pid> /T /F` — the mechanism this
+repo used before ADI-04 — and asserts the orphan **survives**. Without that control, the passing
+Job Host test could have been passing for a trivial reason.
+
+The host is compiled by `apps/daemon/scripts/build-windows-job-host.mjs` through PowerShell's
+`Add-Type -OutputType ConsoleApplication`, which drives the in-box .NET Framework C# compiler, so
+building the daemon does not require a .NET SDK. It is written to `apps/daemon/dist/`, which
+`apps/desktop/electron-builder.yml` already ships wholesale to `resources/daemon` as an
+`extraResources` entry — the same ride-along the `@napi-rs/keyring` native binding gets — so **no
+new packaging entry was needed**.
+
+### The three-way scope split
+
+Upstream's v2 work divides into three parts, and only the first is in scope for this ticket:
+
+1. **Legacy-supervisor-compatible core (ported).** The compatibility manifest, accepted-work
+   boundaries, launch-scope freezing, the fallback-authorization gate, the bounded unknown-frame
+   ledger, and process-tree-aware cancellation. All of it is meaningful over a one-shot CLI
+   transport, which is the only transport this repo has.
+2. **App-server / SDK-specific (not ported).** `providers/codex/app-server/**`,
+   `providers/claude/sdk/**`, and the interactive-transport machinery they exist to serve. This
+   repo has no interactive transport, and AD-21 (see [providers.md](providers.md)) already records
+   the standing decision to stay on `codex exec --json`.
+3. **Durable persistence / execution-graph store (not ported).** That is ADI-05's scope.
+
+### This supervisor is not upstream's supervisor
+
+Upstream's `session-supervisor.ts` is ~1,398 lines built around rich interactive transports,
+mid-turn commands, approval round-trips, and a durable execution graph. Porting it would have meant
+importing — and then maintaining — a large amount of machinery with no reachable caller in this repo.
+`packages/agent-runtime/src/providers/common/session-supervisor.ts` is instead a new, much smaller
+supervisor written to the same *contracts* over the one transport that exists here. **ADI-06+ will
+replace its internals when rich transports land**; the exported shapes are the part intended to
+survive that, which is why they are exported from `index.ts` despite having no caller yet.
+
+Its one hard constraint is that the supervised event stream is byte-identical to the unsupervised
+one: no event is added, dropped, reordered, or rewritten. This is proven, not asserted —
+`test/support/supervisor-contract.ts` deep-equals the full `AgentEvent[]` from a bare
+`provider.startSession()` against the one from `superviseProviderSession()` for the same fixture,
+per provider. Everything the supervisor learns, it learns either by reading events it is passing
+through anyway, or through an `@internal`, optional `launchProbe` seam on `StartSessionOptions`.
+
+That seam was added rather than approximated. The alternative considered was treating "first
+observed event" as the acceptance signal, which needs no new field — but it collapses both
+accepted-work boundaries into one heuristic, making the Claude/Codex distinction decorative. With
+the probe, the boundaries genuinely differ at runtime: Claude's `'accepted'` follows the stdin
+flush, Codex's follows the spawn attempt itself (an argv-embedded prompt is delivered unconditionally
+the instant the process exists), and the conformance suite asserts both reach `'accepted'`, not that
+one of them settles for the weaker `'unknown'` — `AcceptedWorkState` measures delivery, not whether
+the CLI has acted on the prompt yet, and delivery is certain in both cases, just observed at a
+different moment. An earlier draft of this mechanism read the accepted-work timing off the
+manifest's `acceptedWorkBoundary` field instead of the probe's own `viaStdin` evidence, and got this
+exact case wrong (marking Codex `'unknown'`) before an adversarial review caught it — see the note
+directly below for why that approach was replaced.
+
+### Fixed: a manifest hit can fail open where a manifest miss fails closed
+
+The compatibility manifest's `acceptedWorkBoundary` field is a fact about a *specific, fixture-verified
+CLI build* — it does not, and structurally cannot, track whether this repo's own adapter code still
+transports the prompt the way that build was verified against. If an adapter's `promptViaStdin`
+config were ever changed (e.g. `build-args.ts` switched a provider from argv to stdin) without the
+manifest being updated to match, the manifest lookup would still find its entry (the CLI version
+didn't change) and confidently report the *old* boundary — a **hit that fails open**, which is worse
+than a miss: `acceptedWorkBoundaryFor(undefined)` already fails closed for an unrecognized version,
+but a recognized version with a stale boundary claim had no equivalent protection. Concretely, a
+`'first-prompt-byte-to-stdin'`-classified session whose adapter actually embeds the prompt in argv
+would sit at `'not_accepted'` for the session's entire life, even after definitely delivering the
+prompt — the exact "safe to retry" answer for work that already ran.
+
+The fix (see `SessionLaunchProbe.onSpawnAttempt`'s `evidence.viaStdin` in `types.ts`, and
+`session-supervisor.ts`'s launch-probe wiring) drives the accepted-work decision from
+`runProviderSession`'s own, real `promptViaStdin` flag, reported at the exact call site that also
+decides whether to write stdin — not from a separately-maintained manifest field. This makes the
+drift structurally impossible: there is only one flag governing both what the adapter actually does
+and what the supervisor assumes it did. The manifest's `acceptedWorkBoundary` column remains useful
+documentation (see `docs/providers.md`) and drives fixture-set classification, but is no longer the
+safety-critical input.
+
+### Limitation: accepted-work state is in memory only
+
+`AcceptedWorkLatch` lives in the supervisor object. **A daemon crash or restart loses it**, and a
+session recovered after such a crash has no way to learn whether its provider had already accepted
+work. That is a real gap, not a theoretical one: it is precisely the window in which an automatic
+retry could duplicate a side effect in the user's working directory. Persisting acceptance across
+restarts is **ADI-05's job**, and the ticket that does it should treat this paragraph as the
+requirement.
+
+### Limitation: `accountEvidence: 'cli_owned'` is not an account fingerprint
+
+`FrozenLaunchScope` carries the literal `accountEvidence: 'cli_owned'`. This is a documented
+limitation marker, not a capability. The strongest identity claim this repo can make is "the same
+CLI binary, at the same version, reporting the same auth state", because `ProviderStatus`
+(`packages/shared/src/provider.ts`) has no account identifier, no `authSource` discriminator, and
+no `accountFingerprint` — and this repo's adapters never read a provider's credential storage, by
+design (see [SECURITY.md](../SECURITY.md)).
+
+Concretely: the scope **cannot** distinguish "the same CLI, still logged into the same account"
+from "the same CLI, logged out and logged back into a *different* account between two launches".
+Closing that needs new `ProviderStatus` fields that do not exist yet. The literal type keeps the gap
+visible at every use site rather than letting a reader assume the scope binds to an account.
+
+### The fallback gate is provably always-deny in the shipped configuration
+
+`FallbackGate.authorize()` denies with `no_alternate_transport` whenever `alternateTransportIds` is
+empty, and **nothing in this repo registers a second transport id**: `compatibility-manifest.ts`
+defines exactly one (`legacy-one-shot`) and both adapters use it. So every reachable call today
+denies. This is enforced by code and pinned by a test, not merely asserted in a comment:
+`test/fallback-gate.test.ts` exhausts the full `AcceptedWorkState x ProviderDeliveryState x terminal`
+product (18 cases) against an empty alternate list and requires a denial for every one. The rest of
+the gate's rules are implemented and tested anyway, so that the ticket introducing a second transport
+turns the gate on against already-reviewed logic rather than writing safety rules under deadline.
+
+### One behavioral change that is not purely additive
+
+`ProviderSessionHandle.cancel()` previously resolved once a kill signal had been *sent*, so a caller
+that immediately cleaned up the working directory was racing a still-running process tree. It now
+resolves only once the owned tree is **confirmed** reaped (POSIX polls the process group until
+`ESRCH`; Windows waits on the Job Host's exit) and rejects on a reap timeout. The supervisor catches
+that rejection and reports it as `SupervisedOutcome.reaped: false` rather than rethrowing, so a
+caller learns the working directory may still be occupied instead of receiving an exception it is
+likely to log and discard. Every pre-existing test in `packages/agent-runtime/test/`,
+`apps/daemon/test/`, and `apps/desktop/test/` passes unchanged against this.

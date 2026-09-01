@@ -191,7 +191,7 @@ export class SessionManager {
     if (!session || (session.status !== 'starting' && session.status !== 'running')) return false;
     const runtime = this.runtime.get(id);
     if (!runtime) return false;
-    await runtime.handle.cancel();
+    await this.cancelRuntime(id, runtime);
     return true;
   }
 
@@ -200,13 +200,26 @@ export class SessionManager {
     if (!session) return false;
     const runtime = this.runtime.get(id);
     if ((session.status === 'starting' || session.status === 'running') && runtime) {
-      await runtime.handle.cancel();
+      await this.cancelRuntime(id, runtime);
     }
     this.runtime.delete(id);
     this.store.delete(id);
     const orderIndex = this.completedOrder.indexOf(id);
     if (orderIndex !== -1) this.completedOrder.splice(orderIndex, 1);
     return true;
+  }
+
+  /**
+   * `handle.cancel()` can reject (e.g. a process-tree reap-confirmation timeout) rather than always
+   * resolving once it merely initiated termination. The cancel signal was still sent either way, so
+   * a caller here (an HTTP route, `remove()`, `cancelAll()`) must not see that as the request itself
+   * having failed -- only that reap couldn't be confirmed within the budget, which is worth logging,
+   * not surfacing as a 500.
+   */
+  private async cancelRuntime(id: string, runtime: RuntimeState): Promise<void> {
+    await runtime.handle.cancel().catch((error: unknown) => {
+      this.logger.warn('session cancel did not confirm a process-tree reap', { sessionId: id, error });
+    });
   }
 
   /**
@@ -218,16 +231,20 @@ export class SessionManager {
    * forever. The process-level SIGKILL escalation in spawnProcess is what ultimately reaps it.
    */
   async cancelAll(timeoutMs = 5_000): Promise<void> {
-    const activeRuntimes = this.store
+    const active = this.store
       .list()
       .filter((session) => session.status === 'starting' || session.status === 'running')
-      .map((session) => this.runtime.get(session.id))
-      .filter((runtime): runtime is RuntimeState => !!runtime);
+      .map((session) => ({ id: session.id, runtime: this.runtime.get(session.id) }))
+      .filter((entry): entry is { id: string; runtime: RuntimeState } => !!entry.runtime);
 
-    await Promise.all(activeRuntimes.map((runtime) => runtime.handle.cancel()));
+    // This method's whole contract is best-effort and bounded -- one session's cancel failing to
+    // confirm reap must never stop this from also cancelling every other active session, and must
+    // never make the caller (including the daemon's own shutdown handler) see a rejection instead
+    // of the documented bounded wait. See `cancelRuntime`.
+    await Promise.all(active.map(({ id, runtime }) => this.cancelRuntime(id, runtime)));
 
     await Promise.race([
-      Promise.all(activeRuntimes.map((runtime) => runtime.done)),
+      Promise.all(active.map(({ runtime }) => runtime.done)),
       new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
   }

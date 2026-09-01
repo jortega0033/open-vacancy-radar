@@ -46,5 +46,13 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # ADI-04. Already covered by `pnpm test` above, but run again as a named step so a provider
+      # conformance regression is identifiable from the job summary alone, rather than being one
+      # failing file inside a 20-package recursive run. These are the tests that pin the v1 adapter
+      # contract, the supervised-vs-unsupervised event identity, the accepted-work boundaries, and
+      # the always-deny fallback gate.
+      - name: Provider conformance
+        run: pnpm test:provider-conformance
+
       - name: Build
         run: pnpm build

@@ -19,4 +19,8 @@ describeProviderContract({
   },
   expectedAssistantText: 'done',
   expectedProviderSessionId: 'codex-fixture-thread-id',
+  // ADI-04. Codex's adapter sets no `promptViaStdin`: buildCodexArgs puts the prompt in argv.
+  // `fixtureSet` mirrors CODEX_LEGACY_COMPATIBILITY in providers/compatibility-manifest.ts.
+  promptViaStdin: false,
+  fixtureSet: 'codex-legacy-0.147.0-v1',
 });

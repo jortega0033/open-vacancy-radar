@@ -20,6 +20,11 @@ export async function execCapture(
   const { child, exit, kill } = spawnProcess(command, args, {
     cwd: opts.cwd ?? process.cwd(),
     env: opts.env,
+    // Bypasses the Windows Job Host: `command` here is routinely a bare name (`where`, `which`,
+    // or a CLI invoked only for a quick version/auth check) that relies on the OS's own PATH
+    // search, which the Job Host cannot do (it requires an already-absolute path). See
+    // `SpawnOptions.useJobHostOnWindows`'s doc comment for the detection breakage this avoids.
+    useJobHostOnWindows: false,
   });
 
   let stdout = '';
@@ -35,7 +40,12 @@ export async function execCapture(
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    kill();
+    // `kill()` returns a promise as of ADI-04 and rejects if the tree cannot be confirmed reaped.
+    // Not awaited here on purpose: this timeout's job is to stop *waiting* on a hung CLI, and
+    // `await exit` below already resolves once the direct child is gone. The rejection is caught
+    // rather than left floating, since an unhandled rejection would crash the daemon over a
+    // best-effort cleanup of a version check.
+    void kill().catch(() => undefined);
   }, timeoutMs);
 
   const { code } = await exit;

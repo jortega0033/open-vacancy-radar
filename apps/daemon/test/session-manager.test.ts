@@ -443,4 +443,27 @@ describe('SessionManager: bounded retention of completed sessions (AD-11)', () =
     expect(runningSession.isCancelled()).toBe(true);
     expect(completedSession.isCancelled()).toBe(false); // never touched, it was already terminal
   }, 10_000);
+
+  it('cancelAll() tolerates one session\'s handle.cancel() rejecting (e.g. a reap-confirmation timeout) and still cancels the rest within the bound', async () => {
+    // handle.cancel() can now reject rather than always resolving once it merely initiated
+    // termination (see spawnProcess's process-tree reap confirmation). Without per-session error
+    // isolation, a single rejection would make cancelAll's own Promise.all reject, which -- since
+    // apps/daemon/src/index.ts's shutdown handler calls cancelAll() via `void shutdown(...)` --
+    // would surface as an unhandled rejection during daemon shutdown instead of the documented
+    // bounded wait, skipping mcpManager.close()/app.close()/discovery-file cleanup entirely.
+    const { provider, sessionManager } = setup();
+    const failing = sessionManager.create('claude', '/tmp', 'hi');
+    const failingSession = provider.sessions.get(failing.id)!;
+    failingSession.handle.cancel = () => Promise.reject(new Error('reap confirmation timed out'));
+
+    const ok = sessionManager.create('claude', '/tmp', 'hi');
+    const okSession = provider.sessions.get(ok.id)!;
+    void okSession.handle.cancel().then(() => {
+      okSession.push({ type: 'session.cancelled' });
+      okSession.finish();
+    });
+
+    await expect(sessionManager.cancelAll(2_000)).resolves.toBeUndefined();
+    expect(sessionManager.get(ok.id)?.status).toBe('cancelled');
+  }, 10_000);
 });
