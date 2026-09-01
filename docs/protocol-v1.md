@@ -12,12 +12,20 @@ ever need a genuinely breaking change -- something that hasn't happened yet.
 `GET /health` also reports an optional `supportedProtocolVersions` array. `@agent-dock/client`
 checks compatibility automatically before the first real request (see
 [client-sdk.md](client-sdk.md)): it negotiates the highest version both the client and the daemon
-list, and throws `ProtocolMismatchError` when they share none at all. A pre-v2 daemon (this repo's
-own daemon today) omits the array entirely, which the client treats as "the daemon speaks exactly
-`protocolVersion`" -- against such a daemon, negotiation always settles on `1`, so this is
-unchanged from the plain exact-match check v1 originally shipped with. See
+list, and throws `ProtocolMismatchError` when they share none at all. A pre-v2 daemon omits the
+array entirely, which the client treats as "the daemon speaks exactly `protocolVersion`" -- against
+such a daemon, negotiation always settles on `1`, so this is unchanged from the plain exact-match
+check v1 originally shipped with. See
 [client-sdk.md#public-exports](client-sdk.md#public-exports) for `client.v2`, the negotiation-only
 namespace this enables.
+
+As of ADI-05 this repo's own daemon does report the array: `[1, 2]` when its durable session store
+opened and the v2 read routes are mounted, and `[1]` when it fell back to memory-only operation (see
+[daemon.md#v2-read-routes](daemon.md#v2-read-routes)). **`protocolVersion` itself stays `1` in both
+cases**, so nothing in this document changes for a v1 client -- every route, body, and SSE frame
+described below is exactly what it always was. The v2 routes are additive and read-only; they are
+documented in [daemon.md](daemon.md#v2-read-routes), not here, because this file is the frozen v1
+contract.
 
 ## HTTP + SSE routes
 

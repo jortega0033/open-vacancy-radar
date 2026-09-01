@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { createSessionRequestSchema, sessionIdParamSchema } from '@agent-dock/shared';
 import type { ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { SessionManager } from '../session-manager.js';
+import { ActiveSessionLimitError } from '../active-session-limiter.js';
+import { StorageFullError } from '../session-lineage-store.js';
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -39,8 +41,32 @@ export function registerSessionRoutes(
       return;
     }
 
-    const session = sessionManager.create(provider, cwd, prompt, resumeProviderSessionId, model);
-    reply.code(201).send(session);
+    // Both failures below are refusals to *start*, not failures of a started session, so they are
+    // reported as client-visible states with machine-readable codes rather than being flattened
+    // into the generic 500 the error handler would otherwise produce. Crucially, neither one has
+    // spawned a provider process or written a durable record by the time it throws (see
+    // `SessionManager.create`), so a caller is safe to retry either after freeing capacity.
+    try {
+      const session = sessionManager.create(provider, cwd, prompt, resumeProviderSessionId, model);
+      reply.code(201).send(session);
+    } catch (err) {
+      if (err instanceof ActiveSessionLimitError) {
+        reply.code(409).send({
+          error: 'too many active sessions',
+          code: err.code,
+          scope: err.scope,
+          capacity: err.capacity,
+        });
+        return;
+      }
+      if (err instanceof StorageFullError) {
+        // 507 Insufficient Storage, not 503: the daemon is healthy and every other route works.
+        // What is exhausted is the session store's retention budget, and nothing evictable remains.
+        reply.code(507).send({ error: 'session storage is full', code: err.code });
+        return;
+      }
+      throw err;
+    }
   });
 
   app.get('/sessions/:sessionId', async (req, reply) => {

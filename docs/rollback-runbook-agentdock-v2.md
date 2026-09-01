@@ -23,8 +23,44 @@ revert it — never a blanket file delete.
 
 The same `userData` root also holds a pre-existing, unrelated `ai-workspace/` scratch directory (see
 privacy.md), which holds no durable user data and is safe to delete at any time — do not confuse it
-with any new v2 "AI Workspace" durable session/grant store a later ADI ticket introduces; that store
-gets its own named path and its own rollback treatment when it lands.
+with the v2 durable session store described immediately below, which is a different directory with
+different rules.
+
+### `agentdock-state/`: the v2 durable session store (ADI-05)
+
+ADI-05 introduced the second piece of persistent state this runbook covers:
+`<userData>/agentdock-state/sessions-v1/`, written by the daemon and pointed at by
+`AGENT_DOCK_STATE_DIR`, which `apps/desktop/electron/main.ts` sets when it spawns the daemon.
+
+**A rollback must never delete, truncate, or "clean up" this directory.** It holds no personal data
+(see [privacy.md](privacy.md#agentdock-state-session-history-without-session-content) — content is
+reduced to hashes before anything is written), but it holds the record of whether a given session's
+prompt had already been delivered to a provider CLI. Deleting that turns "we know this already ran"
+into "we have no idea", and the specific consequence is an automatic retry duplicating a side effect
+in the user's own working directory. A stale, unreadable, or newer-than-expected store costs the
+user nothing; a deleted one costs them a safety guarantee.
+
+**Downgrade is already handled in code, and needs no manual step.** If the store on disk declares a
+`schemaVersion` this build does not understand — which is exactly what a rollback from a future
+build produces — the daemon:
+
+1. detects it in a **read-only preflight**, before any directory is created or any file is opened
+   for writing;
+2. logs it at `error` level and starts anyway, on the in-memory v1 session store;
+3. registers **no v2 routes**, so `GET /v2/...` returns 404 and `GET /health` reports
+   `supportedProtocolVersions: [1]`; and
+4. leaves the entire state tree **byte-identical**, so rolling forward again finds it intact.
+
+This is pinned by `apps/daemon/test/index.downgrade.test.ts` (a full start / serve / shutdown cycle
+against a hand-bumped `schemaVersion: 2` manifest, asserting a byte-identical tree afterwards) and
+`apps/daemon/test/session-lineage-store.schema.test.ts` (content + mtime snapshots plus fs-call
+spies showing zero writes, renames, or unlinks). If you are rolling back ADI-05 itself, the correct
+action for this directory is therefore **nothing at all** — the reverted build simply ignores any
+newer state that is there.
+
+Corrupt state is likewise never deleted: anything the daemon cannot parse is moved into
+`sessions-v1/quarantine/` and left there. If you are diagnosing a rollback, that directory is the
+first place to look, and it is safe to copy out and attach to an issue.
 
 ## Rollback procedure
 

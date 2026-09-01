@@ -272,7 +272,20 @@ function spawnDaemon(): void {
 
   daemonChild = spawn(process.execPath, args, {
     cwd,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENT_DOCK_APP_ID: APP_ID },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      AGENT_DOCK_APP_ID: APP_ID,
+      // ADI-05: pins the daemon's durable v2 session state under the same per-user data root that
+      // already holds workspace.db and vacancy-engine.db, in its own subdirectory. Without this the
+      // daemon would fall back to its own platform-native location (%LOCALAPPDATA%\<appId> and
+      // friends), creating a second, undocumented product-data directory that a user uninstalling
+      // or resetting the app would never find. The subdirectory matters as much as the root: the
+      // daemon refuses a state root that overlaps a product database path (see
+      // apps/daemon/src/state-directory.ts), so that a backup, a drizzle migration, or a workspace
+      // reset can never carry the session store along with it.
+      AGENT_DOCK_STATE_DIR: join(app.getPath('userData'), 'agentdock-state'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });

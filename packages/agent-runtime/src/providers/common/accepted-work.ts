@@ -3,8 +3,13 @@
  *
  * This is the single fact every retry, fallback, and cancellation decision in the supervisor is
  * built on, so it is modelled as a lattice with an explicit join rather than as a mutable boolean
- * somebody can flip back. See docs/adr-agentdock-v2-provenance.md for why this lives in memory
- * only today (a daemon crash loses it; persisting it is ADI-05's job).
+ * somebody can flip back.
+ *
+ * The latch itself is still per-session and in memory, which is correct: it tracks one live launch.
+ * What ADI-05 added is durability *around* it -- `apps/daemon/src/session-manager.ts` wires this
+ * latch to the durable session store, so the `'accepted'` conclusion survives a daemon crash even
+ * though the object holding it does not. See docs/adr-agentdock-v2-provenance.md#adi-05, including
+ * why only `'unknown'` and `'accepted'` are ever written to disk.
  */
 
 /**
