@@ -6,10 +6,18 @@ import { spawnProcess } from '../../process/spawn-process.js';
 import { findExecutable } from '../../detect-executable.js';
 import type { Logger } from '../../logger.js';
 import type { ProviderSessionHandle, StartSessionOptions } from '../../types.js';
+import { checkProviderFrameBounds, PROVIDER_FRAME_BOUNDS } from './unknown-frames.js';
 
 export interface ParsedLine {
   events: AgentEvent[];
   providerSessionId?: string;
+  /**
+   * Set by a parser whose `default:` branch was reached, i.e. the provider emitted an event type
+   * this repo does not model. Purely diagnostic: it does not change `events` (which stays empty,
+   * exactly as before ADI-04) and never reaches an `AgentEvent`. `runProviderSession` forwards it
+   * to `StartSessionOptions.launchProbe` when a supervisor is attached, and ignores it otherwise.
+   */
+  unrecognized?: { eventType: string };
 }
 
 export interface ProviderRunConfig {
@@ -41,6 +49,25 @@ export function runProviderSession(
   const channel = new AsyncChannel<AgentEvent>();
   let spawned: ReturnType<typeof spawnProcess> | undefined;
   let cancelled = false;
+
+  /**
+   * ADI-04's observation seam. `undefined` for every v1 caller, and every use below is guarded by
+   * that, so an unsupervised session executes exactly the code path it did before this ticket —
+   * including skipping the frame bounds check, which is the only added per-line work.
+   *
+   * A probe callback is an observer, so it is never allowed to affect the session it observes: a
+   * throwing callback is swallowed and logged at debug rather than propagated into `run()`, where
+   * it would surface to the user as a spurious ADAPTER_CRASH.
+   */
+  const probe = options.launchProbe;
+  function notify(fn: (() => void) | undefined): void {
+    if (!fn) return;
+    try {
+      fn();
+    } catch {
+      logger.debug(`${config.providerId}: launch probe callback threw`);
+    }
+  }
 
   /**
    * Enqueues an EVENT_OVERFLOW error followed by session.failed, bypassing the channel's normal
@@ -94,7 +121,20 @@ export function runProviderSession(
 
     const args = config.buildArgs(options);
     logger.info(`${config.providerId}: starting session`, { sessionId: options.sessionId });
-    spawned = spawnProcess(exePath, args, { cwd: options.cwd, env: options.env });
+    // Fired before the process exists, and only after cwd + executable validation have passed, so
+    // it marks exactly the moment an argv-embedded prompt (Codex) stops being provably undelivered.
+    // Reports this call's own promptViaStdin flag as ground truth -- see SessionLaunchProbe's doc
+    // comment on why the caller must not have to separately track or assume it.
+    notify(() => probe?.onSpawnAttempt?.({ viaStdin: config.promptViaStdin === true }));
+    try {
+      spawned = spawnProcess(exePath, args, { cwd: options.cwd, env: options.env });
+    } catch (err) {
+      // A synchronous spawn throw proves no process was created, so the prompt provably never
+      // reached one. Re-thrown unchanged: the existing `run().catch` turns it into the same
+      // ADAPTER_CRASH events it always did.
+      notify(probe?.onSpawnFailed);
+      throw err;
+    }
     // AD-05: when the adapter supports it, the prompt travels over stdin rather than argv. See
     // ProviderRunConfig.promptViaStdin and build-args.ts for why. `.write()` followed immediately
     // by `.end()` is safe and standard: Node buffers and flushes the write before actually
@@ -102,6 +142,10 @@ export function runProviderSession(
     // (spaces, quotes, newlines, unicode) since it's a plain UTF-8 write, not shell-parsed.
     if (config.promptViaStdin) {
       spawned.child.stdin.write(options.prompt, 'utf8');
+      // Fired after the write call, which is the point at which the bytes are irrevocably queued
+      // for the child: Node buffers and flushes them without further action from us, and there is
+      // no later observable moment (no per-write ack from the CLI) to wait for.
+      notify(probe?.onPromptDelivered);
     }
     spawned.child.stdin.end();
 
@@ -118,14 +162,50 @@ export function runProviderSession(
     let overflowed = false;
     try {
       for await (const line of readLines(spawned.child.stdout)) {
+        // A cheap byte-length check on the raw line, before the more expensive shape/depth walk
+        // inside `checkProviderFrameBounds` runs: a frame between `PROVIDER_FRAME_BOUNDS.maxBytes`
+        // and `readLines`'s own much larger hard line cap is already known to be a violation from
+        // its raw length alone, so there's no need to pay for `validateJsonBounds`'s recursive walk
+        // (which itself re-serializes the value via `JSON.stringify` as its final check) just to
+        // re-derive a fact `Buffer.byteLength` on the unparsed string already tells us for free.
+        // `raw` is still parsed and still handed to `parseLine` exactly as before: only the
+        // redundant re-validation of an already-known oversized frame is skipped, so no emitted
+        // event changes for a session that happens to be supervised.
+        const lineOversized = Buffer.byteLength(line, 'utf8') > PROVIDER_FRAME_BOUNDS.maxBytes;
         let raw: unknown;
         try {
           raw = JSON.parse(line);
         } catch {
           logger.debug(`${config.providerId}: skipped unparseable line`);
+          if (probe?.onUnknownFrame) notify(() => probe.onUnknownFrame!('unparseable_line', line));
           continue;
         }
+        if (probe?.onUnknownFrame) {
+          // Observation only, deliberately placed *before* parseLine and with no `continue`: a
+          // frame that is oversized or non-object is still handed to the parser exactly as it was
+          // pre-ADI-04, so no emitted event changes. The supervisor learns about it; the session
+          // does not behave differently because of it.
+          if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+            notify(() => probe.onUnknownFrame!('non_object_frame', line));
+          } else if (lineOversized) {
+            notify(() =>
+              probe.onUnknownFrame!(
+                'frame_bounds_exceeded',
+                line,
+                undefined,
+                `encoded JSON exceeds ${PROVIDER_FRAME_BOUNDS.maxBytes} bytes`,
+              ),
+            );
+          } else {
+            const violation = checkProviderFrameBounds(raw);
+            if (violation) notify(() => probe.onUnknownFrame!('frame_bounds_exceeded', line, undefined, violation));
+          }
+        }
         const parsed = config.parseLine(raw, logger);
+        if (parsed.unrecognized && probe?.onUnknownFrame) {
+          const eventType = parsed.unrecognized.eventType;
+          notify(() => probe.onUnknownFrame!('unrecognized_event_type', line, eventType));
+        }
         if (parsed.providerSessionId) providerSessionId = parsed.providerSessionId;
         for (const event of parsed.events) {
           if (!channel.push(event)) {
@@ -145,8 +225,14 @@ export function runProviderSession(
     }
 
     if (overflowed) {
-      spawned.kill();
-      await spawned.exit;
+      // Awaited (ADI-04): `kill()` now resolves only once the whole owned tree is confirmed gone.
+      // A rejection here must not replace the EVENT_OVERFLOW terminal events with an ADAPTER_CRASH,
+      // so it is logged and swallowed — the overflow is the user-relevant failure, not the reap.
+      await spawned.kill().catch((err: unknown) => {
+        logger.warn(`${config.providerId}: process tree reap failed after event overflow`, {
+          message: (err as Error).message,
+        });
+      });
       closeWithOverflow();
       return;
     }
@@ -192,7 +278,12 @@ export function runProviderSession(
     events: channel[Symbol.asyncIterator](),
     cancel: async () => {
       cancelled = true;
-      spawned?.kill();
+      // Awaited rather than fire-and-forget (ADI-04). Before this, `cancel()` resolved as soon as
+      // a signal had been *sent*, so a caller that immediately cleaned up the working directory
+      // was racing a still-running process tree. `kill()` now resolves only on confirmed reap and
+      // rejects on a reap timeout; that rejection is propagated rather than swallowed, because
+      // "cancelled, but we cannot prove anything is dead" is not a success.
+      await spawned?.kill();
     },
   };
 }

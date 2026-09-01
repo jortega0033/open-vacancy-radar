@@ -109,8 +109,12 @@ export function parseCodexLine(raw: unknown, logger: Logger): ParsedLine {
       const message = typeof error?.message === 'string' ? error.message : 'Codex turn failed';
       return { events: [{ type: 'error', message, recoverable: false }] };
     }
-    default:
-      logger.debug('codex: unrecognized event type', { eventType: String(obj.type) });
-      return { events: [] };
+    default: {
+      // See the equivalent branch in providers/claude/parser.ts: `events` is unchanged, and
+      // `unrecognized` is diagnostic-only input for the ADI-04 supervisor's frame ledger.
+      const eventType = String(obj.type);
+      logger.debug('codex: unrecognized event type', { eventType });
+      return { events: [], unrecognized: { eventType } };
+    }
   }
 }

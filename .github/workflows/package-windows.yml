@@ -60,6 +60,14 @@ jobs:
           }
           Write-Host "Found unpacked executable: $exePath"
 
+      # ADI-04. Deliberately positioned AFTER packaging: `pnpm package:win` runs `prepackage:win`,
+      # which compiles apps/daemon/dist/agent-dock-job-host.exe. These tests exercise that real
+      # compiled helper — including the negative control proving `taskkill /T /F` cannot reach an
+      # orphan whose intermediate parent already exited, which is the gap the Job Object closes.
+      # Running them before packaging would test a helper this job had not built yet.
+      - name: Windows process-tree termination tests
+        run: pnpm test:windows-process-tree
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

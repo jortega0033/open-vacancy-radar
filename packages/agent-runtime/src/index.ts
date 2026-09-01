@@ -9,3 +9,29 @@ export * from './registry.js';
 export * from './providers/claude/adapter.js';
 export * from './providers/codex/adapter.js';
 export * from './providers/fake/adapter.js';
+
+// ADI-04. Exported for the same reason ADI-03's model-select is: nothing in apps/daemon calls this
+// yet (session-manager.ts is deliberately untouched), but the surface is the reviewed one a later
+// ticket will wire in, and keeping it unexported would mean re-litigating the API at that point.
+// Only the public types are re-exported here — `run-session.ts` and `process/*` stay internal, per
+// the AD-09 note at the top of this file.
+export * from './providers/compatibility-manifest.js';
+export * from './providers/common/session-supervisor.js';
+export type {
+  AcceptedWorkState,
+} from './providers/common/accepted-work.js';
+export { ACCEPTED_WORK_RANK, AcceptedWorkLatch } from './providers/common/accepted-work.js';
+export type { FrozenLaunchScope } from './providers/common/launch-scope.js';
+export { freezeLaunchScope, launchScopesEqual } from './providers/common/launch-scope.js';
+export type {
+  FallbackAuthorizeInput,
+  FallbackDecision,
+  FallbackDeniedReason,
+  ProviderDeliveryState,
+} from './providers/common/fallback-gate.js';
+export { FallbackGate, ProviderTransportStartupError } from './providers/common/fallback-gate.js';
+export type {
+  NormalizedUnknownFrame,
+  UnknownFrameKind,
+} from './providers/common/unknown-frames.js';
+export { PROVIDER_FRAME_BOUNDS, UnknownFrameLedger } from './providers/common/unknown-frames.js';

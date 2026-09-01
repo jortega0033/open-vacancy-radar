@@ -24,6 +24,8 @@
     "package": "pnpm build && pnpm --filter @agent-dock/desktop run package",
     "package:win": "pnpm build && pnpm --filter @agent-dock/desktop run package:win",
     "test": "pnpm -r --filter=./packages/* --filter=./apps/* run test",
+    "test:provider-conformance": "pnpm --filter @agent-dock/agent-runtime exec vitest run test/claude-contract.test.ts test/codex-contract.test.ts test/claude-supervisor-contract.test.ts test/codex-supervisor-contract.test.ts test/compatibility-manifest.test.ts test/accepted-work.test.ts test/launch-scope.test.ts test/fallback-gate.test.ts test/unknown-frames.test.ts test/session-supervisor.test.ts",
+    "test:windows-process-tree": "pnpm --filter @agent-dock/agent-runtime exec vitest run test/spawn-process.test.ts",
     "typecheck": "pnpm -r run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

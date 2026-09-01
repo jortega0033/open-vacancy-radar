@@ -7,6 +7,7 @@
 // dependency it imports into plain JavaScript that Node can run standalone — which is
 // exactly what Electron's packaged-mode sidecar (electron/main.ts) needs.
 import { build } from 'esbuild';
+import { buildWindowsJobHost } from './build-windows-job-host.mjs';
 
 await build({
   entryPoints: ['src/index.ts'],
@@ -29,3 +30,8 @@ await build({
     js: "import { createRequire as __createRequire } from 'node:module'; import { fileURLToPath as __fileURLToPath } from 'node:url'; import { dirname as __dirnameOf } from 'node:path'; const require = __createRequire(import.meta.url); const __filename = __fileURLToPath(import.meta.url); const __dirname = __dirnameOf(__filename);",
   },
 });
+
+// The Windows Job Object host (ADI-04): a native runtime asset that must land in dist/ alongside
+// the bundle, since packages/agent-runtime resolves it relative to the running daemon entry point.
+// A no-op on non-Windows hosts, so `pnpm build` stays cross-platform.
+await buildWindowsJobHost();

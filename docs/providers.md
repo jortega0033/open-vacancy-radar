@@ -248,13 +248,85 @@ It lives under `test/support/`, not `src/`: it's a vitest-coupled test helper, n
 package's public runtime API, so it isn't exported from `index.ts`. A provider adapter maintained
 outside this repo would copy the pattern rather than import the file directly.
 
-Both `ClaudeProvider` and `CodexProvider` pass the full suite today (24 tests total, 12 each; run
+ADI-04 added two fields to `ProviderContractSpec`: `promptViaStdin` (required) and `fixtureSet`
+(optional). `promptViaStdin` mirrors the adapter's own setting and is cross-checked against the real
+argv builder, since it is the observable fact the provider's accepted-work boundary is derived from
+(see the next section); `fixtureSet` names the conformance corpus the provider's compatibility
+manifest entry declares. Every pre-existing assertion in this suite is unchanged.
+
+Both `ClaudeProvider` and `CodexProvider` pass the full suite today (28 tests total, 14 each; run
 `pnpm --filter @agent-dock/agent-runtime test` to see current counts directly rather than trusting
 a number in prose, which is exactly the kind of claim that drifts silently). Provider-specific
 parsing detail (the exact Claude/Codex JSONL shapes) stays in `test/claude-parser.test.ts` /
 `test/codex-parser.test.ts`, which the contract suite doesn't replace. Both providers' `detect()`
 auth parsing also has dedicated pure-function tests independent of the contract suite (see
 `test/claude-detect.test.ts` / `test/codex-detect.test.ts`).
+
+## Accepted-work boundaries and the compatibility manifest (ADI-04)
+
+`packages/agent-runtime/src/providers/compatibility-manifest.ts` records, per
+provider/CLI-version/transport triple, the **accepted-work boundary**: the instant after which this
+repo can no longer prove the provider did *not* act on the user's prompt. This is a safety fact,
+not a progress indicator — it exists so a supervisor can answer "is it safe to retry?" without
+guessing, and so it is never answered optimistically by accident.
+
+| Provider | Pinned version | Transport | Accepted-work boundary | Why |
+|---|---|---|---|---|
+| Claude Code | `2.1.228` | `legacy-one-shot` | `first-prompt-byte-to-stdin` | `build-args.ts` deliberately keeps the prompt out of argv and `adapter.ts` sets `promptViaStdin`, so nothing reaches the CLI until the stdin write. Everything before that write is provably undelivered. |
+| Codex | `0.147.0` | `legacy-one-shot` | `process-spawn-attempt` | `build-args.ts` puts the prompt directly in argv (`codex exec <prompt>`), so it is handed over atomically by the act of creating the process. There is no later moment to observe. |
+
+The supervisor does not actually read this table's boundary column at runtime to decide *when* to
+mark work accepted, and deliberately so: it reads `runProviderSession`'s own `promptViaStdin` flag
+instead, reported at the exact moment of the spawn attempt (see `SessionLaunchProbe.onSpawnAttempt`
+in `types.ts`). A separately-maintained boundary field that silently drifted out of sync with a real
+adapter change (e.g. `build-args.ts` switching a provider from argv to stdin without this manifest
+being updated) would have been a manifest **hit** confidently reporting the *old* transport, which
+is worse than a miss — a miss already fails closed. Deriving from the actual flag instead makes that
+drift structurally impossible: there is one flag governing both what `runProviderSession` does and
+what the supervisor assumes it did. The manifest's boundary column above still documents which
+boundary applies to each pinned version, for fixture classification and this table, but is not the
+enforcement mechanism.
+
+Because of this, both providers reach the same terminal accepted-work value for a successful
+session — `acceptedWork: 'accepted'` — just via different observable moments, which the conformance
+suite asserts rather than assumes: Claude's `'accepted'` follows an observed stdin flush (direct
+evidence of delivery); Codex's `'accepted'` follows the spawn attempt itself, since an argv-embedded
+prompt is handed over unconditionally and atomically the instant the process is created — there is
+no in-flight window analogous to a stdin write that could still fail. `AcceptedWorkState` measures
+delivery (retry-safety), never completion, so "accepted" here never implies the CLI has finished, or
+even started, acting on the prompt — only that it has provably received it.
+
+### The fail-closed manifest-miss rule
+
+Lookup is **exact match only**. There is deliberately no semver-range matching and no
+"nearest version" fallback: a manifest entry is a claim that *that exact build* was run against the
+conformance fixtures, and range matching would silently extend that claim to builds nobody tested.
+So a user on `claude 2.1.229`, or on a build whose version could not be detected at all, is a
+manifest miss — which is an ordinary, expected state, not an error.
+
+On a miss, `acceptedWorkBoundaryFor(undefined)` returns **`'process-spawn-attempt'`**, the earliest
+and therefore most conservative boundary in the union. An unverified CLI is assumed to have received
+the prompt the moment we tried to start it.
+
+The direction matters, and it is the single most consequential default in this area. Defaulting the
+other way (`'first-prompt-byte-to-stdin'`) would assume an unverified CLI reads its prompt from
+stdin and that nothing before that write can have reached it — an assumption that is false for every
+argv-prompt CLI, and whose failure mode is the dangerous one: concluding "no work was accepted, safe
+to retry" for a CLI that had already started acting on the user's prompt. Being wrong in the
+conservative direction costs a refused retry. Being wrong in the other direction costs a duplicated
+side effect in the user's working directory.
+
+### Where this is exercised
+
+`test/support/supervisor-contract.ts` (`describeSupervisorContract`) is the per-provider conformance
+suite for the supervisor, with `test/claude-supervisor-contract.test.ts` and
+`test/codex-supervisor-contract.test.ts` as thin call sites — the same pattern as the v1 provider
+contract above, kept in a separate file so a failure is unambiguous about which contract broke.
+`test/compatibility-manifest.test.ts` additionally checks each boundary against the adapter's *real*
+argv builder, so an adapter that moved its prompt into or out of argv without updating the manifest
+fails rather than getting a silently wrong boundary.
+
+Run both contract suites together with `pnpm test:provider-conformance` from the repo root.
 
 ## Adding a new provider
 
