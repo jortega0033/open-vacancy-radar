@@ -193,6 +193,7 @@ function vacancy(record: WorkableFeedRecord, minimumAnnualBaseUsd: number | null
     currency: null,
     salaryPeriod: null,
     advertisedMinimum: null,
+    postedAt: record.postedAt,
     raw: record,
     minimumAnnualBaseUsd,
   });

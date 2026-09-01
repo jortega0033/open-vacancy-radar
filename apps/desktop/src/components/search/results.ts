@@ -247,8 +247,8 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     arrangementValue: 'unknown' as const,
     employmentType: vacancy.employmentType,
     salary: formatDiscoverySalary(vacancy),
-    // Discovery rows carry no posting date at all.
-    postedAt: null,
+    // Null for most sources, which genuinely carry no posting date; real for the sources that do.
+    postedAt: vacancy.postedAt,
     description: vacancy.description,
     verification: WORLDWIDE_VERIFICATION,
     profileScore: null,
@@ -279,7 +279,10 @@ export interface SearchFilters {
   sponsorOnly: boolean;
   /** Netherlands only: the worldwide pipeline records no workplace mode. */
   arrangement: 'any' | ArrangementValue;
-  /** Netherlands only: the worldwide pipeline records no posting date. */
+  /**
+   * Both markets. Most worldwide sources still record no posting date at all -- a row with an
+   * unknown date is dropped rather than kept when this filter is active, never assumed recent.
+   */
   postedWithin: PostedWithin;
   /** Both markets: the discovery source / ATS provider. */
   source: string;
@@ -316,7 +319,7 @@ export function supportedFilters(market: SearchMarket): {
   return {
     sponsorOnly: isNetherlands,
     arrangement: isNetherlands,
-    postedWithin: isNetherlands,
+    postedWithin: true,
     employment: !isNetherlands,
     country: !isNetherlands,
   };
@@ -421,4 +424,19 @@ export function formatDate(value: string | null): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.valueOf())) return 'Unknown';
   return parsed.toLocaleDateString();
+}
+
+/**
+ * Matches the Netherlands pipeline's own `freshnessPolicy.maximumPostingAgeDays` (30): that
+ * pipeline enforces it server-side and never reports an older row at all, so a worldwide row past
+ * the same age is flagged, not hidden, since nothing here re-checks whether the posting is still
+ * live before the user applies to it.
+ */
+const STALE_POSTING_THRESHOLD_DAYS = 30;
+
+export function isStalePosting(postedAt: string | null, now: Date = new Date()): boolean {
+  if (!postedAt) return false;
+  const posted = new Date(postedAt);
+  if (Number.isNaN(posted.valueOf())) return false;
+  return now.getTime() - posted.getTime() > STALE_POSTING_THRESHOLD_DAYS * MILLISECONDS_PER_DAY;
 }

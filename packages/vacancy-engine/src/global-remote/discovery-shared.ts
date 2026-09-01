@@ -56,11 +56,12 @@ export function locations(value: unknown, emptyFallback = 'Worldwide'): string {
 export function discoveryAudit(
   input: Omit<
     DiscoveryVacancyAudit,
-    'decision' | 'reasons' | 'annualizedMinimumUsd' | 'contentHash' | 'description'
+    'decision' | 'reasons' | 'annualizedMinimumUsd' | 'contentHash' | 'description' | 'postedAt'
   > & {
     raw: unknown;
     minimumAnnualBaseUsd: number | null;
     description?: string | null;
+    postedAt?: string | null;
   },
 ): DiscoveryVacancyAudit {
   const annualized = annualizedMinimumUsd(
@@ -92,6 +93,7 @@ export function discoveryAudit(
     reasons: classification.reasons,
     contentHash: createHash('sha256').update(JSON.stringify(input.raw)).digest('hex'),
     description: input.description ?? null,
+    postedAt: input.postedAt ?? null,
   };
 }
 

@@ -189,6 +189,7 @@ function normalizeRemooteJob(
     salaryPeriod,
     advertisedMinimum,
     description,
+    postedAt: hashEvidence.postedAt,
     raw: hashEvidence,
     minimumAnnualBaseUsd,
   });
