@@ -6,6 +6,7 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
   locations,
   parseSalaryText,
   parsedRoot,
@@ -129,6 +130,7 @@ async function discoverDice(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description: summary,
+          postedAt: isoPostedAt(stringValue(job.postedDate)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -203,6 +205,7 @@ async function discoverTheMuse(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description,
+          postedAt: isoPostedAt(stringValue(job.publication_date)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));

@@ -4,6 +4,8 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
+  isoPostedAtFromDdMmYyyy,
   numberValue,
   parseSalaryText,
   parsedRoot,
@@ -65,6 +67,7 @@ async function discoverAdzuna(
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
           description: stringValue(job.description),
+          postedAt: isoPostedAt(stringValue(job.created)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -133,6 +136,7 @@ async function discoverJooble(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: snippet,
+        postedAt: isoPostedAt(stringValue(job.updated)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -188,6 +192,7 @@ async function discoverReed(
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
         description: stringValue(job.jobDescription),
+        postedAt: isoPostedAtFromDdMmYyyy(stringValue(job.date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];

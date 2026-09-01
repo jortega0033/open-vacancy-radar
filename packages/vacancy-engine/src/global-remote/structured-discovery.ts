@@ -5,6 +5,7 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
   locations,
   numberValue,
   parseSalaryText,
@@ -111,6 +112,7 @@ async function discoverFreehire(
         salaryPeriod: stringValue(enrichment?.salary_period),
         advertisedMinimum: numberValue(enrichment?.salary_min),
         description: stringValue(job.description),
+        postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -189,6 +191,7 @@ async function discoverJobOpportunities(
         currency: stringValue(job.salary_currency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(job.salary_period),
         advertisedMinimum: numberValue(job.salary_min),
+        postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -263,6 +266,7 @@ async function discoverRemoteLanders(
           currency: salary.currency,
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
+          postedAt: isoPostedAt(stringValue(job.postedDate)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));

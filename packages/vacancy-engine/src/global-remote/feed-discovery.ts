@@ -7,6 +7,9 @@ import {
   discoveryAudit,
   httpUrl,
   identifier,
+  isoPostedAt,
+  isoPostedAtFromMmDdYyyyPrefix,
+  isoPostedAtFromUnixSeconds,
   locations,
   numberValue,
   parseSalaryText,
@@ -215,6 +218,7 @@ async function discoverWeWorkRemotely(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -248,6 +252,7 @@ async function discoverRemotive(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -277,6 +282,7 @@ async function discoverUnCareers(
         currency: null,
         salaryPeriod: null,
         advertisedMinimum: null,
+        postedAt: isoPostedAtFromMmDdYyyyPrefix(metadata['Posted Date'] ?? null),
         raw: {
           title: item.title,
           link: item.link,
@@ -313,6 +319,7 @@ async function discoverStartupJobs(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -344,6 +351,7 @@ async function discoverJobsCollider(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -375,6 +383,7 @@ async function discoverDevItJobsNl(
         salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -406,6 +415,7 @@ async function discoverDevItJobsUk(
         salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -436,6 +446,7 @@ async function discoverRealWorkFromAnywhere(
         salaryPeriod: null,
         advertisedMinimum: null,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -467,6 +478,7 @@ async function discoverJobspresso(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -540,6 +552,7 @@ async function discoverWorkingNomads(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description,
+        postedAt: isoPostedAt(stringValue(job.pub_date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -597,6 +610,7 @@ async function discoverRemoteFirstJobs(
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
           description: stringValue(job.description),
+          postedAt: isoPostedAt(stringValue(job.published_at)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -675,6 +689,7 @@ async function discoverJobRemotely(
           description: Array.isArray(job.skillsRequired)
             ? job.skillsRequired.filter((value): value is string => typeof value === 'string').join(' ')
             : null,
+          postedAt: isoPostedAt(stringValue(job.createdAt)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -739,6 +754,7 @@ async function discoverRemoteOk(
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
         description: stringValue(job.description),
+        postedAt: isoPostedAt(stringValue(job.date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -817,6 +833,7 @@ async function discoverArbeitnow(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description,
+          postedAt: isoPostedAtFromUnixSeconds(numberValue(job.created_at)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));

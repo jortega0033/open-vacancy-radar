@@ -71,6 +71,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
       <title>Acme: Senior Frontend Engineer</title>
       <region>Anywhere in the World</region><type>Full-Time</type>
       <description><![CDATA[Annual base salary $150,000 per year.]]></description>
+      <pubDate>Mon, 31 Aug 2026 16:30:27 +0000</pubDate>
       <guid>wwr-1</guid><link>https://weworkremotely.com/remote-jobs/acme-frontend</link>
     </item>`)],
     [REMOTE_FIRST_URL, JSON.stringify({
@@ -85,6 +86,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
         salary_min: 130000,
         salary_max: 160000,
         locations: ['Europe'],
+        published_at: '2026-08-24T09:00:00',
       }],
     })],
     [JOB_REMOTELY_URL, JSON.stringify({
@@ -98,6 +100,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
           jobType: 'REMOTE',
           salary: { min: 120000, max: 140000, currency: 'USD' },
           skillsRequired: ['angular', 'typescript'],
+          createdAt: '2026-08-25T09:00:00.000Z',
         }],
         page: 1,
         pages: 1,
@@ -116,6 +119,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
         salary_min: 140000,
         salary_max: 170000,
         description: 'Build the web UI.',
+        date: '2026-08-26T09:00:00+00:00',
       },
     ])],
     [ARBEITNOW_URL, JSON.stringify({
@@ -128,6 +132,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
         url: 'https://www.arbeitnow.com/jobs/companies/arbeit/frontend-engineer-1',
         job_types: ['Full-time'],
         location: 'Netherlands',
+        created_at: 1788241217,
       }],
       links: { next: null },
       meta: { current_page: 1 },
@@ -135,16 +140,19 @@ function routes(): Map<string, string | AtsHttpResponse> {
     [STARTUP_JOBS_URL, rss(`<item>
       <title>Frontend Developer at Startup Co</title>
       <description><![CDATA[Annual salary $135,000 per year.]]></description>
+      <pubDate>Mon, 31 Aug 2026 05:17:00 +0000</pubDate>
       <guid>startup-1</guid><link>https://startup.jobs/frontend-developer-startup-1</link>
     </item>`)],
     [DEVITJOBS_URL, rss(`<item>
       <title>Angular Developer @ Dutch Co [€80.000 - 100.000]</title>
       <description><![CDATA[Frontend product development in Amsterdam.]]></description>
+      <pubDate>Mon, 31 Aug 2026 21:01:03 GMT</pubDate>
       <guid>devit-1</guid><link>https://devitjobs.nl/jobs/dutch-angular-developer</link>
     </item>`)],
     [JOBS_COLLIDER_URL, rss(`<item>
       <title>Frontend Engineer at Collider Co</title>
       <description><![CDATA[Remote role paying $145,000 per year.]]></description>
+      <pubDate>Tue, 01 Sep 2026 00:20:52 +0000</pubDate>
       <guid>collider-1</guid><link>https://jobscollider.com/remote-jobs/frontend-engineer-1</link>
     </item>`)],
     [WORKING_NOMADS_URL, JSON.stringify([{
@@ -154,21 +162,25 @@ function routes(): Map<string, string | AtsHttpResponse> {
       url: 'https://www.workingnomads.com/jobs/senior-frontend-developer-wn-1',
       location: 'Anywhere',
       description: '<p>Base salary $150,000 per year.</p>',
+      pub_date: '2026-08-31T12:04:17-04:00',
     }])],
     [REAL_WORK_URL, rss(`<item>
       <title>Frontend Engineer at Anywhere Co</title>
       <description><![CDATA[Worldwide role paying $125,000 annually.]]></description>
+      <pubDate>Wed, 05 Aug 2026 08:04:44 GMT</pubDate>
       <guid>rwfa-1</guid><link>https://www.realworkfromanywhere.com/jobs/frontend-engineer-rwfa-1</link>
     </item>`)],
     [DEVITJOBS_UK_URL, rss(`<item>
       <title>Frontend Developer @ British Co [£100,000 - 120,000]</title>
       <description><![CDATA[Build web applications in the United Kingdom.]]></description>
+      <pubDate>Tue, 01 Sep 2026 06:09:06 GMT</pubDate>
       <guid>devit-uk-1</guid><link>https://devitjobs.uk/jobs/british-frontend-developer</link>
     </item>`)],
     [JOBSPRESSO_URL, rss(`<item>
       <title>Senior Frontend Engineer</title>
       <dc:creator><![CDATA[Presso Co<br>⚲&nbsp;Worldwide]]></dc:creator>
       <description><![CDATA[Remote role paying $140,000 per year.]]></description>
+      <pubDate>Sat, 29 Aug 2026 02:12:12 +0000</pubDate>
       <guid isPermaLink="false">https://jobspresso.co/?post_type=job_listing&#038;p=1</guid>
       <link>https://jobspresso.co/job/senior-frontend-engineer/</link>
     </item>`)],
@@ -212,25 +224,34 @@ describe('credential-free JSON and RSS discovery feeds', () => {
         company: 'Remotive Co',
         url: 'https://remotive.com/remote-jobs/software-development/senior-frontend-engineer-2091000',
         description: 'Build accessible interfaces. Annual base salary $150,000 per year.',
+        postedAt: '2026-08-27T14:36:09.000Z',
       });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'we_work_remotely'))
+      .toMatchObject({ postedAt: '2026-08-31T16:30:27.000Z' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_first_jobs'))
+      .toMatchObject({ postedAt: '2026-08-24T09:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_remotely'))
-      .toMatchObject({ company: 'Unspecified employer (JobRemotely)' });
+      .toMatchObject({ company: 'Unspecified employer (JobRemotely)', postedAt: '2026-08-25T09:00:00.000Z' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_ok'))
+      .toMatchObject({ postedAt: '2026-08-26T09:00:00.000Z' });
+    expect(result.vacancies.find((vacancy) => vacancy.provider === 'arbeitnow'))
+      .toMatchObject({ postedAt: '2026-09-01T05:40:17.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'startup_jobs'))
-      .toMatchObject({ decision: 'location_restricted' });
+      .toMatchObject({ decision: 'location_restricted', postedAt: '2026-08-31T05:17:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'devitjobs_nl'))
-      .toMatchObject({ decision: 'salary_unverified', currency: 'EUR' });
+      .toMatchObject({ decision: 'salary_unverified', currency: 'EUR', postedAt: '2026-08-31T21:01:03.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobs_collider'))
-      .toMatchObject({ decision: 'location_restricted' });
+      .toMatchObject({ decision: 'location_restricted', postedAt: '2026-09-01T00:20:52.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'working_nomads'))
-      .toMatchObject({ company: 'Nomad Co', decision: 'official_review_candidate' });
+      .toMatchObject({ company: 'Nomad Co', decision: 'official_review_candidate', postedAt: '2026-08-31T16:04:17.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'real_work_from_anywhere'))
-      .toMatchObject({ company: 'Anywhere Co', location: 'Worldwide', decision: 'salary_unverified' });
+      .toMatchObject({ company: 'Anywhere Co', location: 'Worldwide', decision: 'salary_unverified', postedAt: '2026-08-05T08:04:44.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'devitjobs_uk'))
-      .toMatchObject({ decision: 'location_restricted', currency: 'GBP' });
+      .toMatchObject({ decision: 'location_restricted', currency: 'GBP', postedAt: '2026-09-01T06:09:06.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobspresso'))
-      .toMatchObject({ company: 'Presso Co', location: 'Worldwide', decision: 'official_review_candidate' });
+      .toMatchObject({ company: 'Presso Co', location: 'Worldwide', decision: 'official_review_candidate', postedAt: '2026-08-29T02:12:12.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_frontend_jobs'))
-      .toMatchObject({ company: 'Frontend Jobs Co', location: 'Worldwide', decision: 'official_review_candidate' });
+      .toMatchObject({ company: 'Frontend Jobs Co', location: 'Worldwide', decision: 'official_review_candidate', postedAt: null });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'un_careers'))
       .toMatchObject({
         key: 'un_careers:283900',
@@ -239,7 +260,7 @@ describe('credential-free JSON and RSS discovery feeds', () => {
         url: 'https://careers.un.org/jobSearchDescription/283900?language=en',
       });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'un_careers'))
-      .toMatchObject({ description: null });
+      .toMatchObject({ description: null, postedAt: '2026-08-29T00:00:00.000Z' });
   });
 
   it('records a blocked feed and continues every other provider', async () => {
