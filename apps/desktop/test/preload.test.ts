@@ -12,9 +12,9 @@ const { invoke, on, removeListener } = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
-// preload.ts exposes four independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`)
-// via four separate exposeInMainWorld calls, keyed by name so loading one doesn't clobber the
-// other, the way a single shared `exposedApi` variable would.
+// preload.ts exposes five independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`,
+// `system`) via five separate exposeInMainWorld calls, keyed by name so loading one doesn't clobber
+// the other, the way a single shared `exposedApi` variable would.
 let exposedApis: Record<string, Record<string, unknown>>;
 
 vi.mock('electron', () => ({
@@ -34,6 +34,18 @@ async function loadPreload(name = 'agentDock'): Promise<Record<string, unknown>>
   if (!api) throw new Error(`preload.ts did not call exposeInMainWorld("${name}", ...)`);
   return api;
 }
+
+// Every test in this file calls loadPreload(), which does a real `vi.resetModules()` + dynamic
+// `import()` per call -- slow enough under a loaded test run (many files, jsdom setup) to
+// occasionally exceed vitest's default 5000ms per-test timeout on a busy machine. This is a
+// mitigation, not a fix: the real cost is re-executing the whole preload module graph on every
+// single test instead of once per describe block (each block only ever loads one fixed namespace).
+// Raising the ceiling buys headroom now without masking a *correctness* regression -- a genuine
+// hang would still fail, just after longer -- but it does make a genuine multiple-times-slower
+// regression in loadPreload() itself harder to notice. Caching the load per describe block would
+// remove the cost outright instead of raising the ceiling on it; left as a follow-up rather than
+// done here, since it touches every test in this file for a performance win, not a correctness one.
+vi.setConfig({ testTimeout: 15_000 });
 
 beforeEach(() => {
   invoke.mockReset();
@@ -370,5 +382,45 @@ describe('electron/preload.ts: cv bridge', () => {
     invoke.mockResolvedValue(undefined);
     api = await loadPreload('cv');
     await expect((api.getWorkspaceDir as () => Promise<unknown>)()).rejects.toThrow(/workspace directory/);
+  });
+});
+
+describe('electron/preload.ts: system bridge', () => {
+  it('exposes exactly the three documented capability functions and nothing else', async () => {
+    const api = await loadPreload('system');
+    expect(Object.keys(api).sort()).toEqual(['getAppVersion', 'saveFile', 'setLaunchAtLogin'].sort());
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('setLaunchAtLogin passes true through for the real enable case', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('system');
+    await (api.setLaunchAtLogin as (enabled: boolean) => Promise<void>)(true);
+    expect(invoke).toHaveBeenCalledWith('system:set-login-item', true);
+  });
+
+  it('setLaunchAtLogin coerces a non-boolean argument to a real boolean before sending it over IPC', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('system');
+    await (api.setLaunchAtLogin as (enabled: unknown) => Promise<void>)('yes' as unknown as boolean);
+    expect(invoke).toHaveBeenCalledWith('system:set-login-item', false);
+  });
+
+  it('getAppVersion invokes system:get-app-version with no arguments', async () => {
+    invoke.mockResolvedValue('1.2.3');
+    const api = await loadPreload('system');
+    expect(await (api.getAppVersion as () => Promise<unknown>)()).toBe('1.2.3');
+    expect(invoke).toHaveBeenCalledWith('system:get-app-version');
+  });
+
+  it('saveFile passes the input through to system:save-file', async () => {
+    invoke.mockResolvedValue({ saved: true, path: 'C:/Users/someone/Downloads/report.pdf' });
+    const api = await loadPreload('system');
+    const input = { suggestedName: 'report.pdf', data: 'aGVsbG8=', encoding: 'base64', filters: [] };
+    const result = await (api.saveFile as (input: unknown) => Promise<unknown>)(input);
+    expect(invoke).toHaveBeenCalledWith('system:save-file', input);
+    expect(result).toEqual({ saved: true, path: 'C:/Users/someone/Downloads/report.pdf' });
   });
 });

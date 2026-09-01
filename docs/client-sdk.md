@@ -116,9 +116,11 @@ Worth knowing if you're extending this package:
 
 Electron's main process (`apps/desktop/electron/main.ts`) owns exactly one `AgentDockClient`
 instance, constructed once the daemon's discovery file is readable. It's the only thing in the
-desktop app that imports `@agent-dock/client`: the renderer only ever reaches it through seven IPC
-handlers in `main.ts`, and the preload bridge (`electron/preload.ts`) exposes those seven functions
-and nothing shaped like a generic request passthrough. See
+desktop app that imports `@agent-dock/client`: the renderer only ever reaches it through the
+`agentDock` IPC handlers in `main.ts`, and the preload bridge (`electron/preload.ts`) exposes those
+same functions and nothing shaped like a generic request passthrough. The preload bridge also
+exposes separate, non-daemon `vacancyRadar`/`workspace`/`cv`/`system` namespaces (see
+[electron.md](electron.md)) that never touch `AgentDockClient` at all. See
 [SECURITY.md](../SECURITY.md#renderer-never-talks-to-the-daemon-directly) for the full boundary,
 and [electron.md](electron.md) for how the main process wires this client to IPC.
 
