@@ -86,7 +86,7 @@ export function assertContainedIn(root: string, target: string): void {
 }
 
 /**
- * Atomically replaces `filePath` with the JSON encoding of `value`.
+ * Atomically replaces `filePath` with `contents`, verbatim.
  *
  * The sequence is the standard durable-replace dance, and the order matters at every step:
  *
@@ -101,8 +101,13 @@ export function assertContainedIn(root: string, target: string): void {
  *
  * If anything throws before the rename, the temp file is removed in `finally`. If the rename
  * succeeded, the temp name no longer exists and the cleanup is a no-op.
+ *
+ * Exported alongside `atomicWriteJson` because not everything the store replaces is JSON: an event
+ * log is JSONL and a quarantined tail is raw text, and both need the identical durability sequence.
+ * A second, hand-rolled write/rename pair for those (which is what the corrupt-tail repair
+ * originally had) is exactly how a missing fsync gets introduced in one place and not the other.
  */
-export function atomicWriteJson(filePath: string, value: unknown): void {
+export function atomicWriteText(filePath: string, contents: string): void {
   const directory = dirname(filePath);
   const tmpPath = join(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
 
@@ -110,7 +115,7 @@ export function atomicWriteJson(filePath: string, value: unknown): void {
   let fd: number | undefined;
   try {
     fd = openSync(tmpPath, 'wx', 0o600);
-    writeFileSync(fd, `${JSON.stringify(value)}\n`);
+    writeFileSync(fd, contents);
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
@@ -139,6 +144,14 @@ export function atomicWriteJson(filePath: string, value: unknown): void {
       }
     }
   }
+}
+
+/**
+ * Atomically replaces `filePath` with the JSON encoding of `value`, newline-terminated so a
+ * truncated file is detectable. See `atomicWriteText` for the durability sequence itself.
+ */
+export function atomicWriteJson(filePath: string, value: unknown): void {
+  atomicWriteText(filePath, `${JSON.stringify(value)}\n`);
 }
 
 /**

@@ -6,7 +6,7 @@ import { noopLogger, ProviderRegistry } from '@agent-dock/agent-runtime';
 import { FAKE_PROVIDER_CAPABILITIES, FakeProvider } from '@agent-dock/agent-runtime';
 import { ActiveSessionLimiter } from '../src/active-session-limiter.js';
 import { INTERRUPTED_SESSION_V1_ERROR, toV1Session } from '../src/persisted-session-schema.js';
-import { SessionLineageStore } from '../src/session-lineage-store.js';
+import { MAX_PERSISTED_EVENTS_PER_SESSION, SessionLineageStore } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
 import { FIXTURE_SCOPE, eventLine, makeRecord, makeSession, seedManifest, seedRecord } from './support/lineage-fixtures.js';
 
@@ -100,6 +100,84 @@ describe('recovering sessions left non-terminal by a restart', () => {
       store.listEvents(record.session.id).events.filter((event) => event.type === 'session.interrupted'),
     ).toHaveLength(0);
   });
+});
+
+describe('the event counter past the truncation cap', () => {
+  /**
+   * Seeds a session whose log is already at the cap, cheaply: appending 5,000 events through the
+   * store would mean 5,000 fsyncs, and what is under test is what happens *after* the cap, not the
+   * journey to it.
+   */
+  function seedCappedSession(): ReturnType<typeof makeRecord> {
+    const record = makeRecord({
+      status: 'completed',
+      terminalReason: 'provider_completed',
+      eventCount: MAX_PERSISTED_EVENTS_PER_SESSION,
+    });
+    const lines: string[] = [];
+    for (let i = 0; i < MAX_PERSISTED_EVENTS_PER_SESSION; i++) lines.push(eventLine(i));
+    seedRecord(stateRoot, record, lines);
+    return record;
+  }
+
+  it('checkpoints the true count on every suppressed event, so a crash does not freeze it at the cap', () => {
+    const record = seedCappedSession();
+    const store = new SessionLineageStore({ stateRoot });
+    expect(store.get(record.session.id)?.session.eventCount).toBe(MAX_PERSISTED_EVENTS_PER_SESSION);
+
+    const extra = 25;
+    for (let i = 0; i < extra; i++) {
+      store.appendEvent(record.session.id, {
+        type: 'assistant.message',
+        text: 'over the cap',
+        sequence: MAX_PERSISTED_EVENTS_PER_SESSION + i,
+        timestamp: 't',
+      });
+    }
+
+    // Read straight off disk, with no graceful shutdown in between: this is the state a kill -9
+    // would have left, and the counter has to be in it already.
+    const onDisk = JSON.parse(
+      readFileSync(
+        join(
+          stateRoot,
+          'sessions-v1',
+          'lineages',
+          record.session.rootSessionId,
+          'records',
+          `${record.session.id}.json`,
+        ),
+        'utf8',
+      ),
+    );
+    expect(onDisk.session.eventCount).toBe(MAX_PERSISTED_EVENTS_PER_SESSION + extra);
+    expect(onDisk.session.eventsTruncated).toBe(true);
+
+    // The log itself did not grow, which is the whole reason the counter had to be checkpointed:
+    // recovery's max(persisted eventCount, lines on disk) has nothing but the record to learn from.
+    const recovered = new SessionLineageStore({ stateRoot });
+    expect(
+      recovered.listEvents(record.session.id, { limit: MAX_PERSISTED_EVENTS_PER_SESSION + extra }).events,
+    ).toHaveLength(MAX_PERSISTED_EVENTS_PER_SESSION);
+    expect(recovered.get(record.session.id)?.session.eventCount).toBe(MAX_PERSISTED_EVENTS_PER_SESSION + extra);
+    expect(recovered.get(record.session.id)?.session.eventsTruncated).toBe(true);
+  }, 20_000);
+
+  it('flips eventsTruncated exactly once and keeps counting from there', () => {
+    const record = seedCappedSession();
+    const store = new SessionLineageStore({ stateRoot });
+
+    store.appendEvent(record.session.id, {
+      type: 'assistant.message',
+      text: 'first over the cap',
+      sequence: MAX_PERSISTED_EVENTS_PER_SESSION,
+      timestamp: 't',
+    });
+
+    const persisted = store.get(record.session.id)?.session;
+    expect(persisted?.eventsTruncated).toBe(true);
+    expect(persisted?.eventCount).toBe(MAX_PERSISTED_EVENTS_PER_SESSION + 1);
+  }, 20_000);
 });
 
 describe('acceptedWork survives recovery verbatim', () => {

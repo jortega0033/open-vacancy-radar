@@ -57,6 +57,22 @@ export const INTERRUPTED_SESSION_V1_ERROR = 'daemon restarted before the session
 const MAX_STATUS_BYTES = 256;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_ERROR_CODE_BYTES = 128;
+/**
+ * Byte caps for the three *identifier* fields that are kept verbatim rather than digested.
+ *
+ * A model id, a provider-native thread id, and a tool-call id are all short, opaque handles in every
+ * real case -- and all three arrive from a third-party CLI's stdout or from a client request body,
+ * neither of which this repo controls. Keeping them is what makes a record useful (a resume attaches
+ * a lineage by `providerSessionId`; a tool call is correlated by `toolCallId`), so they cannot be
+ * hashed away like content. Bounding them is what stops a hostile or malfunctioning value from
+ * turning a "no content on disk" store into a place to park a prompt, a stack trace, or a secret:
+ * 256 bytes is far more than any of the three legitimately needs and far less than any payload.
+ *
+ * These are exported for `session-lineage-store.ts`, which copies `providerSessionId` on its own.
+ */
+export const MAX_MODEL_ID_BYTES = 256;
+export const MAX_PROVIDER_SESSION_ID_BYTES = 256;
+export const MAX_TOOL_CALL_ID_BYTES = 256;
 /** An error `code` is an identifier, never prose: anything outside this charset is dropped. */
 const ERROR_CODE_DISALLOWED = /[^A-Za-z0-9._-]+/g;
 
@@ -76,7 +92,7 @@ function utf8Bytes(text: string): number {
  * keeps the guarantee the caller actually needs ("never more than N bytes") rather than an
  * approximate one.
  */
-function truncateToBytes(text: string, maxBytes: number): string {
+export function truncateToBytes(text: string, maxBytes: number): string {
   if (utf8Bytes(text) <= maxBytes) return text;
   const cut = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
   return utf8Bytes(cut) <= maxBytes ? cut : cut.slice(0, -1);
@@ -314,7 +330,9 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
         type: 'session.started',
         sessionId: envelope.sessionId,
         provider: envelope.provider,
-        ...(envelope.providerSessionId === undefined ? {} : { providerSessionId: envelope.providerSessionId }),
+        ...(envelope.providerSessionId === undefined
+          ? {}
+          : { providerSessionId: truncateToBytes(envelope.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES) }),
       };
 
     case 'status': {
@@ -342,7 +360,9 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
         ...base,
         type: 'tool.started',
         toolName: truncateToBytes(envelope.toolName, MAX_TOOL_NAME_BYTES),
-        ...(envelope.toolCallId === undefined ? {} : { toolCallId: envelope.toolCallId }),
+        ...(envelope.toolCallId === undefined
+          ? {}
+          : { toolCallId: truncateToBytes(envelope.toolCallId, MAX_TOOL_CALL_ID_BYTES) }),
         ...(input === undefined ? {} : { inputBytes: input.bytes, inputSha256: input.sha256 }),
       };
     }
@@ -355,7 +375,9 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
         ...(envelope.toolName === undefined
           ? {}
           : { toolName: truncateToBytes(envelope.toolName, MAX_TOOL_NAME_BYTES) }),
-        ...(envelope.toolCallId === undefined ? {} : { toolCallId: envelope.toolCallId }),
+        ...(envelope.toolCallId === undefined
+          ? {}
+          : { toolCallId: truncateToBytes(envelope.toolCallId, MAX_TOOL_CALL_ID_BYTES) }),
         ...(envelope.isError === undefined ? {} : { isError: envelope.isError }),
         ...(result === undefined ? {} : { resultBytes: result.bytes, resultSha256: result.sha256 }),
       };
@@ -391,7 +413,9 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
       return {
         ...base,
         type: 'session.completed',
-        ...(envelope.providerSessionId === undefined ? {} : { providerSessionId: envelope.providerSessionId }),
+        ...(envelope.providerSessionId === undefined
+          ? {}
+          : { providerSessionId: truncateToBytes(envelope.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES) }),
       };
 
     case 'session.failed': {
@@ -547,10 +571,15 @@ export function redactSessionForPersistence(
       id: safe.id,
       provider: safe.provider,
       cwd: safe.cwd,
-      ...(safe.model === undefined ? {} : { model: safe.model }),
+      // `model` and `providerSessionId` are bounded, not digested: both are identifiers a reader
+      // acts on (which model ran, which thread to resume), and both are attacker-influenceable
+      // strings. See MAX_MODEL_ID_BYTES.
+      ...(safe.model === undefined ? {} : { model: truncateToBytes(safe.model, MAX_MODEL_ID_BYTES) }),
       status: extra.status,
       ...(extra.terminalReason === undefined ? {} : { terminalReason: extra.terminalReason }),
-      ...(safe.providerSessionId === undefined ? {} : { providerSessionId: safe.providerSessionId }),
+      ...(safe.providerSessionId === undefined
+        ? {}
+        : { providerSessionId: truncateToBytes(safe.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES) }),
       startedAt: safe.startedAt,
       ...(safe.completedAt === undefined ? {} : { completedAt: safe.completedAt }),
       acceptedWork: extra.acceptedWork,

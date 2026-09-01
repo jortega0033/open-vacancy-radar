@@ -150,6 +150,102 @@ describe('future schema version: the store refuses without touching anything', (
     expect(mutationsInsideStore()).toEqual([]);
   });
 
+  it('throws on a future-version line inside an event log, with zero filesystem mutations', () => {
+    // An event log carries `v` per line, not a top-level `schemaVersion`, so a preflight that only
+    // knew how to read whole-file JSON would sail straight past a newer build's log -- and then
+    // `#repairEventLog` would find lines that do not validate against *this* build's schema, call
+    // them a torn tail, and rewrite the file. That rewrite is the mutation this asserts cannot
+    // happen: a version we do not understand is not corruption.
+    expectThrowsUntouched(() => {
+      seedManifest(stateRoot, { schemaVersion: 1 });
+      const record = makeRecord();
+      seedRecord(stateRoot, record, [
+        eventLine(0),
+        JSON.stringify({ v: 2, sequence: 1, timestamp: 't', type: 'something.new' }),
+      ]);
+    }, 2);
+  });
+
+  it('throws on a future-version line in a stray temp beside an event log', () => {
+    expectThrowsUntouched(() => {
+      seedManifest(stateRoot, { schemaVersion: 1 });
+      const record = makeRecord();
+      seedRecord(stateRoot, record, [eventLine(0)]);
+      const events = join(stateRoot, 'sessions-v1', 'lineages', record.session.rootSessionId, 'events');
+      writeFileSync(
+        join(events, `.${record.session.id}.jsonl.999.abc.tmp`),
+        `${JSON.stringify({ v: 7, sequence: 1, timestamp: 't', type: 'something.new' })}\n`,
+      );
+    }, 7);
+  });
+
+  it('does not mistake a torn or unparseable event-log line for a future version', () => {
+    // The other half of the same rule: only a numeric `v` above this build's own counts. Garbage,
+    // and a half-written final line, stay the corruption path's business -- which is allowed to
+    // mutate, and does.
+    seedManifest(stateRoot, { schemaVersion: 1 });
+    const record = makeRecord();
+    seedRecord(stateRoot, record, [eventLine(0)]);
+    const log = join(
+      stateRoot,
+      'sessions-v1',
+      'lineages',
+      record.session.rootSessionId,
+      'events',
+      `${record.session.id}.jsonl`,
+    );
+    writeFileSync(log, `${eventLine(0)}\nnot json at all\n{"v":"2","sequence":2`);
+
+    const store = new SessionLineageStore({ stateRoot });
+    expect(store.listEvents(record.session.id).events.map((event) => event.sequence)).toEqual([0]);
+  });
+
+  it('throws on a future-schema record staged under .trash, and neither restores nor quarantines it', () => {
+    // A trashed lineage is an eviction the newer build had not yet committed. Recovery would either
+    // rename it back into lineages/ (no tombstone) or delete it (tombstone present), and both are
+    // mutations on state belonging to software this build does not understand.
+    const trashed = makeRecord();
+    const trashEntry = join(
+      stateRoot,
+      'sessions-v1',
+      '.trash',
+      `evict--${trashed.session.rootSessionId}--00000000-0000-4000-8000-00000000ffff`,
+    );
+
+    expectThrowsUntouched(() => {
+      seedManifest(stateRoot, { schemaVersion: 1 });
+      mkdirSync(join(trashEntry, 'records'), { recursive: true });
+      mkdirSync(join(trashEntry, 'events'), { recursive: true });
+      writeFileSync(
+        join(trashEntry, 'records', `${trashed.session.id}.json`),
+        JSON.stringify({ ...trashed, schemaVersion: 6 }),
+      );
+    }, 6);
+
+    // Still in .trash, still not in lineages/, still not in quarantine.
+    expect(existsSync(join(trashEntry, 'records', `${trashed.session.id}.json`))).toBe(true);
+    expect(existsSync(join(stateRoot, 'sessions-v1', 'lineages', trashed.session.rootSessionId))).toBe(false);
+    expect(existsSync(join(stateRoot, 'sessions-v1', 'quarantine'))).toBe(false);
+  });
+
+  it('throws on a future-version event log staged under .trash', () => {
+    const trashed = makeRecord();
+    expectThrowsUntouched(() => {
+      seedManifest(stateRoot, { schemaVersion: 1 });
+      const trashEntry = join(
+        stateRoot,
+        'sessions-v1',
+        '.trash',
+        `evict--${trashed.session.rootSessionId}--00000000-0000-4000-8000-00000000eeee`,
+      );
+      mkdirSync(join(trashEntry, 'events'), { recursive: true });
+      writeFileSync(
+        join(trashEntry, 'events', `${trashed.session.id}.jsonl`),
+        `${JSON.stringify({ v: 9, sequence: 0, timestamp: 't', type: 'something.new' })}\n`,
+      );
+    }, 9);
+  });
+
   it('does not create the store skeleton at all when a future version is found', () => {
     seedManifest(stateRoot, { schemaVersion: 2 });
     expect(() => new SessionLineageStore({ stateRoot })).toThrow(UnsupportedStateSchemaVersionError);

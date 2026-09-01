@@ -7,7 +7,7 @@ import { noopLogger, ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { AgentEvent, ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '@agent-dock/agent-runtime';
 import { ACTIVE_SESSION_LIMITS, ActiveSessionLimiter } from '../src/active-session-limiter.js';
-import { SessionLineageStore } from '../src/session-lineage-store.js';
+import { SessionLineageStore, type RetentionPolicy } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
 import { buildServer } from '../src/server.js';
 
@@ -114,7 +114,7 @@ interface Harness {
 let harnesses: Harness[] = [];
 let cwd: string;
 
-function setup(): Harness {
+function setup(retention?: RetentionPolicy): Harness {
   const stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-limits-'));
   const claude = new ControllableProvider('claude');
   const codex = new ControllableProvider('codex');
@@ -122,7 +122,7 @@ function setup(): Harness {
   registry.register(claude);
   registry.register(codex);
 
-  const store = new SessionLineageStore({ stateRoot });
+  const store = new SessionLineageStore({ stateRoot, ...(retention ? { retention } : {}) });
   const limiter = new ActiveSessionLimiter();
   const manager = new SessionManager(registry, noopLogger, undefined, limiter, store);
   const app = buildServer({
@@ -205,6 +205,55 @@ describe('POST /sessions: 409 at the active-session limit', () => {
     expect(refused.statusCode).toBe(409);
     expect(claude.startedOptions.length).toBe(startedBefore);
     expect(store.stats().records).toBe(recordsBefore);
+  });
+});
+
+describe('POST /sessions: 507 when the durable store has no room', () => {
+  /**
+   * The store is given a one-record budget and that record is spent on a session that is still
+   * running, so retention has nothing it is allowed to evict (an active lineage is never a
+   * candidate). This is the only way the 507 path can be reached honestly: it is not a disk-space
+   * condition, it is "the retention budget is full and every lineage in it is still in use".
+   */
+  it('refuses with the documented body, writes no record, and never starts a provider', async () => {
+    const { app, claude, store, limiter } = setup({ maxRecords: 1 });
+
+    const first = await app.inject({ method: 'POST', url: '/sessions', headers: AUTH, payload: createBody('claude') });
+    expect(first.statusCode).toBe(201);
+    expect(store.stats().records).toBe(1);
+
+    const startedBefore = claude.startedOptions.length;
+
+    const refused = await app.inject({ method: 'POST', url: '/sessions', headers: AUTH, payload: createBody('claude') });
+
+    expect(refused.statusCode).toBe(507);
+    expect(refused.json()).toEqual({ error: 'session storage is full', code: 'storage_full' });
+    // Refused before anything irreversible: no provider process, no record, and -- because the
+    // reservation is released on the way out -- no permanently shrunk capacity either.
+    expect(claude.startedOptions.length).toBe(startedBefore);
+    expect(store.stats().records).toBe(1);
+    expect(store.get(first.json().id)).toBeDefined();
+    expect(limiter.snapshot().global).toBe(1);
+  });
+
+  it('admits the next session once the one holding the budget has finished', async () => {
+    const { app, claude, store } = setup({ maxRecords: 1 });
+    const first = await app.inject({ method: 'POST', url: '/sessions', headers: AUTH, payload: createBody('claude') });
+    expect(
+      (await app.inject({ method: 'POST', url: '/sessions', headers: AUTH, payload: createBody('claude') })).statusCode,
+    ).toBe(507);
+
+    const channel = claude.sessions.get(first.json().id)!;
+    channel.push({ type: 'session.completed' });
+    channel.finish();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Now the first lineage is terminal, so it is evictable and the budget can be reclaimed. A 507
+    // is a "not right now", never a wedged store.
+    const admitted = await app.inject({ method: 'POST', url: '/sessions', headers: AUTH, payload: createBody('claude') });
+    expect(admitted.statusCode).toBe(201);
+    expect(store.get(first.json().id)).toBeUndefined();
+    expect(store.get(admitted.json().id)).toBeDefined();
   });
 });
 

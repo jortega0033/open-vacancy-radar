@@ -227,6 +227,18 @@ variant without a redaction rule is a compile error) and
 `apps/daemon/test/persisted-session-schema.test.ts` for the runtime coverage check and the
 sentinel sweep over the whole on-disk tree.
 
+Three identifiers *are* kept verbatim, because a reader acts on them: `model`, `providerSessionId`,
+and `toolCallId`. All three are **capped at 256 UTF-8 bytes** on the way in (the same treatment
+`status` and `toolName` already got), everywhere they are copied -- into an event line, into the
+session record, and in the store's own `setProviderSessionId`. A real value is a handful of bytes,
+so the cap costs nothing legitimate; what it removes is the one route by which an oversized value
+from a provider's stdout, or from a client request body, could park content in a store whose whole
+point is that it holds none.
+
+The bounded, content-free `unknownFrames` ledger (one `{kind, eventType, bytes, sha256,
+occurrences}` entry per distinct kind of provider output this repo could not interpret, never the
+line itself) is written into the record when a session reaches a terminal state.
+
 ### Restart recovery
 
 Recovery runs **synchronously in the store's constructor**, which `index.ts` calls before
@@ -253,9 +265,16 @@ downgraded. `'interrupted'` exists only in v2's vocabulary; a v1 client reading
   oldest-terminal-first. An active lineage is never evicted. Eviction is two-phase -- rename into
   `.trash/`, write the tombstone (**the commit point**), delete the trashed copy -- so an interrupted
   eviction is either rolled back or completed on the next start, never left half-done.
-- **A future `schemaVersion` anywhere** → a read-only preflight throws before any directory is
+- **Event log past 5,000 lines** → further events are counted but not stored (`eventsTruncated`
+  flips to `true`). Because the log can no longer speak for the counter, every suppressed event
+  checkpoints the record's `eventCount`, so a crash after the cap recovers the true count rather
+  than the frozen line count.
+- **A future schema version anywhere** → a read-only preflight throws before any directory is
   created or any file opened for writing, the daemon logs it and starts on the memory store alone,
-  and the newer state is left byte-identical. See
+  and the newer state is left byte-identical. "Anywhere" covers the manifest, every record, every
+  tombstone, every `events/*.jsonl` line (which carries `v`, not `schemaVersion`), any stray `.tmp`
+  beside either, and everything staged under `.trash/` -- each of which a later startup step would
+  otherwise quarantine, rewrite, restore, or delete. See
   [the rollback runbook](rollback-runbook-agentdock-v2.md#agentdock-state-the-v2-durable-session-store-adi-05).
 
 ## Event history and replay
@@ -292,6 +311,12 @@ oldest (and its `AgentSession` record with it) once a 51st completes. This is a 
 a cache-replacement policy: the daemon is local and single-user, and a bound that's simple to
 reason about was preferred over one that's optimal. `DELETE /sessions/:id` removes a session
 immediately regardless of this cap, and removes it from the retention tracking too.
+
+Sessions recovered from the durable store at startup enter the same FIFO, in completion order, and
+are trimmed by the same pass -- otherwise a store holding its full 500-record budget would seed all
+500 into memory and keep them for the daemon's lifetime, reaching the exact unbounded growth this
+cap exists to prevent by way of a restart. The trim is in-memory only: durable retention is a
+separate and deliberately more permissive policy, so nothing leaves the disk.
 
 `SessionManager.cancel()` also refuses to report success for a session that's already terminal
 (see the routes table above), so a stale UI action against a long-finished session gets `404`, not

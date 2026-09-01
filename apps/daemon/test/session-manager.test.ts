@@ -1,8 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, AgentEventEnvelope, ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { ProviderRegistry, noopLogger } from '@agent-dock/agent-runtime';
 import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '@agent-dock/agent-runtime';
+import { ActiveSessionLimiter } from '../src/active-session-limiter.js';
+import { SessionLineageStore } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
+import { makeRecord, readAllText, seedManifest, seedRecord } from './support/lineage-fixtures.js';
 
 const TERMINAL_TYPES = new Set(['session.completed', 'session.failed', 'session.cancelled']);
 
@@ -92,6 +99,30 @@ function setup() {
   const sessionManager = new SessionManager(registry, noopLogger);
   return { provider, sessionManager };
 }
+
+/** Temp state roots created by the durable-store tests below, torn down after each of them. */
+const stateRoots: string[] = [];
+
+function makeStateRoot(): string {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-session-manager-'));
+  stateRoots.push(stateRoot);
+  seedManifest(stateRoot, { schemaVersion: 1 });
+  return stateRoot;
+}
+
+/** The same wiring `index.ts` uses when a durable store opened successfully. */
+function setupDurable(stateRoot: string) {
+  const provider = new TestProvider();
+  const registry = new ProviderRegistry();
+  registry.register(provider);
+  const store = new SessionLineageStore({ stateRoot });
+  const sessionManager = new SessionManager(registry, noopLogger, undefined, new ActiveSessionLimiter(), store);
+  return { provider, sessionManager, store };
+}
+
+afterEach(() => {
+  for (const stateRoot of stateRoots.splice(0)) rmSync(stateRoot, { recursive: true, force: true });
+});
 
 /** Lets any already-queued microtask/macrotask chain (push -> waiter -> for-await -> listener) settle. */
 function tick(ms = 0): Promise<void> {
@@ -466,4 +497,112 @@ describe('SessionManager: bounded retention of completed sessions (AD-11)', () =
     await expect(sessionManager.cancelAll(2_000)).resolves.toBeUndefined();
     expect(sessionManager.get(ok.id)?.status).toBe('cancelled');
   }, 10_000);
+});
+
+describe('SessionManager: sessions recovered from the durable store obey the same in-memory cap', () => {
+  const RETENTION_CAP = 50; // MAX_RETAINED_COMPLETED_SESSIONS in session-manager.ts
+
+  /** `count` completed records, one lineage each, oldest first. */
+  function seedCompletedRecords(stateRoot: string, count: number): string[] {
+    const base = Date.now() - count * 60_000;
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      const record = makeRecord({
+        status: 'completed',
+        terminalReason: 'provider_completed',
+        startedAt: stamp,
+        completedAt: stamp,
+      });
+      seedRecord(stateRoot, record);
+      ids.push(record.session.id);
+    }
+    return ids;
+  }
+
+  it('trims the seeded set to the cap, keeping the most recently completed', () => {
+    const stateRoot = makeStateRoot();
+    const ids = seedCompletedRecords(stateRoot, RETENTION_CAP + 5);
+
+    const { sessionManager, store } = setupDurable(stateRoot);
+
+    // Without the FIFO seeding, every recovered record would sit in memory for the daemon's whole
+    // lifetime: the cap only ever counted sessions *this* process watched finish.
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+    for (const id of ids.slice(0, 5)) expect(sessionManager.get(id)).toBeUndefined();
+    for (const id of ids.slice(5)) expect(sessionManager.get(id)).toBeDefined();
+
+    // Durable retention is a separate, deliberately more permissive policy (docs/privacy.md), so
+    // the in-memory trim evicted nothing from disk.
+    expect(store.stats().records).toBe(RETENTION_CAP + 5);
+    for (const id of ids) expect(store.get(id)).toBeDefined();
+  }, 20_000);
+
+  it('counts a recovered session against the cap that a newly completed one then pushes out', async () => {
+    const stateRoot = makeStateRoot();
+    const ids = seedCompletedRecords(stateRoot, RETENTION_CAP);
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+
+    const fresh = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(fresh.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    // The oldest recovered session -- not the new one, and not nothing at all -- is what leaves.
+    expect(sessionManager.get(ids[0] as string)).toBeUndefined();
+    expect(sessionManager.get(fresh.id)).toBeDefined();
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+    expect(store.get(ids[0] as string)).toBeDefined();
+  }, 20_000);
+});
+
+describe('SessionManager: the unknown-frame ledger reaches the durable record', () => {
+  const RAW_FRAME = '{"type":"weird","payload":"SENTINEL_UNKNOWN_FRAME_CONTENT"}';
+
+  it('persists a bounded, content-free tally of provider output it could not interpret', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+
+    // The production seam: `run-session.ts` calls exactly this, once per line it could not fully
+    // interpret. Driving it directly keeps the test about the daemon's wiring rather than about a
+    // provider CLI's output format.
+    const probe = provider.startedOptions.get(session.id)?.launchProbe;
+    expect(probe?.onUnknownFrame, 'the launch probe carries no unknown-frame callback').toBeDefined();
+    probe?.onUnknownFrame?.('unrecognized_event_type', RAW_FRAME, 'weird');
+    probe?.onUnknownFrame?.('unrecognized_event_type', RAW_FRAME, 'weird');
+    probe?.onUnknownFrame?.('unparseable_line', 'not json at all');
+
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    const frames = store.get(session.id)?.session.unknownFrames ?? [];
+    expect(frames.map((frame) => frame.kind)).toEqual(['unrecognized_event_type', 'unparseable_line']);
+    const first = frames[0]!;
+    expect(first.eventType).toBe('weird');
+    expect(first.occurrences).toBe(2);
+    expect(first.bytes).toBe(Buffer.byteLength(RAW_FRAME, 'utf8'));
+    expect(first.sha256).toBe(createHash('sha256').update(RAW_FRAME, 'utf8').digest('hex'));
+
+    // The raw line is correlatable by hash and unreadable from disk, which is the only reason a
+    // field fed straight from provider stdout is safe to persist.
+    expect(readAllText(stateRoot)).not.toContain('SENTINEL_UNKNOWN_FRAME_CONTENT');
+  }, 20_000);
+
+  it('leaves unknownFrames empty for a session whose output was fully understood', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    expect(store.get(session.id)?.session.unknownFrames).toEqual([]);
+  }, 20_000);
 });

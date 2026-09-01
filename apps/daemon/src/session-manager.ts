@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentEvent, AgentEventEnvelope, AgentSession, ProviderId, TerminalReasonV2 } from '@agent-dock/shared';
 import type { Logger, ProviderRegistry, ProviderSessionHandle, SessionLaunchProbe } from '@agent-dock/agent-runtime';
-import { AcceptedWorkLatch } from '@agent-dock/agent-runtime';
+import { AcceptedWorkLatch, UnknownFrameLedger } from '@agent-dock/agent-runtime';
 import { MemorySessionStore, type SessionStore } from './session-store.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
-import { toV1Session } from './persisted-session-schema.js';
+import { toV1Session, type PersistedSessionRecordV1 } from './persisted-session-schema.js';
 import type { SessionLineageStore } from './session-lineage-store.js';
 
 /**
@@ -31,6 +31,12 @@ interface RuntimeState {
    * (AD-12).
    */
   done: Promise<void>;
+  /**
+   * The bounded, content-free tally of provider output this repo could not interpret, fed by the
+   * launch probe's `onUnknownFrame` seam. Present only when a durable store is active, because it
+   * exists to be written into that session's final record and nothing else reads it.
+   */
+  unknownFrames?: UnknownFrameLedger;
 }
 
 const MAX_STORED_EVENTS_PER_SESSION = 5_000;
@@ -52,6 +58,18 @@ const DURABLE_TERMINAL: Readonly<
   'session.failed': { status: 'failed', reason: 'provider_error' },
   'session.cancelled': { status: 'cancelled', reason: 'cancelled_by_client' },
 });
+
+/**
+ * Sorts recovered records into the order they *would* have entered `completedOrder` had the daemon
+ * never stopped. `completedAt` is what the FIFO tracks, so a record missing one (a shape a strict
+ * schema does not admit, but a defensive fallback costs nothing) falls back to its start time, and
+ * an unparseable timestamp sorts oldest -- i.e. is evicted first, which is the safe direction for a
+ * record we cannot place.
+ */
+function completionOrderKey(session: PersistedSessionRecordV1['session']): number {
+  const stamp = Date.parse(session.completedAt ?? session.startedAt);
+  return Number.isFinite(stamp) ? stamp : 0;
+}
 
 /**
  * Orchestrates session lifecycle: creates sessions via the provider registry, consumes their
@@ -84,7 +102,22 @@ export class SessionManager {
     // never existed. Every recovered record is already terminal, so none of them holds a limiter
     // reservation and the full active-session budget is available immediately.
     if (this.durable) {
-      for (const record of this.durable.allRecords()) this.store.create(toV1Session(record));
+      const recovered = this.durable.allRecords();
+      for (const record of recovered) this.store.create(toV1Session(record));
+
+      // Recovered sessions join the same FIFO a live session joins when it completes, in the same
+      // order (oldest completion first), and are then trimmed by the same eviction pass. Without
+      // this, `MAX_RETAINED_COMPLETED_SESSIONS` would bound only sessions this process watched
+      // finish: a durable store holding its full 500-record budget would seed all 500 into memory
+      // and keep every one of them for the daemon's whole lifetime, which is precisely the
+      // unbounded growth AD-11 exists to prevent -- just reached through a restart instead.
+      // Durable retention is separate and deliberately more permissive (see docs/privacy.md), so
+      // trimming here evicts nothing from disk.
+      const oldestCompletedFirst = [...recovered].sort(
+        (a, b) => completionOrderKey(a.session) - completionOrderKey(b.session),
+      );
+      for (const record of oldestCompletedFirst) this.completedOrder.push(record.session.id);
+      this.evictOldestCompletedIfOverCap();
     }
   }
 
@@ -141,6 +174,10 @@ export class SessionManager {
     // nothing after it can proceed without one.
     this.limiter.reserve(provider, id);
 
+    // Only when a durable store is active: the ledger exists to be written into that session's
+    // final record, so without one it would accumulate entries nothing ever reads.
+    const unknownFrames = this.durable ? new UnknownFrameLedger() : undefined;
+
     let recorded = false;
     let handle: ProviderSessionHandle;
     try {
@@ -163,7 +200,7 @@ export class SessionManager {
         prompt,
         resumeProviderSessionId,
         model,
-        ...(this.durable ? { launchProbe: this.buildLaunchProbe(id) } : {}),
+        ...(unknownFrames ? { launchProbe: this.buildLaunchProbe(id, unknownFrames) } : {}),
       });
     } catch (err) {
       this.limiter.release(id);
@@ -176,7 +213,14 @@ export class SessionManager {
       throw err;
     }
 
-    const runtimeEntry: RuntimeState = { handle, events: [], listeners: new Set(), nextSequence: 0, done: Promise.resolve() };
+    const runtimeEntry: RuntimeState = {
+      handle,
+      events: [],
+      listeners: new Set(),
+      nextSequence: 0,
+      done: Promise.resolve(),
+      ...(unknownFrames ? { unknownFrames } : {}),
+    };
     this.runtime.set(id, runtimeEntry);
     // `.catch` rather than a bare assignment: a provider generator that throws instead of ending
     // with a terminal event would otherwise make `done` a rejected promise nobody awaits until
@@ -200,13 +244,19 @@ export class SessionManager {
   /**
    * The accepted-work observation seam (ADI-04's `SessionLaunchProbe`), wired to the durable store.
    *
-   * The two callbacks encode the same boundary the supervisor does, for the same reason: a CLI that
-   * receives its prompt in argv (`viaStdin: false`) has been handed the work atomically by process
-   * creation, while a CLI that reads stdin has provably received nothing until the write happens.
-   * Both end at `'accepted'`; only the moment differs. See
+   * The first two callbacks encode the same boundary the supervisor does, for the same reason: a CLI
+   * that receives its prompt in argv (`viaStdin: false`) has been handed the work atomically by
+   * process creation, while a CLI that reads stdin has provably received nothing until the write
+   * happens. Both end at `'accepted'`; only the moment differs. See
    * docs/adr-agentdock-v2-provenance.md#the-three-way-scope-split.
+   *
+   * `onUnknownFrame` fills the ledger whose entries become the record's `unknownFrames`. It is
+   * recorded here rather than digested at write time because the ledger is what applies the bounds
+   * *and* the content rule: it keeps a sha256 and a byte length per distinct kind, never the line
+   * (see `UnknownFrameLedger`), which is why a field fed straight from provider stdout is safe to
+   * persist at all.
    */
-  private buildLaunchProbe(id: string): SessionLaunchProbe {
+  private buildLaunchProbe(id: string, unknownFrames: UnknownFrameLedger): SessionLaunchProbe {
     const latch = new AcceptedWorkLatch();
     void latch.accepted.then(() => {
       this.durable?.markAcceptedWork(id, 'accepted');
@@ -217,6 +267,9 @@ export class SessionManager {
       },
       onPromptDelivered: () => {
         latch.observe('accepted');
+      },
+      onUnknownFrame: (kind, rawLine, eventType, boundsViolation) => {
+        unknownFrames.record(kind, rawLine, eventType, boundsViolation);
       },
     };
   }
@@ -312,7 +365,16 @@ export class SessionManager {
         this.durable.setProviderSessionId(id, envelope.providerSessionId);
       }
       const terminal = DURABLE_TERMINAL[envelope.type];
-      if (terminal) this.durable.finalize(id, terminal.status, terminal.reason);
+      if (terminal) {
+        // Immediately before finalization, and only if there is something to say. A provider emits
+        // exactly one terminal event, always last (see run-session.ts), so no further frame can
+        // arrive after this point and the record ends up describing the whole run. The empty case
+        // -- overwhelmingly the common one -- is skipped rather than written as `[]`, which the
+        // record already says, so an ordinary session costs no extra record replace or fsync.
+        const frames = this.runtime.get(id)?.unknownFrames?.entries() ?? [];
+        if (frames.length > 0) this.durable.setUnknownFrames(id, frames);
+        this.durable.finalize(id, terminal.status, terminal.reason);
+      }
     } catch (error: unknown) {
       this.logger.warn('could not persist a session event; the session itself is unaffected', {
         sessionId: id,
@@ -326,8 +388,11 @@ export class SessionManager {
     while (this.completedOrder.length > MAX_RETAINED_COMPLETED_SESSIONS) {
       const staleId = this.completedOrder.shift();
       if (staleId === undefined) break;
-      // Already removed via remove()/DELETE. Nothing left to evict, just drop the stale FIFO entry.
-      if (!this.runtime.has(staleId)) continue;
+      // Both deletes are unconditional and both are no-ops for anything already gone. A session
+      // recovered from the durable store has a `SessionStore` entry but never had a `RuntimeState`
+      // (no process, no event buffer), so a guard on `runtime.has()` here -- which is what this loop
+      // used to open with -- would drop the FIFO entry and leave the store entry retained forever,
+      // making the cap unenforceable for exactly the sessions the constructor seeds.
       this.runtime.delete(staleId);
       this.store.delete(staleId);
     }

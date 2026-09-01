@@ -1,18 +1,52 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SessionLineageStore } from '../src/session-lineage-store.js';
-import { eventLine, listFiles, makeRecord, readAllText, seedManifest, seedRecord } from './support/lineage-fixtures.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * `node:fs` is wrapped (rather than spied on: its ESM namespace is not configurable) so the
+ * corrupt-tail repair's *syscall order* can be asserted, the same way `atomic-fs.test.ts` asserts
+ * it for `atomicWriteJson`. Every wrapper calls the real function, so the rest of this file behaves
+ * exactly as it did before and observes the true sequence rather than a simulated one.
+ */
+const { calls, WRAPPED } = vi.hoisted(() => ({
+  calls: [] as Array<{ fn: string; args: unknown[]; result?: unknown }>,
+  WRAPPED: ['openSync', 'writeFileSync', 'writeSync', 'fsyncSync', 'closeSync', 'renameSync', 'unlinkSync'] as const,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const wrapper: Record<string, unknown> = { ...actual };
+  for (const name of WRAPPED) {
+    const original = actual[name] as unknown as (...args: unknown[]) => unknown;
+    wrapper[name] = (...args: unknown[]) => {
+      // Recorded before the call, so a throw (a directory fsync on win32, say) still shows up as
+      // the attempt it was.
+      const entry = { fn: name, args };
+      calls.push(entry);
+      const result = original(...args);
+      (entry as { result?: unknown }).result = result;
+      return result;
+    };
+  }
+  return { ...wrapper, default: wrapper };
+});
+
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const { basename, dirname, join, resolve } = await import('node:path');
+const { SessionLineageStore } = await import('../src/session-lineage-store.js');
+const { eventLine, listFiles, makeRecord, readAllText, seedManifest, seedRecord } = await import(
+  './support/lineage-fixtures.js'
+);
 
 let stateRoot: string;
 
 beforeEach(() => {
   stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-corruption-'));
   seedManifest(stateRoot, { schemaVersion: 1 });
+  calls.length = 0;
 });
 
 afterEach(() => {
+  calls.length = 0;
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
@@ -115,6 +149,89 @@ describe('corrupt event-log tail', () => {
     const loaded = store.get(record.session.id);
     expect(loaded).toBeDefined();
     expect(loaded?.session.acceptedWork).toBe('accepted');
+  });
+});
+
+describe('corrupt-tail repair is itself crash-safe', () => {
+  /** True for the temp name `atomicWriteText` picks for `target`. */
+  function isTempFor(candidate: string, target: string): boolean {
+    return candidate.startsWith(join(dirname(target), `.${basename(target)}.`)) && candidate.endsWith('.tmp');
+  }
+
+  /**
+   * Asserts the full durable-replace sequence landed on `target`: the bytes were written and
+   * fsynced to a temp, the descriptor was closed, the temp was renamed over the target, and only
+   * then was the containing directory fsynced.
+   *
+   * The repair path is the one place in this store that used a bare `writeFileSync` + `renameSync`
+   * with no fsync between them. That is a durability hole precisely where it matters most: this
+   * code only ever runs on a machine that has *already* proven it can die mid-write, and the write
+   * it commits is the one that shortens a log after copying its tail elsewhere.
+   */
+  function expectDurableReplace(target: string): void {
+    const openIndex = calls.findIndex(
+      (call) => call.fn === 'openSync' && isTempFor(String(call.args[0]), target),
+    );
+    expect(openIndex, `no temp file was opened for ${target}`).toBeGreaterThanOrEqual(0);
+
+    const open = calls[openIndex] as { args: unknown[]; result?: unknown };
+    const after = calls.slice(openIndex + 1);
+    const onTheDescriptor = after.filter((call) => call.args[0] === open.result).map((call) => call.fn);
+    expect(onTheDescriptor.slice(0, 3)).toEqual(['writeFileSync', 'fsyncSync', 'closeSync']);
+
+    const closeIndex = after.findIndex((call) => call.fn === 'closeSync' && call.args[0] === open.result);
+    const renameIndex = after.findIndex(
+      (call) => call.fn === 'renameSync' && call.args[0] === open.args[0],
+    );
+    expect(renameIndex, `the temp for ${target} was never renamed into place`).toBeGreaterThanOrEqual(0);
+    expect(after[renameIndex]?.args[1]).toBe(target);
+    expect(closeIndex, 'the rename happened before the descriptor was closed').toBeLessThan(renameIndex);
+
+    const directoryOpen = after
+      .slice(renameIndex + 1)
+      .find((call) => call.fn === 'openSync' && resolve(String(call.args[0])) === resolve(dirname(target)));
+    expect(directoryOpen, `the directory holding ${target} was not fsynced after the rename`).toBeDefined();
+    // On win32 that open can legitimately fail (a directory is not an openable file there), which
+    // is why the attempt is the assertion and the fsync itself is only checked when it can happen.
+    if (directoryOpen?.result !== undefined) {
+      expect(after.some((call) => call.fn === 'fsyncSync' && call.args[0] === directoryOpen.result)).toBe(true);
+    }
+  }
+
+  it('writes, fsyncs, renames, then fsyncs the directory, for both the quarantine copy and the truncated log', () => {
+    const record = makeRecord();
+    seedRecord(stateRoot, record, [eventLine(0)]);
+    const logPath = eventLogPath(record.session.rootSessionId, record.session.id);
+    writeFileSync(logPath, `${eventLine(0)}\n{"v":1,"sequence":1,"tim`);
+    calls.length = 0;
+
+    new SessionLineageStore({ stateRoot });
+
+    expectDurableReplace(logPath);
+
+    const quarantined = listFiles(join(storeDir(), 'quarantine'));
+    expect(quarantined).toHaveLength(1);
+    expectDurableReplace(join(storeDir(), 'quarantine', quarantined[0] as string));
+  });
+
+  it('fsyncs the quarantine copy before the truncated log replaces the original', () => {
+    // The ordering that makes the repair survive a *second* crash: if the shortened log committed
+    // first, a crash before the copy was durable would leave the discarded tail in neither file.
+    const record = makeRecord();
+    seedRecord(stateRoot, record, [eventLine(0)]);
+    const logPath = eventLogPath(record.session.rootSessionId, record.session.id);
+    writeFileSync(logPath, `${eventLine(0)}\n{"v":1,"sequence":1,"tim`);
+    calls.length = 0;
+
+    new SessionLineageStore({ stateRoot });
+
+    const quarantined = listFiles(join(storeDir(), 'quarantine'))[0] as string;
+    const quarantineRename = calls.findIndex(
+      (call) => call.fn === 'renameSync' && String(call.args[1]).endsWith(quarantined),
+    );
+    const logRename = calls.findIndex((call) => call.fn === 'renameSync' && call.args[1] === logPath);
+    expect(quarantineRename).toBeGreaterThanOrEqual(0);
+    expect(logRename).toBeGreaterThan(quarantineRename);
   });
 });
 

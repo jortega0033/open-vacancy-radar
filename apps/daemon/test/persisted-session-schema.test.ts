@@ -7,6 +7,9 @@ import { z } from 'zod';
 import { agentEventEnvelopeSchema, type AgentEventEnvelope } from '@agent-dock/shared';
 import {
   INTERRUPTED_SESSION_V1_ERROR,
+  MAX_MODEL_ID_BYTES,
+  MAX_PROVIDER_SESSION_ID_BYTES,
+  MAX_TOOL_CALL_ID_BYTES,
   REDACTED_V1_EVENT_TYPES,
   persistedEventRecordV1Schema,
   persistedSessionRecordV1Schema,
@@ -234,6 +237,19 @@ describe('v1 projection of a recovered session', () => {
 });
 
 describe('sentinel sweep: no content reaches the disk', () => {
+  /**
+   * Three fields are kept verbatim rather than digested (`model`, `providerSessionId`,
+   * `toolCallId`), because a reader acts on them: which model ran, which thread a resume attaches
+   * to, which call a result belongs to. That makes them the one place an oversized value could
+   * carry content past the redactor, so each is planted here at fifteen times its cap. The
+   * assertion for these is different in kind from the one below -- bounded passthrough, not
+   * absence: the marker is expected to survive, and everything past the byte cap is not.
+   */
+  const OVERSIZED_PADDING = 'x'.repeat(4_000);
+  const SENTINEL_MODEL = `SENTINEL_MODEL_0009_${OVERSIZED_PADDING}`;
+  const SENTINEL_PROVIDER_SESSION = `SENTINEL_PROVIDER_SESSION_0010_${OVERSIZED_PADDING}`;
+  const SENTINEL_TOOL_CALL = `SENTINEL_TOOL_CALL_0011_${OVERSIZED_PADDING}`;
+
   it('never writes any string field of any event variant into the store tree', () => {
     const store = new SessionLineageStore({ stateRoot });
     const session = makeSession({ prompt: 'SENTINEL_PROMPT_0001', cwd: '/workspace' });
@@ -270,6 +286,76 @@ describe('sentinel sweep: no content reaches the disk', () => {
     for (const sentinel of sentinels) {
       expect(everything, `${sentinel} leaked to disk`).not.toContain(sentinel);
     }
+  });
+
+  it('bounds the three identifier fields it keeps verbatim, in both the record and the event log', () => {
+    const store = new SessionLineageStore({ stateRoot });
+    const session = makeSession({ model: SENTINEL_MODEL });
+    store.create(session, { protocolVersion: 2, scope: FIXTURE_SCOPE });
+
+    store.appendEvent(session.id, {
+      type: 'session.started',
+      sessionId: session.id,
+      provider: 'claude',
+      providerSessionId: SENTINEL_PROVIDER_SESSION,
+      sequence: 0,
+      timestamp: 't0',
+    });
+    // The store's own copy, which does not go through `redactEnvelope` at all and therefore needs
+    // its own bound: this is the value a later resume matches a lineage on.
+    store.setProviderSessionId(session.id, SENTINEL_PROVIDER_SESSION);
+    store.appendEvent(session.id, {
+      type: 'tool.started',
+      toolName: 'Bash',
+      toolCallId: SENTINEL_TOOL_CALL,
+      sequence: 1,
+      timestamp: 't1',
+    });
+    store.appendEvent(session.id, {
+      type: 'tool.completed',
+      toolName: 'Bash',
+      toolCallId: SENTINEL_TOOL_CALL,
+      sequence: 2,
+      timestamp: 't2',
+    });
+    store.appendEvent(session.id, {
+      type: 'session.completed',
+      providerSessionId: SENTINEL_PROVIDER_SESSION,
+      sequence: 3,
+      timestamp: 't3',
+    });
+    store.finalize(session.id, 'completed', 'provider_completed');
+
+    const persisted = store.get(session.id)?.session;
+    const events = store.listEvents(session.id).events;
+    const started = events[0] as { providerSessionId: string };
+    const toolStarted = events[1] as { toolCallId: string };
+    const toolCompleted = events[2] as { toolCallId: string };
+    const completed = events[3] as { providerSessionId: string };
+
+    const bounded: Array<[string, string | undefined, number]> = [
+      ['record.model', persisted?.model, MAX_MODEL_ID_BYTES],
+      ['record.providerSessionId', persisted?.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES],
+      ['session.started.providerSessionId', started.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES],
+      ['tool.started.toolCallId', toolStarted.toolCallId, MAX_TOOL_CALL_ID_BYTES],
+      ['tool.completed.toolCallId', toolCompleted.toolCallId, MAX_TOOL_CALL_ID_BYTES],
+      ['session.completed.providerSessionId', completed.providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES],
+    ];
+
+    for (const [where, value, cap] of bounded) {
+      expect(value, `${where} is missing`).toBeDefined();
+      expect(Buffer.byteLength(value as string, 'utf8'), `${where} exceeds its cap`).toBe(cap);
+      // Truncated, not hashed away: the leading marker is still there, which is what makes these
+      // fields worth keeping in the first place.
+      expect(value as string).toContain('SENTINEL_');
+    }
+
+    // And nothing anywhere under the store carries the value at its original, unbounded length.
+    const everything = readAllText(stateRoot);
+    for (const sentinel of [SENTINEL_MODEL, SENTINEL_PROVIDER_SESSION, SENTINEL_TOOL_CALL]) {
+      expect(everything, 'an unbounded identifier reached the disk').not.toContain(sentinel);
+    }
+    expect(everything).not.toContain('x'.repeat(MAX_MODEL_ID_BYTES + 1));
   });
 
   it('writes the genuine digest of the redacted content, not an opaque placeholder', () => {

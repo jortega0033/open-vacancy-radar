@@ -1,25 +1,37 @@
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { AgentEventEnvelope, AgentSession, SessionStatusV2, TerminalReasonV2 } from '@agent-dock/shared';
 import type { Logger, NormalizedUnknownFrame } from '@agent-dock/agent-runtime';
 import { noopLogger } from '@agent-dock/agent-runtime';
-import { appendDurably, assertContainedIn, atomicWriteJson, quarantine, syncDirectory } from './durable-store/atomic-fs.js';
 import {
+  appendDurably,
+  assertContainedIn,
+  atomicWriteJson,
+  atomicWriteText,
+  quarantine,
+  syncDirectory,
+} from './durable-store/atomic-fs.js';
+import {
+  MAX_PROVIDER_SESSION_ID_BYTES,
+  PERSISTED_SCHEMA_VERSION,
   interruptedEventRecord,
   persistedEventRecordV1Schema,
   persistedSessionRecordV1Schema,
   redactEnvelope,
   redactSessionForPersistence,
+  truncateToBytes,
   type PersistedEventRecordV1,
   type PersistedLaunchScope,
   type PersistedSessionRecordV1,
@@ -254,6 +266,54 @@ function tryReadJson(path: string): unknown {
 }
 
 /**
+ * How much of one event log the preflight reads, and how many of its lines it parses.
+ *
+ * A future build writes its own `v` on **every** line it appends, so a log written by one is
+ * recognizable from its first record; reading the whole of a multi-megabyte log on every startup
+ * would cost far more than that recognition is worth. The budget applies per file, so a log whose
+ * early lines are all this build's own `v: 1` still gets its remainder handled by the ordinary
+ * corruption path, which is where a mid-log surprise belongs anyway.
+ */
+const PREFLIGHT_LOG_PROBE_BYTES = 64 * 1024;
+const PREFLIGHT_LOG_PROBE_LINES = 256;
+
+/**
+ * How deep the preflight descends into a `.trash/` entry. A trashed lineage is two levels deep
+ * (`records/`, `events/`); the extra headroom covers an entry left by an older layout, and the cap
+ * itself stops a symlinked or pathologically nested tree from turning startup into a full disk walk.
+ */
+const PREFLIGHT_MAX_DEPTH = 8;
+
+/**
+ * Reads the leading bytes of a JSONL file and returns its complete lines, or `[]` for anything
+ * unreadable. Read-only by construction: it opens `O_RDONLY` and never seeks past its own budget.
+ */
+function tryReadLeadingLines(path: string): string[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(PREFLIGHT_LOG_PROBE_BYTES);
+    const read = readSync(fd, buffer, 0, PREFLIGHT_LOG_PROBE_BYTES, 0);
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    // When the budget was exhausted the final element is a line cut in half, which is not a record
+    // and must not be judged as one. When it was not, the final element is either the empty string
+    // after a trailing newline or a genuinely torn tail -- both parse to nothing and are skipped.
+    if (read === PREFLIGHT_LOG_PROBE_BYTES) lines.pop();
+    return lines.slice(0, PREFLIGHT_LOG_PROBE_LINES);
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Closing a descriptor we are done reading from cannot fail in a way the caller can act on.
+      }
+    }
+  }
+}
+
+/**
  * Parses one already-read JSONL line. Deliberately a separate function from `tryReadJson` above,
  * which takes a *path*: the two are one character apart at a call site and mixing them up produces
  * a silently empty event log rather than an error, so they are kept distinct rather than
@@ -335,39 +395,95 @@ export class SessionLineageStore {
    * the test that pins it (`session-lineage-store.schema.test.ts`) asserts exactly that by
    * snapshotting file contents and mtimes and by spying for zero write/rename/unlink calls.
    *
-   * Scans, in order: the manifest, every lineage metadata record, every tombstone, and any stray
-   * `.tmp` file. A stray temp is included because it is the one place a *future* version's
-   * half-written record can be sitting, and quarantining it (which is what happens to strays a few
-   * lines later) would be a mutation on a tree we must not touch.
+   * Scans, in order: the manifest, every lineage metadata record, every tombstone, every event log,
+   * any stray `.tmp` file next to either kind, and everything staged under `.trash/`.
+   *
+   * The last three are each included because each is a place a *later* startup step mutates:
+   *
+   * - a stray temp is quarantined by `#quarantineStrayTemps`, and it is the one place a future
+   *   version's half-written record can be sitting;
+   * - an event log is rewritten in place by `#repairEventLog` the moment its tail does not parse
+   *   against *this* build's line schema -- which is exactly what a future build's lines would do;
+   * - a `.trash/` entry is either restored into `lineages/` or deleted outright by
+   *   `#recoverInterruptedEvictions`, and a trashed lineage can hold a full future-schema tree whose
+   *   eviction the newer build had not yet committed.
+   *
+   * Event logs are judged by a different field from everything else: a line is a
+   * `PersistedEventRecordV1`, which carries `v`, not `schemaVersion`. A line that fails to parse, or
+   * that has no numeric `v`, is deliberately *not* treated as a version conflict here -- it is
+   * ordinary corruption, and the corruption path (which runs later, and mutates) is where it belongs.
    */
   #preflightSchemaVersions(): void {
     if (!existsSync(this.root)) return;
 
-    const candidates: string[] = [];
+    /** Files whose whole content is one JSON object carrying a top-level `schemaVersion`. */
+    const objectCandidates: string[] = [];
+    /** Files whose lines are event records, each carrying its own `v`. */
+    const lineCandidates: string[] = [];
 
-    if (existsSync(this.#manifestPath)) candidates.push(this.#manifestPath);
+    /**
+     * Walks one lineage-shaped tree (a live lineage, or a trashed copy of one), classifying files
+     * by where they sit rather than by extension alone: a `.tmp` beside a record is a half-written
+     * record, while a `.tmp` inside `events/` is a half-written *log* and has to be read as lines.
+     */
+    const collect = (dir: string, depth: number): void => {
+      if (depth > PREFLIGHT_MAX_DEPTH) return;
+      const inEventsDir = basename(dir) === 'events';
+      for (const name of safeReaddir(dir)) {
+        const path = join(dir, name);
+        let isDirectory: boolean;
+        try {
+          isDirectory = statSync(path).isDirectory();
+        } catch {
+          continue;
+        }
+        if (isDirectory) {
+          collect(path, depth + 1);
+        } else if (name.endsWith('.jsonl') || (inEventsDir && name.endsWith('.tmp'))) {
+          lineCandidates.push(path);
+        } else if (name.endsWith('.json') || name.endsWith('.tmp')) {
+          objectCandidates.push(path);
+        }
+      }
+    };
+
+    if (existsSync(this.#manifestPath)) objectCandidates.push(this.#manifestPath);
 
     for (const name of safeReaddir(this.root)) {
-      if (name.endsWith('.tmp')) candidates.push(join(this.root, name));
+      if (name.endsWith('.tmp')) objectCandidates.push(join(this.root, name));
     }
 
-    for (const rootId of safeReaddir(this.#lineagesDir)) {
-      const recordsDir = join(this.#lineagesDir, rootId, 'records');
-      for (const name of safeReaddir(recordsDir)) {
-        if (name.endsWith('.json') || name.endsWith('.tmp')) candidates.push(join(recordsDir, name));
-      }
-    }
+    for (const rootId of safeReaddir(this.#lineagesDir)) collect(join(this.#lineagesDir, rootId), 1);
 
     for (const name of safeReaddir(this.#tombstonesDir)) {
-      if (name.endsWith('.json') || name.endsWith('.tmp')) candidates.push(join(this.#tombstonesDir, name));
+      if (name.endsWith('.json') || name.endsWith('.tmp')) objectCandidates.push(join(this.#tombstonesDir, name));
     }
 
-    for (const path of candidates) {
+    // Every entry, not only `evict--*`: an unprefixed one is never restored, but sweeping it costs
+    // one readdir and keeps this pass's rule ("nothing under the root goes unlooked-at") simple.
+    for (const name of safeReaddir(this.#trashDir)) collect(join(this.#trashDir, name), 1);
+
+    for (const path of objectCandidates) {
       const parsed = tryReadJson(path);
       if (!parsed || typeof parsed !== 'object') continue;
       const version = (parsed as { schemaVersion?: unknown }).schemaVersion;
-      if (typeof version === 'number' && Number.isFinite(version) && version > 1) {
+      // Only a genuine JS number counts. A `schemaVersion` encoded as anything else (`"2"`, a
+      // BigInt-ish string, an object) is left to the corruption path on purpose: coercing here would
+      // buy a hypothetical encoding nothing in this repo produces, at the cost of turning ordinary
+      // int-like corruption into a permanent, un-self-healing refusal to open the store at all.
+      if (typeof version === 'number' && Number.isFinite(version) && version > PERSISTED_SCHEMA_VERSION) {
         throw new UnsupportedStateSchemaVersionError(version, path);
+      }
+    }
+
+    for (const path of lineCandidates) {
+      for (const line of tryReadLeadingLines(path)) {
+        const parsed = tryParseJson(line);
+        if (!parsed || typeof parsed !== 'object') continue;
+        const version = (parsed as { v?: unknown }).v;
+        if (typeof version === 'number' && Number.isFinite(version) && version > PERSISTED_SCHEMA_VERSION) {
+          throw new UnsupportedStateSchemaVersionError(version, path);
+        }
       }
     }
   }
@@ -573,14 +689,16 @@ export class SessionLineageStore {
     );
     mkdirSync(this.#quarantineDir, { recursive: true, mode: 0o700 });
     assertContainedIn(this.#quarantineDir, quarantinePath);
-    writeFileSync(quarantinePath, badTail.length > 0 ? `${badTail}\n` : '', { mode: 0o600 });
+    // Both writes below go through `atomicWriteText`, not a plain `writeFileSync` + `renameSync`.
+    // This is a repair path, which means it runs on a machine that has *already* demonstrated it can
+    // lose power or be killed mid-write: a second crash between writing the quarantine copy and
+    // committing the truncated log would otherwise leave the discarded tail existing in neither
+    // file. The fsync before each rename is what makes the copy real before the original shrinks.
+    atomicWriteText(quarantinePath, badTail.length > 0 ? `${badTail}\n` : '');
 
     const rewritten = good === 0 ? '' : `${lines.slice(0, good).join('\n')}\n`;
-    const tmpPath = `${logPath}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(tmpPath, rewritten, { mode: 0o600 });
     assertContainedIn(this.root, logPath);
-    renameSync(tmpPath, logPath);
-    syncDirectory(join(lineageDir, 'events'));
+    atomicWriteText(logPath, rewritten);
 
     this.#logger.warn('truncated a torn event log to its last good line', {
       sessionId,
@@ -794,6 +912,14 @@ export class SessionLineageStore {
   /**
    * Two-phase eviction. See `#recoverInterruptedEvictions` for why the tombstone write, and not the
    * rename or the delete, is the commit point.
+   *
+   * Accepted residual risk, flagged rather than fixed here: the in-memory maps are updated at the
+   * end of this method, so an IO failure part-way through (ENOSPC on the tombstone write, say)
+   * leaves the on-disk tree and this process's view of it disagreeing until the next restart, which
+   * re-derives everything from disk. Closing that properly means a real transaction around the
+   * in-memory mutation as well, which is a larger change than a best-effort, single-process
+   * durability layer needs; the disagreement is bounded by one process lifetime and every
+   * *committed* fact (the tombstone, the record files) is still correct on disk. See also `create()`.
    */
   #evictLineage(lineage: Lineage, reason: Tombstone['reason']): void {
     const lineageDir = this.#lineageDir(lineage.rootId);
@@ -814,7 +940,11 @@ export class SessionLineageStore {
       records: lineage.records.size,
       bytes: lineage.bytes,
     };
-    atomicWriteJson(join(this.#tombstonesDir, `${lineage.rootId}.json`), tombstone);
+    // Checked like `trashPath` above and like every other mutating path in this module: the id is
+    // interpolated straight into a filename, and this one is read back off disk on the next startup.
+    const tombstonePath = join(this.#tombstonesDir, `${lineage.rootId}.json`);
+    assertContainedIn(this.#tombstonesDir, tombstonePath);
+    atomicWriteJson(tombstonePath, tombstone);
 
     if (existsSync(trashPath)) rmSync(trashPath, { recursive: true, force: true });
 
@@ -840,6 +970,12 @@ export class SessionLineageStore {
    * `PersistedAcceptedWork` for the full reasoning. In short: `'not_accepted'` is a claim that
    * retrying is safe, and by the time this record exists the daemon is already committed to
    * launching a provider, so that claim can no longer be made.
+   *
+   * The in-memory lineage entry is registered before `#writeRecord`, so a write failure here (a full
+   * disk, a revoked permission) leaves this process believing in a record that never landed. The
+   * caller sees the throw and gives up on the session, and the next startup re-derives everything
+   * from disk, so the disagreement is bounded by one process lifetime. That is the same accepted
+   * residual risk `#evictLineage` documents, and closing it needs the same larger change.
    */
   create(session: AgentSession, options: CreateSessionRecordOptions): PersistedSessionRecordV1 {
     const parent = options.resumeProviderSessionId
@@ -896,27 +1032,41 @@ export class SessionLineageStore {
    * "this session emitted 5,000 events" apart from "this session emitted 40,000 events and we kept
    * the first 5,000" -- a distinction a plain line count silently erases.
    *
-   * The metadata record is rewritten only at checkpoints (the truncation flip, accepted-work,
-   * finalization), not once per event: an atomic replace plus two fsyncs per event would dominate
-   * the cost of running a session, and the log itself is already durable per line. Recovery takes
-   * `max(persisted eventCount, lines on disk)`, so a crash between checkpoints under-reports
-   * nothing.
+   * Below the cap the metadata record is rewritten only at checkpoints (the truncation flip,
+   * accepted-work, finalization, scope refinement), not once per event: an atomic replace plus two
+   * fsyncs per event would dominate the cost of running a session, and the log itself is already
+   * durable per line. Recovery takes `max(persisted eventCount, lines on disk)`, so a crash between
+   * checkpoints under-reports nothing.
+   *
+   * **Above the cap that reasoning inverts, so the rule does too.** Once no line is being appended,
+   * the log stops being able to speak for the counter, and `max(eventCount, lines)` would freeze at
+   * exactly the cap forever no matter how many more events a session went on to emit -- turning the
+   * distinction the previous paragraph promises back into the plain line count it exists to avoid.
+   * So every *suppressed* event checkpoints the record. That costs nothing in the common case (it
+   * only begins after 5,000 events have already been persisted) and it replaces a per-event append
+   * to a growing log with a per-event replace of one small, fixed-size record.
    */
   appendEvent(sessionId: string, event: AgentEventEnvelope): void {
     const located = this.#locate(sessionId);
     if (!located) return;
     const { lineage, record } = located;
 
+    // Incremented first, so a checkpoint below records the count *including* this event. A throw
+    // from the append leaves the counter one ahead of the log, which is the same state a crash
+    // between checkpoints leaves and which recovery already reconciles the same way.
+    record.session.eventCount += 1;
+
     const lines = lineage.linesOnDisk.get(sessionId) ?? 0;
     if (lines < MAX_PERSISTED_EVENTS_PER_SESSION) {
       this.#appendLine(lineage, sessionId, redactEnvelope(event));
-    } else if (!record.session.eventsTruncated) {
-      record.session.eventsTruncated = true;
-      this.#writeRecord(lineage, record);
-      this.#logger.warn('persisted event log is full; further events are counted but not stored', { sessionId });
+      return;
     }
 
-    record.session.eventCount += 1;
+    if (!record.session.eventsTruncated) {
+      record.session.eventsTruncated = true;
+      this.#logger.warn('persisted event log is full; further events are counted but not stored', { sessionId });
+    }
+    this.#writeRecord(lineage, record);
   }
 
   /**
@@ -947,13 +1097,20 @@ export class SessionLineageStore {
     this.#writeRecord(lineage, record);
   }
 
-  /** Records the provider-native thread id, which is what a later resume attaches a lineage by. */
+  /**
+   * Records the provider-native thread id, which is what a later resume attaches a lineage by.
+   *
+   * Bounded on the way in, with the same cap `redactEnvelope` applies to the copy it writes into an
+   * event line: this value arrives from a third-party CLI's stdout, and a real thread id is a
+   * handful of bytes. An unbounded one is either a bug or a payload, and neither belongs on disk.
+   */
   setProviderSessionId(sessionId: string, providerSessionId: string): void {
     const located = this.#locate(sessionId);
     if (!located) return;
     const { lineage, record } = located;
-    if (record.session.providerSessionId === providerSessionId) return;
-    record.session.providerSessionId = providerSessionId;
+    const bounded = truncateToBytes(providerSessionId, MAX_PROVIDER_SESSION_ID_BYTES);
+    if (record.session.providerSessionId === bounded) return;
+    record.session.providerSessionId = bounded;
     this.#writeRecord(lineage, record);
   }
 

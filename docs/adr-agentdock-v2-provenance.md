@@ -394,11 +394,17 @@ driven by the same `SessionLaunchProbe` seam ADI-04 added. Recovery carries the 
 verbatim and never downgrades it.
 
 `session-manager.ts` wires the probe directly rather than going through
-`superviseProviderSession()`. The supervisor's other machinery — the fallback gate, the frozen
-scope comparison, the unknown-frame ledger — has no daemon-side consumer yet, and routing every
-live session through it to reach one latch would have changed far more of the running system than
-this ticket needed. Wiring the full supervisor in remains a later ticket; the seam it introduced is
-what made this one small.
+`superviseProviderSession()`. The supervisor's remaining machinery — the fallback gate, the frozen
+scope comparison — still has no daemon-side consumer, and routing every live session through it to
+reach one latch would have changed far more of the running system than this ticket needed. Wiring
+the full supervisor in remains a later ticket; the seam it introduced is what made this one small.
+
+The unknown-frame ledger is the one piece of that machinery the daemon does now consume, and it
+consumes it the same way: `SessionManager` builds its own `UnknownFrameLedger` per session and
+feeds it from the probe's `onUnknownFrame` callback, then writes `ledger.entries()` into the record
+immediately before finalizing it. That keeps the persisted `unknownFrames` field honest (it was
+otherwise designed, schema'd, and served by the v2 read routes while being permanently empty)
+without a second copy of the bounding and hashing rules that make the field safe to store at all.
 
 ### Two stop conditions, both proven rather than asserted
 
@@ -408,12 +414,46 @@ what made this one small.
    redactor's covered set to match exactly, and `.strict()` Zod schemas that reject a record
    carrying `prompt` or `error`. A sentinel sweep fills every string field of every variant with a
    unique marker, runs it through the real store, and greps the entire on-disk tree.
+
+   Digesting is not the only mechanism, because not every kept field *can* be digested. `model`,
+   `providerSessionId`, and `toolCallId` are identifiers a reader acts on, so they are kept — and
+   therefore **byte-capped at 256**, everywhere they are copied, exactly as `status` and `toolName`
+   already were. A field that is kept verbatim and unbounded is a place to put content, however
+   short its legitimate values are; the sentinel sweep covers these three too, asserting the
+   oversized value is truncated to its cap rather than merely absent.
 2. **A future schema version mutates nothing.** The store's constructor runs a read-only preflight
    before creating a directory or opening any file for writing.
    `session-lineage-store.schema.test.ts` asserts this with a recursive content+mtime snapshot
    *and* with `node:fs` spies showing zero write, rename, or unlink calls — including in the case
    where corruption is present alongside the future version, where the corrupt file must be left
    un-quarantined because quarantining is itself a mutation.
+
+   The preflight's coverage is defined by what the *rest of startup* would touch, not by what is
+   convenient to parse: the manifest, every record, every tombstone, every stray `.tmp`, every
+   `events/*.jsonl`, and everything staged under `.trash/`. The last two are the ones a
+   `schemaVersion`-only sweep misses. An event log carries `v` per line rather than a top-level
+   `schemaVersion`, and a newer build's lines would fail *this* build's line schema — which
+   `#repairEventLog` would read as a torn tail and rewrite. A `.trash/` entry is an eviction the
+   newer build had not committed, which recovery either renames back into `lineages/` or deletes
+   outright. Both are mutations on state belonging to software this build does not understand, so
+   both are now scanned first. Lines that merely fail to parse, or that carry no numeric `v`, are
+   deliberately *not* treated as a version conflict: that is ordinary corruption, and the corruption
+   path is where it belongs.
+
+### The event counter keeps its meaning past the truncation cap
+
+`eventCount` is documented to answer "how many events did this session emit", which is a different
+question from "how many lines are on disk" — the pair `eventCount: 40000, eventsTruncated: true`
+means something a line count cannot say. Below the 5,000-line cap the record is only checkpointed
+(at the truncation flip, accepted-work, scope refinement, finalization) and recovery reconciles with
+`max(persisted eventCount, lines on disk)`, because the log is durable per line and can speak for
+the counter.
+
+Above the cap that stops being true: no line is appended, so `max(...)` would freeze at exactly
+5,000 forever no matter how many more events arrived, collapsing the distinction back into the line
+count. So every *suppressed* event now checkpoints the record. The cost lands only on a session that
+has already persisted 5,000 events, and it replaces an append to a growing log with a replace of one
+small fixed-size record; the common case is untouched.
 
 ### Known limitation: the state-directory overlap guard is not enforced for the daemon's own default
 
