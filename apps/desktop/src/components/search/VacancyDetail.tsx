@@ -91,10 +91,10 @@ export interface VacancyDetailProps {
  * shapes actually carries; where a field does not exist for the selected market it says
  * "Not recorded by this pipeline" rather than leaving a blank the reader will fill in themselves.
  *
- * Notably there is no "CV match %". Neither report compares a vacancy to a CV: the Netherlands
- * report's `score` is deterministic relevance against the engine's *configured candidate profile*,
- * and the worldwide report has no score at all. The only real CV comparison in this app is the
- * on-demand AI gap analysis, so that is what the CV card offers.
+ * Notably there is no "CV match %". Neither report compares a vacancy to a CV: both reports' scores
+ * are deterministic relevance against the engine's *configured candidate profile*, never against a
+ * CV. The only real CV comparison in this app is the on-demand AI gap analysis, so that is what the
+ * CV card offers.
  */
 export function VacancyDetail({
   result,

@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import type { Logger } from 'pino';
 
+import { loadCandidateProfile, type CandidateProfile } from '../candidate/profile.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/client.js';
 import { runGlobalRemoteDiscovery } from '../global-remote/discovery.js';
@@ -18,6 +19,7 @@ import {
   type OfficialVacancyAudit,
 } from '../global-remote/models.js';
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
+import { scoreWorldwideVacancy } from '../filtering/index.js';
 import { globalRemoteSourceRegistry } from '../global-remote/source-registry.js';
 import {
   runWorkableGlobalDiscovery,
@@ -106,6 +108,30 @@ export function uniqueDiscovery(vacancies: DiscoveryVacancyAudit[]): DiscoveryVa
     (left, right) =>
       left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
   );
+}
+
+function candidateProfilePathFor(projectRoot: string): string {
+  return path.join(projectRoot, 'config', 'candidate-profile-v1.json');
+}
+
+/**
+ * Computed once here, after discovery, rather than threaded through each of the ~30
+ * `discoveryAudit()` call sites in global-remote/*.ts: unlike `description`/`postedAt`, which are
+ * per-source raw metadata, a profile score needs the candidate profile and the pipeline's own
+ * salary floor -- neither of which any individual discovery source has, or should have, access to.
+ * This mirrors how the Netherlands pipeline only scores after `runVacancyScan` has already produced
+ * its vacancy list (see the `deterministic_scoring` stage in `runUnlockedEndToEndScan`, full-scan.ts).
+ */
+export function applyWorldwideProfileScores(
+  vacancies: readonly DiscoveryVacancyAudit[],
+  profile: CandidateProfile,
+  minimumAnnualBaseUsd: number | null,
+): DiscoveryVacancyAudit[] {
+  return vacancies.map((vacancy) => ({
+    ...vacancy,
+    profileScore:
+      scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd)?.deterministicScore ?? null,
+  }));
 }
 
 function groupOfficial(
@@ -269,6 +295,12 @@ export async function runGlobalRemoteScan(
           vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
         };
   const discoveryAudit = uniqueDiscovery(discovery.vacancies);
+  const candidateProfile = await loadCandidateProfile(candidateProfilePathFor(projectRoot));
+  const scoredDiscoveryAudit = applyWorldwideProfileScores(
+    discoveryAudit,
+    candidateProfile,
+    profile.minimumAnnualBaseUsd,
+  );
   const officialAudit = [...official.audits].sort(
     (left, right) =>
       left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
@@ -316,7 +348,7 @@ export async function runGlobalRemoteScan(
     discoverySources: discovery.sources,
     ...groups,
     officialAudit,
-    discoveryAudit,
+    discoveryAudit: scoredDiscoveryAudit,
     methodology: [
       'Free remote-job APIs are discovery inputs only; their geography and salary labels never create a strict match.',
       'Current official ATS APIs or normal employer HTML are fetched with bounded concurrency, timeouts, retries, conditional caching, and a descriptive User-Agent.',

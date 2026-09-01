@@ -1,18 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CandidateProfile } from '../../src/candidate/profile.js';
 import type {
   DiscoveryProvider,
   DiscoveryVacancyAudit,
   GlobalRemoteReport,
 } from '../../src/global-remote/models.js';
 import { renderGlobalRemoteHtml } from '../../src/global-remote/report.js';
-import { resolveRoleQuery, uniqueDiscovery } from '../../src/pipeline/global-remote.js';
+import {
+  applyWorldwideProfileScores,
+  resolveRoleQuery,
+  uniqueDiscovery,
+} from '../../src/pipeline/global-remote.js';
 
 function vacancy(
   provider: DiscoveryProvider,
   key: string,
   url: string,
   title: string,
+  overrides: Partial<DiscoveryVacancyAudit> = {},
 ): DiscoveryVacancyAudit {
   return {
     key,
@@ -31,6 +37,8 @@ function vacancy(
     contentHash: key.padEnd(64, '0').slice(0, 64),
     description: null,
     postedAt: null,
+    profileScore: null,
+    ...overrides,
   };
 }
 
@@ -137,5 +145,80 @@ describe('resolveRoleQuery', () => {
   it('caps an override at 200 characters, matching the profile schema limit', () => {
     const tooLong = 'x'.repeat(250);
     expect(resolveRoleQuery('frontend', tooLong)).toBe('x'.repeat(200));
+  });
+});
+
+describe('applyWorldwideProfileScores', () => {
+  const configuredProfile: CandidateProfile = {
+    profileVersion: 'candidate-profile-v1',
+    candidateName: 'Jake Ortega',
+    currentRole: 'Senior Frontend Engineer',
+    location: 'Netherlands',
+    experienceYears: 10,
+    strongestSkills: ['Angular', 'TypeScript'],
+    additionalSkills: [],
+    targetRoles: ['Senior Frontend Engineer'],
+    consideredRoles: [],
+    excludedRoleFamilies: [],
+    constraints: {
+      professionalLanguage: 'English',
+      dutchRequired: false,
+      primaryCountry: 'Netherlands',
+      allowRemoteEuSupportingNetherlands: true,
+      minimumMonthlyBaseEur: 6_000,
+    },
+  };
+  // Mirrors the checked-in `config/candidate-profile-v1.json` default: no target roles, no
+  // strongest skills configured.
+  const unconfiguredProfile: CandidateProfile = {
+    ...configuredProfile,
+    targetRoles: [],
+    strongestSkills: [],
+  };
+
+  it('leaves every profileScore null, never a real-looking zero, when the candidate profile is not configured', () => {
+    const vacancies = [
+      vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+        description: 'Build Angular and TypeScript web applications.',
+      }),
+    ];
+
+    const scored = applyWorldwideProfileScores(vacancies, unconfiguredProfile, 100_000);
+
+    expect(scored.map((item) => item.profileScore)).toEqual([null]);
+  });
+
+  it('computes a profile score per vacancy while leaving every other field untouched', () => {
+    const vacancies = [
+      vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+        description:
+          'Responsibilities\nBuild and own Angular and TypeScript web applications.\nRequirements\nStrong Angular and TypeScript experience.',
+        annualizedMinimumUsd: 150_000,
+      }),
+    ];
+
+    const scored = applyWorldwideProfileScores(vacancies, configuredProfile, 100_000);
+
+    expect(scored[0]!.profileScore).toEqual(expect.any(Number));
+    expect(scored[0]!.profileScore).toBeGreaterThan(0);
+    expect(scored[0]).toMatchObject({
+      key: 'himalayas:1',
+      title: 'Senior Frontend Engineer',
+      annualizedMinimumUsd: 150_000,
+    });
+  });
+
+  it('caps a scored vacancy below the below-threshold salary floor, mirroring scoreWorldwideVacancy directly', () => {
+    const vacancies = [
+      vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+        description: 'Build Angular and TypeScript web applications.',
+        annualizedMinimumUsd: 40_000,
+      }),
+    ];
+
+    const scored = applyWorldwideProfileScores(vacancies, configuredProfile, 100_000);
+
+    expect(scored[0]!.profileScore).not.toBeNull();
+    expect(scored[0]!.profileScore).toBeLessThanOrEqual(69);
   });
 });

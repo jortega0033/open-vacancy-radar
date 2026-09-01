@@ -27,6 +27,7 @@ function worldwideResult(
       contentHash: `hash-${key}`,
       description: null,
       postedAt: null,
+      profileScore: null,
     },
     official: null,
     key,
