@@ -221,6 +221,19 @@ describe('POST /sessions', () => {
     expect(res.statusCode).toBe(201);
     expect(provider.startedOptions.at(-1)?.resumeProviderSessionId).toBe('prior-thread');
   });
+
+  it('passes a model field in the request body through to the provider, over the real HTTP route', async () => {
+    const { app, registry } = setup('success');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/sessions',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { provider: 'claude', cwd, prompt: 'hi', model: 'claude-opus-5' },
+    });
+    expect(res.statusCode).toBe(201);
+    const provider = registry.get('claude') as FakeProvider;
+    expect(provider.startedOptions.at(-1)?.model).toBe('claude-opus-5');
+  });
 });
 
 describe('SSE events + cancellation', () => {

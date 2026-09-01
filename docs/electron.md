@@ -45,18 +45,26 @@ permissions), but it's cheap defense in depth for a fork that later adds either 
 
 ## The preload bridge
 
-`electron/preload.ts` exposes exactly seven functions on `window.agentDock` via `contextBridge`:
-never a generic "invoke this channel with this payload" tunnel, and never the daemon's base URL or
-bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a clean status object
-from the IPC payload rather than passing it through once its shape looks roughly right, so an
-accidental extra field on the main-process side (a token, a base URL) can never ride along even by
-mistake (see `apps/desktop/test/preload.test.ts` for the regression test against this real module):
+`electron/preload.ts` exposes five separate `contextBridge` namespaces on `window`, each a fixed,
+narrow set of functions: never a generic "invoke this channel with this payload" tunnel, and never
+the daemon's base URL or bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a
+clean status object from the IPC payload rather than passing it through once its shape looks
+roughly right, so an accidental extra field on the main-process side (a token, a base URL) can never
+ride along even by mistake. Every namespace's exact allowlist is asserted against the real module in
+`apps/desktop/test/preload.test.ts`.
+
+`window.agentDock` — the only bridge that talks to the daemon, via `AgentDockClient` (see
+[client-sdk.md](client-sdk.md)):
 
 ```ts
 interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
+  listMcpProviders(): Promise<McpConnectionStatus[]>;
+  searchMcp(input: McpSearchRequest): Promise<McpVacancyResult[]>;
+  setMcpCredential(input: McpCredentialInput): Promise<void>;
+  removeMcpProvider(providerId: McpProviderId): Promise<void>;
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   cancelSession(sessionId: string): Promise<void>;
   onSessionEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
@@ -64,10 +72,28 @@ interface AgentDockBridge {
 }
 ```
 
-Each maps to one `ipcMain.handle(...)` in `main.ts`. If you're adding a new capability the renderer
-needs, add a narrow, single-purpose function here. Resist the temptation to add a generic
-"send arbitrary IPC channel + payload" escape hatch, since that's exactly the shape that would let a
-compromised renderer reach something it shouldn't.
+The other four namespaces are product-specific to Open Vacancy Radar and never touch the daemon or
+`AgentDockClient` at all:
+
+- **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
+  `getNetherlandsReport`, `runNetherlandsScan`, `getSearchProfile`, `saveSearchProfile`: reads and
+  triggers scans against the vendored `vacancy-engine` package and its own SQLite database.
+- **`window.workspace`** (`WorkspaceBridge`, defined in `electron/workspace/types.ts`) — CRUD over
+  the workspace SQLite database's saved jobs, applications, CV documents, and letters (21 methods:
+  `getSettings`, `updateSettings`, `getCounts`, `list/create/update/delete` for each of the four
+  record types, plus `setDefaultCvDocument` and `duplicateLetter`).
+- **`window.cv`** (`CvBridge`) — `selectAndRead`, `getWorkspaceDir`: the native file-picker/read path
+  for importing a CV, kept separate from `workspace` because it touches the OS file-picker dialog
+  rather than the database.
+- **`window.system`** (`SystemBridge`) — `setLaunchAtLogin`, `getAppVersion`, `saveFile`: the handful
+  of OS-level integrations that don't fit any of the other namespaces.
+
+Each function maps to one `ipcMain.handle(...)` in `main.ts` (or, for `workspace`/`cv`, in their own
+main-process modules under `electron/workspace/`). If you're adding a new capability the renderer
+needs, add a narrow, single-purpose function to the namespace it belongs with, or a new namespace if
+none fits. Resist the temptation to add a generic "send arbitrary IPC channel + payload" escape
+hatch, since that's exactly the shape that would let a compromised renderer reach something it
+shouldn't.
 
 ## Daemon lifecycle from Electron's side
 

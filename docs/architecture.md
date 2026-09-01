@@ -10,8 +10,9 @@ links out rather than duplicating any of those.
 
 ```
 ┌─────────────────────────┐
-│   Renderer (React)        │   window.agentDock.*: seven narrow IPC capabilities only.
-│                            │   Never receives the daemon's token or base URL.
+│   Renderer (React)        │   window.{agentDock,vacancyRadar,workspace,cv,system}.*: a fixed
+│                            │   set of narrow IPC bridges (see electron.md). Never receives
+│                            │   the daemon's token or base URL.
 └─────────────┬────────────┘
               │ Electron IPC (contextBridge, same machine, no network)
               ▼
@@ -80,8 +81,10 @@ Three boundaries matter, in decreasing order of "who might be hostile":
 2. **The renderer → Electron main.** The renderer is this repo's own code, not adversarial, but
    it's still validated as if it might send something malformed: every IPC input is re-checked
    against the Zod schemas at the `ipcMain.handle` boundary (see [electron.md](electron.md)), and
-   it structurally cannot reach the daemon's token or make an arbitrary daemon call, only the seven
-   functions the preload bridge exposes.
+   it structurally cannot reach the daemon's token or make an arbitrary daemon call: only the
+   `agentDock` bridge talks to the daemon at all, and even it exposes only a fixed set of named
+   functions, never a generic passthrough. The preload script's four other, product-specific
+   bridges (`vacancyRadar`, `workspace`, `cv`, `system`) never touch the daemon or its client SDK.
 3. **The daemon → the provider CLI.** The daemon trusts the CLI it spawns (it's the user's own,
    already-authenticated installation) but never trusts *what a request asked it to spawn*: the
    executable is always resolved internally via `findExecutable()`, never from request input, and

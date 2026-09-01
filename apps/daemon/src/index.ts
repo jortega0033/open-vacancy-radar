@@ -1,3 +1,4 @@
+import type { Logger } from '@agent-dock/agent-runtime';
 import { createConsoleLogger } from '@agent-dock/agent-runtime';
 import { generateToken } from './auth-token.js';
 import {
@@ -10,9 +11,25 @@ import {
 import { buildProviderRegistry } from './providers.js';
 import { buildServer } from './server.js';
 import { SessionManager } from './session-manager.js';
+import type { McpCredentialStore } from './mcp/types.js';
 import { OsMcpCredentialStore } from './mcp/credential-store.js';
 import { McpConnectionManager } from './mcp/manager.js';
 import { McpSdkConnectorFactory } from './mcp/sdk-connector.js';
+
+/**
+ * Extracted from `main()` so the empty-policy invariant below can be asserted against the real,
+ * constructed manager (`buildMcpManager(...).providerIds()`) rather than pinned by matching the
+ * source text of `main()` itself, which a harmless refactor (renaming an inline `[]` into a named
+ * constant, reordering constructor args) could silently defeat without the invariant actually
+ * changing. See apps/daemon/test/index.test.ts and
+ * docs/adr-agentdock-v2-provenance.md#the-mcp-foundation-ships-dormant-on-purpose.
+ */
+export function buildMcpManager(mcpCredentials: McpCredentialStore, logger: Logger): McpConnectionManager {
+  // Provider-specific policies (starting with #29) inject their OAuthClientProvider here. Keeping
+  // the registry empty means an OAuth server can never be contacted before its redirect URI,
+  // PKCE/token persistence, terms, tool, and retention policy have all been reviewed together.
+  return new McpConnectionManager([], new McpSdkConnectorFactory(mcpCredentials), mcpCredentials, logger);
+}
 
 async function main() {
   const logger = createConsoleLogger('daemon', process.env.AGENT_DOCK_LOG_LEVEL === 'debug' ? 'debug' : 'info');
@@ -26,15 +43,7 @@ async function main() {
   const sessionManager = new SessionManager(registry, logger);
   const token = generateToken();
   const mcpCredentials = new OsMcpCredentialStore();
-  // Provider-specific policies (starting with #29) inject their OAuthClientProvider here. Keeping
-  // the registry empty means an OAuth server can never be contacted before its redirect URI,
-  // PKCE/token persistence, terms, tool, and retention policy have all been reviewed together.
-  const mcpManager = new McpConnectionManager(
-    [],
-    new McpSdkConnectorFactory(mcpCredentials),
-    mcpCredentials,
-    logger,
-  );
+  const mcpManager = buildMcpManager(mcpCredentials, logger);
 
   const app = buildServer({ registry, sessionManager, token, logger, mcpManager });
 

@@ -126,7 +126,9 @@ def local_name(value: str) -> str:
     return value.rsplit("}", 1)[-1].lower()
 
 
-def check_exact_files(directory: Path, expected: set[str]) -> None:
+def check_exact_files(
+    directory: Path, expected: set[str], allow_extra: frozenset[str] = frozenset()
+) -> None:
     if not directory.is_dir():
         ERRORS.append(f"Missing directory: {relative(directory)}")
         return
@@ -134,7 +136,7 @@ def check_exact_files(directory: Path, expected: set[str]) -> None:
     actual = {path.name for path in directory.iterdir() if path.is_file()}
     for name in sorted(expected - actual):
         ERRORS.append(f"Missing file: {relative(directory / name)}")
-    for name in sorted(actual - expected):
+    for name in sorted(actual - expected - allow_extra):
         ERRORS.append(f"Unexpected file: {relative(directory / name)}")
 
 
@@ -325,7 +327,15 @@ def validate_icns(path: Path) -> None:
 
 def main() -> int:
     check_exact_files(BRAND_ROOT, set(BRAND_VIEWBOXES))
-    check_exact_files(ICON_ROOT, {"open-vacancy-radar.ico", "open-vacancy-radar.icns"})
+    check_exact_files(
+        ICON_ROOT,
+        {"open-vacancy-radar.ico", "open-vacancy-radar.icns"},
+        # `installer.nsh` is the NSIS silent-bundling hook for the VC++ redistributable (checked
+        # into git, not an image asset this script validates). `vc_redist.x64.exe` is the
+        # redistributable itself: gitignored, downloaded on demand by `scripts/download-vc-redist.mjs`
+        # before a Windows package build, so it may or may not be present in a given working copy.
+        allow_extra={"installer.nsh", "vc_redist.x64.exe"},
+    )
     check_exact_files(PNG_ROOT, {f"icon-{size}.png" for size in PNG_SIZES})
     check_exact_files(ILLUSTRATION_ROOT, set(ILLUSTRATION_VIEWBOXES))
     check_exact_files(
