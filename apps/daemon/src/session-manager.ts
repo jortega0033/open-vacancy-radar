@@ -400,6 +400,17 @@ export class SessionManager {
         resumeProviderSessionId,
         model,
         ...(unknownFrames ? { launchProbe: this.buildLaunchProbe(id, unknownFrames) } : {}),
+        // ADI-08b. Keyed on the protocol version this session was admitted under, which is already
+        // the v1/v2 discriminator this method takes -- no new parameter, no new plumbing, and no
+        // second source of truth that could disagree with the one the durable record is written
+        // with. `protocolVersion` defaults to 1, so v1's call site in `routes/sessions.ts` (which
+        // passes five arguments and stops) reaches this line with the key spread away entirely.
+        //
+        // Spread rather than `hardened: protocolVersion === 2` on purpose: a v1 session's options
+        // object must not merely carry a falsy value here, it must not carry the key at all. That
+        // is what lets `session-manager.hardening.test.ts` assert the v1 shape by deep equality
+        // against the pre-ADI-08b one instead of asserting a value it would have to know about.
+        ...(protocolVersion === 2 ? { hardened: true } : {}),
       });
     } catch (err) {
       if (reserved) this.limiter.release(id);
