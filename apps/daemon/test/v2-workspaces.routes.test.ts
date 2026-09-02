@@ -279,7 +279,7 @@ describe('trust cannot be self-asserted (D3)', () => {
 });
 
 describe('POST /v2/workspaces/consume-grant', () => {
-  it('marks the workspace trusted, atomically with its audit entries', async () => {
+  it('marks the workspace trusted, once both of its audit entries are durable', async () => {
     const { app, trustStore, sessionManager } = setup();
     const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
 
@@ -407,7 +407,7 @@ describe('audit is never best-effort', () => {
     expect(trustStore.all()).toHaveLength(0);
   });
 
-  it('completes the audit write BEFORE it grants trust or answers, in that exact order', async () => {
+  it('completes BOTH audit writes BEFORE it grants trust or answers, in that exact order', async () => {
     const { app, auditStore, trustStore } = setup();
     const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
 
@@ -432,10 +432,13 @@ describe('audit is never best-effort', () => {
     });
     order.push('responded');
 
-    expect(order).toEqual(['audit:grant.consumed', 'trust:set', 'audit:trust.granted', 'responded']);
+    // `trust.granted` is a pre-commit record: it is fsynced before the durable, externally
+    // observable mutation it describes, never after it. The reverse order leaves a window in which a
+    // crash produces a permanently trusted workspace that nothing recorded.
+    expect(order).toEqual(['audit:grant.consumed', 'audit:trust.granted', 'trust:set', 'responded']);
   });
 
-  it('rolls trust back when the post-grant audit entry cannot be written', async () => {
+  it('never reaches setTrusted when the pre-commit audit entry cannot be written', async () => {
     const { app, auditStore, trustStore, sessionManager } = setup();
     const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
 
@@ -443,6 +446,12 @@ describe('audit is never best-effort', () => {
     auditStore.append = async (entry) => {
       if (entry.event === 'trust.granted') throw new AuditUnavailableError('injected');
       return realAppend(entry);
+    };
+    let setTrustedCalls = 0;
+    const realSetTrusted = trustStore.setTrusted.bind(trustStore);
+    trustStore.setTrusted = async (identity, provider) => {
+      setTrustedCalls += 1;
+      return realSetTrusted(identity, provider);
     };
 
     const res = await consume(app, {
@@ -453,10 +462,167 @@ describe('audit is never best-effort', () => {
     });
 
     expect(res.statusCode).toBe(503);
-    // An unrecorded trusted workspace is precisely the state the audit store exists to prevent, so
-    // the trust is withdrawn rather than left standing.
+    // Nothing to roll back, because nothing was ever done: the audit write is a precondition of the
+    // mutation now, not a report of it. No trust on disk, and no block needed to contain a
+    // half-grant that never existed.
+    expect(setTrustedCalls).toBe(0);
     expect(trustStore.matches(view.workspaceId, view.incarnation)).toBe(false);
+    expect(sessionManager.isWorkspaceBlocked(view.workspaceId)).toBe(false);
+  });
+
+  it('leaves NO trust on disk when the daemon dies between the audit entry and setTrusted', async () => {
+    // The crash simulation the ordering exists for: the audit write succeeds and fsyncs, and then
+    // the process never gets to persist trust. A second store opened over the same state root is
+    // what a restarted daemon would see, so this asserts on the bytes, not on an in-memory object.
+    const { app, trustStore } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+
+    trustStore.setTrusted = () => {
+      throw new Error('simulated crash: the daemon died before trust could be persisted');
+    };
+
+    const res = await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().code).toBe('trust_write_failed');
+
+    // What a restart would read back.
+    const afterRestart = new WorkspaceTrustStore({ stateRoot });
+    expect(afterRestart.matches(view.workspaceId, view.incarnation)).toBe(false);
+    expect(afterRestart.inspectSync(view.workspaceId).state).toBe('untrusted');
+
+    // And the log is the conservative side of the discrepancy: it claims a grant that did not take
+    // effect, rather than hiding one that did.
+    expect(auditLines().map((entry) => entry.event)).toEqual(['grant.consumed', 'trust.granted']);
+  });
+
+  it('reports an audit fault with a closed code and no filesystem path in the body', async () => {
+    // A real failure, not an injected error object: the audit log's own file is replaced by a
+    // directory, so `appendDurably`'s open fails with an EISDIR whose message names the log path.
+    // That message must never reach a caller -- main.ts relays these bodies toward the renderer.
+    const { app } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+
+    const logPath = join(stateRoot, 'workspace-audit', 'audit.jsonl');
+    mkdirSync(logPath, { recursive: true });
+
+    const res = await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe('audit_unavailable');
+    for (const sentinel of [logPath, stateRoot, 'audit.jsonl', tmpdir()]) {
+      expect(res.body, `${sentinel} leaked into the response`).not.toContain(sentinel);
+    }
+    expect(res.body).not.toMatch(/[A-Za-z]:\\/);
+    expect(res.body).not.toContain('/');
+  });
+});
+
+describe('consume-grant brackets its awaits with the revocation epoch', () => {
+  it('denies, and does not clear the block, when a revocation lands during the audit writes', async () => {
+    const { app, auditStore, trustStore, sessionManager } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+
+    // The revocation lands inside the `trust.granted` write: after the entry check at the top of the
+    // route, and before the mutation. Only the re-check placed immediately before `setTrusted` can
+    // see it.
+    const realAppend = auditStore.append.bind(auditStore);
+    auditStore.append = async (entry) => {
+      const written = await realAppend(entry);
+      if (entry.event === 'trust.granted') sessionManager.blockWorkspace(view.workspaceId);
+      return written;
+    };
+    let setTrustedCalls = 0;
+    const realSetTrusted = trustStore.setTrusted.bind(trustStore);
+    trustStore.setTrusted = async (identity, provider) => {
+      setTrustedCalls += 1;
+      return realSetTrusted(identity, provider);
+    };
+
+    const res = await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe('workspace_revoked');
+    // Never persisted in the first place. Both re-checks would leave the *answer* at 403 -- the one
+    // after `setTrusted` would write trust and then roll it back -- so this call count is what
+    // distinguishes the pre-persist check from its successor, and what fails if it is removed.
+    expect(setTrustedCalls).toBe(0);
+    // The consumption must not overwrite the revocation that beat it.
     expect(sessionManager.isWorkspaceBlocked(view.workspaceId)).toBe(true);
+    expect(trustStore.matches(view.workspaceId, view.incarnation)).toBe(false);
+    expect(new WorkspaceTrustStore({ stateRoot }).inspectSync(view.workspaceId).state).toBe('untrusted');
+    expect(auditLines().at(-1)?.reason).toBe('trust_revoked');
+  });
+
+  it('rolls trust back and keeps the block when a revocation lands during setTrusted itself', async () => {
+    const { app, trustStore, sessionManager } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+
+    // The narrowest window there is: the trust write itself. Without the second re-check the route
+    // would fall through to `allowWorkspace()` and silently convert this revocation into a grant.
+    const realSetTrusted = trustStore.setTrusted.bind(trustStore);
+    trustStore.setTrusted = async (identity, provider) => {
+      const result = await realSetTrusted(identity, provider);
+      sessionManager.blockWorkspace(view.workspaceId);
+      return result;
+    };
+
+    const res = await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe('workspace_revoked');
+    expect(sessionManager.isWorkspaceBlocked(view.workspaceId)).toBe(true);
+    expect(new WorkspaceTrustStore({ stateRoot }).matches(view.workspaceId, view.incarnation)).toBe(false);
+  });
+
+  it('denies a consumption whose epoch moved even though nothing is blocked right now', async () => {
+    const { app, auditStore, trustStore, sessionManager } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+
+    // Block and allow inside one await: a boolean "is it blocked" test would see nothing at either
+    // end. The epoch counter is what makes the intervening revocation visible at all. Recorded as
+    // `not_trusted`, not `trust_revoked`, because by the time we look nothing is revoked.
+    const realAppend = auditStore.append.bind(auditStore);
+    auditStore.append = async (entry) => {
+      const written = await realAppend(entry);
+      if (entry.event === 'grant.consumed') {
+        sessionManager.blockWorkspace(view.workspaceId);
+        sessionManager.allowWorkspace(view.workspaceId);
+      }
+      return written;
+    };
+
+    const res = await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('workspace_grant_stale');
+    expect(trustStore.matches(view.workspaceId, view.incarnation)).toBe(false);
+    expect(auditLines().at(-1)?.reason).toBe('not_trusted');
   });
 });
 
@@ -528,6 +694,53 @@ describe('PUT /v2/workspaces/:workspaceId/trust: revocation', () => {
       'trust.granted',
       'trust.revocation_started',
     ]);
+  });
+
+  it('still cancels live sessions when the trust.revocation_started audit entry fails', async () => {
+    // The inversion of the grant path's rule, and the reason it exists. `blockWorkspace()` has
+    // already run by the time the audit is attempted, so returning on a failed write would leave a
+    // workspace that is revoked for new sessions but still has the user's files open under a running
+    // CLI. The audit fault is reported; the teardown happens anyway.
+    const { app, auditStore, sessionManager, provider, trustStore } = setup();
+    const view = workspaceTrustViewSchema.parse((await inspect(app)).json().workspace);
+    await consume(app, {
+      path: workspaceDir,
+      provider: 'claude',
+      workspaceId: view.workspaceId,
+      incarnation: view.incarnation,
+    });
+
+    const session = sessionManager.create(
+      'claude',
+      workspaceDir,
+      'prompt',
+      undefined,
+      undefined,
+      1,
+      view.workspaceId,
+    );
+
+    const realAppend = auditStore.append.bind(auditStore);
+    auditStore.append = async (entry) => {
+      if (entry.event === 'trust.revocation_started') throw new AuditUnavailableError('injected');
+      return realAppend(entry);
+    };
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v2/workspaces/${view.workspaceId}/trust`,
+      headers: AUTH,
+      payload: { state: 'untrusted' },
+    });
+
+    // The caller is told the log is broken, with the same closed code every other route uses...
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe('audit_unavailable');
+    expect(res.body).not.toContain(stateRoot);
+    // ...about a revocation that was nonetheless carried out in full.
+    expect(provider.cancelled.has(session.id)).toBe(true);
+    expect(sessionManager.isWorkspaceBlocked(view.workspaceId)).toBe(true);
+    expect(trustStore.inspectSync(view.workspaceId).state).toBe('untrusted');
   });
 
   it('404s for a workspace nothing was ever granted for, rather than inventing audit fields', async () => {

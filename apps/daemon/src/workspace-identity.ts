@@ -158,11 +158,19 @@ function sha256Hex(parts: readonly string[]): string {
   return hash.digest('hex');
 }
 
-/** Bounds a directory basename for display. Never a full path, and never empty. */
+/**
+ * Bounds a directory basename for display. Never a full path, and never empty.
+ *
+ * The empty-basename case is real and is exactly the case where returning the input would be worst:
+ * `basename('C:\\')` and `basename('/')` are both `''`, so a user who picks a drive root would
+ * otherwise have the full canonical path travel to the renderer inside a field the whole design
+ * promises is a bounded folder name (the renderer is never told where anything is; see
+ * `workspace-grant.ts`). A drive root has no folder name to show, so it is labelled as what it is.
+ */
 export function toDisplayName(canonicalPath: string): string {
   const name = basename(canonicalPath).trim();
-  const fallback = name.length > 0 ? name : canonicalPath;
-  return fallback.slice(0, MAX_WORKSPACE_DISPLAY_NAME_LENGTH) || 'workspace';
+  if (name.length === 0) return '(drive root)';
+  return name.slice(0, MAX_WORKSPACE_DISPLAY_NAME_LENGTH) || 'workspace';
 }
 
 /**

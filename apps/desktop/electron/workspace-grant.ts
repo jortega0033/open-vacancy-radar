@@ -248,13 +248,32 @@ export class WorkspaceGrantManager {
     // Audited before the handle is handed out, and the failure is fatal to the request: an
     // unrecorded approval is exactly what the audit store exists to prevent. Note the ordering --
     // the record is not in the map yet, so a failed audit leaves no usable grant behind.
-    await this.#deps.recordGrantEvent({
-      event: 'grant.issued',
-      workspaceId: record.workspaceId,
-      incarnation: record.incarnation,
-      provider,
-      actor: 'user',
-    });
+    //
+    // The catch is not softening that: it still throws, and nothing is registered. What it stops is
+    // an *arbitrary* error escaping to the renderer over IPC. `recordGrantEvent` talks to the daemon
+    // over HTTP, and the failures on that path (a fetch error naming a socket, an audit fault whose
+    // message quotes a log file path) carry text this process has not reviewed -- and the whole
+    // point of this module is that the renderer learns nothing about the filesystem. Only a
+    // `WorkspaceGrantRefusedError`, whose message main.ts chose from a closed table, passes through
+    // unchanged; anything else is replaced with a fixed one.
+    try {
+      await this.#deps.recordGrantEvent({
+        event: 'grant.issued',
+        workspaceId: record.workspaceId,
+        incarnation: record.incarnation,
+        provider,
+        actor: 'user',
+      });
+    } catch (err) {
+      if (err instanceof WorkspaceGrantRefusedError) throw err;
+      this.#deps.onEvent?.('could not record a workspace grant issuance in the audit log', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new WorkspaceGrantRefusedError(
+        'this approval could not be recorded in the security log, so no workspace was granted',
+        'audit_failure',
+      );
+    }
 
     this.#grants.set(record.handle, record);
 

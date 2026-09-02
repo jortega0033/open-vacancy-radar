@@ -135,6 +135,31 @@ describe('object identity (D1)', () => {
     expect(toDisplayName(join('a', 'b', 'c'))).toBe('c');
   });
 
+  it('never falls back to the full path for a root that has no basename', async () => {
+    // `basename('C:\\')` and `basename('/')` are both empty, and the fallback used to be the whole
+    // canonical path -- which would have travelled to the renderer inside the one field that is
+    // supposed to be a bounded folder name. A user really can pick a drive root in the folder
+    // picker, so this is a reachable leak, not a hypothetical one.
+    // `basename` is platform-specific, so only the roots this platform actually parses as roots are
+    // exercised: on POSIX a backslash is an ordinary filename character.
+    const roots = isWindows ? ['C:\\', 'D:\\', '/', '\\\\?\\C:\\'] : ['/'];
+    for (const root of roots) {
+      const name = toDisplayName(root);
+      expect(name, root).not.toBe(root);
+      expect(name, root).not.toContain('\\');
+      expect(name, root).not.toContain('/');
+      expect(name.length, root).toBeGreaterThan(0);
+    }
+
+    // And end to end, through a resolution whose canonical path is a filesystem root.
+    const driveRoot = isWindows ? 'C:\\' : '/';
+    const identity = await resolveWorkspaceIdentity(driveRoot, {
+      deps: stubDeps({ realpathNative: async () => driveRoot }),
+    });
+    expect(identity.displayName).toBe('(drive root)');
+    expect(identity.displayName).not.toContain(driveRoot);
+  });
+
   it.runIf(isWindows)(
     'gives C:\\Repo and c:\\repo the SAME workspaceId: the regression D1 exists to prevent',
     async () => {

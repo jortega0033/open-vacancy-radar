@@ -421,14 +421,47 @@ async function daemonFetch(path: string, init: { method: string; body?: unknown 
   });
 }
 
-/** The daemon's own refusal message, when it sent one, and never a raw status code alone. */
-async function daemonErrorMessage(res: Response, fallback: string): Promise<string> {
+/** Every message this process is willing to show for a daemon refusal, keyed by the daemon's code. */
+const DAEMON_REFUSAL_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  unc_workspace_unsupported:
+    'network locations are not supported as agent workspaces. Choose a folder on a local drive: a ' +
+    'network path cannot be given a stable identity, so the app cannot guarantee that the folder ' +
+    'you approve is the folder the agent later runs in.',
+  invalid_workspace_path: 'this folder could not be read, so it cannot be used as an agent workspace',
+  workspace_not_reusable:
+    'this folder cannot be used as an agent workspace: the filesystem does not report a stable ' +
+    'identity for it. Choose a folder on a local disk.',
+  audit_log_full:
+    'the security log is full, so this action was refused rather than performed unrecorded. ' +
+    'Archive it and restart the app.',
+  audit_unavailable:
+    'the security log is not writable, so this action was refused rather than performed unrecorded. ' +
+    'Restart the app.',
+  audit_write_failed: 'this action could not be recorded in the security log, so it was not performed',
+});
+
+/**
+ * The renderer-facing message for a daemon refusal, chosen from the closed table above by the
+ * daemon's machine-readable `code` and **never** taken from its `error` text.
+ *
+ * The previous version returned `body.error` verbatim, which is a path leak waiting to happen: an
+ * audit-store failure's message quotes the filesystem error that caused it, and that error names the
+ * daemon's log file. Reading only `code` means a message this process did not write can never reach
+ * the renderer, whatever a future daemon build decides to put in `error`. It is the same defensive
+ * shape `consumeGrant` below already used, applied to the two calls that did not have it.
+ *
+ * An unrecognized code falls back to the caller's own fixed message rather than to the daemon's
+ * text, so a code added daemon-side later degrades to a vague message, never to an unreviewed one.
+ */
+async function daemonRefusal(res: Response, fallback: string): Promise<{ message: string; code: string }> {
+  let code = '';
   try {
-    const body = (await res.json()) as { error?: unknown };
-    return typeof body.error === 'string' && body.error.length > 0 ? body.error : fallback;
+    const body = (await res.json()) as { code?: unknown };
+    if (typeof body.code === 'string') code = body.code;
   } catch {
-    return fallback;
+    // A body that is not JSON tells us nothing beyond the status, which the fallback already covers.
   }
+  return { message: DAEMON_REFUSAL_MESSAGES[code] ?? fallback, code };
 }
 
 /**
@@ -451,10 +484,8 @@ const workspaceGrants = new WorkspaceGrantManager({
   async inspectWorkspace({ path, provider }): Promise<WorkspaceTrustView> {
     const res = await daemonFetch('/v2/workspaces/inspect', { method: 'POST', body: { path, provider } });
     if (!res.ok) {
-      throw new WorkspaceGrantRefusedError(
-        await daemonErrorMessage(res, 'this folder could not be inspected'),
-        'inspect_failed',
-      );
+      const refusal = await daemonRefusal(res, 'this folder could not be inspected');
+      throw new WorkspaceGrantRefusedError(refusal.message, refusal.code || 'inspect_failed');
     }
     const body = (await res.json()) as { workspace?: unknown };
     // Parsed rather than cast: this response feeds a security confirmation dialog, and a malformed
@@ -481,10 +512,14 @@ const workspaceGrants = new WorkspaceGrantManager({
   async recordGrantEvent(input): Promise<void> {
     const res = await daemonFetch('/v2/workspaces/grant-events', { method: 'POST', body: input });
     if (!res.ok) {
-      throw new WorkspaceGrantRefusedError(
-        await daemonErrorMessage(res, 'this action could not be recorded in the security log, so it was not performed'),
-        'audit_failure',
+      // `audit_failure` is kept as the code regardless of which audit fault the daemon reported:
+      // this is the grant manager's own reason vocabulary, and the daemon's finer distinction
+      // (full vs unwritable) is already reflected in the message chosen from the closed table.
+      const refusal = await daemonRefusal(
+        res,
+        'this action could not be recorded in the security log, so it was not performed',
       );
+      throw new WorkspaceGrantRefusedError(refusal.message, 'audit_failure');
     }
   },
 

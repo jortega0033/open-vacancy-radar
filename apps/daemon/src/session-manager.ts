@@ -538,12 +538,31 @@ export class SessionManager {
    * because a revocation in gap N is invisible to a check made before gap N, and sufficient because
    * a revocation cannot be half-done when we look.
    *
-   * Removing any one of these four checks reintroduces a real window:
+   * What each check is for:
    *
-   * - the entry check catches a revocation between the caller reading the epoch and calling here;
+   * - the entry checks catch a revocation between the caller reading the epoch and calling here;
    * - the post-revalidation check catches one during the filesystem round trip;
    * - the post-inspection check catches one during the trust-store read;
    * - the final comparison is what the returned `true` actually means.
+   *
+   * ## What the tests can and cannot pin (read this before deleting one)
+   *
+   * Revocation state is **monotonic**: `blockWorkspace` and `allowWorkspace` only ever increment the
+   * epoch, so once a gap's revocation has happened, *every* later check sees it too. That means no
+   * test can distinguish an intermediate check from the final one by its **answer** -- the answer is
+   * `false` either way. `session-manager.workspace.test.ts` therefore pins the first three by their
+   * other observable consequence, the **early exit**: if the entry checks work, `revalidate` is never
+   * called; if the post-revalidation check works, `trustStore.inspect` is never called. Those
+   * assertions fail if the corresponding check is deleted, which is what makes them regression tests
+   * rather than decoration.
+   *
+   * The **post-inspection check is deliberately not individually pinned**, because it genuinely
+   * cannot be: nothing observable happens between it and the final comparison (only synchronous
+   * field reads), so deleting it changes no behavior any test can see today. It is kept as
+   * defense-in-depth against exactly that changing -- the moment anything awaits, logs, or emits
+   * between the inspection and the return, its absence becomes a live window, and a reviewer adding
+   * that line should not also have to rediscover this requirement. Do not delete it on the grounds
+   * that no test fails.
    */
   async workspaceIsTrusted(check: WorkspaceTrustCheck): Promise<boolean> {
     if (!this.workspaceTrust) return false;
@@ -558,6 +577,8 @@ export class SessionManager {
     if (!stillTheSameWorkspace) return false;
 
     const inspection = await this.workspaceTrust.inspect(check.workspaceId);
+    // Defense-in-depth, and knowingly not distinguishable from the final comparison by any test
+    // today: see the "what the tests can and cannot pin" note above before removing it.
     if (this.workspaceEpoch(check.workspaceId) !== check.expectedEpoch) return false;
 
     const trusted = inspection.state === 'trusted' && inspection.incarnation === check.incarnation;

@@ -498,8 +498,31 @@ This repo replaces it with a grant contract that runs entirely in the main proce
 8. navigation, `WebContents` destruction, a daemon restart, a trust revocation, or a five-minute TTL
    expires the grant;
 9. consumption deletes the record **synchronously, before any await**, so exactly one caller wins;
-10. the daemon re-resolves the identity from the path, refuses on any drift, and only then marks the
-    workspace trusted, atomically with the audit write.
+10. the daemon re-resolves the identity from the path, refuses on any drift, writes both audit
+    entries (`grant.consumed` and `trust.granted`) and awaits their fsync, and only then marks the
+    workspace trusted.
+
+**There is no atomicity between the audit write and the trust write, and the ordering is what stands
+in for it.** A durable append and a durable file replace are two operations on a filesystem that
+offers no transaction across them, so one of them is necessarily observable first, and the only real
+decision is *which*. The audit entry goes first: `trust.granted` means "this daemon has decided to
+trust this workspace and is about to persist that", not "the trust file has been written". A crash
+between the two therefore leaves an audit line for a grant that did not take effect -- a
+conservative, readable discrepancy in which the log claims more authority was given than actually
+was. The other order leaves the opposite: a permanently trusted workspace with no record of anyone
+ever granting it, which is precisely the state the audit store exists to make impossible, and which
+no rollback code can repair because the process that would run it is gone. An earlier draft of this
+section claimed the two happened "atomically"; they never did, and the claim is now removed rather
+than restated.
+
+Between the audit writes and the mutation the daemon re-reads `SessionManager`'s revocation epoch,
+and it re-reads it again between the mutation and `allowWorkspace()`, with no await between either
+re-read and the statement it guards. This is the same bracketing `SessionManager.workspaceIsTrusted`
+applies and exists for the same reason: `blockWorkspace()` is synchronous, so a revocation racing
+this request lands entirely inside one of the awaits, and an unconditional `allowWorkspace()` at the
+end would clear the very block that revocation installed -- turning a revocation into a grant. A
+revocation observed at either re-read denies the consumption (`grant.denied`, reason `trust_revoked`)
+and rolls back anything already persisted.
 
 **D3, the invariant the whole ticket turns on:** `PUT /v2/workspaces/:id/trust` cannot express
 `'trusted'` at all. The schema's enum is `['untrusted', 'revoking']`, and a body naming `'trusted'`

@@ -43,11 +43,45 @@ import { isWorkspaceDirty } from '../workspace-execution-lease.js';
  * directory that has not changed since -- which, in the shipped app, only exists because the user
  * approved that directory in a native dialog.
  *
- * ## Audit before allow, always
+ * ## Audit before effect, always
  *
- * Every route below that changes trust writes its audit entry *and awaits its fsync* before the
- * response is sent. An audit failure is a denial, never a warning: see `withAudit`.
+ * Every route below that *raises* trust writes its audit entry -- and awaits its fsync -- before the
+ * durable, externally-observable effect it describes, not after. An audit failure is a denial, never
+ * a warning: see `writeAudit`.
+ *
+ * The one deliberate exception is revocation, and it points the other way: there, the effect
+ * (blocking admission and cancelling live sessions) must happen even if the audit write fails,
+ * because a workspace the user revoked must never keep running sessions because a log was full. The
+ * rule is not "audit before everything"; it is **"never grant unrecorded, never fail to revoke"**.
  */
+
+/**
+ * The complete, closed set of ways an audit write can be reported to a caller.
+ *
+ * Every field here is a literal written in this file. No part of it is derived from an exception, a
+ * path, or anything else the filesystem produced -- see `appendAudit` for why that matters. The
+ * three cases are kept distinct because the operator action differs: archive the log, restart the
+ * daemon, or look at the daemon log.
+ */
+const AUDIT_FAILURES = {
+  audit_log_full: {
+    status: 507,
+    code: 'audit_log_full',
+    message: 'the workspace audit log is full, so this action was refused rather than performed unrecorded',
+  },
+  audit_unavailable: {
+    status: 503,
+    code: 'audit_unavailable',
+    message: 'the workspace audit log is not writable, so this action was refused rather than performed unrecorded',
+  },
+  audit_write_failed: {
+    status: 500,
+    code: 'audit_write_failed',
+    message: 'the workspace audit log could not be written',
+  },
+} as const;
+
+type AuditFailure = (typeof AUDIT_FAILURES)[keyof typeof AUDIT_FAILURES];
 
 export interface V2WorkspaceRouteOptions {
   trustStore: WorkspaceTrustStore;
@@ -102,32 +136,47 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
   const isDirty = options.isDirty ?? isWorkspaceDirty;
 
   /**
+   * Appends one audit entry, reporting a failure as a **closed code plus a fixed message**.
+   *
+   * The closed set is the point. An audit-store failure's own `Error.message` quotes whatever the
+   * filesystem said, and that text carries the daemon's log path (`appendDurably`'s own error names
+   * the file, and an ordinary EACCES/ENOSPC/EPERM from Node names it too). These responses are
+   * relayed by the desktop app's main process and end up in front of the renderer, which is the one
+   * process in this system that is never told where anything lives -- so nothing derived from a
+   * filesystem error may appear in them. The daemon's own log keeps the real cause
+   * (`AuditStore` logs it at the point of failure), which is where an operator can act on it.
+   */
+  function appendAudit(entry: Parameters<AuditStore['append']>[0]): Promise<AuditFailure | undefined> {
+    return auditStore.append(entry).then(
+      () => undefined,
+      (err: unknown) => {
+        if (err instanceof AuditCapacityError) return AUDIT_FAILURES.audit_log_full;
+        if (err instanceof AuditUnavailableError) return AUDIT_FAILURES.audit_unavailable;
+        return AUDIT_FAILURES.audit_write_failed;
+      },
+    );
+  }
+
+  /**
    * Writes one audit entry and reports whether the caller may proceed.
    *
    * The contract is deliberately blunt: **if this returns false, deny.** An audit log that is
    * "best-effort" is not an audit log, so a capacity error and a latched-unhealthy store both stop
    * the action rather than being logged past. The two are distinguished in the response only
    * because one is recoverable by archiving a file and the other needs a restart.
+   *
+   * Revocation is the one caller that must not use this: it has to attempt the write and then tear
+   * the workspace down regardless of the answer, so it calls `appendAudit` directly and decides for
+   * itself what to send.
    */
   async function writeAudit(
     reply: FastifyReply,
     entry: Parameters<AuditStore['append']>[0],
   ): Promise<boolean> {
-    try {
-      await auditStore.append(entry);
-      return true;
-    } catch (err) {
-      if (err instanceof AuditCapacityError) {
-        reply.code(507).send({ error: err.message, code: err.code });
-        return false;
-      }
-      if (err instanceof AuditUnavailableError) {
-        reply.code(503).send({ error: err.message, code: err.code });
-        return false;
-      }
-      reply.code(500).send({ error: 'the workspace audit log could not be written', code: 'audit_write_failed' });
-      return false;
-    }
+    const failure = await appendAudit(entry);
+    if (!failure) return true;
+    reply.code(failure.status).send({ error: failure.message, code: failure.code });
+    return false;
   }
 
   /**
@@ -176,14 +225,36 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
    * 1. re-resolve identity from the path (a symlink or junction swapped since the dialog fails here);
    * 2. compare against the claimed pair (`identity_drift` if either half differs);
    * 3. refuse a non-reusable identity outright;
-   * 4. refuse a workspace whose trust was revoked while this request was in flight;
+   * 4. refuse a workspace whose trust was revoked before this request reached here, and record the
+   *    revocation epoch in the same synchronous turn as that check;
    * 5. **audit `grant.consumed`, awaited to fsync**, and deny if that write fails;
-   * 6. persist trust, then audit `trust.granted`;
-   * 7. only then allow.
+   * 6. **audit `trust.granted`, awaited to fsync**, and deny if that write fails;
+   * 7. re-check the revocation epoch, then persist trust;
+   * 8. re-check it again, then open admission.
    *
-   * Step 5 preceding steps 6 and 7 is what makes "audit before allow" structural rather than a
-   * convention: there is no ordering of these statements that grants access without a durable record
-   * of it existing first.
+   * ## Why `trust.granted` is written *before* the trust it describes
+   *
+   * The entry means "the daemon has decided to trust this workspace and is about to persist that",
+   * not "the trust file has been written". The framing is deliberate, because the alternative is
+   * unsound: `setTrusted` is durable on disk and immediately visible to a concurrent `inspect`, so
+   * writing the entry afterwards leaves a window -- one full await -- in which a crash, a power
+   * loss, or a latching audit failure produces a permanently trusted workspace with no record of it
+   * ever having been granted. That is the exact state this store exists to make impossible, and no
+   * amount of rollback code can reach a process that is no longer running.
+   *
+   * Reversing the order moves the residue to the safe side: a crash between the entry and the write
+   * leaves an audit line for a grant that did not take effect, which is a *readable, conservative*
+   * discrepancy -- the log claims more authority was given than actually was. `grant.denied` /
+   * `trust.revoked` lines around it, plus the trust file itself, say what really happened.
+   *
+   * ## Why the epoch is re-checked at steps 7 and 8
+   *
+   * Steps 5 and 6 are awaits, and `SessionManager.blockWorkspace` is synchronous, so a revocation
+   * arriving while this request is in flight always lands *entirely* inside one of those gaps. The
+   * check at step 4 cannot see it, and `allowWorkspace` at step 8 would clear the very block that
+   * revocation just installed. This is the same discipline `SessionManager.workspaceIsTrusted`
+   * applies, for the same reason, and the re-reads are placed with no await between them and the
+   * mutation they guard.
    */
   app.post('/v2/workspaces/consume-grant', async (req, reply) => {
     const parsed = workspaceConsumeGrantRequestSchema.safeParse(req.body);
@@ -218,6 +289,45 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
           ? denial('trust_revoked', 403, 'workspace_revoked')
           : undefined;
 
+    // Read in the same synchronous turn as the block check above, so the two describe one instant.
+    // Every later re-check compares against this value.
+    const epochAtDecision = sessionManager.workspaceEpoch(identity.workspaceId);
+
+    /**
+     * What (if anything) changed this workspace's trust state since `epochAtDecision`.
+     *
+     * `blocked` is an outright revocation. `epoch_moved` is the subtler case: the counter also moves
+     * on `allowWorkspace`, so a block-and-allow cycle that completed inside one of this request's
+     * awaits leaves nothing blocked but still means this consumption was decided against a state
+     * that no longer holds. Both deny -- the difference is only in what is recorded and answered,
+     * because calling the second one a revocation would put a fact in the audit log that is not one.
+     */
+    const changedSinceDecision = (): 'blocked' | 'epoch_moved' | undefined => {
+      if (sessionManager.isWorkspaceBlocked(identity.workspaceId)) return 'blocked';
+      if (sessionManager.workspaceEpoch(identity.workspaceId) !== epochAtDecision) return 'epoch_moved';
+      return undefined;
+    };
+
+    /** Audits and answers a mid-flight denial. Never grants, and never opens admission. */
+    const denyMidFlight = async (change: 'blocked' | 'epoch_moved'): Promise<void> => {
+      const refusal =
+        change === 'blocked'
+          ? denial('trust_revoked', 403, 'workspace_revoked')
+          : denial('not_trusted', 409, 'workspace_grant_stale');
+      const audited = await writeAudit(reply, {
+        event: 'grant.denied',
+        workspaceId: identity.workspaceId,
+        incarnation: identity.incarnation,
+        provider,
+        transport: 'legacy-one-shot',
+        ...(sessionId === undefined ? {} : { sessionId }),
+        reason: refusal.reason,
+        actor: 'policy',
+      });
+      if (!audited) return;
+      reply.code(refusal.status).send({ error: 'the workspace grant was refused', code: refusal.code });
+    };
+
     if (failure) {
       // The denial is audited against the *resolved* identity, not the claimed one: the claim is
       // exactly the thing that was found to be wrong, so recording it would file the entry under a
@@ -237,7 +347,21 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
       return;
     }
 
+    // Steps 5 and 6. Both records exist, fsynced, before anything durable or observable happens.
+    // Either failing denies outright: nothing was mutated yet, so there is nothing to roll back and
+    // no block to install -- the workspace is exactly as untrusted as it was before the request.
     if (!(await writeAudit(reply, buildConsumed(identity, provider, sessionId)))) return;
+    if (!(await writeAudit(reply, buildGranted(identity, provider, sessionId)))) return;
+
+    // Step 7's re-check, with no await between it and the mutation it guards.
+    const beforePersist = changedSinceDecision();
+    if (beforePersist) {
+      // Deliberately no `blockWorkspace` here: nothing was persisted, so there is nothing to
+      // contain, and blocking would let a losing racer close a workspace that a concurrent,
+      // legitimate grant had just opened.
+      await denyMidFlight(beforePersist);
+      return;
+    }
 
     try {
       await trustStore.setTrusted(identity, provider);
@@ -246,30 +370,37 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
         reply.code(409).send({ error: err.message, code: err.code });
         return;
       }
-      // Trust could not be persisted. The consumption is already recorded, so the honest recovery is
-      // to make the state on disk match what was actually achieved (nothing) rather than leave a
-      // half-granted workspace: block it, and report the failure.
+      // Trust could not be persisted, and the log already says it was about to be. The honest
+      // recovery is to make the state on disk match what was actually achieved (nothing): block the
+      // workspace, undo any partial write, and report the failure. The rollback's *own* failure is
+      // logged rather than swallowed -- it is the one path that can leave the two disagreeing, so a
+      // silent catch here is the difference between a diagnosable state and an inexplicable one.
       sessionManager.blockWorkspace(identity.workspaceId);
+      await trustStore.setUntrusted(identity.workspaceId).catch((rollbackErr: unknown) => {
+        app.log.error(
+          { err: rollbackErr },
+          'workspace trust could not be rolled back after a failed grant; the workspace is blocked in memory but its stored state may be stale',
+        );
+      });
+      app.log.error({ err }, 'workspace trust could not be persisted while consuming a grant');
       reply.code(500).send({ error: 'workspace trust could not be saved', code: 'trust_write_failed' });
       return;
     }
 
-    if (
-      !(await writeAudit(reply, {
-        event: 'trust.granted',
-        workspaceId: identity.workspaceId,
-        incarnation: identity.incarnation,
-        provider,
-        transport: 'legacy-one-shot',
-        ...(sessionId === undefined ? {} : { sessionId }),
-        actor: 'user',
-      }))
-    ) {
-      // The grant was consumed and trust was written, but the record of the grant *taking effect*
-      // could not be. Rolling trust back is the only outcome that leaves the log truthful: an
-      // unrecorded trusted workspace is precisely the state this store exists to make impossible.
+    // Step 8's re-check. `setTrusted` above is an await, so a revocation can land inside it, and
+    // `allowWorkspace` below would otherwise clear the block that revocation just installed --
+    // silently converting a revocation into a grant. Here the block *is* re-asserted, because
+    // something durable was written and must not stay trusted while unblocked.
+    const afterPersist = changedSinceDecision();
+    if (afterPersist) {
       sessionManager.blockWorkspace(identity.workspaceId);
-      await trustStore.setUntrusted(identity.workspaceId).catch(() => undefined);
+      await trustStore.setUntrusted(identity.workspaceId).catch((rollbackErr: unknown) => {
+        app.log.error(
+          { err: rollbackErr },
+          'workspace trust could not be rolled back after a revocation raced the grant; the workspace is blocked in memory but its stored state may be stale',
+        );
+      });
+      await denyMidFlight(afterPersist);
       return;
     }
 
@@ -293,6 +424,12 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
    * caller that wants the workspace held closed while it decides; `untrusted` is the terminal state.
    * Blocking happens *before* either store write, so a failing write cannot leave the workspace
    * admitting sessions.
+   *
+   * **Nothing here is gated on the audit write.** The `trust.revocation_started` entry is attempted
+   * and its failure is logged and answered, but the block and the session cancellation happen
+   * regardless: a revoked-and-cancelled-but-under-audited workspace is strictly better than a
+   * revoked workspace with the user's files still open under a running CLI. That inverts the grant
+   * path's rule on purpose -- see the module comment.
    */
   app.put('/v2/workspaces/:workspaceId/trust', async (req, reply) => {
     const workspaceId = workspaceDigestSchema.safeParse(
@@ -345,7 +482,21 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
       actor: 'user',
     } as const;
 
-    if (!(await writeAudit(reply, { ...auditBase, event: 'trust.revocation_started' }))) return;
+    // Attempted, not gated on. This is the deliberate inversion of the rule the grant path follows,
+    // and the asymmetry is the whole point: an unrecorded *grant* hands out authority nothing
+    // remembers, while an unrecorded *revocation* only under-documents authority being taken away.
+    // Returning here on a failed write -- which is what this route used to do -- would skip
+    // `revokeWorkspace()` below, the only call that actually kills the CLI processes already running
+    // in this workspace, leaving them alive in a folder the user just revoked because a log file was
+    // full. `blockWorkspace()` has already run synchronously above, so new sessions are refused
+    // either way; the cancellation of the live ones must not be skippable by an audit fault.
+    const startFailure = await appendAudit({ ...auditBase, event: 'trust.revocation_started' });
+    if (startFailure) {
+      app.log.error(
+        { code: startFailure.code, workspaceId: workspaceId.data },
+        'the start of a workspace revocation could not be audited; cancelling its live sessions anyway',
+      );
+    }
 
     // Persisted state and live sessions are torn down independently, and a failure in either must
     // not skip the other: a workspace whose trust file could not be updated must still lose its
@@ -359,6 +510,14 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
       }),
       sessionManager.revokeWorkspace(workspaceId.data),
     ]);
+
+    // Reported only now, after the teardown actually happened. The caller still learns the audit log
+    // is broken -- with the same closed code every other route uses -- but learns it about a
+    // revocation that was carried out, not one that was abandoned.
+    if (startFailure) {
+      reply.code(startFailure.status).send({ error: startFailure.message, code: startFailure.code });
+      return;
+    }
 
     if (parsed.data.state === 'untrusted') {
       if (!(await writeAudit(reply, { ...auditBase, event: 'trust.revoked' }))) return;
@@ -400,6 +559,27 @@ export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2Works
     if (!written) return;
     reply.code(202).send({ schemaVersion: V2_WORKSPACE_VIEW_SCHEMA_VERSION, recorded: true });
   });
+}
+
+/**
+ * The `trust.granted` entry: "this daemon has decided to trust this workspace and is about to
+ * persist that", written immediately *before* `setTrusted`. See the route's own comment for why the
+ * pre-commit framing is the only one that keeps "no trust without a record" true across a crash.
+ */
+function buildGranted(
+  identity: WorkspaceIdentity,
+  provider: ProviderId,
+  sessionId: string | undefined,
+): Parameters<AuditStore['append']>[0] {
+  return {
+    event: 'trust.granted',
+    workspaceId: identity.workspaceId,
+    incarnation: identity.incarnation,
+    provider,
+    transport: 'legacy-one-shot',
+    ...(sessionId === undefined ? {} : { sessionId }),
+    actor: 'user',
+  };
 }
 
 function buildConsumed(

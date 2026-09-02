@@ -363,7 +363,8 @@ contextBridge.exposeInMainWorld('system', systemApi);
  * Its own namespace rather than three more methods on `agentDock`, for the reason the other
  * separations exist: this is the app's filesystem-trust boundary, and keeping it isolated means it
  * can be reviewed, tested, and (in a fork that does not want agent workspaces) deleted on its own
- * terms. The four pre-existing namespaces are untouched by this ticket, and `preload.test.ts`
+ * terms. The five pre-existing namespaces (`agentDock`, `vacancyRadar`, `workspace`, `cv`, and
+ * `system`) are untouched by this ticket, and `preload.test.ts`
  * asserts that key-for-key.
  *
  * Note what is missing, because the omissions are the design:

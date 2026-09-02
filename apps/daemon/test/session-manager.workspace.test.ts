@@ -15,8 +15,21 @@ import type { WorkspaceIdentity } from '../src/workspace-identity.js';
  * The property under test everywhere below is the same one: `workspaceIsTrusted` re-reads the
  * revocation epoch after **every** await, so a revocation landing in any gap is caught. Each race
  * test injects `blockWorkspace()` at a different one of those gaps, and the assertion is always
- * `false`. Deleting any one of the re-checks in session-manager.ts makes exactly one of these fail,
- * which is what stops them being decorative.
+ * `false`.
+ *
+ * ## Why the answer alone does not pin any individual check
+ *
+ * Revocation state is monotonic -- both `blockWorkspace` and `allowWorkspace` only ever increment
+ * the epoch -- so once a gap's revocation has happened, every later check sees it too. Asserting
+ * only on the returned `false` therefore proves that *some* check caught it, never which one, and
+ * an adversarial reviewer who deletes any single intermediate check will find these tests still
+ * green. The `SHORT-CIRCUIT` tests below close that gap the only way it can be closed: by asserting
+ * on the **work that must not happen** after a check fires (`revalidate` never called, `inspect`
+ * never called). Those do fail when their check is deleted.
+ *
+ * The post-inspection re-check is the one exception and is documented as such in
+ * `session-manager.ts`: nothing observable happens between it and the final comparison, so no test
+ * can distinguish the two. It stays as defense-in-depth for the day something does.
  */
 
 const WORKSPACE = 'a'.repeat(64);
@@ -197,8 +210,11 @@ describe('workspaceIsTrusted: revocation racing each await (at least three disti
     const original = trustStore.inspect.bind(trustStore);
     trustStore.inspect = async (workspaceId: string) => {
       const result = await original(workspaceId);
-      // The final `blockedWorkspaces`/epoch comparison is what catches this one. Without it, a
-      // decision would be returned as `true` for a workspace already revoked.
+      // The block lands before this promise settles, so control returns to `workspaceIsTrusted`
+      // with the revocation already visible: it is the **post-inspection** re-check that refuses
+      // here, not the final comparison, which would only see the same thing a moment later. (An
+      // earlier version of this comment named the final comparison; deleting the post-inspection
+      // check and rerunning is what showed that to be wrong -- both catch it, and this one first.)
       sessionManager.blockWorkspace(WORKSPACE);
       return result;
     };
@@ -220,6 +236,72 @@ describe('workspaceIsTrusted: revocation racing each await (at least three disti
     holder.manager = sessionManager;
 
     await expect(sessionManager.workspaceIsTrusted(check(sessionManager))).resolves.toBe(false);
+  });
+});
+
+describe('workspaceIsTrusted: each early re-check is pinned by the work it prevents', () => {
+  /** A `setup()` whose revalidation is counted, so "never reached" is an assertion and not a hope. */
+  async function setupCounting(revalidateResult = true) {
+    const calls = { revalidate: 0, inspect: 0 };
+    const harness = await setup({
+      revalidate: async () => {
+        calls.revalidate += 1;
+        return revalidateResult;
+      },
+    });
+    const original = harness.trustStore.inspect.bind(harness.trustStore);
+    harness.trustStore.inspect = async (workspaceId: string) => {
+      calls.inspect += 1;
+      return original(workspaceId);
+    };
+    return { ...harness, calls };
+  }
+
+  it('SHORT-CIRCUIT 1: a blocked workspace never reaches the filesystem revalidation', async () => {
+    const { sessionManager, calls } = await setupCounting();
+    sessionManager.blockWorkspace(WORKSPACE);
+    // The epoch is read *after* the block here, so it matches and the entry epoch check passes.
+    // The entry `blockedWorkspaces` check is the only one that can refuse before the first await,
+    // which is why deleting it shows up as a filesystem round trip that should never have happened.
+    await expect(sessionManager.workspaceIsTrusted(check(sessionManager))).resolves.toBe(false);
+    expect(calls.revalidate).toBe(0);
+    expect(calls.inspect).toBe(0);
+  });
+
+  it('SHORT-CIRCUIT 2: a stale epoch never reaches the revalidation either, though nothing is blocked', async () => {
+    const { sessionManager, calls } = await setupCounting();
+    const stale = check(sessionManager);
+    sessionManager.blockWorkspace(WORKSPACE);
+    sessionManager.allowWorkspace(WORKSPACE);
+    // Nothing is blocked now, so only the entry *epoch* check can refuse this one before the await.
+    expect(sessionManager.isWorkspaceBlocked(WORKSPACE)).toBe(false);
+    await expect(sessionManager.workspaceIsTrusted(stale)).resolves.toBe(false);
+    expect(calls.revalidate).toBe(0);
+  });
+
+  it('SHORT-CIRCUIT 3: a revocation during revalidation never reaches the trust store', async () => {
+    const calls = { revalidate: 0, inspect: 0 };
+    const holder: { manager?: SessionManager } = {};
+    const { sessionManager, trustStore } = await setup({
+      revalidate: async () => {
+        calls.revalidate += 1;
+        holder.manager?.blockWorkspace(WORKSPACE);
+        return true;
+      },
+    });
+    holder.manager = sessionManager;
+    const original = trustStore.inspect.bind(trustStore);
+    trustStore.inspect = async (workspaceId: string) => {
+      calls.inspect += 1;
+      return original(workspaceId);
+    };
+
+    await expect(sessionManager.workspaceIsTrusted(check(sessionManager))).resolves.toBe(false);
+    expect(calls.revalidate).toBe(1);
+    // The post-revalidation re-check refused before the store was ever consulted. Without it the
+    // answer would still be `false` (the later checks see the same revocation), so this call count
+    // is the only thing that distinguishes that check from its successors.
+    expect(calls.inspect).toBe(0);
   });
 });
 

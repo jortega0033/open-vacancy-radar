@@ -227,6 +227,32 @@ describe('requestGrant: refusals write nothing', () => {
     );
   });
 
+  it('never lets a filesystem error message reach the caller when the audit write fails', async () => {
+    // What a real audit-store failure looks like by the time it gets here: the daemon's log path,
+    // quoted verbatim by the OS. `requestGrant` used to call `recordGrantEvent` with no catch at
+    // all, so this string became the IPC rejection the renderer sees -- in the one module whose
+    // entire job is that the renderer never learns where anything is on disk.
+    const AUDIT_LOG_PATH = 'C:\\Users\\someone\\AppData\\Roaming\\agentdock-state\\workspace-audit\\audit.jsonl';
+    const { manager } = harness({
+      recordGrantEvent: async () => {
+        throw new Error(`EACCES: permission denied, open '${AUDIT_LOG_PATH}'`);
+      },
+    });
+
+    const err = await manager.requestGrant('claude', RENDERER).catch((caught: unknown) => caught);
+
+    expect(err).toBeInstanceOf(WorkspaceGrantRefusedError);
+    const message = (err as WorkspaceGrantRefusedError).message;
+    expect(message).toBe(
+      'this approval could not be recorded in the security log, so no workspace was granted',
+    );
+    for (const sentinel of [AUDIT_LOG_PATH, 'audit.jsonl', 'agentdock-state', 'C:\\', 'EACCES']) {
+      expect(message, `${sentinel} leaked to the renderer`).not.toContain(sentinel);
+    }
+    expect((err as WorkspaceGrantRefusedError).code).toBe('audit_failure');
+    expect(manager.outstanding).toBe(0);
+  });
+
   it('issues no usable grant when the audit entry for the issuance cannot be written', async () => {
     const { manager, failEventRecording } = harness();
     failEventRecording(true);
