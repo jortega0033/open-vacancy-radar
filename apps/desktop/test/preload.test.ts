@@ -12,9 +12,9 @@ const { invoke, on, removeListener } = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 
-// preload.ts exposes five independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`,
-// `system`) via five separate exposeInMainWorld calls, keyed by name so loading one doesn't clobber
-// the other, the way a single shared `exposedApi` variable would.
+// preload.ts exposes six independent namespaces (`agentDock`, `vacancyRadar`, `cv`, `workspace`,
+// `system`, and ADI-06's `workspaceGrant`) via six separate exposeInMainWorld calls, keyed by name
+// so loading one doesn't clobber the other, the way a single shared `exposedApi` variable would.
 let exposedApis: Record<string, Record<string, unknown>>;
 
 vi.mock('electron', () => ({
@@ -422,5 +422,252 @@ describe('electron/preload.ts: system bridge', () => {
     const result = await (api.saveFile as (input: unknown) => Promise<unknown>)(input);
     expect(invoke).toHaveBeenCalledWith('system:save-file', input);
     expect(result).toEqual({ saved: true, path: 'C:/Users/someone/Downloads/report.pdf' });
+  });
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-06: the workspaceGrant namespace, and proof the other five did not move.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * The exact key sets the five pre-ADI-06 namespaces had, copied here as literals.
+ *
+ * Deliberately duplicated rather than derived from the module: a check that reads the current
+ * surface and compares it to itself cannot fail. These literals are the record of what shipped
+ * before this ticket, so widening any of the five (rather than adding the sixth) breaks a test.
+ */
+const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
+  agentDock: [
+    'getDaemonStatus',
+    'onDaemonStatus',
+    'listProviders',
+    'createSession',
+    'cancelSession',
+    'onSessionEvent',
+    'selectDirectory',
+    'listMcpProviders',
+    'searchMcp',
+    'setMcpCredential',
+    'removeMcpProvider',
+  ],
+  vacancyRadar: [
+    'getReport',
+    'getStatus',
+    'runScan',
+    'getNetherlandsReport',
+    'runNetherlandsScan',
+    'getSearchProfile',
+    'saveSearchProfile',
+  ],
+  workspace: [
+    'getSettings',
+    'updateSettings',
+    'getCounts',
+    'listSavedJobs',
+    'createSavedJob',
+    'updateSavedJob',
+    'deleteSavedJob',
+    'listApplications',
+    'createApplication',
+    'updateApplication',
+    'deleteApplication',
+    'listCvDocuments',
+    'createCvDocument',
+    'updateCvDocument',
+    'deleteCvDocument',
+    'setDefaultCvDocument',
+    'listLetters',
+    'createLetter',
+    'updateLetter',
+    'deleteLetter',
+    'duplicateLetter',
+  ],
+  cv: ['getWorkspaceDir', 'selectAndRead'],
+  system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
+};
+
+describe('electron/preload.ts: ADI-06 did not widen any existing namespace', () => {
+  it('leaves all five pre-existing namespaces key-for-key unchanged', async () => {
+    for (const [namespace, keys] of Object.entries(PRE_ADI_06_NAMESPACES)) {
+      const api = await loadPreload(namespace);
+      expect(Object.keys(api).sort(), namespace).toEqual([...keys].sort());
+    }
+  });
+
+  it('adds no workspace-grant capability to agentDock', async () => {
+    // `selectDirectory` is the one pre-v2 bridge that returns a path, and it stays grandfathered
+    // per ADI-07's framing. This asserts ADI-06 did not add a second path-bearing capability
+    // beside it, and did not fold the grant surface into this namespace.
+    const api = await loadPreload('agentDock');
+    for (const key of Object.keys(api)) {
+      expect(key).not.toMatch(/grant|trust/i);
+    }
+  });
+});
+
+describe('electron/preload.ts: workspaceGrant bridge (ADI-06)', () => {
+  it('exposes exactly the three documented capability functions and nothing else', async () => {
+    const api = await loadPreload('workspaceGrant');
+    expect(Object.keys(api).sort()).toEqual(['consumeGrant', 'getGrantStatus', 'requestGrant'].sort());
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('exposes no generic IPC passthrough and no trust-setting verb', async () => {
+    const api = await loadPreload('workspaceGrant');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+    // D3: there is no renderer-facing way to set trust, and no daemon route that would accept one.
+    expect(api.trust).toBeUndefined();
+    expect(api.setTrusted).toBeUndefined();
+    expect(api.inspect).toBeUndefined();
+  });
+
+  it('sends only a provider id, dropping a path a caller tried to smuggle alongside it', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('workspaceGrant');
+
+    await (api.requestGrant as (p: unknown) => Promise<unknown>)('claude');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('workspace-grant:request', { provider: 'claude' });
+
+    // The renderer must never be able to name the folder: only the user can, in the native picker
+    // main opens. This is the same property `cv.selectAndRead` is tested for.
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    await (api.requestGrant as (p: unknown) => Promise<unknown>)({
+      provider: 'claude',
+      path: 'C:/Users/someone/.ssh',
+      cwd: 'C:/Users/someone',
+    });
+    const sent = JSON.stringify(invoke.mock.calls[0]);
+    expect(sent).not.toContain('.ssh');
+    expect(sent).not.toContain('Users');
+    expect(sent).not.toContain('cwd');
+  });
+
+  it('rebuilds the grant offer, dropping a path the IPC payload carried', async () => {
+    invoke.mockResolvedValue({
+      grantHandle: 'x'.repeat(43),
+      display: { name: 'my-project', branch: 'main', dirty: true, effects: 'unbounded_cli' },
+      // Everything a future main-process change might accidentally attach.
+      canonicalPath: 'C:/Users/someone/my-project',
+      workspaceId: 'a'.repeat(64),
+      incarnation: 'b'.repeat(64),
+      token: 'leaked-token',
+    });
+    const api = await loadPreload('workspaceGrant');
+
+    const offer = await (api.requestGrant as (p: string) => Promise<unknown>)('claude');
+
+    expect(offer).toEqual({
+      grantHandle: 'x'.repeat(43),
+      display: { name: 'my-project', branch: 'main', dirty: true, effects: 'unbounded_cli' },
+    });
+    const serialized = JSON.stringify(offer);
+    expect(serialized).not.toContain('canonicalPath');
+    expect(serialized).not.toContain('Users');
+    expect(serialized).not.toContain('a'.repeat(64));
+    expect(serialized).not.toContain('b'.repeat(64));
+    expect(serialized).not.toContain('leaked-token');
+  });
+
+  it('never echoes an effects value main sent: the literal is what this build can describe', async () => {
+    invoke.mockResolvedValue({
+      grantHandle: 'x'.repeat(43),
+      display: { name: 'my-project', dirty: false, effects: 'read_only' },
+    });
+    const api = await loadPreload('workspaceGrant');
+    const offer = (await (api.requestGrant as (p: string) => Promise<unknown>)('claude')) as {
+      display: { effects: string };
+    };
+    // A narrowed effects claim reaching the UI would be exactly the false statement D4 exists to
+    // prevent, so it is replaced, not passed through.
+    expect(offer.display.effects).toBe('unbounded_cli');
+  });
+
+  it('returns null for a cancelled request and for a malformed payload', async () => {
+    for (const payload of [null, undefined, {}, { grantHandle: 42 }, { grantHandle: 'x', display: 1 }]) {
+      invoke.mockResolvedValue(payload);
+      const api = await loadPreload('workspaceGrant');
+      expect(await (api.requestGrant as (p: string) => Promise<unknown>)('claude')).toBeNull();
+    }
+  });
+
+  it('sends the grant handle and nothing else when consuming', async () => {
+    invoke.mockResolvedValue({ ok: true });
+    const api = await loadPreload('workspaceGrant');
+    const result = await (api.consumeGrant as (h: string) => Promise<unknown>)('y'.repeat(43));
+    expect(invoke).toHaveBeenCalledWith('workspace-grant:consume', { grantHandle: 'y'.repeat(43) });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('coerces a non-string handle to an empty one rather than forwarding an object', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'unknown_handle' });
+    const api = await loadPreload('workspaceGrant');
+    await (api.consumeGrant as (h: unknown) => Promise<unknown>)({
+      toString: () => 'C:/Users/someone',
+    });
+    expect(invoke).toHaveBeenCalledWith('workspace-grant:consume', { grantHandle: '' });
+  });
+
+  it('rebuilds the consume result, so only ok and a reason string can cross', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'identity_drift', path: 'C:/Users/someone' });
+    const api = await loadPreload('workspaceGrant');
+    const result = await (api.consumeGrant as (h: string) => Promise<unknown>)('y'.repeat(43));
+    expect(result).toEqual({ ok: false, reason: 'identity_drift' });
+  });
+
+  it('treats an unrecognized consume response as a refusal, never as a success', async () => {
+    for (const payload of [null, undefined, {}, { ok: 'yes' }, 'ok']) {
+      invoke.mockResolvedValue(payload);
+      const api = await loadPreload('workspaceGrant');
+      const result = await (api.consumeGrant as (h: string) => Promise<unknown>)('y'.repeat(43));
+      expect(result).toEqual({ ok: false, reason: 'unknown_handle' });
+    }
+  });
+
+  it('rebuilds the grant status, and reports "gone" for anything it does not recognize', async () => {
+    invoke.mockResolvedValue({ state: 'active', expiresInMs: 1234, canonicalPath: 'C:/secret' });
+    let api = await loadPreload('workspaceGrant');
+    expect(await (api.getGrantStatus as (h: string) => Promise<unknown>)('z'.repeat(43))).toEqual({
+      state: 'active',
+      expiresInMs: 1234,
+    });
+    expect(invoke).toHaveBeenCalledWith('workspace-grant:status', { grantHandle: 'z'.repeat(43) });
+
+    invoke.mockResolvedValue({ state: 'gone', reason: 'timeout' });
+    api = await loadPreload('workspaceGrant');
+    expect(await (api.getGrantStatus as (h: string) => Promise<unknown>)('z'.repeat(43))).toEqual({
+      state: 'gone',
+      reason: 'timeout',
+    });
+
+    invoke.mockResolvedValue({ nonsense: true });
+    api = await loadPreload('workspaceGrant');
+    expect(await (api.getGrantStatus as (h: string) => Promise<unknown>)('z'.repeat(43))).toEqual({
+      state: 'gone',
+      reason: 'unknown_handle',
+    });
+  });
+
+  it('maps every capability to exactly one hard-coded workspace-grant: channel', async () => {
+    const cases: [name: string, channel: string][] = [
+      ['requestGrant', 'workspace-grant:request'],
+      ['consumeGrant', 'workspace-grant:consume'],
+      ['getGrantStatus', 'workspace-grant:status'],
+    ];
+    for (const [name, channel] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(null);
+      const api = await loadPreload('workspaceGrant');
+      await (api[name] as (arg: string) => Promise<unknown>)('claude');
+      expect(invoke, name).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0]?.[0], name).toBe(channel);
+    }
   });
 });

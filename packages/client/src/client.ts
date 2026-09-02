@@ -64,6 +64,15 @@ export interface HealthResponse {
   protocolVersion: number;
   /** Absent from a pre-v2 daemon. See `ProtocolSupport` and `client.v2`. */
   supportedProtocolVersions?: readonly number[];
+  /**
+   * A UUID minted once per daemon process (ADI-06). Absent from a pre-ADI-06 daemon.
+   *
+   * Surfaced here only so a caller can tell one daemon process from its replacement across a
+   * restart: the desktop app expires every outstanding workspace grant when this value changes,
+   * because the successor daemon never saw the approval that produced them. The client itself does
+   * nothing with it and holds no state keyed on it.
+   */
+  daemonInstanceId?: string;
 }
 
 export interface SessionEventsOptions {

@@ -47,6 +47,29 @@ It lives in its own subdirectory, deliberately separate from `workspace.db` and 
 and the daemon refuses to start its store in any directory that overlaps them — so a backup, a
 database migration, or a workspace reset can never take it along by accident.
 
+### The workspace trust and security log
+
+Alongside the session record, `agentdock-state/` holds two small files covering folder access:
+`workspace-trust/trust.json` (which folders you have approved for an AI agent to work in) and
+`workspace-audit/audit.jsonl` (an append-only record of each approval, use, and withdrawal).
+
+Neither file contains a folder path or a folder name. A folder is recorded as a pair of SHA-256
+digests derived from the filesystem's own identifiers for it — the values the operating system uses
+internally to tell one directory from another — never from its name or location. Everything else in
+a log line is a fixed keyword from a short list (what happened, why, and whether it was you or a
+policy that caused it), a random line id, and a timestamp. There is no free-text field, no folder
+name, and no Git branch name in either file, so there is nowhere for a project, client, or employer
+name to end up. The app's own tests run a full approve-use-withdraw cycle and then search every byte
+of both files for anything path-shaped.
+
+The security log is capped at 64 MB and, unlike the session history, it **never** discards old
+entries to make room: if it filled up, the app would refuse to approve new folder access rather than
+allow access it could not record. In normal use that cap is tens of thousands of approvals away.
+
+Approving a folder always requires you to pick it in a system folder picker and then confirm a
+dialog that spells out what the agent will be able to do in it. The app's interface cannot name a
+folder on your behalf and cannot approve one without that dialog.
+
 None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
 plain SQLite file on your own disk, readable by anything running as your OS user, same as any other
 desktop app's local data.
@@ -96,6 +119,12 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   session together with any sessions resumed from it rather than leaving a broken chain. Deleting
   the `agentdock-state/` directory yourself is safe at any time the app is closed: it holds no
   personal data and nothing in the app reads it except the restart-recovery check described above.
+- **Workspace approvals and the security log (`agentdock-state/workspace-trust/`,
+  `agentdock-state/workspace-audit/`)**: not pruned automatically, deliberately — a security log
+  that quietly discards its own history is not a record of anything. Withdrawing a folder's approval
+  through the app marks it withdrawn and adds a line saying so, rather than erasing the earlier
+  lines. Deleting either file yourself, with the app closed, is safe: every folder simply becomes
+  unapproved again and has to be re-approved through the same dialog.
 
 ## What this project cannot promise
 

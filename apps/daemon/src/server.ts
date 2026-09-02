@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import type { Logger, ProviderRegistry } from '@agent-dock/agent-runtime';
 import { extractBearerToken, tokensMatch } from './auth-token.js';
@@ -11,6 +12,10 @@ import { registerV2ProviderRoutes } from './routes/v2-providers.js';
 import { registerV2SessionRoutes } from './routes/v2-sessions.js';
 import type { ActiveSessionLimiter } from './active-session-limiter.js';
 import type { SessionLineageStore } from './session-lineage-store.js';
+import { registerV2WorkspaceRoutes } from './routes/v2-workspaces.js';
+import { registerV2AuditRoutes } from './routes/v2-audit.js';
+import type { WorkspaceTrustStore } from './workspace-trust-store.js';
+import type { AuditStore } from './audit-store.js';
 
 /**
  * Present only when the daemon has a working durable store this run.
@@ -24,6 +29,21 @@ import type { SessionLineageStore } from './session-lineage-store.js';
 export interface BuildServerV2Options {
   store: SessionLineageStore;
   limiter: ActiveSessionLimiter;
+  /**
+   * The ADI-06 workspace-trust pair, present only when **both** stores opened.
+   *
+   * Nested inside `v2` rather than beside it, and required together rather than individually, for
+   * the same reason `v2` itself is optional: the workspace routes cannot function without either one
+   * of them. A trust store with no audit store would grant access it could not record, which is the
+   * exact failure mode the audit store exists to prevent; an audit store with no trust store would
+   * record decisions nothing can act on. Absence of the pair is the downgrade path -- the workspace
+   * and audit routes are simply never registered, and every `/v2/workspaces/...` call 404s through
+   * the ordinary not-found handler.
+   */
+  workspace?: {
+    trustStore: WorkspaceTrustStore;
+    auditStore: AuditStore;
+  };
 }
 
 export interface BuildServerOptions {
@@ -33,6 +53,8 @@ export interface BuildServerOptions {
   logger: Logger;
   mcpManager?: McpConnectionManager;
   v2?: BuildServerV2Options;
+  /** Overridable only for tests that assert the value round-trips; production mints a fresh UUID. */
+  daemonInstanceId?: string;
 }
 
 /**
@@ -77,13 +99,24 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
     }
   });
 
-  registerHealthRoute(app, startedAt, { v2Enabled: !!opts.v2 });
+  registerHealthRoute(app, startedAt, {
+    v2Enabled: !!opts.v2,
+    daemonInstanceId: opts.daemonInstanceId ?? randomUUID(),
+  });
   registerProviderRoutes(app, opts.registry);
   registerSessionRoutes(app, opts.sessionManager, opts.registry);
   if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
   if (opts.v2) {
     registerV2ProviderRoutes(app, opts.registry, opts.v2.limiter);
     registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter);
+    if (opts.v2.workspace) {
+      registerV2WorkspaceRoutes(app, {
+        trustStore: opts.v2.workspace.trustStore,
+        auditStore: opts.v2.workspace.auditStore,
+        sessionManager: opts.sessionManager,
+      });
+      registerV2AuditRoutes(app, opts.v2.workspace.auditStore);
+    }
   }
 
   app.setErrorHandler((err: FastifyError, req, reply) => {

@@ -78,7 +78,7 @@ another app id's daemon, since they're different files. See
 
 | Route | Auth | Behavior |
 |---|---|---|
-| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion, supportedProtocolVersions }`. `protocolVersion` is frozen at `1` forever; `supportedProtocolVersions` is `[1, 2]` when the durable store opened, and `[1]` when it did not (see [v2 read routes](#v2-read-routes) and [protocol-v1.md](protocol-v1.md)) |
+| `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion, supportedProtocolVersions, daemonInstanceId }`. `protocolVersion` is frozen at `1` forever; `supportedProtocolVersions` is `[1, 2]` when the durable store opened, and `[1]` when it did not (see [v2 read routes](#v2-read-routes) and [protocol-v1.md](protocol-v1.md)). `daemonInstanceId` is a UUID minted once per daemon **process** and stable for its lifetime: a client that sees it change knows this is a different daemon, even though the port, the token, and the discovery file may all be identical (see [Workspace trust routes](#workspace-trust-routes)) |
 | `GET /providers` | required | `{ providers: ProviderStatus[] }`: runs each adapter's `detect()` |
 | `GET /providers/:providerId` | required | One `ProviderStatus`, or `404` for an unregistered id |
 | `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, or a `cwd` that doesn't exist. `409` when the [active-session limit](#active-session-limits) is reached, `507` when the session store has no room. `201` + `AgentSession` on success |
@@ -116,6 +116,36 @@ inventing one here would freeze a public request contract nobody has reviewed. S
 control stay on the v1 routes. See
 [the ADR](adr-agentdock-v2-provenance.md#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
 for the full deferral note.
+
+### Workspace trust routes
+
+ADI-06 adds four routes governing whether a session may run in a real directory of the user's, plus
+one read route over the audit log. They are registered only when **all three** durable stores opened
+successfully: the workspace trust store, the audit store (both from `openWorkspaceStores`, and see
+[Workspace trust and the audit log](#workspace-trust-and-the-audit-log) below), **and** the durable
+session-lineage store. The third is a real coupling, not just a doc nicety: `apps/daemon/src/index.ts`
+nests the whole `v2` options object -- workspace routes included -- inside the lineage store's
+success, so a daemon whose lineage store failed to open registers no workspace routes either. That
+fails in the safe direction (no store, no grants), which is why it stands, but it is stated here
+rather than left to be discovered. When any of the three did not open, none of these routes exist,
+every path below returns the ordinary `404`, and nothing can be granted at all: the downgrade path
+here is closed, not open.
+
+| Route | Behavior |
+|---|---|
+| `POST /v2/workspaces/inspect` | Body `{ path, provider }`. Resolves the workspace identity and returns `{ schemaVersion: 1, workspace }`, a trust view carrying **no path**: two digests, a bounded folder basename, an optional Git branch, a dirty flag, a reusable flag, and the trust state. `400 { code: 'unc_workspace_unsupported' }` for a network location, `400 { code: 'invalid_workspace_path' }` for anything else unresolvable. Writes no audit entry: inspection is not a decision |
+| `POST /v2/workspaces/consume-grant` | Body `{ path, provider, workspaceId, incarnation, sessionId? }`. **The only route that can produce `state: 'trusted'`.** Re-resolves the identity from `path` and refuses unless it matches the claimed pair (`409 { code: 'workspace_identity_drift' }`), refuses a non-reusable identity (`409`), and refuses a revoked workspace (`403`). Audits `grant.consumed` **and** `trust.granted`, awaiting both fsyncs, then re-checks the revocation epoch, persists trust, re-checks the epoch again, opens admission, and only then answers. A revocation observed at either re-check denies the consumption instead (`403 { code: 'workspace_revoked' }`, or `409 { code: 'workspace_grant_stale' }` when the epoch moved without leaving the workspace blocked) and rolls back anything persisted |
+| `PUT /v2/workspaces/:workspaceId/trust` | Body `{ state: 'untrusted' \| 'revoking' }`. **Cannot raise trust**: `state: 'trusted'` is answered with `400 { code: 'trust_not_self_assertable' }`. Blocks admission synchronously, then cancels every live session in the workspace and persists the new state. Neither the block nor the cancellation is gated on the audit write: a failed `trust.revocation_started` entry is logged and reported in the response, but the workspace is still torn down first, because a revoked workspace with live CLI processes still in it is worse than an under-audited revocation. `404` for a workspace nothing was ever granted for |
+| `POST /v2/workspaces/grant-events` | Body `{ event: 'grant.issued' \| 'grant.denied', workspaceId, incarnation, provider, reason?, actor }`. The narrow channel through which the desktop app's main process reports the two grant-lifecycle facts only it can observe. The enum admits **only** those two events: everything else in the audit vocabulary is a decision the daemon makes and writes itself |
+| `GET /v2/audit?cursor=&limit=` | `{ schemaVersion: 1, entries, nextCursor?, unhealthy }`, oldest-first. Read-only: there is no delete and no clear verb. Cursor and limit reuse the same `opaqueCursorV2Schema`/`pageLimitV2Schema` rules as the v2 session routes |
+
+The load-bearing property across all of these is that **no HTTP caller, including the desktop app's
+own main process, can set a workspace trusted by asking**. Trust is only ever a side effect of the
+daemon consuming a grant whose claimed identity it re-derived from the filesystem itself and found
+unchanged. In the shipped app such a pair exists only because the user picked the folder in a native
+picker and approved it in a native confirmation dialog. See
+[the ADR](adr-agentdock-v2-provenance.md#adi-06-workspace-identity-trust-grants-leases-audit-and-exact-approvals)
+for the full contract and for why this diverges from upstream.
 
 ### Active session limits
 
@@ -276,6 +306,60 @@ downgraded. `'interrupted'` exists only in v2's vocabulary; a v1 client reading
   beside either, and everything staged under `.trash/` -- each of which a later startup step would
   otherwise quarantine, rewrite, restore, or delete. See
   [the rollback runbook](rollback-runbook-agentdock-v2.md#agentdock-state-the-v2-durable-session-store-adi-05).
+
+## Workspace trust and the audit log
+
+Two stores live beside the durable session store under the same state root.
+
+`workspace-trust/trust.json` records which workspaces the user approved, and at which
+**incarnation**. A workspace is identified by the filesystem object it is (`dev` + `ino`, plus the
+Git worktree and common directory when it is a repository), not by its path string: on Windows one
+directory has several canonical-looking spellings (`C:\PROGRA~1\x` and `C:\Program Files\x`, or two
+paths differing only in case), and keying on the string would hand the same physical directory two
+different ids. The incarnation *does* include the canonical path, so a rename requires the user to
+re-confirm even though the underlying object is the same.
+
+A workspace whose filesystem cannot give a stable object identity (`dev`/`ino` of 0, an SMB share,
+or two consecutive stats disagreeing) gets random values that can never match on a later check, and
+the trust store refuses to remember it at all. Network locations reached over UNC are rejected even
+earlier, at the boundary, with their own error code.
+
+`workspace-audit/audit.jsonl` is the append-only record of every trust decision. Its retention rule
+is the **inverse** of the session store's: at its 64 MB cap it refuses to write rather than evicting
+its oldest entry, and a refused write denies the action that needed it. An audit log that silently
+forgets is not an audit log, so "the decision was refused" is the correct outcome and "the decision
+happened but nothing recorded it" is not. One failed write latches the store permanently unwritable
+for the life of the process, so no entry can ever land out of order after a failure. On startup the
+log's sequence numbers are validated as contiguous from zero; any gap, truncated head, or
+unparseable line quarantines the whole file (never deletes it) and starts a fresh one.
+
+Entries hold only digests, enums, a uuid, and a timestamp. There is no path and no folder name in
+them, by schema, and the daemon's tests grep the whole on-disk tree after a full
+issue-consume-revoke cycle to keep that honest.
+
+The same rule applies to what an audit *failure* is allowed to say. A failed append is reported to
+HTTP callers as one of three fixed codes -- `audit_log_full` (507), `audit_unavailable` (503),
+`audit_write_failed` (500) -- with a message written in `v2-workspaces.ts` and never derived from the
+underlying exception. The exception's own text quotes the filesystem, which names the log file, and
+these bodies are relayed by the desktop app's main process toward the renderer, which is never told
+where anything lives. The real cause is logged by the daemon instead, where an operator can act on
+it. Main maps the code back onto its own fixed message and never reads the response's `error` field.
+
+There is deliberately no hash chain. This repo's threat model names a same-user local attacker (see
+[SECURITY.md](../SECURITY.md)), who could recompute one; contiguous-sequence validation makes the
+smaller claim that can actually be kept, which is that truncation and deletion are detectable.
+
+### Execution leases ship dormant
+
+`apps/daemon/src/workspace-execution-lease.ts` implements reader/writer leases keyed on the same
+workspace identity, with a writer excluding everything, a reader refused while a writer holds the
+workspace, two readers sharing a clean tree freely, and two readers sharing a **dirty** tree only
+with an explicit opt-in. `git status` failing counts as dirty: failing to prove cleanliness must not
+authorize sharing.
+
+**Nothing calls `acquire()` today.** Leases only matter at v2 session creation, which does not exist
+yet, so the manager ships fully unit-tested and unwired, the same way ADI-04's fallback gate did.
+ADI-13 is the ticket that gives it a caller.
 
 ## Event history and replay
 

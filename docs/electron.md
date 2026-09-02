@@ -45,7 +45,7 @@ permissions), but it's cheap defense in depth for a fork that later adds either 
 
 ## The preload bridge
 
-`electron/preload.ts` exposes five separate `contextBridge` namespaces on `window`, each a fixed,
+`electron/preload.ts` exposes six separate `contextBridge` namespaces on `window`, each a fixed,
 narrow set of functions: never a generic "invoke this channel with this payload" tunnel, and never
 the daemon's base URL or bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a
 clean status object from the IPC payload rather than passing it through once its shape looks
@@ -72,8 +72,9 @@ interface AgentDockBridge {
 }
 ```
 
-The other four namespaces are product-specific to Open Vacancy Radar and never touch the daemon or
-`AgentDockClient` at all:
+The other five namespaces never go through `AgentDockClient`. Four are product-specific to Open
+Vacancy Radar and never touch the daemon at all; the fifth (`workspaceGrant`) reaches the daemon
+directly over loopback, but only from the main process:
 
 - **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
   `getNetherlandsReport`, `runNetherlandsScan`, `getSearchProfile`, `saveSearchProfile`: reads and
@@ -87,6 +88,14 @@ The other four namespaces are product-specific to Open Vacancy Radar and never t
   rather than the database.
 - **`window.system`** (`SystemBridge`) — `setLaunchAtLogin`, `getAppVersion`, `saveFile`: the handful
   of OS-level integrations that don't fit any of the other namespaces.
+- **`window.workspaceGrant`** (`WorkspaceGrantBridge`, ADI-06) — `requestGrant`, `consumeGrant`,
+  `getGrantStatus`: the app's filesystem-trust boundary, which is why it is its own namespace rather
+  than three more methods on `agentDock`. Note what it does **not** have. `requestGrant` takes a
+  provider id and nothing else, so the renderer cannot name a folder: only the user can, in the
+  native picker that main opens, and only after confirming a native dialog. Nothing here returns a
+  path, a `workspaceId`, or an `incarnation` — a grant is an opaque 43-character handle plus a
+  bounded folder basename — and there is no `trust()` verb, because no daemon route would accept one
+  (see [daemon.md](daemon.md#workspace-trust-routes)).
 
 Each function maps to one `ipcMain.handle(...)` in `main.ts` (or, for `workspace`/`cv`, in their own
 main-process modules under `electron/workspace/`). If you're adding a new capability the renderer
