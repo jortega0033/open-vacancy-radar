@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import {
   ACTIVE_CAPABILITY_EXTENSION_IDS,
   MODEL_SELECT_CAPABILITY_ID,
@@ -9,7 +9,6 @@ import {
   type CapabilitySelectionV2,
   type CapabilityUnavailableReasonV2,
   type OpaqueExtension,
-  type ProviderId,
   type ProviderStatus,
 } from '@agent-dock/shared';
 import { resolveModelSelection } from '@agent-dock/vacancy-agent-adapter';

@@ -807,3 +807,165 @@ describe('a session ref is withdrawn wherever a grant would be', () => {
     expect((await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).ok).toBe(false);
   });
 });
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-13: the whole path, end to end.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * Every fact about the folder that must never cross to the renderer, in every spelling a leak could
+ * plausibly take. Kept as one list so a new leak channel is checked against all of them at once
+ * rather than against whichever one the test author happened to remember.
+ */
+const FORBIDDEN_TO_RENDERER = [
+  SECRET_PATH,
+  SECRET_PATH.replace(/\\/g, '/'),
+  'C:\\Users\\someone',
+  'C:/Users/someone',
+  WORKSPACE_ID,
+  INCARNATION,
+];
+
+/**
+ * Asserts that nothing anywhere inside `value` names the folder or the daemon's trust keys.
+ *
+ * Deep-walks rather than checking `JSON.stringify`, on the same principle `requestGrant`'s own
+ * sweep uses: a nested object, an array element, or a field a future change adds is checked exactly
+ * like a top-level one. `label` is threaded through so a failure says *which* renderer-facing value
+ * leaked, which is the whole diagnostic value of running this over four of them.
+ */
+function expectNoLocationAnywhere(label: string, value: unknown): void {
+  for (const found of allStrings(value)) {
+    for (const secret of FORBIDDEN_TO_RENDERER) {
+      expect(found, `${label} leaked ${secret}`).not.toContain(secret);
+    }
+    // Nothing renderer-facing has any business carrying a path separator or a drive letter at all.
+    // The display name is a bare basename, and every id in this flow is base64url or a uuid.
+    expect(found, `${label} looks like a Windows path`).not.toMatch(/[A-Za-z]:[\\/]/);
+    expect(found, `${label} contains a path separator`).not.toMatch(/[\\/]/);
+  }
+}
+
+describe('the full grant -> ref -> start-session path (ADI-13)', () => {
+  it('hands the daemon the real identity while the renderer only ever holds opaque handles', async () => {
+    const h = harness();
+
+    // ---- 1. the renderer asks for a grant, naming only a provider -------------------------------
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+    expect(offer).not.toBeNull();
+    expectNoLocationAnywhere('requestGrant result', offer);
+
+    // ---- 2. the renderer spends the handle ------------------------------------------------------
+    const consumed = await h.manager.consumeGrant(offer!.grantHandle, RENDERER);
+    expect(consumed.ok).toBe(true);
+    expectNoLocationAnywhere('consumeGrant result', consumed);
+    const workspaceSessionRef = (consumed as { workspaceSessionRef: string }).workspaceSessionRef;
+    expect(workspaceSessionRef).toHaveLength(WORKSPACE_SESSION_REF_LENGTH);
+    expect(workspaceSessionRef).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    // ---- 3. the renderer starts a session, addressing the workspace only by that ref -------------
+    // Note what this call *is*: the complete set of values a renderer can supply. There is no path
+    // in it because `StartSessionInput` has nowhere to put one.
+    const rendererRequest = { workspaceSessionRef, prompt: 'summarize the repo' };
+    expectNoLocationAnywhere('renderer request', rendererRequest);
+
+    const started = await h.manager.startSession(rendererRequest, RENDERER);
+
+    expect(started).toEqual({
+      ok: true,
+      session: { sessionId: SESSION_ID, provider: 'claude', status: 'starting' },
+    });
+    expectNoLocationAnywhere('startSession result', started);
+
+    // ---- 4. and the daemon leg got the real thing ----------------------------------------------
+    // The other half of the property. A test that only checked for absence would also pass if the
+    // ref carried nothing and the session was started against the wrong folder (or none), so the
+    // exact daemon-facing payload is pinned too.
+    expect(h.calls.createSession).toEqual([
+      {
+        path: SECRET_PATH,
+        provider: 'claude',
+        workspaceId: WORKSPACE_ID,
+        incarnation: INCARNATION,
+        prompt: 'summarize the repo',
+      },
+    ]);
+    // The opaque handles are this process's own bookkeeping and are never spoken to the daemon:
+    // the daemon re-resolves the identity from the path and knows nothing about a ref.
+    const daemonPayload = JSON.stringify(h.calls.createSession);
+    expect(daemonPayload).not.toContain(workspaceSessionRef);
+    expect(daemonPayload).not.toContain(offer!.grantHandle);
+  });
+
+  it('is the only way a session starts: nothing the renderer sends can substitute for the ref', async () => {
+    const h = harness();
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+    const consumed = await h.manager.consumeGrant(offer!.grantHandle, RENDERER);
+    const workspaceSessionRef = (consumed as { workspaceSessionRef: string }).workspaceSessionRef;
+
+    // A renderer that has been fully compromised: it knows the digests (say, from a log it should
+    // not have) and attaches them, plus a path, plus the grant handle it already spent. None of it
+    // is read -- the four declared fields are the whole of the input surface.
+    const hostile = {
+      workspaceSessionRef,
+      prompt: 'go',
+      ...({
+        path: 'C:\\Users\\someone\\.ssh',
+        cwd: 'C:\\Windows\\System32',
+        workspaceId: 'f'.repeat(64),
+        incarnation: 'e'.repeat(64),
+        grantHandle: offer!.grantHandle,
+      } as Record<string, unknown>),
+    };
+
+    const started = await h.manager.startSession(hostile, RENDERER);
+
+    expect(started.ok).toBe(true);
+    // The daemon saw the ref's own record, not one field of what the caller attached.
+    expect(h.calls.createSession).toEqual([
+      {
+        path: SECRET_PATH,
+        provider: 'claude',
+        workspaceId: WORKSPACE_ID,
+        incarnation: INCARNATION,
+        prompt: 'go',
+      },
+    ]);
+    expectNoLocationAnywhere('startSession result', started);
+  });
+
+  it('refuses the whole path when the grant was never consumed, so no ref exists to start from', async () => {
+    const h = harness();
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+
+    // A grant handle is not a session ref, even though the two are deliberately the same length and
+    // alphabet on the wire. They live in different maps, and only a *consumed* grant mints a ref.
+    expect(offer!.grantHandle).toHaveLength(WORKSPACE_SESSION_REF_LENGTH);
+    const started = await h.manager.startSession(
+      { workspaceSessionRef: offer!.grantHandle, prompt: 'go' },
+      RENDERER,
+    );
+
+    expect(started).toEqual({ ok: false, reason: 'unknown_workspace_ref' });
+    expect(h.calls.createSession).toEqual([]);
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+  });
+
+  it('relays a daemon refusal with no path and no daemon-authored text', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+    // What main.ts's `DAEMON_SESSION_REFUSALS` table produces for `workspace_identity_drift`: a
+    // fixed token from this process's own vocabulary, never the daemon's `error` string.
+    h.setCreateSessionOutcome({ ok: false, reason: 'identity_drift' });
+
+    const started = await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER);
+
+    expect(started).toEqual({ ok: false, reason: 'identity_drift' });
+    expectNoLocationAnywhere('refused startSession result', started);
+    // The ref survives a refusal: a drifted identity is the daemon's answer about one attempt, not a
+    // withdrawal of the user's approval. Only the expiry paths above take a ref away.
+    expect(h.manager.outstandingSessionRefs).toBe(1);
+  });
+});

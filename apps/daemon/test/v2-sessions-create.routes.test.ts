@@ -939,6 +939,58 @@ describe('POST /v2/sessions: audit before effect', () => {
     vi.restoreAllMocks();
   });
 
+  it('fsyncs the audit entry before SessionManager.create() is ever called', async () => {
+    const { app, sessionManager, auditStore } = setup();
+    const identity = await trust(app);
+
+    // The stricter twin of the test above. `startSession` is the *last* effect inside `create()`, so
+    // the previous ordering assertion would still hold if a future edit moved the limiter
+    // reservation, the durable record write, or the lease bookkeeping ahead of the audit write. This
+    // one brackets the whole of `create()` instead, which is the boundary ADI-06's own review had to
+    // force into `v2-workspaces.ts` and the one this route claims in its header.
+    const order: string[] = [];
+    const append = auditStore.append.bind(auditStore);
+    vi.spyOn(auditStore, 'append').mockImplementation(async (entry) => {
+      const result = await append(entry);
+      // Pushed only after the real append resolved, i.e. after its fsync (see
+      // audit-store.durability.test.ts, which proves the fsync precedes the resolution).
+      order.push(`audit:${entry.event}`);
+      return result;
+    });
+    const create_ = sessionManager.create.bind(sessionManager);
+    vi.spyOn(sessionManager, 'create').mockImplementation((...args) => {
+      order.push('SessionManager.create');
+      return create_(...args);
+    });
+
+    const res = await create(app, createBody(identity));
+
+    expect(res.statusCode).toBe(201);
+    expect(order).toEqual(['audit:session.workspace_allowed', 'SessionManager.create']);
+    vi.restoreAllMocks();
+  });
+
+  it('never calls SessionManager.create when the pre-effect audit write fails', async () => {
+    const { app, sessionManager, auditStore } = setup();
+    const identity = await trust(app);
+
+    const append = auditStore.append.bind(auditStore);
+    vi.spyOn(auditStore, 'append').mockImplementation(async (entry) => {
+      if (entry.event === 'session.workspace_allowed') throw new AuditCapacityError(1024);
+      return append(entry);
+    });
+    const createSpy = vi.spyOn(sessionManager, 'create');
+
+    const res = await create(app, createBody(identity));
+
+    // The other half of "audit before effect": the ordering above proves the write happens first,
+    // and this proves a failed write means the effect never happens at all rather than happening
+    // unrecorded.
+    expect(res.statusCode).toBe(507);
+    expect(createSpy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
   it('refuses the session outright when the pre-effect audit write fails', async () => {
     const { app, provider, auditStore, store, leaseManager } = setup();
     const identity = await trust(app);
