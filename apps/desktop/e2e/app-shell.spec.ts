@@ -19,6 +19,11 @@ test.describe('app shell', () => {
       ['Applications', 'Applications'],
       ['CV', 'CV'],
       ['Letters', 'Letters'],
+      // ADI-07's eighth destination. Reachability only: the page's own behavior (concurrency, the
+      // two 409s, the restart-recovered case) is covered in test/components/agent-workspace/, where
+      // the daemon can be stubbed, and driving a real agent session from an e2e run would need a
+      // real CLI, a real folder, and a real native picker.
+      ['AI Workspace', 'AI Workspace'],
       ['AI Runtime', 'AI Runtime'],
       ['Settings', 'Settings'],
       ['Search', 'Search Jobs'],
