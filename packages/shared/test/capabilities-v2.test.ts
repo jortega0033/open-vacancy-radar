@@ -4,6 +4,7 @@ import {
   boundedJsonSchema,
   capabilityIdSchema,
   isCapabilityExtensionActive,
+  MODEL_SELECT_CAPABILITY_ID,
   opaqueExtensionListSchema,
   parseOpaqueExtensions,
   utf8ByteLength,
@@ -154,13 +155,18 @@ describe('opaqueExtensionListSchema / parseOpaqueExtensions', () => {
 });
 
 describe('unknown extensions remain parseable but inactive', () => {
-  it('has no active capability extensions in this release', () => {
-    // This must only change in the ticket that ports a real extension-handler registry behind one
-    // of these ids -- any future change activating an extension has to touch this line on purpose.
-    expect(ACTIVE_CAPABILITY_EXTENSION_IDS).toEqual([]);
+  it('activates exactly one capability extension in this release: model-select (ADI-13)', () => {
+    // This must only change in a ticket that ports a real handler behind another id -- any future
+    // change activating an extension has to touch this line on purpose.
+    expect(ACTIVE_CAPABILITY_EXTENSION_IDS).toEqual([MODEL_SELECT_CAPABILITY_ID]);
+    expect(isCapabilityExtensionActive(MODEL_SELECT_CAPABILITY_ID)).toBe(true);
   });
 
-  it('reports every extension id as inactive, even one this build just parsed successfully', () => {
+  it('is a well-formed extension id, so the activation cannot be an id the parser would reject', () => {
+    expect(capabilityIdSchema.safeParse(MODEL_SELECT_CAPABILITY_ID).success).toBe(true);
+  });
+
+  it('reports an unrelated extension id as inactive, even one this build just parsed successfully', () => {
     const [parsed] = parseOpaqueExtensions([{ id: 'ext.acme.turbo', constraints: { kind: 'opaque', value: {} } }]);
     expect(isCapabilityExtensionActive(parsed!.id)).toBe(false);
   });

@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { agentEventEnvelopeSchema, type AgentEventEnvelope } from '@agent-dock/shared';
+import {
+  MODEL_SELECT_CAPABILITY_ID,
+  agentEventEnvelopeSchema,
+  createSessionV2RequestSchema,
+  type AgentEventEnvelope,
+} from '@agent-dock/shared';
+import { buildModelSelectConstraints } from '@agent-dock/vacancy-agent-adapter';
 import {
   INTERRUPTED_SESSION_V1_ERROR,
   MAX_MODEL_ID_BYTES,
@@ -249,6 +255,14 @@ describe('sentinel sweep: no content reaches the disk', () => {
   const SENTINEL_MODEL = `SENTINEL_MODEL_0009_${OVERSIZED_PADDING}`;
   const SENTINEL_PROVIDER_SESSION = `SENTINEL_PROVIDER_SESSION_0010_${OVERSIZED_PADDING}`;
   const SENTINEL_TOOL_CALL = `SENTINEL_TOOL_CALL_0011_${OVERSIZED_PADDING}`;
+  /**
+   * ADI-13's `selection` is the fourth thing written verbatim rather than digested, and the only
+   * one that is caller-supplied *structure* rather than a single bounded identifier: `enabled`
+   * records each requested capability exactly as it arrived, constraint payload included. So it
+   * gets the same treatment as the three above -- an oversized sentinel that must never reach the
+   * store, and a real bounded value that must survive intact.
+   */
+  const SENTINEL_SELECTION = `SENTINEL_SELECTION_0012_${OVERSIZED_PADDING}`;
 
   it('never writes any string field of any event variant into the store tree', () => {
     const store = new SessionLineageStore({ stateRoot });
@@ -356,6 +370,71 @@ describe('sentinel sweep: no content reaches the disk', () => {
       expect(everything, 'an unbounded identifier reached the disk').not.toContain(sentinel);
     }
     expect(everything).not.toContain('x'.repeat(MAX_MODEL_ID_BYTES + 1));
+  });
+
+  it('refuses an unbounded selection at every gate that guards the store, and never writes one', () => {
+    // The oversized ask, well-formed in shape and hostile only in size: a model-select constraint
+    // whose payload string is fifteen times the wire cap.
+    const oversized = {
+      id: MODEL_SELECT_CAPABILITY_ID,
+      constraints: { kind: 'opaque' as const, value: { model: SENTINEL_SELECTION } },
+    };
+
+    // Gate one, the request boundary: `POST /v2/sessions` is the store's only caller that can put a
+    // `selection` on a record at all, and its body schema reuses `opaqueExtensionListSchema`. The
+    // sentinel never becomes a `create()` argument, because the request carrying it is a 400.
+    expect(
+      createSessionV2RequestSchema.safeParse({
+        provider: 'claude',
+        cwd: '/workspace',
+        workspaceId: 'a'.repeat(64),
+        incarnation: 'b'.repeat(64),
+        prompt: 'do the thing',
+        capabilities: [oversized],
+      }).success,
+    ).toBe(false);
+
+    // Gate two, the store's own schema, which is checked here rather than trusted to gate one:
+    // `persistedSessionRecordV1Schema` is what every record is parsed against on load, so a record
+    // that somehow acquired an unbounded selection would be quarantined rather than served.
+    expect(
+      persistedSessionRecordV1Schema.safeParse(
+        makeRecord({ selection: { enabled: [oversized], unavailableOptional: [] } }),
+      ).success,
+    ).toBe(false);
+
+    // And a bounded selection of exactly the same shape is accepted, so the refusals above are
+    // about the size and not about the field existing.
+    expect(
+      persistedSessionRecordV1Schema.safeParse(
+        makeRecord({
+          selection: {
+            enabled: [{ id: MODEL_SELECT_CAPABILITY_ID, constraints: buildModelSelectConstraints('x') }],
+            unavailableOptional: [],
+          },
+        }),
+      ).success,
+    ).toBe(true);
+
+    // Finally the sweep itself: a real, properly bounded selection goes through `create()` and is
+    // persisted verbatim, and nothing anywhere under the store root carries the sentinel or its
+    // padding.
+    const store = new SessionLineageStore({ stateRoot });
+    const session = makeSession();
+    const selection = {
+      enabled: [{ id: MODEL_SELECT_CAPABILITY_ID, constraints: buildModelSelectConstraints('x') }],
+      unavailableOptional: [{ id: 'ext.acme.turbo', reason: 'unsupported_capability' as const }],
+    };
+    store.create(session, { protocolVersion: 2, scope: FIXTURE_SCOPE, selection });
+
+    // Verbatim, because a selection is what a later resume inherits: a digested one would be
+    // useless to compare a subsequent request against.
+    expect(store.get(session.id)?.session.selection).toEqual(selection);
+
+    const everything = readAllText(stateRoot);
+    expect(everything).toContain('"model":"x"');
+    expect(everything, 'an unbounded selection reached the disk').not.toContain(SENTINEL_SELECTION);
+    expect(everything).not.toContain(OVERSIZED_PADDING);
   });
 
   it('writes the genuine digest of the redacted content, not an opaque placeholder', () => {

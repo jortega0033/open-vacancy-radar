@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityIdSchema } from '@agent-dock/shared';
+import {
+  ACTIVE_CAPABILITY_EXTENSION_IDS,
+  capabilityIdSchema,
+  isCapabilityExtensionActive,
+  MODEL_SELECT_CAPABILITY_ID as SHARED_MODEL_SELECT_CAPABILITY_ID,
+} from '@agent-dock/shared';
 import {
   MODEL_SELECT_CAPABILITY_ID,
   buildModelSelectConstraints,
@@ -11,6 +16,28 @@ import {
  * Deliberately not imported from agent-runtime: the intersector is provider-agnostic, and a real
  * caller supplies whatever catalog a provider actually detected. */
 const FIXTURE_CLAUDE_CATALOG = ['sonnet', 'opus', 'fable', 'haiku'];
+
+/**
+ * ADI-13's drift guard.
+ *
+ * `packages/shared` cannot import this constant: this package depends on shared, so the import would
+ * be a cycle between two workspace packages. The literal is therefore written out in both files, and
+ * this is the test that makes the duplication safe. It lives here rather than in shared's own suite
+ * for the same dependency reason -- only this side can see both copies.
+ *
+ * If it ever fails, the daemon is answering `unsupported_capability` for the one capability it
+ * actually implements: `ACTIVE_CAPABILITY_EXTENSION_IDS` would name an id the resolver never sees.
+ */
+describe('MODEL_SELECT_CAPABILITY_ID drift guard (ADI-13)', () => {
+  it('is byte-identical to the literal packages/shared activates', () => {
+    expect(MODEL_SELECT_CAPABILITY_ID).toBe(SHARED_MODEL_SELECT_CAPABILITY_ID);
+  });
+
+  it('is the id shared reports as an active capability extension', () => {
+    expect(ACTIVE_CAPABILITY_EXTENSION_IDS).toContain(MODEL_SELECT_CAPABILITY_ID);
+    expect(isCapabilityExtensionActive(MODEL_SELECT_CAPABILITY_ID)).toBe(true);
+  });
+});
 
 describe('MODEL_SELECT_CAPABILITY_ID', () => {
   it('is a well-formed extension capability id', () => {

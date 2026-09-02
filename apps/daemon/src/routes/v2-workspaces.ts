@@ -9,16 +9,17 @@ import {
   type ProviderId,
   type WorkspaceTrustView,
 } from '@agent-dock/shared';
-import { AuditCapacityError, AuditUnavailableError, type AuditStore } from '../audit-store.js';
+import type { AuditStore } from '../audit-store.js';
 import type { SessionManager } from '../session-manager.js';
-import {
-  InvalidWorkspacePathError,
-  UncWorkspacePathError,
-  resolveWorkspaceIdentity,
-  type WorkspaceIdentity,
-} from '../workspace-identity.js';
+import { resolveWorkspaceIdentity, type WorkspaceIdentity } from '../workspace-identity.js';
 import { NonReusableWorkspaceError, type WorkspaceTrustStore } from '../workspace-trust-store.js';
 import { isWorkspaceDirty } from '../workspace-execution-lease.js';
+import {
+  appendAudit as appendAuditEntry,
+  replyForIdentityError,
+  writeAudit as writeAuditEntry,
+  type AuditFailure,
+} from './v2-route-helpers.js';
 
 /**
  * The v2 **workspace trust** routes. Registered only when the trust store and the audit store both
@@ -55,34 +56,6 @@ import { isWorkspaceDirty } from '../workspace-execution-lease.js';
  * rule is not "audit before everything"; it is **"never grant unrecorded, never fail to revoke"**.
  */
 
-/**
- * The complete, closed set of ways an audit write can be reported to a caller.
- *
- * Every field here is a literal written in this file. No part of it is derived from an exception, a
- * path, or anything else the filesystem produced -- see `appendAudit` for why that matters. The
- * three cases are kept distinct because the operator action differs: archive the log, restart the
- * daemon, or look at the daemon log.
- */
-const AUDIT_FAILURES = {
-  audit_log_full: {
-    status: 507,
-    code: 'audit_log_full',
-    message: 'the workspace audit log is full, so this action was refused rather than performed unrecorded',
-  },
-  audit_unavailable: {
-    status: 503,
-    code: 'audit_unavailable',
-    message: 'the workspace audit log is not writable, so this action was refused rather than performed unrecorded',
-  },
-  audit_write_failed: {
-    status: 500,
-    code: 'audit_write_failed',
-    message: 'the workspace audit log could not be written',
-  },
-} as const;
-
-type AuditFailure = (typeof AUDIT_FAILURES)[keyof typeof AUDIT_FAILURES];
-
 export interface V2WorkspaceRouteOptions {
   trustStore: WorkspaceTrustStore;
   auditStore: AuditStore;
@@ -111,73 +84,23 @@ function toTrustView(
   };
 }
 
-/**
- * Translates an identity-resolution failure into a client-visible refusal.
- *
- * The UNC case gets its own code and its own full message (D6): "network locations are not
- * supported" is actionable, whereas the generic invalid-path error would leave a user retrying the
- * same share forever. Returns `true` when it handled the error, so the caller can `return`.
- */
-function replyForIdentityError(reply: FastifyReply, err: unknown): boolean {
-  if (err instanceof UncWorkspacePathError) {
-    reply.code(400).send({ error: err.message, code: err.code });
-    return true;
-  }
-  if (err instanceof InvalidWorkspacePathError) {
-    reply.code(400).send({ error: err.message, code: err.code });
-    return true;
-  }
-  return false;
-}
-
 export function registerV2WorkspaceRoutes(app: FastifyInstance, options: V2WorkspaceRouteOptions): void {
   const { trustStore, auditStore, sessionManager } = options;
   const resolveIdentity = options.resolveIdentity ?? ((path: string) => resolveWorkspaceIdentity(path));
   const isDirty = options.isDirty ?? isWorkspaceDirty;
 
   /**
-   * Appends one audit entry, reporting a failure as a **closed code plus a fixed message**.
+   * The two audit helpers, bound to this route's store.
    *
-   * The closed set is the point. An audit-store failure's own `Error.message` quotes whatever the
-   * filesystem said, and that text carries the daemon's log path (`appendDurably`'s own error names
-   * the file, and an ordinary EACCES/ENOSPC/EPERM from Node names it too). These responses are
-   * relayed by the desktop app's main process and end up in front of the renderer, which is the one
-   * process in this system that is never told where anything lives -- so nothing derived from a
-   * filesystem error may appear in them. The daemon's own log keeps the real cause
-   * (`AuditStore` logs it at the point of failure), which is where an operator can act on it.
+   * Both moved to `v2-route-helpers.ts` in ADI-13 so `POST /v2/sessions` uses the identical closed
+   * failure table and the identical "if this returns false, deny" contract. Their behavior here is
+   * unchanged; only the definition site moved. Revocation still calls `appendAudit` directly,
+   * because it must tear the workspace down whether or not the write succeeded.
    */
-  function appendAudit(entry: Parameters<AuditStore['append']>[0]): Promise<AuditFailure | undefined> {
-    return auditStore.append(entry).then(
-      () => undefined,
-      (err: unknown) => {
-        if (err instanceof AuditCapacityError) return AUDIT_FAILURES.audit_log_full;
-        if (err instanceof AuditUnavailableError) return AUDIT_FAILURES.audit_unavailable;
-        return AUDIT_FAILURES.audit_write_failed;
-      },
-    );
-  }
-
-  /**
-   * Writes one audit entry and reports whether the caller may proceed.
-   *
-   * The contract is deliberately blunt: **if this returns false, deny.** An audit log that is
-   * "best-effort" is not an audit log, so a capacity error and a latched-unhealthy store both stop
-   * the action rather than being logged past. The two are distinguished in the response only
-   * because one is recoverable by archiving a file and the other needs a restart.
-   *
-   * Revocation is the one caller that must not use this: it has to attempt the write and then tear
-   * the workspace down regardless of the answer, so it calls `appendAudit` directly and decides for
-   * itself what to send.
-   */
-  async function writeAudit(
-    reply: FastifyReply,
-    entry: Parameters<AuditStore['append']>[0],
-  ): Promise<boolean> {
-    const failure = await appendAudit(entry);
-    if (!failure) return true;
-    reply.code(failure.status).send({ error: failure.message, code: failure.code });
-    return false;
-  }
+  const appendAudit = (entry: Parameters<AuditStore['append']>[0]): Promise<AuditFailure | undefined> =>
+    appendAuditEntry(auditStore, entry);
+  const writeAudit = (reply: FastifyReply, entry: Parameters<AuditStore['append']>[0]): Promise<boolean> =>
+    writeAuditEntry(auditStore, reply, entry);
 
   /**
    * `POST /v2/workspaces/inspect`. Read-only: resolves identity and reports the current trust state.

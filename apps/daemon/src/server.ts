@@ -13,9 +13,11 @@ import { registerV2SessionRoutes } from './routes/v2-sessions.js';
 import type { ActiveSessionLimiter } from './active-session-limiter.js';
 import type { SessionLineageStore } from './session-lineage-store.js';
 import { registerV2WorkspaceRoutes } from './routes/v2-workspaces.js';
+import { registerV2SessionCreateRoute } from './routes/v2-sessions-create.js';
 import { registerV2AuditRoutes } from './routes/v2-audit.js';
 import type { WorkspaceTrustStore } from './workspace-trust-store.js';
 import type { AuditStore } from './audit-store.js';
+import type { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
 
 /**
  * Present only when the daemon has a working durable store this run.
@@ -43,6 +45,17 @@ export interface BuildServerV2Options {
   workspace?: {
     trustStore: WorkspaceTrustStore;
     auditStore: AuditStore;
+    /**
+     * ADI-13. Required alongside the pair above rather than optional, for the same reason they are
+     * required together: `POST /v2/sessions` cannot admit a session without taking an exclusive
+     * lease on the folder it will run in, and a create route that skipped leasing would let two
+     * agents write the same directory at once -- precisely what the lease manager exists to stop.
+     *
+     * It must be the **same instance** the `SessionManager` was constructed with, because that is
+     * where every release happens; two instances would mean leases that are acquired and never
+     * freed. `index.ts` constructs one and passes it to both.
+     */
+    leaseManager: WorkspaceExecutionLeaseManager;
   };
 }
 
@@ -116,6 +129,19 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
         sessionManager: opts.sessionManager,
       });
       registerV2AuditRoutes(app, opts.v2.workspace.auditStore);
+      // ADI-13, and deliberately its own registration call rather than a fourth argument to
+      // `registerV2SessionRoutes` above: this route needs the trust store, the audit store, and the
+      // lease manager, which the read-only v2 session routes have no business holding. Removing
+      // exactly this line rolls session creation back to v1-only and leaves v1, the v2 read routes,
+      // and the workspace/audit routes untouched -- which
+      // `apps/daemon/test/v2-sessions-create.rollback.test.ts` asserts by doing precisely that.
+      registerV2SessionCreateRoute(app, {
+        registry: opts.registry,
+        sessionManager: opts.sessionManager,
+        store: opts.v2.store,
+        auditStore: opts.v2.workspace.auditStore,
+        leaseManager: opts.v2.workspace.leaseManager,
+      });
     }
   }
 

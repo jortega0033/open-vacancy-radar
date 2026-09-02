@@ -50,6 +50,9 @@ importers:
       '@agent-dock/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@agent-dock/vacancy-agent-adapter':
+        specifier: workspace:*
+        version: link:../../packages/vacancy-agent-adapter
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0

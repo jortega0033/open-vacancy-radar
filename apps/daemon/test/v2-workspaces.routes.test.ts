@@ -12,6 +12,7 @@ import { ActiveSessionLimiter } from '../src/active-session-limiter.js';
 import { SessionLineageStore } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
 import { WorkspaceTrustStore } from '../src/workspace-trust-store.js';
+import { WorkspaceExecutionLeaseManager } from '../src/workspace-execution-lease.js';
 import { buildServer } from '../src/server.js';
 import { resolveWorkspaceIdentity } from '../src/workspace-identity.js';
 
@@ -86,7 +87,19 @@ function setup(options: { withWorkspaceStores?: boolean; maxAuditBytes?: number 
   });
   const limiter = new ActiveSessionLimiter();
   const store = new SessionLineageStore({ stateRoot });
-  const sessionManager = new SessionManager(registry, noopLogger, undefined, limiter, store, { trustStore });
+  // ADI-13: one lease manager, shared between the session manager and `buildServer`, exactly as
+  // `index.ts` wires it. These tests exercise the workspace routes rather than session creation, but
+  // the manager still has to be the same instance so a session started here releases what it took.
+  const leaseManager = new WorkspaceExecutionLeaseManager();
+  const sessionManager = new SessionManager(
+    registry,
+    noopLogger,
+    undefined,
+    limiter,
+    store,
+    { trustStore },
+    leaseManager,
+  );
 
   const app = buildServer({
     registry,
@@ -96,7 +109,9 @@ function setup(options: { withWorkspaceStores?: boolean; maxAuditBytes?: number 
     v2: {
       store,
       limiter,
-      ...(options.withWorkspaceStores === false ? {} : { workspace: { trustStore, auditStore } }),
+      ...(options.withWorkspaceStores === false
+        ? {}
+        : { workspace: { trustStore, auditStore, leaseManager } }),
     },
   });
 

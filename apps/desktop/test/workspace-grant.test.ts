@@ -5,7 +5,10 @@ import {
   GRANT_TTL_MS,
   WorkspaceGrantManager,
   WorkspaceGrantRefusedError,
+  WORKSPACE_SESSION_REF_LENGTH,
+  WORKSPACE_SESSION_REF_TTL_MS,
   type DaemonConsumeOutcome,
+  type DaemonCreateSessionOutcome,
   type WorkspaceGrantDeps,
 } from '../electron/workspace-grant.js';
 
@@ -25,6 +28,8 @@ const SECRET_PATH = 'C:\\Users\\someone\\SENTINEL_SECRET_PROJECT';
 const DAEMON_A = '11111111-1111-4111-8111-111111111111';
 const DAEMON_B = '22222222-2222-4222-8222-222222222222';
 
+const SESSION_ID = '11111111-2222-4333-8444-555555555555';
+
 const RENDERER = 7;
 const OTHER_RENDERER = 9;
 
@@ -35,12 +40,15 @@ interface Harness {
     consume: Record<string, unknown>[];
     events: Record<string, unknown>[];
     confirm: Record<string, unknown>[];
+    /** ADI-13: what main asked the daemon's `POST /v2/sessions` for. */
+    createSession: Record<string, unknown>[];
   };
   setNow: (value: number) => void;
   setDaemon: (value: string | undefined) => void;
   setPickResult: (value: string | null) => void;
   setConfirmResult: (value: boolean) => void;
   setConsumeOutcome: (value: DaemonConsumeOutcome) => void;
+  setCreateSessionOutcome: (value: DaemonCreateSessionOutcome) => void;
   failEventRecording: (fail: boolean) => void;
 }
 
@@ -59,12 +67,16 @@ function view(overrides: Partial<WorkspaceTrustView> = {}): WorkspaceTrustView {
 }
 
 function harness(overrides: Partial<WorkspaceGrantDeps> = {}, trustView = view()): Harness {
-  const calls: Harness['calls'] = { inspect: [], consume: [], events: [], confirm: [] };
+  const calls: Harness['calls'] = { inspect: [], consume: [], events: [], confirm: [], createSession: [] };
   let now = 1_000_000;
   let daemon: string | undefined = DAEMON_A;
   let pickResult: string | null = SECRET_PATH;
   let confirmResult = true;
   let consumeOutcome: DaemonConsumeOutcome = { ok: true };
+  let createSessionOutcome: DaemonCreateSessionOutcome = {
+    ok: true,
+    session: { sessionId: SESSION_ID, provider: 'claude', status: 'starting' },
+  };
   let eventFailure = false;
 
   const manager = new WorkspaceGrantManager({
@@ -79,6 +91,10 @@ function harness(overrides: Partial<WorkspaceGrantDeps> = {}, trustView = view()
     recordGrantEvent: async (input) => {
       calls.events.push(input as unknown as Record<string, unknown>);
       if (eventFailure) throw new WorkspaceGrantRefusedError('audit unavailable', 'audit_failure');
+    },
+    createSession: async (input) => {
+      calls.createSession.push(input as unknown as Record<string, unknown>);
+      return createSessionOutcome;
     },
     pickDirectory: async () => pickResult,
     confirm: async (input) => {
@@ -108,6 +124,9 @@ function harness(overrides: Partial<WorkspaceGrantDeps> = {}, trustView = view()
     },
     setConsumeOutcome: (value) => {
       consumeOutcome = value;
+    },
+    setCreateSessionOutcome: (value) => {
+      createSessionOutcome = value;
     },
     failEventRecording: (fail) => {
       eventFailure = fail;
@@ -293,7 +312,7 @@ describe('consumeGrant: single use, bound to one WebContents', () => {
 
     // And the legitimate holder's grant is untouched: a wrong-caller attempt must not become a way
     // to destroy someone else's approval.
-    expect(await manager.consumeGrant(offer?.grantHandle, RENDERER)).toEqual({ ok: true });
+    expect(await manager.consumeGrant(offer?.grantHandle, RENDERER)).toMatchObject({ ok: true });
   });
 
   it('yields exactly one success for two genuinely concurrent consumptions of the same handle', async () => {
@@ -364,7 +383,7 @@ describe('expiry', () => {
     const { manager, setNow } = harness();
     const first = await manager.requestGrant('claude', RENDERER);
     setNow(1_000_000 + GRANT_TTL_MS - 1);
-    expect(await manager.consumeGrant(first?.grantHandle, RENDERER)).toEqual({ ok: true });
+    expect(await manager.consumeGrant(first?.grantHandle, RENDERER)).toMatchObject({ ok: true });
 
     setNow(2_000_000);
     const second = await manager.requestGrant('claude', RENDERER);
@@ -387,7 +406,7 @@ describe('expiry', () => {
       ok: false,
       reason: 'navigation',
     });
-    expect(await manager.consumeGrant(theirs?.grantHandle, OTHER_RENDERER)).toEqual({ ok: true });
+    expect(await manager.consumeGrant(theirs?.grantHandle, OTHER_RENDERER)).toMatchObject({ ok: true });
   });
 
   it('expires grants when the WebContents is destroyed', async () => {
@@ -513,5 +532,440 @@ describe('handle generation', () => {
     // right direction to lose precision in: the answer is still a refusal.
     expect(manager.grantStatus(first?.grantHandle)).toEqual({ state: 'gone', reason: 'unknown_handle' });
     expect(manager.outstanding).toBe(0);
+  });
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-13: workspace session refs and startSession.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Runs the full renderer-visible path: request a grant, consume it, and take the ref that comes back. */
+async function grantAndConsume(
+  h: Harness,
+  webContentsId = RENDERER,
+): Promise<{ workspaceSessionRef: string }> {
+  const offer = await h.manager.requestGrant('claude', webContentsId);
+  const consumed = await h.manager.consumeGrant(offer?.grantHandle, webContentsId);
+  expect(consumed.ok).toBe(true);
+  const ref = (consumed as { workspaceSessionRef?: string }).workspaceSessionRef;
+  expect(typeof ref).toBe('string');
+  return { workspaceSessionRef: ref as string };
+}
+
+describe('consumeGrant now hands back a workspace session ref (ADI-13)', () => {
+  it('returns an opaque 43-character ref and nothing that identifies the folder', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    expect(workspaceSessionRef).toHaveLength(WORKSPACE_SESSION_REF_LENGTH);
+    // Before this ticket, `consumeGrant` resolved and then discarded the path and identity outright.
+    // Everything it retains now stays in this process: the caller gets a handle and nothing else.
+    expect(workspaceSessionRef).not.toContain(SECRET_PATH);
+    expect(workspaceSessionRef).not.toContain(WORKSPACE_ID);
+    expect(workspaceSessionRef).not.toContain(INCARNATION);
+    expect(h.manager.outstandingSessionRefs).toBe(1);
+  });
+
+  it('mints no ref when the daemon refuses the consumption', async () => {
+    const h = harness();
+    h.setConsumeOutcome({ ok: false, reason: 'identity_drift' });
+
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+    const consumed = await h.manager.consumeGrant(offer?.grantHandle, RENDERER);
+
+    expect(consumed).toEqual({ ok: false, reason: 'identity_drift' });
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+  });
+
+  it('never repeats a ref', async () => {
+    const h = harness();
+    const refs = new Set<string>();
+    for (let i = 0; i < 20; i++) refs.add((await grantAndConsume(h)).workspaceSessionRef);
+    expect(refs.size).toBe(20);
+  });
+});
+
+describe('startSession: the daemon gets the real path, the renderer never does', () => {
+  it('calls the daemon with the path and identity the ref holds, not anything the caller sent', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    const result = await h.manager.startSession(
+      {
+        workspaceSessionRef,
+        prompt: 'summarize the repo',
+        // A caller trying to name a location. `StartSessionInput` has nowhere to put these, and the
+        // manager reads only the four fields it declares.
+        ...({ cwd: 'C:\\Users\\someone\\.ssh', workspaceId: 'f'.repeat(64) } as Record<string, unknown>),
+      },
+      RENDERER,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      session: { sessionId: SESSION_ID, provider: 'claude', status: 'starting' },
+    });
+    expect(h.calls.createSession).toEqual([
+      {
+        path: SECRET_PATH,
+        provider: 'claude',
+        workspaceId: WORKSPACE_ID,
+        incarnation: INCARNATION,
+        prompt: 'summarize the repo',
+      },
+    ]);
+  });
+
+  it('returns nothing to the caller that names, spells, or hints at the folder', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    const result = await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER);
+
+    // The same sweep `requestGrant`'s own test uses: every string anywhere in the returned value.
+    for (const value of allStrings(result)) {
+      expect(value).not.toContain(SECRET_PATH);
+      expect(value).not.toContain('SENTINEL_SECRET_PROJECT');
+      expect(value).not.toContain(WORKSPACE_ID);
+      expect(value).not.toContain(INCARNATION);
+      expect(value).not.toMatch(/[A-Za-z]:\\/);
+    }
+  });
+
+  it('forwards a resume target and a capability list untouched', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+    const capabilities = [
+      { id: 'ext.open_vacancy_radar.model_select', constraints: { kind: 'opaque', value: {} } },
+    ];
+
+    await h.manager.startSession(
+      { workspaceSessionRef, prompt: 'continue', resumeProviderSessionId: 'thread-1', capabilities },
+      RENDERER,
+    );
+
+    expect(h.calls.createSession[0]).toMatchObject({
+      resumeProviderSessionId: 'thread-1',
+      capabilities,
+    });
+  });
+
+  it('is multi-use within its lifetime, unlike the single-use grant handle it came from', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    for (const prompt of ['first', 'second', 'third']) {
+      const result = await h.manager.startSession({ workspaceSessionRef, prompt }, RENDERER);
+      expect(result.ok, prompt).toBe(true);
+    }
+    // Three sessions from one approval: the deliberate difference from a grant handle. Re-prompting
+    // the user for each one would be a dialog with no new decision behind it.
+    expect(h.calls.createSession.map((call) => call.prompt)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('refuses an unknown ref without calling the daemon', async () => {
+    const h = harness();
+    await grantAndConsume(h);
+
+    const result = await h.manager.startSession(
+      { workspaceSessionRef: 'q'.repeat(43), prompt: 'go' },
+      RENDERER,
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_workspace_ref' });
+    expect(h.calls.createSession).toEqual([]);
+  });
+
+  it('refuses a ref presented by a different WebContents, and keeps the ref usable by its owner', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    const stolen = await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, OTHER_RENDERER);
+    expect(stolen).toEqual({ ok: false, reason: 'wrong_webcontents' });
+    expect(h.calls.createSession).toEqual([]);
+
+    // Not deleted: letting the wrong caller destroy a legitimate ref would be a denial-of-service.
+    expect((await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).ok).toBe(true);
+  });
+
+  it('refuses an empty or non-string prompt without calling the daemon', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    for (const prompt of ['', 42, null, { toString: () => 'x' }]) {
+      const result = await h.manager.startSession({ workspaceSessionRef, prompt }, RENDERER);
+      expect(result).toEqual({ ok: false, reason: 'invalid_request' });
+    }
+    expect(h.calls.createSession).toEqual([]);
+  });
+
+  it('refuses once the ref TTL has passed, and sweeps it', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.setNow(1_000_000 + WORKSPACE_SESSION_REF_TTL_MS - 1);
+    expect((await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).ok).toBe(true);
+
+    h.setNow(1_000_000 + WORKSPACE_SESSION_REF_TTL_MS + 1);
+    expect(await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).toEqual({
+      ok: false,
+      reason: 'timeout',
+    });
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+  });
+
+  it('outlives the five-minute grant TTL: a ref is not a grant', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.setNow(1_000_000 + GRANT_TTL_MS + 1);
+
+    // The grant that produced it is long gone; the workspace the user trusted is not.
+    expect((await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).ok).toBe(true);
+  });
+
+  it('refuses after the daemon instance changed, because the digests were minted by a dead process', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.setDaemon(DAEMON_B);
+
+    expect(await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).toEqual({
+      ok: false,
+      reason: 'daemon_generation',
+    });
+    expect(h.calls.createSession).toEqual([]);
+  });
+
+  it('relays a daemon refusal as a bare reason', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+    h.setCreateSessionOutcome({ ok: false, reason: 'workspace_lease_conflict' });
+
+    expect(await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).toEqual({
+      ok: false,
+      reason: 'workspace_lease_conflict',
+    });
+  });
+});
+
+describe('a session ref is withdrawn wherever a grant would be', () => {
+  it('drops when the owning WebContents navigates', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.manager.expireForWebContents(RENDERER, 'navigation');
+
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+    expect(await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).toEqual({
+      ok: false,
+      reason: 'unknown_workspace_ref',
+    });
+  });
+
+  it('leaves another WebContents ref alone', async () => {
+    const h = harness();
+    const mine = await grantAndConsume(h, RENDERER);
+    const theirs = await grantAndConsume(h, OTHER_RENDERER);
+
+    h.manager.expireForWebContents(RENDERER, 'webcontents_destroyed');
+
+    expect(
+      (await h.manager.startSession({ workspaceSessionRef: mine.workspaceSessionRef, prompt: 'go' }, RENDERER)).ok,
+    ).toBe(false);
+    expect(
+      (
+        await h.manager.startSession(
+          { workspaceSessionRef: theirs.workspaceSessionRef, prompt: 'go' },
+          OTHER_RENDERER,
+        )
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('drops on a trust revocation for that workspace', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.manager.expireForWorkspace(WORKSPACE_ID);
+
+    expect(await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).toEqual({
+      ok: false,
+      reason: 'unknown_workspace_ref',
+    });
+  });
+
+  it('drops on a daemon restart sweep', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+
+    h.manager.expireAll('daemon_generation');
+
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+    expect((await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER)).ok).toBe(false);
+  });
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-13: the whole path, end to end.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * Every fact about the folder that must never cross to the renderer, in every spelling a leak could
+ * plausibly take. Kept as one list so a new leak channel is checked against all of them at once
+ * rather than against whichever one the test author happened to remember.
+ */
+const FORBIDDEN_TO_RENDERER = [
+  SECRET_PATH,
+  SECRET_PATH.replace(/\\/g, '/'),
+  'C:\\Users\\someone',
+  'C:/Users/someone',
+  WORKSPACE_ID,
+  INCARNATION,
+];
+
+/**
+ * Asserts that nothing anywhere inside `value` names the folder or the daemon's trust keys.
+ *
+ * Deep-walks rather than checking `JSON.stringify`, on the same principle `requestGrant`'s own
+ * sweep uses: a nested object, an array element, or a field a future change adds is checked exactly
+ * like a top-level one. `label` is threaded through so a failure says *which* renderer-facing value
+ * leaked, which is the whole diagnostic value of running this over four of them.
+ */
+function expectNoLocationAnywhere(label: string, value: unknown): void {
+  for (const found of allStrings(value)) {
+    for (const secret of FORBIDDEN_TO_RENDERER) {
+      expect(found, `${label} leaked ${secret}`).not.toContain(secret);
+    }
+    // Nothing renderer-facing has any business carrying a path separator or a drive letter at all.
+    // The display name is a bare basename, and every id in this flow is base64url or a uuid.
+    expect(found, `${label} looks like a Windows path`).not.toMatch(/[A-Za-z]:[\\/]/);
+    expect(found, `${label} contains a path separator`).not.toMatch(/[\\/]/);
+  }
+}
+
+describe('the full grant -> ref -> start-session path (ADI-13)', () => {
+  it('hands the daemon the real identity while the renderer only ever holds opaque handles', async () => {
+    const h = harness();
+
+    // ---- 1. the renderer asks for a grant, naming only a provider -------------------------------
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+    expect(offer).not.toBeNull();
+    expectNoLocationAnywhere('requestGrant result', offer);
+
+    // ---- 2. the renderer spends the handle ------------------------------------------------------
+    const consumed = await h.manager.consumeGrant(offer!.grantHandle, RENDERER);
+    expect(consumed.ok).toBe(true);
+    expectNoLocationAnywhere('consumeGrant result', consumed);
+    const workspaceSessionRef = (consumed as { workspaceSessionRef: string }).workspaceSessionRef;
+    expect(workspaceSessionRef).toHaveLength(WORKSPACE_SESSION_REF_LENGTH);
+    expect(workspaceSessionRef).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    // ---- 3. the renderer starts a session, addressing the workspace only by that ref -------------
+    // Note what this call *is*: the complete set of values a renderer can supply. There is no path
+    // in it because `StartSessionInput` has nowhere to put one.
+    const rendererRequest = { workspaceSessionRef, prompt: 'summarize the repo' };
+    expectNoLocationAnywhere('renderer request', rendererRequest);
+
+    const started = await h.manager.startSession(rendererRequest, RENDERER);
+
+    expect(started).toEqual({
+      ok: true,
+      session: { sessionId: SESSION_ID, provider: 'claude', status: 'starting' },
+    });
+    expectNoLocationAnywhere('startSession result', started);
+
+    // ---- 4. and the daemon leg got the real thing ----------------------------------------------
+    // The other half of the property. A test that only checked for absence would also pass if the
+    // ref carried nothing and the session was started against the wrong folder (or none), so the
+    // exact daemon-facing payload is pinned too.
+    expect(h.calls.createSession).toEqual([
+      {
+        path: SECRET_PATH,
+        provider: 'claude',
+        workspaceId: WORKSPACE_ID,
+        incarnation: INCARNATION,
+        prompt: 'summarize the repo',
+      },
+    ]);
+    // The opaque handles are this process's own bookkeeping and are never spoken to the daemon:
+    // the daemon re-resolves the identity from the path and knows nothing about a ref.
+    const daemonPayload = JSON.stringify(h.calls.createSession);
+    expect(daemonPayload).not.toContain(workspaceSessionRef);
+    expect(daemonPayload).not.toContain(offer!.grantHandle);
+  });
+
+  it('is the only way a session starts: nothing the renderer sends can substitute for the ref', async () => {
+    const h = harness();
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+    const consumed = await h.manager.consumeGrant(offer!.grantHandle, RENDERER);
+    const workspaceSessionRef = (consumed as { workspaceSessionRef: string }).workspaceSessionRef;
+
+    // A renderer that has been fully compromised: it knows the digests (say, from a log it should
+    // not have) and attaches them, plus a path, plus the grant handle it already spent. None of it
+    // is read -- the four declared fields are the whole of the input surface.
+    const hostile = {
+      workspaceSessionRef,
+      prompt: 'go',
+      ...({
+        path: 'C:\\Users\\someone\\.ssh',
+        cwd: 'C:\\Windows\\System32',
+        workspaceId: 'f'.repeat(64),
+        incarnation: 'e'.repeat(64),
+        grantHandle: offer!.grantHandle,
+      } as Record<string, unknown>),
+    };
+
+    const started = await h.manager.startSession(hostile, RENDERER);
+
+    expect(started.ok).toBe(true);
+    // The daemon saw the ref's own record, not one field of what the caller attached.
+    expect(h.calls.createSession).toEqual([
+      {
+        path: SECRET_PATH,
+        provider: 'claude',
+        workspaceId: WORKSPACE_ID,
+        incarnation: INCARNATION,
+        prompt: 'go',
+      },
+    ]);
+    expectNoLocationAnywhere('startSession result', started);
+  });
+
+  it('refuses the whole path when the grant was never consumed, so no ref exists to start from', async () => {
+    const h = harness();
+    const offer = await h.manager.requestGrant('claude', RENDERER);
+
+    // A grant handle is not a session ref, even though the two are deliberately the same length and
+    // alphabet on the wire. They live in different maps, and only a *consumed* grant mints a ref.
+    expect(offer!.grantHandle).toHaveLength(WORKSPACE_SESSION_REF_LENGTH);
+    const started = await h.manager.startSession(
+      { workspaceSessionRef: offer!.grantHandle, prompt: 'go' },
+      RENDERER,
+    );
+
+    expect(started).toEqual({ ok: false, reason: 'unknown_workspace_ref' });
+    expect(h.calls.createSession).toEqual([]);
+    expect(h.manager.outstandingSessionRefs).toBe(0);
+  });
+
+  it('relays a daemon refusal with no path and no daemon-authored text', async () => {
+    const h = harness();
+    const { workspaceSessionRef } = await grantAndConsume(h);
+    // What main.ts's `DAEMON_SESSION_REFUSALS` table produces for `workspace_identity_drift`: a
+    // fixed token from this process's own vocabulary, never the daemon's `error` string.
+    h.setCreateSessionOutcome({ ok: false, reason: 'identity_drift' });
+
+    const started = await h.manager.startSession({ workspaceSessionRef, prompt: 'go' }, RENDERER);
+
+    expect(started).toEqual({ ok: false, reason: 'identity_drift' });
+    expectNoLocationAnywhere('refused startSession result', started);
+    // The ref survives a refusal: a drifted identity is the daemon's answer about one attempt, not a
+    // withdrawal of the user's approval. Only the expiry paths above take a ref away.
+    expect(h.manager.outstandingSessionRefs).toBe(1);
   });
 });

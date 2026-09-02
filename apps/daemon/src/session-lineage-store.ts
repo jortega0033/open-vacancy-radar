@@ -12,7 +12,13 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import type { AgentEventEnvelope, AgentSession, SessionStatusV2, TerminalReasonV2 } from '@agent-dock/shared';
+import type {
+  AgentEventEnvelope,
+  AgentSession,
+  CapabilitySelectionV2,
+  SessionStatusV2,
+  TerminalReasonV2,
+} from '@agent-dock/shared';
 import type { Logger, NormalizedUnknownFrame } from '@agent-dock/agent-runtime';
 import { noopLogger } from '@agent-dock/agent-runtime';
 import {
@@ -26,6 +32,7 @@ import {
 import {
   MAX_PROVIDER_SESSION_ID_BYTES,
   PERSISTED_SCHEMA_VERSION,
+  READABLE_SCHEMA_VERSIONS,
   interruptedEventRecord,
   persistedEventRecordV1Schema,
   persistedSessionRecordV1Schema,
@@ -47,7 +54,7 @@ import {
  *
  * ```
  * <stateRoot>/sessions-v1/
- *   manifest.json                        {"schemaVersion":1}
+ *   manifest.json                        {"schemaVersion":2}  (1 is still read; see #loadManifest)
  *   lineages/<rootSessionId>/
  *     records/<sessionId>.json           one PersistedSessionRecordV1, atomically replaced
  *     events/<sessionId>.jsonl           PersistedEventRecordV1 per line, append-only
@@ -150,6 +157,13 @@ export interface CreateSessionRecordOptions {
   scope: PersistedLaunchScope;
   /** The provider-native thread id this session continues, if any. Drives lineage attachment. */
   resumeProviderSessionId?: string;
+  /**
+   * The capability negotiation this session was admitted with (ADI-13), or omitted.
+   *
+   * Omitted is what every v1 caller passes and what a resume of a pre-ADI-13 parent passes, and it
+   * must stay distinguishable from an empty selection on disk: see `PersistedSessionRecordV1`.
+   */
+  selection?: CapabilitySelectionV2;
 }
 
 interface Lineage {
@@ -379,7 +393,11 @@ export class SessionLineageStore {
     // Manifest last: its presence and correctness is the marker that a full, successful startup
     // pass completed. Writing it first would leave a valid-looking manifest over a tree that a
     // crash mid-recovery had left half-processed.
-    atomicWriteJson(this.#manifestPath, { schemaVersion: 1 });
+    //
+    // This is also the one and only "upgrade" step ADI-13 needed: a manifest that declared `1` was
+    // accepted above and is replaced here with the current version, in the same write that already
+    // happened on every startup. No separate migration pass, and no rewrite of any record.
+    atomicWriteJson(this.#manifestPath, { schemaVersion: PERSISTED_SCHEMA_VERSION });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -517,11 +535,26 @@ export class SessionLineageStore {
     }
   }
 
+  /**
+   * Reads the manifest, accepting **every** version this build understands, not only the one it
+   * writes.
+   *
+   * ADI-13 is where that distinction became load-bearing. This build writes `schemaVersion: 2`, but
+   * a store created by any pre-ADI-13 build declares `1`, and a `1` manifest is a *valid* manifest --
+   * not a corrupt one. Treating it as corrupt (which a `version === PERSISTED_SCHEMA_VERSION` check
+   * would do) would quarantine a perfectly good manifest on every user's first launch after
+   * upgrading, and would log a corruption warning about state that is entirely intact. The manifest
+   * is rewritten to the current version by the constructor's final `atomicWriteJson`, so an accepted
+   * `1` becomes a `2` on the way out with no separate migration step.
+   *
+   * A version *above* `PERSISTED_SCHEMA_VERSION` never reaches here: `#preflightSchemaVersions` has
+   * already thrown, without touching anything.
+   */
   #loadManifest(): void {
     if (!existsSync(this.#manifestPath)) return;
     const parsed = tryReadJson(this.#manifestPath);
     const version = (parsed as { schemaVersion?: unknown } | undefined)?.schemaVersion;
-    if (version === 1) return;
+    if (typeof version === 'number' && READABLE_SCHEMA_VERSIONS.includes(version)) return;
     // Not a future version (the preflight already ruled that out), so it is corrupt or truncated.
     // The manifest holds no session state, so rebuilding it loses nothing -- but the corrupt one is
     // still quarantined, because "the manifest was unreadable" is a fact a bug report wants.
@@ -979,7 +1012,7 @@ export class SessionLineageStore {
    */
   create(session: AgentSession, options: CreateSessionRecordOptions): PersistedSessionRecordV1 {
     const parent = options.resumeProviderSessionId
-      ? this.#findByProviderSessionId(options.resumeProviderSessionId)
+      ? this.findByProviderSessionId(options.resumeProviderSessionId)
       : undefined;
 
     const rootId = parent?.session.rootSessionId ?? session.id;
@@ -997,6 +1030,7 @@ export class SessionLineageStore {
       eventsTruncated: false,
       scope: options.scope,
       unknownFrames: [],
+      ...(options.selection === undefined ? {} : { selection: options.selection }),
     });
 
     let lineage = this.#lineages.get(rootId);
@@ -1015,7 +1049,20 @@ export class SessionLineageStore {
     return record;
   }
 
-  #findByProviderSessionId(providerSessionId: string): PersistedSessionRecordV1 | undefined {
+  /**
+   * The retained record whose provider-native thread id is `providerSessionId`, if any.
+   *
+   * **Public since ADI-13, and public rather than duplicated on purpose.** `create()` above uses it
+   * to decide lineage attachment; `POST /v2/sessions` uses it, before `create()` runs, to decide
+   * whether a resume target exists at all and to inherit that parent's model and selection. Those
+   * two answers must come from the same index, because a route that resolved a parent one way while
+   * `create()` resolved it another would attach a session to a lineage it did not inherit from --
+   * and, worse, could treat an unknown resume target as a fresh session, which is precisely the
+   * model-laundering path the route's `unknown_resume_target` refusal closes.
+   *
+   * The linear scan is unchanged from when this was private: the store is bounded at 500 records.
+   */
+  findByProviderSessionId(providerSessionId: string): PersistedSessionRecordV1 | undefined {
     for (const lineage of this.#lineages.values()) {
       for (const record of lineage.records.values()) {
         if (record.session.providerSessionId === providerSessionId) return record;

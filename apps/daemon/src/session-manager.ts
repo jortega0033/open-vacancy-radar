@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentEvent, AgentEventEnvelope, AgentSession, ProviderId, TerminalReasonV2 } from '@agent-dock/shared';
+import type {
+  AgentEvent,
+  AgentEventEnvelope,
+  AgentSession,
+  CapabilitySelectionV2,
+  ProviderId,
+  TerminalReasonV2,
+} from '@agent-dock/shared';
 import type { Logger, ProviderRegistry, ProviderSessionHandle, SessionLaunchProbe } from '@agent-dock/agent-runtime';
 import { AcceptedWorkLatch, UnknownFrameLedger } from '@agent-dock/agent-runtime';
 import { MemorySessionStore, type SessionStore } from './session-store.js';
@@ -8,6 +15,7 @@ import { toV1Session, type PersistedSessionRecordV1 } from './persisted-session-
 import type { SessionLineageStore } from './session-lineage-store.js';
 import type { WorkspaceTrustStore } from './workspace-trust-store.js';
 import { revalidateWorkspaceIdentity } from './workspace-identity.js';
+import type { WorkspaceExecutionLeaseManager, WorkspaceLease } from './workspace-execution-lease.js';
 
 /**
  * Live, non-persistable state for one session: its process handle and buffered event history.
@@ -101,6 +109,25 @@ export class RevokedWorkspaceError extends Error {
 }
 
 /**
+ * Thrown by `create()` when a workspace's revocation epoch moved between the caller's admission
+ * decision and this call (ADI-13).
+ *
+ * Distinct from `RevokedWorkspaceError` because it is a different fact and deserves a different
+ * answer: nothing is blocked right now, but a block-and-allow cycle completed while this request was
+ * in flight, so the decision that authorized it was made against a state that no longer holds. The
+ * epoch counter is a counter rather than a boolean precisely so this case is visible at all. Same
+ * distinction `routes/v2-workspaces.ts` draws between `workspace_revoked` and `workspace_grant_stale`.
+ */
+export class StaleWorkspaceGrantError extends Error {
+  readonly code = 'workspace_grant_stale';
+
+  constructor(readonly workspaceId: string) {
+    super('this workspace changed trust state while the session was being admitted');
+    this.name = 'StaleWorkspaceGrantError';
+  }
+}
+
+/**
  * The workspace-trust collaborators ADI-06 adds, as one optional bag rather than more positional
  * constructor parameters. Absent for every v1 call site and every existing test, which is why none
  * of them changed.
@@ -112,6 +139,45 @@ export interface SessionManagerWorkspaceOptions {
     canonicalPath: string,
     expected: { workspaceId: string; incarnation: string },
   ) => Promise<boolean>;
+}
+
+/**
+ * The extra facts a v2 create carries, as one optional trailing bag (ADI-13).
+ *
+ * A bag rather than three more positional parameters, and trailing rather than interleaved, so v1's
+ * single call site in `routes/sessions.ts` is **byte-identical** to what it was before this ticket.
+ * That is a checkable claim, not an aspiration: `git diff` on that file is empty.
+ */
+export interface CreateSessionV2Options {
+  /**
+   * The id to use instead of minting one.
+   *
+   * The v2 route needs the id *before* `create()` runs, because it writes a
+   * `session.workspace_allowed` audit entry naming the session it is about to start -- and that
+   * entry must be fsynced before any effect happens (see `routes/v2-sessions-create.ts`). Without
+   * this, the audit line and the session could not refer to the same id.
+   */
+  sessionId?: string;
+  /**
+   * The workspace execution lease the route already acquired for `sessionId`.
+   *
+   * Passed in rather than acquired here because acquisition needs an `await` (the dirty check) and
+   * `create()` is await-free by construction. It is recorded only so this manager owns the
+   * *release*: see `consume()`'s `finally` and `create()`'s `catch`, the two and only two release
+   * sites.
+   */
+  lease?: WorkspaceLease;
+  /** The negotiated capability selection to persist. Absent means no negotiation happened. */
+  selection?: CapabilitySelectionV2;
+  /**
+   * The workspace revocation epoch the caller made its admission decision against.
+   *
+   * Supplying it turns `create()`'s synchronous admission check into the *last* gate of the v2
+   * route's race protection, with no statement between the comparison and the reservation. Omitted
+   * (every v1 caller) it is not checked at all, and only the blocked-set membership applies, exactly
+   * as before this ticket.
+   */
+  expectedWorkspaceEpoch?: number;
 }
 
 /** Everything `workspaceIsTrusted` needs. See that method for why the path must come from the caller. */
@@ -160,6 +226,13 @@ export class SessionManager {
     private readonly limiter: ActiveSessionLimiter = new ActiveSessionLimiter(),
     private readonly durable?: SessionLineageStore,
     workspace?: SessionManagerWorkspaceOptions,
+    /**
+     * ADI-13. Optional for the same reason `durable` and `workspace` are: absent, this manager
+     * behaves exactly as it did before, and every v1 call site and pre-existing test is unchanged.
+     * When present, this object owns lease *release* only -- acquisition happens in the v2 create
+     * route, which can await, and there is deliberately no `acquire()` call anywhere in this class.
+     */
+    private readonly leases?: WorkspaceExecutionLeaseManager,
   ) {
     this.workspaceTrust = workspace?.trustStore;
     this.revalidateIdentity =
@@ -212,7 +285,13 @@ export class SessionManager {
    * 3. **reserve** -- this throws `ActiveSessionLimitError` before any record is written and before
    *    any process is spawned, so a refused request leaves no trace at all;
    * 4. write the durable record, then start the provider. A throw from either releases the
-   *    reservation and, if the record made it to disk, finalizes it as `launch_failed`.
+   *    reservation (and the workspace lease, if one was handed over) and, if the record made it to
+   *    disk, finalizes it as `launch_failed`.
+   *
+   * ADI-13 adds one **trailing, optional** parameter, `v2`, and changes nothing else about this
+   * signature. Every existing positional parameter keeps its position and its meaning, so v1's call
+   * site in `routes/sessions.ts` is untouched by that ticket -- a claim its empty diff makes
+   * checkable rather than merely stated.
    */
   create(
     provider: ProviderId,
@@ -222,20 +301,14 @@ export class SessionManager {
     model?: string,
     protocolVersion: 1 | 2 = 1,
     workspaceId?: string,
+    v2?: CreateSessionV2Options,
   ): AgentSession {
-    const providerImpl = this.registry.get(provider);
-    if (!providerImpl) {
-      throw new Error(`no provider registered for id: ${provider}`);
-    }
+    // The v2 route mints the id itself so its pre-effect audit entry can name the session it is
+    // about to start. Everything downstream (the limiter, the durable record, the workspace index,
+    // the lease release) keys off this one value, so there is no second id to disagree with it.
+    // Minting it is pure, so it happens before the guards below rather than between them.
+    const id = v2?.sessionId ?? randomUUID();
 
-    // ADI-06, and it is a synchronous read of a synchronously-written set, on purpose: a revoked
-    // workspace must be refused with no window in which a concurrent request could slip past. v1
-    // callers pass no `workspaceId` and are unaffected; ADI-13's v2 create path is what supplies one.
-    if (workspaceId !== undefined && this.blockedWorkspaces.has(workspaceId)) {
-      throw new RevokedWorkspaceError(workspaceId);
-    }
-
-    const id = randomUUID();
     const session: AgentSession = {
       id,
       provider,
@@ -246,17 +319,64 @@ export class SessionManager {
       startedAt: new Date().toISOString(),
     };
 
-    // The atomic reservation point. Nothing before this can fail in a way that leaks a hold, and
-    // nothing after it can proceed without one.
-    this.limiter.reserve(provider, id);
-
     // Only when a durable store is active: the ledger exists to be written into that session's
     // final record, so without one it would accumulate entries nothing ever reads.
     const unknownFrames = this.durable ? new UnknownFrameLedger() : undefined;
 
+    /**
+     * ADI-13 widened this `try` upward to enclose every refusal that can happen *after* a caller
+     * has handed over a workspace lease, so that the `catch` below is the one and only place a
+     * pre-live session's lease is given back. Before this ticket the guards sat above the `try`,
+     * which was correct when nothing was handed over; a refusal above the `try` now would leak an
+     * exclusive write lease on the user's own folder for the rest of the daemon's life.
+     *
+     * `reserved` exists because the reservation moved inside too: the `catch` must not release a
+     * hold this call never took. `reserve()` throws for a duplicate id, in which case the hold
+     * belongs to a *different, live* session and releasing it would silently over-admit.
+     */
+    let reserved = false;
     let recorded = false;
     let handle: ProviderSessionHandle;
     try {
+      const providerImpl = this.registry.get(provider);
+      if (!providerImpl) {
+        throw new Error(`no provider registered for id: ${provider}`);
+      }
+
+      // The lease this manager is being handed responsibility for releasing must belong to the
+      // session it is being handed with. If it did not, neither release site could ever free it
+      // (both look it up by session id), so the workspace would stay write-locked for the daemon's
+      // whole lifetime. The `catch` hands it straight back.
+      if (v2?.lease !== undefined && v2.lease.sessionId !== id) {
+        throw new Error('the workspace lease passed to create() belongs to a different session');
+      }
+
+      // ADI-06, and it is a synchronous read of a synchronously-written set, on purpose: a revoked
+      // workspace must be refused with no window in which a concurrent request could slip past. v1
+      // callers pass no `workspaceId` and are unaffected; ADI-13's v2 create path supplies one.
+      //
+      // The epoch comparison is ADI-13's addition and is the *final* gate of the v2 create route's
+      // race protection. The route re-checks admission before acquiring its lease, but acquisition
+      // is an await, so a revoke-then-regrant cycle can complete entirely inside it. Doing the last
+      // check here rather than in the route closes the window completely: there is no statement at
+      // all between this comparison and the reservation that follows it.
+      if (workspaceId !== undefined) {
+        if (this.blockedWorkspaces.has(workspaceId)) {
+          throw new RevokedWorkspaceError(workspaceId);
+        }
+        if (
+          v2?.expectedWorkspaceEpoch !== undefined &&
+          this.workspaceEpoch(workspaceId) !== v2.expectedWorkspaceEpoch
+        ) {
+          throw new StaleWorkspaceGrantError(workspaceId);
+        }
+      }
+
+      // The atomic reservation point. Nothing before this can fail in a way that leaks a hold, and
+      // nothing after it can proceed without one.
+      this.limiter.reserve(provider, id);
+      reserved = true;
+
       if (this.durable) {
         this.durable.create(session, {
           protocolVersion,
@@ -265,6 +385,9 @@ export class SessionManager {
           // path, and default to the fail-closed 'unknown' until then.
           scope: { authenticated: 'unknown', platform: process.platform, accountEvidence: 'cli_owned' },
           ...(resumeProviderSessionId === undefined ? {} : { resumeProviderSessionId }),
+          // Omitted, never defaulted: a v1 caller passes nothing here and its record must carry no
+          // `selection` key at all. See `PersistedSessionRecordV1.session.selection`.
+          ...(v2?.selection === undefined ? {} : { selection: v2.selection }),
         });
         recorded = true;
       }
@@ -279,7 +402,13 @@ export class SessionManager {
         ...(unknownFrames ? { launchProbe: this.buildLaunchProbe(id, unknownFrames) } : {}),
       });
     } catch (err) {
-      this.limiter.release(id);
+      if (reserved) this.limiter.release(id);
+      // The pre-live release site, and the twin of `consume()`'s `finally`. A session that never
+      // reached `startSession` has no event stream, so `consume()` will never run for it and its
+      // lease would otherwise be held until the daemon restarted -- permanently locking the user's
+      // workspace out of every future session because one launch failed. Idempotent, so it is safe
+      // even for the paths where no lease was ever taken (every v1 caller).
+      this.leases?.releaseForSession(id);
       // The record, if it exists, describes a session that never got a provider process. Closing it
       // out as `launch_failed` (and never touching `acceptedWork`, which stays at the fail-closed
       // 'unknown' it was created with) is what stops it being recovered as `interrupted` on the next
@@ -413,6 +542,14 @@ export class SessionManager {
       // placed on the completion path alone would leak a reservation on the other two, and a leaked
       // reservation never expires -- it permanently shrinks the daemon's capacity until restart.
       this.limiter.release(id);
+
+      // The workspace execution lease (ADI-13), released at exactly the same single site and for
+      // exactly the same reason as the limiter hold above: completion, provider failure,
+      // cancellation, a throwing generator, and an abandoned stream all pass through this `finally`.
+      // A release placed on the completion path alone would leave a workspace permanently
+      // write-locked by a session that failed, and unlike a limiter hold that is visible to the user
+      // as "this folder can never be used again until you restart the app".
+      this.leases?.releaseForSession(id);
 
       // Same reasoning as the release above, and the same `finally`: a terminal session is no
       // longer running in its workspace, so leaving it in the index would make `revokeWorkspace`

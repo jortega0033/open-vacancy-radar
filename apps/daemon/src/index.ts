@@ -14,6 +14,7 @@ import { SessionManager } from './session-manager.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
 import { openDurableStore } from './open-durable-store.js';
 import { openWorkspaceStores } from './open-workspace-stores.js';
+import { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
 import type { McpCredentialStore } from './mcp/types.js';
 import { OsMcpCredentialStore } from './mcp/credential-store.js';
 import { McpConnectionManager } from './mcp/manager.js';
@@ -49,6 +50,11 @@ async function main() {
   // collaborator: `workspaceIsTrusted` has to read the same store the routes write, or a revocation
   // would be visible to one and not the other.
   const workspaceStores = openWorkspaceStores(appId, logger);
+  // ADI-13. One instance, shared between the session manager (which releases every lease, at its two
+  // terminal-cleanup sites) and the create route (which acquires them). Two instances would be two
+  // disjoint lease tables: acquisition would succeed, release would find nothing, and the user's
+  // folder would be write-locked for the daemon's whole lifetime after its first session.
+  const leaseManager = new WorkspaceExecutionLeaseManager();
   const sessionManager = new SessionManager(
     registry,
     logger,
@@ -56,13 +62,18 @@ async function main() {
     limiter,
     durable,
     workspaceStores ? { trustStore: workspaceStores.trustStore } : undefined,
+    leaseManager,
   );
   const token = generateToken();
   const mcpCredentials = new OsMcpCredentialStore();
   const mcpManager = buildMcpManager(mcpCredentials, logger);
 
   const v2: BuildServerV2Options | undefined = durable
-    ? { store: durable, limiter, ...(workspaceStores ? { workspace: workspaceStores } : {}) }
+    ? {
+        store: durable,
+        limiter,
+        ...(workspaceStores ? { workspace: { ...workspaceStores, leaseManager } } : {}),
+      }
     : undefined;
   const app = buildServer({ registry, sessionManager, token, logger, mcpManager, ...(v2 ? { v2 } : {}) });
 

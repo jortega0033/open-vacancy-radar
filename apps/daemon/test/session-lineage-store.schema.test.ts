@@ -50,6 +50,17 @@ const { SessionLineageStore, UnsupportedStateSchemaVersionError } = await import
 const { makeRecord, seedManifest, seedRecord, snapshotTree, eventLine } = await import(
   './support/lineage-fixtures.js'
 );
+const { PERSISTED_SCHEMA_VERSION } = await import('../src/persisted-session-schema.js');
+
+/**
+ * One above whatever this build writes.
+ *
+ * Derived rather than hardcoded because ADI-13 bumped `PERSISTED_SCHEMA_VERSION` from 1 to 2, and
+ * every literal `2` in this file silently changed meaning from "the future" to "the present" -- the
+ * kind of drift that turns a stop-condition test into a test that asserts nothing. Deriving it means
+ * the next bump cannot quietly disarm these.
+ */
+const FUTURE_VERSION = PERSISTED_SCHEMA_VERSION + 1;
 
 let stateRoot: string;
 
@@ -90,9 +101,9 @@ function expectThrowsUntouched(seed: () => void, expectedVersion: number): void 
 describe('future schema version: the store refuses without touching anything', () => {
   it('throws on a future manifest, with zero filesystem mutations', () => {
     expectThrowsUntouched(() => {
-      seedManifest(stateRoot, { schemaVersion: 2 });
+      seedManifest(stateRoot, { schemaVersion: FUTURE_VERSION });
       seedRecord(stateRoot, makeRecord());
-    }, 2);
+    }, FUTURE_VERSION);
   });
 
   it('throws on a future session record, with zero filesystem mutations', () => {
@@ -131,7 +142,7 @@ describe('future schema version: the store refuses without touching anything', (
 
   it('throws on the future version even when corruption is present too, without touching the corrupt file', () => {
     const storeDir = join(stateRoot, 'sessions-v1');
-    seedManifest(stateRoot, { schemaVersion: 2 });
+    seedManifest(stateRoot, { schemaVersion: FUTURE_VERSION });
     const corrupt = makeRecord();
     seedRecord(stateRoot, corrupt);
     const corruptPath = join(storeDir, 'lineages', corrupt.session.rootSessionId, 'records', `${corrupt.session.id}.json`);
@@ -161,9 +172,9 @@ describe('future schema version: the store refuses without touching anything', (
       const record = makeRecord();
       seedRecord(stateRoot, record, [
         eventLine(0),
-        JSON.stringify({ v: 2, sequence: 1, timestamp: 't', type: 'something.new' }),
+        JSON.stringify({ v: FUTURE_VERSION, sequence: 1, timestamp: 't', type: 'something.new' }),
       ]);
-    }, 2);
+    }, FUTURE_VERSION);
   });
 
   it('throws on a future-version line in a stray temp beside an event log', () => {
@@ -247,7 +258,7 @@ describe('future schema version: the store refuses without touching anything', (
   });
 
   it('does not create the store skeleton at all when a future version is found', () => {
-    seedManifest(stateRoot, { schemaVersion: 2 });
+    seedManifest(stateRoot, { schemaVersion: FUTURE_VERSION });
     expect(() => new SessionLineageStore({ stateRoot })).toThrow(UnsupportedStateSchemaVersionError);
     for (const dir of ['lineages', 'tombstones', 'quarantine', '.trash']) {
       expect(existsSync(join(stateRoot, 'sessions-v1', dir))).toBe(false);

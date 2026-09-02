@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
+  capabilitySelectionV2Schema,
   providerIdSchema,
   sessionStatusV2Schema,
   terminalReasonV2Schema,
@@ -8,6 +9,7 @@ import {
   type AgentEventEnvelope,
   type AgentEventType,
   type AgentSession,
+  type CapabilitySelectionV2,
   type ProviderId,
   type SessionStatusV2,
   type TerminalReasonV2,
@@ -41,8 +43,37 @@ import type { NormalizedUnknownFrame } from '@agent-dock/agent-runtime';
  *    fails to parse rather than merely failing a code review.
  */
 
-/** Bumped only for an incompatible change to the shapes in this file. See the store's preflight. */
-export const PERSISTED_SCHEMA_VERSION = 1;
+/**
+ * The version this build **writes**. Bumped only for a change to the shapes in this file.
+ *
+ * ## The bump is deliberately asymmetric, and that asymmetry is a data-safety property (ADI-13)
+ *
+ * This constant does exactly two things: it is the ceiling the store's read-only preflight compares
+ * against (a version *above* it triggers the zero-mutation `UnsupportedStateSchemaVersionError`),
+ * and it is the value every newly written record and manifest carries. It is **not** the set of
+ * versions this build can read.
+ *
+ * That set is wider, and it has to be. `persistedSessionRecordV1Schema` accepts `1` *or* `2`, and
+ * `SessionLineageStore.#loadManifest` does the same. A `schemaVersion: 1` record is simply a valid
+ * pre-ADI-13 record with no `selection` field -- which the optional field already models exactly, so
+ * there is no migration logic at all, only a wider literal.
+ *
+ * The naive alternative -- `z.literal(2)` everywhere -- would have been a silent catastrophe on
+ * first launch after upgrade: every existing record would fail to parse, `#loadLineages` would read
+ * that as corruption, and every user's entire session history would be quarantined as "corrupt"
+ * while the manifest was quarantined alongside it. `session-lineage-store.upgrade.test.ts` exists to
+ * fail if anyone narrows either reader back down.
+ */
+export const PERSISTED_SCHEMA_VERSION = 2;
+
+/**
+ * Every on-disk record/manifest version this build can read.
+ *
+ * Exported so the store and its tests cite one list instead of three copies of the same union. The
+ * preflight still refuses anything greater than `PERSISTED_SCHEMA_VERSION`; this names what is
+ * accepted at or below it.
+ */
+export const READABLE_SCHEMA_VERSIONS: readonly number[] = Object.freeze([1, 2]);
 
 /**
  * What a v1 client is shown for a session the daemon recovered as `interrupted` after a restart.
@@ -466,7 +497,12 @@ export interface PersistedLaunchScope {
 export type PersistedAcceptedWork = 'unknown' | 'accepted';
 
 export interface PersistedSessionRecordV1 {
-  schemaVersion: 1;
+  /**
+   * `1` for a record written before ADI-13, `2` for one written by this build. Both are readable and
+   * mean the same thing structurally: a `1` record simply has no `selection`. See
+   * `PERSISTED_SCHEMA_VERSION` for why this union is not narrowed to the current version.
+   */
+  schemaVersion: 1 | 2;
   protocolVersion: 1 | 2;
   session: {
     id: string;
@@ -488,6 +524,15 @@ export interface PersistedSessionRecordV1 {
     eventsTruncated: boolean;
     scope: PersistedLaunchScope;
     unknownFrames: NormalizedUnknownFrame[];
+    /**
+     * The capability negotiation this session was started with (ADI-13), or **absent**.
+     *
+     * Absent is a distinct fact from empty, and nothing may default it: a v1-created session and a
+     * pre-ADI-13 record both legitimately have no selection, and writing `{ enabled: [],
+     * unavailableOptional: [] }` for them would present a fabricated negotiation as a real one. A
+     * resumed session inherits its parent's value verbatim, including inheriting its absence.
+     */
+    selection?: CapabilitySelectionV2;
   };
 }
 
@@ -503,7 +548,10 @@ export const persistedLaunchScopeSchema = z
 
 export const persistedSessionRecordV1Schema = z
   .object({
-    schemaVersion: z.literal(1),
+    // Deliberately a union and NOT `z.literal(PERSISTED_SCHEMA_VERSION)`. See that constant's
+    // docstring: narrowing this to the current version quarantines every pre-ADI-13 record on the
+    // first launch after an upgrade, because `#loadLineages` reads a parse failure as corruption.
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     protocolVersion: z.union([z.literal(1), z.literal(2)]),
     session: z
       .object({
@@ -526,6 +574,10 @@ export const persistedSessionRecordV1Schema = z
         eventsTruncated: z.boolean(),
         scope: persistedLaunchScopeSchema,
         unknownFrames: z.array(unknownFrameViewSchema),
+        // Optional, which is the entire migration: a `schemaVersion: 1` record has no `selection`
+        // and parses cleanly against this same schema. Never given a default -- see the field's
+        // docstring on `PersistedSessionRecordV1`.
+        selection: capabilitySelectionV2Schema.optional(),
       })
       .strict(),
   })
@@ -544,6 +596,8 @@ export interface RedactSessionExtras {
   eventsTruncated: boolean;
   scope: PersistedLaunchScope;
   unknownFrames: NormalizedUnknownFrame[];
+  /** ADI-13. Omitted entirely for a session that negotiated nothing; never defaulted to an empty one. */
+  selection?: CapabilitySelectionV2;
 }
 
 /**
@@ -565,7 +619,9 @@ export function redactSessionForPersistence(
   void _discardedError;
 
   return {
-    schemaVersion: 1,
+    // Every NEW record carries the current version. Existing `1` records are read, not rewritten:
+    // there is nothing to migrate, because the only added field is optional.
+    schemaVersion: PERSISTED_SCHEMA_VERSION as 2,
     protocolVersion: extra.protocolVersion,
     session: {
       id: safe.id,
@@ -592,6 +648,10 @@ export function redactSessionForPersistence(
       eventsTruncated: extra.eventsTruncated,
       scope: extra.scope,
       unknownFrames: extra.unknownFrames,
+      // Spread-or-nothing, never `selection: extra.selection`: writing the key with an `undefined`
+      // value would survive `JSON.stringify` as an absent key today but would read as "present" to
+      // any in-memory check, which is exactly the absent-vs-empty distinction this field carries.
+      ...(extra.selection === undefined ? {} : { selection: extra.selection }),
     },
   };
 }
