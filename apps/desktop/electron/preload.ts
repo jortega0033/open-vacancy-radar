@@ -542,3 +542,353 @@ const workspaceGrantApi: WorkspaceGrantBridge = {
 };
 
 contextBridge.exposeInMainWorld('workspaceGrant', workspaceGrantApi);
+
+/**
+ * A seventh namespace, for the AI Workspace (ADI-07).
+ *
+ * Its own namespace rather than four more methods on `workspaceGrant`, and that separation is the
+ * security decision this ticket makes at this boundary. `workspaceGrant` is the app's filesystem
+ * *trust* surface: four capabilities, each individually reviewed, whose key set `preload.test.ts`
+ * pins exactly. Reading a session list is not a trust decision, and widening the trust namespace to
+ * hold it would mean every future review of "what can the renderer do about folders?" has to first
+ * separate the two concerns again. So `workspaceGrant` is left key-for-key unchanged, and this
+ * sits beside it.
+ *
+ * Note the omissions, which are the design:
+ *
+ * - **no path argument, and no path in any response.** A v2 session's `cwd` has exactly one source
+ *   in this system -- the canonical path behind a grant ref, held in main -- and it is not this.
+ *   Every response is rebuilt field by field below, so a `cwd` main somehow forwarded still could
+ *   not cross.
+ * - **no provider session id and no native tool-call id.** Main drops the first and replaces the
+ *   second with a local alias; this rebuild drops both again.
+ * - **no generic invoke.** Every function names its own channel literally. There is no `channel`
+ *   parameter, so a compromised renderer cannot reach an `agent-workspace:*` channel this list does
+ *   not already grant, let alone a `workspace-grant:*` or `daemon:*` one.
+ * - **no cancel.** Cancelling a session goes through v1's existing `agentDock.cancelSession`, which
+ *   already works on a v2 session (both live in the same `SessionManager`). A second cancel verb
+ *   would be a second thing to keep in agreement with it for no capability gained.
+ */
+export type {
+  ActivityCloseReason,
+  ActivityDigest,
+  ActivityEntry,
+  ActivityPush,
+  AgentWorkspaceBridge,
+  AttachResult,
+  HistoryEntry,
+  PageRequest,
+  SessionCapacity,
+  SessionEventsPage,
+  SessionListPage,
+  SessionSummary,
+} from './agent-workspace-types.js';
+
+import type {
+  ActivityDigest as ActivityDigestType,
+  ActivityEntry as ActivityEntryType,
+  ActivityPush as ActivityPushType,
+  AgentWorkspaceBridge as AgentWorkspaceBridgeType,
+  AttachResult as AttachResultType,
+  HistoryEntry as HistoryEntryType,
+  PageRequest as PageRequestType,
+  SessionCapacity as SessionCapacityType,
+  SessionSummary as SessionSummaryType,
+} from './agent-workspace-types.js';
+
+/** Copies a string field only when it really is one. Every rebuild below goes through this. */
+function optionalString(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function requiredString(source: Record<string, unknown>, key: string, fallback = ''): string {
+  return optionalString(source, key) ?? fallback;
+}
+
+function optionalFiniteNumber(source: Record<string, unknown>, key: string): number | undefined {
+  const value = source[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegativeInt(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function toDigest(value: unknown): ActivityDigestType | undefined {
+  const source = asRecord(value);
+  if (!source) return undefined;
+  const bytes = optionalFiniteNumber(source, 'bytes');
+  const sha256 = optionalString(source, 'sha256');
+  if (bytes === undefined || sha256 === undefined) return undefined;
+  return { bytes, sha256 };
+}
+
+/**
+ * The **second, independent** rebuild of a session summary.
+ *
+ * Main already built this object field by field in `agent-workspace-view.ts`. Doing it again here
+ * is not redundancy: it is the same double-rebuild discipline ADI-13 established for
+ * `startSession`, and it exists because preload should not trust main blindly. If a future change
+ * to main leaks a `cwd` into this payload, the failure has to be in *two* files, in two different
+ * processes, for it to reach the renderer.
+ */
+function toSessionSummary(value: unknown): SessionSummaryType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const id = optionalString(source, 'id');
+  if (id === undefined || id.length === 0) return null;
+
+  const scopeSource = asRecord(source.scope) ?? {};
+  const providerVersion = optionalString(scopeSource, 'providerVersion');
+  const model = optionalString(source, 'model');
+  const terminalReason = optionalString(source, 'terminalReason');
+  const parentSessionId = optionalString(source, 'parentSessionId');
+  const completedAt = optionalString(source, 'completedAt');
+
+  return {
+    id,
+    provider: requiredString(source, 'provider'),
+    protocolVersion: nonNegativeInt(source.protocolVersion),
+    transportId: requiredString(source, 'transportId', 'legacy-one-shot'),
+    ...(model === undefined ? {} : { model }),
+    status: requiredString(source, 'status', 'starting'),
+    ...(terminalReason === undefined ? {} : { terminalReason }),
+    acceptedWork: requiredString(source, 'acceptedWork', 'unknown'),
+    rootSessionId: requiredString(source, 'rootSessionId', id),
+    ...(parentSessionId === undefined ? {} : { parentSessionId }),
+    continuationKind: requiredString(source, 'continuationKind', 'fresh'),
+    startedAt: requiredString(source, 'startedAt'),
+    ...(completedAt === undefined ? {} : { completedAt }),
+    earliestSequence: nonNegativeInt(source.earliestSequence),
+    eventCount: nonNegativeInt(source.eventCount),
+    eventsTruncated: source.eventsTruncated === true,
+    scope: {
+      ...(providerVersion === undefined ? {} : { providerVersion }),
+      authenticated: requiredString(scopeSource, 'authenticated', 'unknown'),
+      platform: requiredString(scopeSource, 'platform', 'unknown'),
+      // Never echoed, for the reason `toGrantOffer` never echoes `effects`: this literal is a
+      // documented limitation marker, and a stronger value main sent must not reach the UI.
+      accountEvidence: 'cli_owned',
+    },
+    unknownFrameCount: nonNegativeInt(source.unknownFrameCount),
+  };
+}
+
+/**
+ * The second, independent rebuild of one activity entry.
+ *
+ * Rebuilt per `kind` rather than spread, so the fields main is required to have dropped
+ * (`providerSessionId`, a native `toolCallId`, a `status` detail, an error `message`) have no
+ * copier here even if they were present on the payload.
+ */
+function toActivityEntry(value: unknown): ActivityEntryType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const seq = source.seq;
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null;
+  const origin = source.origin === 'history' ? 'history' : 'live';
+  const base = { seq, at: requiredString(source, 'at'), origin } as const;
+
+  switch (source.kind) {
+    case 'session.started':
+      return { ...base, kind: 'session.started', provider: requiredString(source, 'provider') };
+    case 'status':
+      return { ...base, kind: 'status', status: requiredString(source, 'status') };
+    case 'assistant.message':
+    case 'thinking.delta': {
+      const text = optionalString(source, 'text');
+      const digest = toDigest(source.digest);
+      const body = {
+        ...(text === undefined ? {} : { text }),
+        ...(source.textTruncated === true ? { textTruncated: true } : {}),
+        ...(source.textOmitted === true ? { textOmitted: true } : {}),
+        ...(digest === undefined ? {} : { digest }),
+      };
+      return source.kind === 'assistant.message'
+        ? { ...base, kind: 'assistant.message', ...body }
+        : { ...base, kind: 'thinking.delta', ...body };
+    }
+    case 'tool.started': {
+      const toolAlias = optionalString(source, 'toolAlias');
+      const input = toDigest(source.input);
+      return {
+        ...base,
+        kind: 'tool.started',
+        toolName: requiredString(source, 'toolName'),
+        ...(toolAlias === undefined ? {} : { toolAlias }),
+        ...(input === undefined ? {} : { input }),
+      };
+    }
+    case 'tool.completed': {
+      const toolName = optionalString(source, 'toolName');
+      const toolAlias = optionalString(source, 'toolAlias');
+      const result = toDigest(source.result);
+      return {
+        ...base,
+        kind: 'tool.completed',
+        ...(toolName === undefined ? {} : { toolName }),
+        ...(toolAlias === undefined ? {} : { toolAlias }),
+        ...(typeof source.isError === 'boolean' ? { isError: source.isError } : {}),
+        ...(result === undefined ? {} : { result }),
+      };
+    }
+    case 'usage': {
+      const inputTokens = optionalFiniteNumber(source, 'inputTokens');
+      const outputTokens = optionalFiniteNumber(source, 'outputTokens');
+      const cachedInputTokens = optionalFiniteNumber(source, 'cachedInputTokens');
+      const cost = optionalFiniteNumber(source, 'cost');
+      return {
+        ...base,
+        kind: 'usage',
+        ...(inputTokens === undefined ? {} : { inputTokens }),
+        ...(outputTokens === undefined ? {} : { outputTokens }),
+        ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+        ...(cost === undefined ? {} : { cost }),
+      };
+    }
+    case 'error': {
+      const code = optionalString(source, 'code');
+      return {
+        ...base,
+        kind: 'error',
+        // Re-checked against the identifier charset here too: this value selects a row in a closed
+        // renderer-side copy table, and a value that is not an identifier has no row to select.
+        ...(code !== undefined && /^[A-Za-z0-9._-]{1,64}$/.test(code) ? { code } : {}),
+        recoverable: source.recoverable === true,
+      };
+    }
+    case 'session.completed':
+      return { ...base, kind: 'session.completed' };
+    case 'session.failed':
+      return { ...base, kind: 'session.failed' };
+    case 'session.cancelled':
+      return { ...base, kind: 'session.cancelled' };
+    case 'session.interrupted':
+      return { ...base, kind: 'session.interrupted' };
+    default:
+      // Fail-closed: an entry kind this build cannot rebuild is dropped, never passed through.
+      return null;
+  }
+}
+
+function toCapacityBucket(value: unknown): { active: number; limit: number } {
+  const source = asRecord(value) ?? {};
+  return { active: nonNegativeInt(source.active), limit: nonNegativeInt(source.limit) };
+}
+
+function toCapacity(value: unknown): SessionCapacityType {
+  const source = asRecord(value) ?? {};
+  return { global: toCapacityBucket(source.global), provider: toCapacityBucket(source.provider) };
+}
+
+/** Copies exactly the two paging fields onto the wire, coerced, never the caller's whole object. */
+function toPagePayload(page: PageRequestType | undefined): Record<string, unknown> {
+  const source = asRecord(page) ?? {};
+  const cursor = optionalString(source, 'cursor');
+  const limit = optionalFiniteNumber(source, 'limit');
+  return {
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
+const agentWorkspaceApi: AgentWorkspaceBridgeType = {
+  async listSessions(page) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:list', toPagePayload(page));
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.sessions) ? source.sessions : [];
+    const sessions: SessionSummaryType[] = [];
+    for (const view of raw) {
+      const summary = toSessionSummary(view);
+      if (summary !== null) sessions.push(summary);
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return {
+      sessions,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      capacity: toCapacity(source?.capacity),
+    };
+  },
+
+  async getSession(sessionId) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:get', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+    });
+    return toSessionSummary(result);
+  },
+
+  async getSessionEvents(sessionId, page) {
+    const id = typeof sessionId === 'string' ? sessionId : '';
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:events', {
+      sessionId: id,
+      ...toPagePayload(page),
+    });
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.events) ? source.events : [];
+    const events: HistoryEntryType[] = [];
+    for (const record of raw) {
+      const entry = toActivityEntry(record);
+      // A history page's entries are history entries by definition: the origin is asserted here
+      // rather than read from the payload, so a mislabelled `origin: 'live'` cannot make a
+      // digest-only entry win the timeline merge against real prose.
+      if (entry !== null) events.push({ ...entry, origin: 'history' });
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return { sessionId: id, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  },
+
+  async attachActivity(sessionId, lastSeq) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:attach', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+      ...(typeof lastSeq === 'number' && Number.isInteger(lastSeq) && lastSeq >= 0 ? { lastSeq } : {}),
+    });
+    const source = asRecord(result);
+    if (source?.ok === true) return { ok: true };
+    const reason = source ? optionalString(source, 'reason') : undefined;
+    // Fail-closed: anything this build cannot interpret is a refusal, never a live attachment.
+    const known: AttachResultType = {
+      ok: false,
+      reason:
+        reason === 'attach_limit' || reason === 'daemon_unavailable' || reason === 'invalid_session_id'
+          ? reason
+          : 'daemon_unavailable',
+    };
+    return known;
+  },
+
+  async detachActivity(sessionId) {
+    await ipcRenderer.invoke('agent-workspace:detach', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+    });
+  },
+
+  onActivity(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      const sessionId = source ? optionalString(source, 'sessionId') : undefined;
+      if (sessionId === undefined || sessionId.length === 0) return;
+
+      const closed = asRecord(source?.closed);
+      if (closed) {
+        const reason = optionalString(closed, 'reason');
+        callback({
+          sessionId,
+          closed: { reason: reason === 'stream_ended' ? 'stream_ended' : 'stream_unavailable' },
+        });
+        return;
+      }
+
+      const entry = toActivityEntry(source?.entry);
+      if (entry !== null) callback({ sessionId, entry } satisfies ActivityPushType);
+    };
+    ipcRenderer.on('agent-workspace:activity', listener);
+    return () => ipcRenderer.removeListener('agent-workspace:activity', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('agentWorkspace', agentWorkspaceApi);

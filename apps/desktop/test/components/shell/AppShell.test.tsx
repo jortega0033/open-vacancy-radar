@@ -70,9 +70,21 @@ describe('AppSidebar', () => {
     runtimeState: 'ready' as const,
   };
 
-  it('renders all seven destinations as buttons', () => {
+  it('renders all eight destinations as buttons', () => {
+    // ADI-07 added "AI Workspace" as the eighth. The list is spelled out rather than derived from
+    // PRIMARY_NAV/SECONDARY_NAV on purpose: a check that reads the nav table and compares it to
+    // itself could not fail, and this is the record of what the shell actually offers.
     render(<AppSidebar {...BASE} />);
-    for (const label of ['Search', 'Saved Jobs', 'Applications', 'CV', 'Letters', 'AI Runtime', 'Settings']) {
+    for (const label of [
+      'Search',
+      'Saved Jobs',
+      'Applications',
+      'CV',
+      'Letters',
+      'AI Workspace',
+      'AI Runtime',
+      'Settings',
+    ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
   });
@@ -195,8 +207,9 @@ describe('headerCopy', () => {
 });
 
 describe('isNavPage', () => {
-  it('accepts the seven destinations and rejects the startPage-only instruction', () => {
+  it('accepts the eight destinations and rejects the startPage-only instruction', () => {
     for (const page of NAV_PAGES) expect(isNavPage(page)).toBe(true);
+    expect(isNavPage('agent-workspace')).toBe(true);
     expect(isNavPage('last_opened')).toBe(false);
     expect(isNavPage('')).toBe(false);
     expect(isNavPage(undefined)).toBe(false);

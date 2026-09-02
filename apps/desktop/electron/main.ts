@@ -34,6 +34,13 @@ import {
   type JobRadarReport,
   type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
+import {
+  AGENT_WORKSPACE_ACTIVITY_CHANNEL,
+  createSessionAliasBook,
+  registerAgentWorkspaceHandlers,
+} from './agent-workspace-ipc.js';
+import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
+import type { ActivityPush } from './agent-workspace-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
@@ -117,8 +124,24 @@ let mainWindow: BrowserWindow | undefined;
  * renderer, so the two can never disagree.
  */
 let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
-let activeSessionId: string | undefined;
-let activeStreamAbort: AbortController | undefined;
+
+/**
+ * Every in-flight **v1** event forward, keyed by session id (ADI-07).
+ *
+ * This replaces the single `activeStreamAbort` module global that used to sit here alongside an
+ * `activeSessionId`. That pair was a single-slot relay: `forwardSessionEvents` overwrote both on
+ * every new session, so a second concurrent session silently orphaned the first one's abort
+ * controller and `killDaemon` could only ever abort whichever stream started last. `activeSessionId`
+ * itself was pure write-only bookkeeping -- it was assigned by `daemon:create-session` and cleared
+ * at a terminal event, and **nothing ever read it** (the shutdown path had already moved to
+ * `sessions.cancelAll()` for exactly this reason, see AD-12) -- so it is simply gone.
+ *
+ * Keying by session id is the same fix ADI-07 makes for the new v2 relay in
+ * `agent-workspace-relay.ts`, applied to the v1 path so the two cannot disagree about what
+ * "shut down every stream" means. The forwarding itself is untouched: same channel, same raw
+ * envelope, same synthesized error event on failure.
+ */
+const v1EventForwards = new Map<string, AbortController>();
 
 /**
  * The daemon's loopback address and per-launch bearer token, kept here so the ADI-06 workspace
@@ -591,20 +614,34 @@ function expireGrantsForWebContents(webContentsId: number, reason: GrantExpiryRe
   );
 }
 
-/** Streams one session's events to the renderer and clears `activeSessionId` at its terminal event. */
+/**
+ * Streams one v1 session's **raw** events to the renderer on `daemon:session-event`.
+ *
+ * This is the CV/Letters path (`useAgentRun`), and ADI-07 leaves what it *does* byte-identical:
+ * every envelope is pushed unmodified, on the same channel, and a stream failure still synthesizes
+ * the same non-recoverable `error` event that `useAgentRun` depends on to stop waiting for a
+ * terminal event that can no longer come.
+ *
+ * The only change is bookkeeping: the controller is registered per session id in `v1EventForwards`
+ * instead of overwriting one shared `activeStreamAbort`, and the terminal-event branch no longer
+ * writes to a global nothing read. See `v1EventForwards` for why that pair had to go.
+ *
+ * It is deliberately **not** replaced by ADI-07's sanitizing relay. The two serve different
+ * consumers over different contracts: this one hands raw envelopes to a one-shot text runner
+ * working in an app-owned scratch directory, while the new relay carries sanitized entries for
+ * concurrent sessions running in the user's own folders. Folding them together would either
+ * redact v1 (breaking `useAgentRun`) or un-redact v2 (breaking the boundary ADI-07 exists to add).
+ */
 function forwardSessionEvents(sessionId: string): void {
   if (!client) return;
   const controller = new AbortController();
-  activeStreamAbort = controller;
+  v1EventForwards.set(sessionId, controller);
   const activeClient = client;
 
   void (async () => {
     try {
       for await (const event of activeClient.sessions.events(sessionId, { signal: controller.signal })) {
         sendToRenderer(mainWindow, 'daemon:session-event', { sessionId, event });
-        if (event.type === 'session.completed' || event.type === 'session.failed' || event.type === 'session.cancelled') {
-          if (activeSessionId === sessionId) activeSessionId = undefined;
-        }
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -612,12 +649,20 @@ function forwardSessionEvents(sessionId: string): void {
         sessionId,
         event: { type: 'error', message: `event stream failed: ${(err as Error).message}`, recoverable: false },
       });
+    } finally {
+      // Guarded on identity so a re-forwarded session id does not have its successor's
+      // registration deleted by its predecessor's late teardown.
+      if (v1EventForwards.get(sessionId) === controller) v1EventForwards.delete(sessionId);
     }
   })();
 }
 
 async function killDaemon(): Promise<void> {
-  activeStreamAbort?.abort();
+  // Every stream, not "whichever one started last". ADI-07 replaced a single `activeStreamAbort`
+  // global with these two keyed registries precisely so this line means what it always claimed to.
+  agentWorkspaceRelay.detachAll();
+  for (const controller of [...v1EventForwards.values()]) controller.abort();
+  v1EventForwards.clear();
   if (client) {
     try {
       // Cancels every in-flight session over HTTP, not just `activeSessionId`: on Windows,
@@ -768,7 +813,8 @@ ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
   // boundary from the renderer in the first place.
   const parsed = createSessionRequestSchema.parse(input);
   const session = await client.sessions.create(parsed);
-  activeSessionId = session.id;
+  // `activeSessionId = session.id` used to sit here. It was write-only state (see `v1EventForwards`
+  // above): nothing ever read it, and tracking "the one session" is the shape ADI-07 removes.
   forwardSessionEvents(session.id);
   return session;
 });
@@ -841,6 +887,48 @@ ipcMain.handle('workspace:start-session', async (event, input: unknown) => {
     // Electron's own unspoofable identification of the calling frame, same as the consume channel.
     event.sender.id,
   );
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * AI Workspace IPC (ADI-07): the seventh preload namespace.
+ *
+ * The five channels, their paging helpers, and their per-session tool-call alias book all live in
+ * electron/agent-workspace-ipc.ts, not here. Nothing in this module's scope belongs to the feature
+ * beyond the handful of lines below, and that is the point: main.ts's other ~fifty channels cannot
+ * be reached by it, and rolling the feature back is deleting one call rather than untangling
+ * shared globals. See that module's docstring for the no-location rule all five channels keep.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Shared by the live relay and the history reader so both agree on a session's tool aliases. */
+const aliasesForSession = createSessionAliasBook();
+
+const agentWorkspaceRelay = new AgentWorkspaceRelay({
+  // Read fresh rather than captured: `client` is replaced on a daemon restart.
+  client: () => client,
+  aliasesFor: aliasesForSession,
+  push: (message: ActivityPush) => sendToRenderer(mainWindow, AGENT_WORKSPACE_ACTIVITY_CHANNEL, message),
+  onEvent: (message, meta) => console.warn(`[agent-workspace] ${message}`, meta ?? {}),
+});
+
+/** One authenticated GET against a v2 read route, returning the parsed body or `undefined`. */
+async function daemonGetJson(path: string): Promise<Record<string, unknown> | undefined> {
+  const res = await daemonFetch(path, { method: 'GET' });
+  if (!res.ok) {
+    if (res.status === 404) return undefined;
+    // No daemon-authored text crosses: the caller turns this into its own fixed message, the same
+    // discipline `daemonRefusal` applies to the workspace routes.
+    throw new Error(`the agent runtime refused this request (status ${res.status})`);
+  }
+  const body: unknown = await res.json().catch(() => undefined);
+  return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+}
+
+registerAgentWorkspaceHandlers(ipcMain, {
+  getJson: daemonGetJson,
+  aliasesFor: aliasesForSession,
+  relay: agentWorkspaceRelay,
 });
 
 ipcMain.handle('dialog:select-directory', async () => {

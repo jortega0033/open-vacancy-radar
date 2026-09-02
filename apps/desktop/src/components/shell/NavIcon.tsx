@@ -6,6 +6,7 @@ import {
   GearSix,
   ListChecks,
   MagnifyingGlass,
+  Terminal,
   type Icon,
 } from '@phosphor-icons/react';
 import type { NavPage } from './nav.js';
@@ -22,6 +23,8 @@ const NAV_ICON: Record<NavPage, Icon> = {
   applications: ListChecks,
   cv: FileText,
   letters: EnvelopeSimple,
+  // A terminal, not a robot: the thing running is the user's own CLI, in a folder they approved.
+  'agent-workspace': Terminal,
   runtime: Cpu,
   settings: GearSix,
 };

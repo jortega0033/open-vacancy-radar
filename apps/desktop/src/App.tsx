@@ -9,6 +9,7 @@ import { CvLibraryPage } from './components/cv-library/index.js';
 import { LettersPage } from './components/letters/index.js';
 import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage } from './components/settings/index.js';
+import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import {
   AppSidebar,
   EMPTY_COUNTS,
@@ -200,6 +201,11 @@ export function App() {
           {nav === 'cv' && <CvLibraryPage />}
           {nav === 'letters' && <LettersPage onLettersChanged={refreshCounts} />}
           {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
+
+          {/* ADI-07. Mounted only while it is the active page, which is what makes the hook's
+              unmount cleanup meaningful: leaving the page detaches every live relay in main rather
+              than leaving SSE streams open behind a screen nobody is looking at. */}
+          {nav === 'agent-workspace' && <AgentWorkspacePage defaultProvider={defaultProvider} />}
 
           {nav === 'runtime' && (
             <RuntimePage
