@@ -22,6 +22,13 @@
       "when": 1788168296035,
       "tag": "0002_brainy_morgan_stark",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788346206600,
+      "tag": "0003_curved_shotgun",
+      "breakpoints": true
     }
   ]
 }

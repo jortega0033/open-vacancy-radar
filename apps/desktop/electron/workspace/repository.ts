@@ -432,6 +432,14 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     confirmApplicationDelete: row.confirmApplicationDelete,
     autoArchiveRejected: row.autoArchiveRejected,
     defaultProvider: row.defaultProvider,
+    // ADI-07. Defended against a null/legacy JSON value rather than trusted: a row written before
+    // migration 0003 has no column at all, and better-sqlite3 hands back whatever is there.
+    agentSelectedSessionId: row.agentSelectedSessionId,
+    agentArchivedSessionIds: Array.isArray(row.agentArchivedSessionIds) ? [...row.agentArchivedSessionIds] : [],
+    agentUnreadCounts:
+      row.agentUnreadCounts && typeof row.agentUnreadCounts === 'object' && !Array.isArray(row.agentUnreadCounts)
+        ? { ...row.agentUnreadCounts }
+        : {},
   };
 }
 

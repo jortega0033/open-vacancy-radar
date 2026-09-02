@@ -34,6 +34,17 @@ import {
   type JobRadarReport,
   type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
+import { toHistoryEntry } from './agent-activity-sanitize.js';
+import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
+import { toCapacity, toSessionSummary } from './agent-workspace-view.js';
+import type {
+  ActivityPush,
+  AttachResult,
+  HistoryEntry,
+  SessionEventsPage,
+  SessionListPage,
+  SessionSummary,
+} from './agent-workspace-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
@@ -68,6 +79,11 @@ import {
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
+  parseAgentWorkspaceAttachInput,
+  parseAgentWorkspaceDetachInput,
+  parseAgentWorkspaceEventsInput,
+  parseAgentWorkspaceGetInput,
+  parseAgentWorkspaceListInput,
 } from './workspace/validate.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
@@ -117,8 +133,24 @@ let mainWindow: BrowserWindow | undefined;
  * renderer, so the two can never disagree.
  */
 let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
-let activeSessionId: string | undefined;
-let activeStreamAbort: AbortController | undefined;
+
+/**
+ * Every in-flight **v1** event forward, keyed by session id (ADI-07).
+ *
+ * This replaces the single `activeStreamAbort` module global that used to sit here alongside an
+ * `activeSessionId`. That pair was a single-slot relay: `forwardSessionEvents` overwrote both on
+ * every new session, so a second concurrent session silently orphaned the first one's abort
+ * controller and `killDaemon` could only ever abort whichever stream started last. `activeSessionId`
+ * itself was pure write-only bookkeeping -- it was assigned by `daemon:create-session` and cleared
+ * at a terminal event, and **nothing ever read it** (the shutdown path had already moved to
+ * `sessions.cancelAll()` for exactly this reason, see AD-12) -- so it is simply gone.
+ *
+ * Keying by session id is the same fix ADI-07 makes for the new v2 relay in
+ * `agent-workspace-relay.ts`, applied to the v1 path so the two cannot disagree about what
+ * "shut down every stream" means. The forwarding itself is untouched: same channel, same raw
+ * envelope, same synthesized error event on failure.
+ */
+const v1EventForwards = new Map<string, AbortController>();
 
 /**
  * The daemon's loopback address and per-launch bearer token, kept here so the ADI-06 workspace
@@ -591,20 +623,34 @@ function expireGrantsForWebContents(webContentsId: number, reason: GrantExpiryRe
   );
 }
 
-/** Streams one session's events to the renderer and clears `activeSessionId` at its terminal event. */
+/**
+ * Streams one v1 session's **raw** events to the renderer on `daemon:session-event`.
+ *
+ * This is the CV/Letters path (`useAgentRun`), and ADI-07 leaves what it *does* byte-identical:
+ * every envelope is pushed unmodified, on the same channel, and a stream failure still synthesizes
+ * the same non-recoverable `error` event that `useAgentRun` depends on to stop waiting for a
+ * terminal event that can no longer come.
+ *
+ * The only change is bookkeeping: the controller is registered per session id in `v1EventForwards`
+ * instead of overwriting one shared `activeStreamAbort`, and the terminal-event branch no longer
+ * writes to a global nothing read. See `v1EventForwards` for why that pair had to go.
+ *
+ * It is deliberately **not** replaced by ADI-07's sanitizing relay. The two serve different
+ * consumers over different contracts: this one hands raw envelopes to a one-shot text runner
+ * working in an app-owned scratch directory, while the new relay carries sanitized entries for
+ * concurrent sessions running in the user's own folders. Folding them together would either
+ * redact v1 (breaking `useAgentRun`) or un-redact v2 (breaking the boundary ADI-07 exists to add).
+ */
 function forwardSessionEvents(sessionId: string): void {
   if (!client) return;
   const controller = new AbortController();
-  activeStreamAbort = controller;
+  v1EventForwards.set(sessionId, controller);
   const activeClient = client;
 
   void (async () => {
     try {
       for await (const event of activeClient.sessions.events(sessionId, { signal: controller.signal })) {
         sendToRenderer(mainWindow, 'daemon:session-event', { sessionId, event });
-        if (event.type === 'session.completed' || event.type === 'session.failed' || event.type === 'session.cancelled') {
-          if (activeSessionId === sessionId) activeSessionId = undefined;
-        }
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -612,12 +658,20 @@ function forwardSessionEvents(sessionId: string): void {
         sessionId,
         event: { type: 'error', message: `event stream failed: ${(err as Error).message}`, recoverable: false },
       });
+    } finally {
+      // Guarded on identity so a re-forwarded session id does not have its successor's
+      // registration deleted by its predecessor's late teardown.
+      if (v1EventForwards.get(sessionId) === controller) v1EventForwards.delete(sessionId);
     }
   })();
 }
 
 async function killDaemon(): Promise<void> {
-  activeStreamAbort?.abort();
+  // Every stream, not "whichever one started last". ADI-07 replaced a single `activeStreamAbort`
+  // global with these two keyed registries precisely so this line means what it always claimed to.
+  agentWorkspaceRelay.detachAll();
+  for (const controller of [...v1EventForwards.values()]) controller.abort();
+  v1EventForwards.clear();
   if (client) {
     try {
       // Cancels every in-flight session over HTTP, not just `activeSessionId`: on Windows,
@@ -768,7 +822,8 @@ ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
   // boundary from the renderer in the first place.
   const parsed = createSessionRequestSchema.parse(input);
   const session = await client.sessions.create(parsed);
-  activeSessionId = session.id;
+  // `activeSessionId = session.id` used to sit here. It was write-only state (see `v1EventForwards`
+  // above): nothing ever read it, and tracking "the one session" is the shape ADI-07 removes.
   forwardSessionEvents(session.id);
   return session;
 });
@@ -841,6 +896,131 @@ ipcMain.handle('workspace:start-session', async (event, input: unknown) => {
     // Electron's own unspoofable identification of the calling frame, same as the consume channel.
     event.sender.id,
   );
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * AI Workspace IPC (ADI-07): the seventh preload namespace.
+ *
+ * Five channels, and the same rule the grant channels above keep: **none of them accepts or
+ * returns a location**. Every request payload is parsed by an allow-listing validator
+ * (workspace/validate.ts) that has no `path`, `cwd`, `workspaceId`, or `incarnation` parser at all,
+ * and every response is rebuilt field by field (agent-workspace-view.ts, agent-activity-sanitize.ts)
+ * so a `cwd` the daemon's own v2 view carries cannot cross even if a future daemon build added
+ * more path-shaped fields beside it.
+ *
+ * The renderer never talks to the daemon. These handlers are the only thing that does, over
+ * loopback, with a bearer token that stays in this process.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * One tool-call alias map per session, shared by the live relay and the history reader.
+ *
+ * A native `toolCallId` never crosses to the renderer; a locally-minted `t1`/`t2` alias does, so a
+ * `tool.started` and its `tool.completed` stay pairable in the UI. Both halves have to consult the
+ * *same* map or a session's live entries and its history entries would disagree about which alias
+ * belongs to which call. Bounded by eviction alongside the relay: a session that is neither
+ * attached nor being paged keeps its map only until the next sweep below.
+ */
+const sessionToolAliases = new Map<string, Map<string, string>>();
+
+/** How many sessions' alias maps are kept. Well above the daemon's own four-session ceiling. */
+const MAX_ALIAS_BOOKS = 64;
+
+function aliasesForSession(sessionId: string): Map<string, string> {
+  const existing = sessionToolAliases.get(sessionId);
+  if (existing) return existing;
+  // Oldest-first eviction, matching `WorkspaceGrantManager`'s tombstone bound: an unbounded map in
+  // a process that runs for days is a leak, and losing an alias map only costs a re-numbering of
+  // that session's tool aliases on its next read.
+  while (sessionToolAliases.size >= MAX_ALIAS_BOOKS) {
+    const oldest = sessionToolAliases.keys().next();
+    if (oldest.done) break;
+    sessionToolAliases.delete(oldest.value);
+  }
+  const created = new Map<string, string>();
+  sessionToolAliases.set(sessionId, created);
+  return created;
+}
+
+const agentWorkspaceRelay = new AgentWorkspaceRelay({
+  // Read fresh rather than captured: `client` is replaced on a daemon restart.
+  client: () => client,
+  aliasesFor: aliasesForSession,
+  push: (message: ActivityPush) => sendToRenderer(mainWindow, 'agent-workspace:activity', message),
+  onEvent: (message, meta) => console.warn(`[agent-workspace] ${message}`, meta ?? {}),
+});
+
+/** One authenticated GET against a v2 read route, returning the parsed body or `undefined`. */
+async function daemonGetJson(path: string): Promise<Record<string, unknown> | undefined> {
+  const res = await daemonFetch(path, { method: 'GET' });
+  if (!res.ok) {
+    if (res.status === 404) return undefined;
+    // No daemon-authored text crosses: the caller turns this into its own fixed message, the same
+    // discipline `daemonRefusal` applies to the workspace routes.
+    throw new Error(`the agent runtime refused this request (status ${res.status})`);
+  }
+  const body: unknown = await res.json().catch(() => undefined);
+  return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+}
+
+/** `?cursor=&limit=` for a v2 read route, built here so no caller hand-concatenates a query. */
+function pageQuery(page: { cursor?: string; limit: number }): string {
+  const params = new URLSearchParams({ limit: String(page.limit) });
+  if (page.cursor !== undefined) params.set('cursor', page.cursor);
+  return `?${params.toString()}`;
+}
+
+function readCursor(body: Record<string, unknown> | undefined): string | undefined {
+  const cursor = body?.nextCursor;
+  return typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
+}
+
+ipcMain.handle('agent-workspace:list', async (_event, input: unknown): Promise<SessionListPage> => {
+  const page = parseAgentWorkspaceListInput(input);
+  const body = await daemonGetJson(`/v2/sessions${pageQuery(page)}`);
+  const raw = Array.isArray(body?.sessions) ? body.sessions : [];
+  const sessions: SessionSummary[] = [];
+  for (const view of raw) {
+    const summary = toSessionSummary(view);
+    if (summary !== null) sessions.push(summary);
+  }
+  const nextCursor = readCursor(body);
+  return {
+    sessions,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    capacity: toCapacity(body?.capacity),
+  };
+});
+
+ipcMain.handle('agent-workspace:get', async (_event, input: unknown): Promise<SessionSummary | null> => {
+  const sessionId = parseAgentWorkspaceGetInput(input);
+  const body = await daemonGetJson(`/v2/sessions/${encodeURIComponent(sessionId)}`);
+  return body === undefined ? null : toSessionSummary(body.session);
+});
+
+ipcMain.handle('agent-workspace:events', async (_event, input: unknown): Promise<SessionEventsPage> => {
+  const { sessionId, ...page } = parseAgentWorkspaceEventsInput(input);
+  const body = await daemonGetJson(`/v2/sessions/${encodeURIComponent(sessionId)}/events${pageQuery(page)}`);
+  const raw = Array.isArray(body?.events) ? body.events : [];
+  const aliases = aliasesForSession(sessionId);
+  const events: HistoryEntry[] = [];
+  for (const record of raw) {
+    const entry = toHistoryEntry(record, aliases);
+    if (entry !== null) events.push(entry);
+  }
+  const nextCursor = readCursor(body);
+  return { sessionId, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
+});
+
+ipcMain.handle('agent-workspace:attach', (_event, input: unknown): AttachResult => {
+  const { sessionId, lastSeq } = parseAgentWorkspaceAttachInput(input);
+  return agentWorkspaceRelay.attach(sessionId, lastSeq);
+});
+
+ipcMain.handle('agent-workspace:detach', (_event, input: unknown): void => {
+  agentWorkspaceRelay.detach(parseAgentWorkspaceDetachInput(input));
 });
 
 ipcMain.handle('dialog:select-directory', async () => {

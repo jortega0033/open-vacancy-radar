@@ -162,8 +162,23 @@ export const THEMES: readonly ThemePreference[] = ['light', 'dark', 'system'];
 export const DENSITIES: readonly DensityPreference[] = ['comfortable', 'compact'];
 export const SIDEBAR_STARTS: readonly SidebarStartPreference[] = ['expanded', 'collapsed', 'remember_last'];
 export const DEFAULT_PROVIDERS: readonly DefaultAiProvider[] = ['claude', 'codex'];
-/** Values `lastOpenedPage` may hold: the renderer's nav ids, not the `startPage` enum. */
-export const NAV_PAGES = ['search', 'saved', 'applications', 'cv', 'letters', 'runtime', 'settings'] as const;
+/**
+ * Values `lastOpenedPage` may hold: the renderer's nav ids, not the `startPage` enum.
+ *
+ * `'agent-workspace'` is ADI-07's eighth destination. It is not added to `START_PAGES`: that enum
+ * is what a user may pick as their *opening* screen in Settings, and a page whose whole purpose is
+ * to show sessions that are running right now is a poor thing to land on cold.
+ */
+export const NAV_PAGES = [
+  'search',
+  'saved',
+  'applications',
+  'cv',
+  'letters',
+  'agent-workspace',
+  'runtime',
+  'settings',
+] as const;
 
 /** Every `…:update` / `…:delete` channel takes its row id through here first. */
 export function parseId(value: unknown, field = 'id'): string {
@@ -372,5 +387,166 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
   patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
+  // ADI-07's three AI Workspace preferences. See `AGENT_WORKSPACE_PREF_LIMITS` for why these live
+  // in SQLite alongside every other setting rather than in localStorage.
+  patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));
+  patch(input, out, 'agentArchivedSessionIds', (v) => parseArchivedSessionIds(v));
+  patch(input, out, 'agentUnreadCounts', (v) => parseUnreadCounts(v));
   return out;
+}
+
+// ------------------------------------------------------------ AI Workspace (ADI-07)
+
+/**
+ * Bounds for the three AI Workspace preference fields.
+ *
+ * These are renderer-local view state (which session is selected, which are archived, how many
+ * unread entries each has) and they live in `app_settings` -- the same SQLite row as every other
+ * preference in this app -- rather than in `localStorage`. That is a deliberate consistency
+ * decision, not an accident: a user who exports, resets, or backs up their workspace database
+ * expects it to carry their app state, and a second, invisible store in Chromium's profile
+ * directory would silently not be part of any of that.
+ *
+ * The caps exist because these are the only settings whose *size* is driven by how much the user
+ * does rather than by a fixed enum. A session list is bounded by the daemon's own eviction quota,
+ * so 200 entries is far more than can accumulate; the cap is a bound on a hostile renderer, not a
+ * product limit anyone will meet.
+ */
+export const AGENT_WORKSPACE_PREF_LIMITS = {
+  archivedSessions: 200,
+  unreadSessions: 200,
+  /** A session id is a UUID (36 chars); `LIMITS.short` is already generous, this is the real shape. */
+  sessionId: 128,
+  /** No badge means anything above this, and an unbounded integer is a rendering hazard. */
+  maxUnread: 9_999,
+} as const;
+
+/**
+ * A bounded list of session ids.
+ *
+ * Stored as a JSON column, matching `cv_documents.profile`'s existing precedent for "a small
+ * structured value in this database", rather than introducing a join table for a list that is
+ * never queried, joined, or ordered by SQL.
+ */
+export function parseArchivedSessionIds(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) fail('"agentArchivedSessionIds" must be an array of session ids');
+  if (value.length > AGENT_WORKSPACE_PREF_LIMITS.archivedSessions) {
+    fail(`"agentArchivedSessionIds" must have at most ${AGENT_WORKSPACE_PREF_LIMITS.archivedSessions} entries`);
+  }
+  const seen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    // Deduplicated here rather than trusted: archiving is idempotent in the reducer, and a stored
+    // list with the same id twice would make it stop being idempotent across a reload.
+    seen.add(str(entry, `agentArchivedSessionIds[${index}]`, AGENT_WORKSPACE_PREF_LIMITS.sessionId));
+  }
+  return [...seen];
+}
+
+/** A bounded `sessionId -> unread count` map. Same JSON-column reasoning as the list above. */
+export function parseUnreadCounts(value: unknown): Record<string, number> {
+  if (value === null || value === undefined) return {};
+  const input = asRecord(value, '"agentUnreadCounts"');
+  const keys = Object.keys(input);
+  if (keys.length > AGENT_WORKSPACE_PREF_LIMITS.unreadSessions) {
+    fail(`"agentUnreadCounts" must have at most ${AGENT_WORKSPACE_PREF_LIMITS.unreadSessions} entries`);
+  }
+  const out: Record<string, number> = {};
+  for (const key of keys) {
+    const id = str(key, 'agentUnreadCounts key', AGENT_WORKSPACE_PREF_LIMITS.sessionId);
+    const count = input[key];
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+      fail(`"agentUnreadCounts.${id}" must be a non-negative integer`);
+    }
+    out[id] = Math.min(count, AGENT_WORKSPACE_PREF_LIMITS.maxUnread);
+  }
+  return out;
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * `agent-workspace:*` IPC payloads (ADI-07).
+ *
+ * Same three rules as the rest of this file: allow-list, never spread; bound every string; and say
+ * what is wrong without echoing what was sent. One rule is added, specific to these channels:
+ * **nothing here accepts a location**. There is no `path`, `cwd`, `workspaceId`, or `incarnation`
+ * parser below, so a renderer that attaches one has it dropped here, on top of the preload bridge
+ * already refusing to put it on the wire.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Canonical UUID form, the shape every v2 session id has (`agentSessionV2ViewSchema.id`). */
+const SESSION_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * `opaqueCursorV2Schema`'s charset and cap, restated.
+ *
+ * Restated rather than imported because this module is deliberately dependency-free (see its own
+ * header: it is pure so it can be unit-tested without Electron or a database). The daemon validates
+ * the cursor again on arrival, so this is the boundary check, not the authority.
+ */
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
+
+/** `pageLimitV2Schema`'s bounds, restated for the same reason. */
+export const PAGE_LIMIT_BOUNDS = { min: 1, max: 100, default: 50 } as const;
+
+export function parseSessionId(value: unknown, field = 'sessionId'): string {
+  const id = str(value, field, 128);
+  if (!SESSION_ID_PATTERN.test(id)) fail(`"${field}" must be a session id`);
+  return id;
+}
+
+export interface AgentWorkspacePageRequest {
+  cursor?: string;
+  limit: number;
+}
+
+function parsePage(input: Record<string, unknown>): AgentWorkspacePageRequest {
+  let limit: number = PAGE_LIMIT_BOUNDS.default;
+  if (input.limit !== undefined && input.limit !== null) {
+    if (typeof input.limit !== 'number' || !Number.isInteger(input.limit)) fail('"limit" must be an integer');
+    if (input.limit < PAGE_LIMIT_BOUNDS.min || input.limit > PAGE_LIMIT_BOUNDS.max) {
+      fail(`"limit" must be between ${PAGE_LIMIT_BOUNDS.min} and ${PAGE_LIMIT_BOUNDS.max}`);
+    }
+    limit = input.limit;
+  }
+  if (input.cursor === undefined || input.cursor === null) return { limit };
+  const cursor = str(input.cursor, 'cursor', 256);
+  if (!CURSOR_PATTERN.test(cursor)) fail('"cursor" must be an opaque pagination cursor');
+  return { cursor, limit };
+}
+
+/** `agent-workspace:list`. Takes paging and nothing else: no provider filter, no path, no query. */
+export function parseAgentWorkspaceListInput(value: unknown): AgentWorkspacePageRequest {
+  if (value === undefined || value === null) return { limit: PAGE_LIMIT_BOUNDS.default };
+  return parsePage(asRecord(value, 'list payload'));
+}
+
+/** `agent-workspace:get`. */
+export function parseAgentWorkspaceGetInput(value: unknown): string {
+  return parseSessionId(asRecord(value, 'payload').sessionId);
+}
+
+/** `agent-workspace:events`. */
+export function parseAgentWorkspaceEventsInput(
+  value: unknown,
+): AgentWorkspacePageRequest & { sessionId: string } {
+  const input = asRecord(value, 'events payload');
+  return { sessionId: parseSessionId(input.sessionId), ...parsePage(input) };
+}
+
+/** `agent-workspace:attach`. `lastSeq` resumes the SSE stream; it is an index, never a cursor. */
+export function parseAgentWorkspaceAttachInput(value: unknown): { sessionId: string; lastSeq?: number } {
+  const input = asRecord(value, 'attach payload');
+  const sessionId = parseSessionId(input.sessionId);
+  if (input.lastSeq === undefined || input.lastSeq === null) return { sessionId };
+  if (typeof input.lastSeq !== 'number' || !Number.isInteger(input.lastSeq) || input.lastSeq < 0) {
+    fail('"lastSeq" must be a non-negative integer');
+  }
+  return { sessionId, lastSeq: input.lastSeq };
+}
+
+/** `agent-workspace:detach`. */
+export function parseAgentWorkspaceDetachInput(value: unknown): string {
+  return parseSessionId(asRecord(value, 'payload').sessionId);
 }

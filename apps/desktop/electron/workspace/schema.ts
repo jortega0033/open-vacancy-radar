@@ -121,4 +121,30 @@ export const appSettings = sqliteTable('app_settings', {
   confirmApplicationDelete: integer('confirm_application_delete', { mode: 'boolean' }).notNull().default(true),
   autoArchiveRejected: integer('auto_archive_rejected', { mode: 'boolean' }).notNull().default(false),
   defaultProvider: text('default_provider', { enum: ['claude', 'codex'] }).notNull().default('claude'),
+  /*
+   * ADI-07: the AI Workspace's renderer-local view state.
+   *
+   * These are preferences, not data, and they live here for exactly one reason: every other
+   * preference in this app lives here. The alternative considered was `localStorage`, which is
+   * where a browser app would put "which row was selected". This is not a browser app -- a user
+   * who backs up, exports, or resets their workspace database reasonably expects that to carry
+   * their app state, and a second store inside Chromium's profile directory would silently not be
+   * part of any of those operations.
+   *
+   * The two collection-shaped fields are JSON columns, following `cv_documents.profile`'s existing
+   * precedent for a small structured value, rather than join tables: neither is ever queried,
+   * ordered, or joined by SQL, so a table would buy nothing and cost two migrations.
+   */
+  /** The session the AI Workspace reopens on. Nullable: "nothing selected" is a real state. */
+  agentSelectedSessionId: text('agent_selected_session_id'),
+  /** Session ids the user has archived out of the live list. Bounded in validate.ts. */
+  agentArchivedSessionIds: text('agent_archived_session_ids', { mode: 'json' })
+    .notNull()
+    .$type<string[]>()
+    .default([]),
+  /** `sessionId -> unread activity count`, for the list's badges. Bounded in validate.ts. */
+  agentUnreadCounts: text('agent_unread_counts', { mode: 'json' })
+    .notNull()
+    .$type<Record<string, number>>()
+    .default({}),
 });

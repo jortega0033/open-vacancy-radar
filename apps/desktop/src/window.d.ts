@@ -77,6 +77,94 @@ export interface SystemBridge {
 }
 
 /**
+ * Mirror of `WorkspaceGrantBridge` in electron/preload.ts (ADI-06, extended by ADI-13).
+ *
+ * This declaration was missing entirely until ADI-07: `workspaceGrant` shipped with no renderer
+ * consumer, so nothing needed to name it, and `window.workspaceGrant` was simply not on the
+ * `Window` interface. The AI Workspace is its first consumer, which is what makes the declaration
+ * necessary now.
+ *
+ * Hand-mirrored rather than imported, like `CvBridge` and `SystemBridge` above and unlike the
+ * workspace record types below: `preload.ts` imports `electron`, so a type reference into it from
+ * the renderer's own declaration file would drag Electron's types into the renderer's graph for no
+ * benefit. The surface is four functions, so drift would be immediately obvious, and
+ * `preload.test.ts` pins the real key set independently.
+ *
+ * Note what these types cannot express, which is the point: no argument names a path, and no
+ * return value carries one.
+ */
+export interface WorkspaceGrantDisplay {
+  name: string;
+  branch?: string;
+  dirty: boolean;
+  /** Always the literal. See ADI-06's D4: a narrowed claim here would be a false one. */
+  effects: 'unbounded_cli';
+}
+
+export interface WorkspaceGrantOffer {
+  grantHandle: string;
+  display: WorkspaceGrantDisplay;
+}
+
+export type WorkspaceGrantConsumeResult =
+  | { ok: true; workspaceSessionRef?: string }
+  | { ok: false; reason: string };
+
+export type WorkspaceGrantStatus =
+  | { state: 'active'; expiresInMs: number }
+  | { state: 'gone'; reason: string };
+
+export interface WorkspaceSessionStarted {
+  sessionId: string;
+  provider: string;
+  status: string;
+  model?: string;
+}
+
+export type WorkspaceStartSessionResult =
+  | { ok: true; session: WorkspaceSessionStarted }
+  | { ok: false; reason: string };
+
+export interface WorkspaceStartSessionInput {
+  workspaceSessionRef: string;
+  prompt: string;
+  resumeProviderSessionId?: string;
+  capabilities?: unknown;
+}
+
+export interface WorkspaceGrantBridge {
+  requestGrant(provider: ProviderId): Promise<WorkspaceGrantOffer | null>;
+  consumeGrant(grantHandle: string): Promise<WorkspaceGrantConsumeResult>;
+  getGrantStatus(grantHandle: string): Promise<WorkspaceGrantStatus>;
+  startSession(input: WorkspaceStartSessionInput): Promise<WorkspaceStartSessionResult>;
+}
+
+/**
+ * The AI Workspace types (ADI-07) *are* imported, for the same reason the workspace record types
+ * below are: `electron/agent-workspace-types.ts` is a pure type module that imports nothing from
+ * Electron or Node, and the surface is large enough (a dozen shapes, one of them an eleven-member
+ * discriminated union) that a hand-written mirror would be pure duplication with a real chance of
+ * silent divergence. The import is type-only and erased at compile time.
+ */
+export type {
+  ActivityCloseReason,
+  ActivityDigest,
+  ActivityEntry,
+  ActivityPush,
+  AgentWorkspaceBridge,
+  AttachRefusal,
+  AttachResult,
+  HistoryEntry,
+  PageRequest,
+  SessionCapacity,
+  SessionEventsPage,
+  SessionListPage,
+  SessionScopeSummary,
+  SessionSummary,
+  StartSessionDenialReason,
+} from '../electron/agent-workspace-types.js';
+
+/**
  * The workspace record/input types are *imported* from the Electron side rather than re-declared
  * here, unlike the three bridges above. Those are short enough that a hand-written mirror is
  * cheap and its drift would be obvious; the workspace contract is five entities × three shapes,
@@ -125,6 +213,10 @@ declare global {
     cv: CvBridge;
     system: SystemBridge;
     workspace: import('../electron/workspace/types.js').WorkspaceBridge;
+    /** ADI-06/ADI-13. Declared here for the first time by ADI-07, its first renderer consumer. */
+    workspaceGrant: WorkspaceGrantBridge;
+    /** ADI-07. The seventh namespace: read v2 sessions, and stream sanitized live activity. */
+    agentWorkspace: import('../electron/agent-workspace-types.js').AgentWorkspaceBridge;
   }
 }
 

@@ -208,6 +208,14 @@ export interface AppSettingsRecord {
   confirmApplicationDelete: boolean;
   autoArchiveRejected: boolean;
   defaultProvider: DefaultAiProvider;
+  /**
+   * ADI-07: the AI Workspace's renderer-local view state, persisted here rather than in
+   * `localStorage` so it travels with the workspace database like every other preference. See
+   * `schema.ts`'s comment on these three columns for the full reasoning.
+   */
+  agentSelectedSessionId: string | null;
+  agentArchivedSessionIds: string[];
+  agentUnreadCounts: Record<string, number>;
 }
 
 export type AppSettingsPatch = Partial<AppSettingsRecord>;

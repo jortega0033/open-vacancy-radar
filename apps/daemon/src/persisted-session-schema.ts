@@ -1,6 +1,8 @@
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
+  digestOfText,
+  digestOfUnknown,
+  truncateToBytes,
   capabilitySelectionV2Schema,
   providerIdSchema,
   sessionStatusV2Schema,
@@ -107,53 +109,16 @@ export const MAX_TOOL_CALL_ID_BYTES = 256;
 /** An error `code` is an identifier, never prose: anything outside this charset is dropped. */
 const ERROR_CODE_DISALLOWED = /[^A-Za-z0-9._-]+/g;
 
-function sha256Of(text: string): string {
-  return createHash('sha256').update(text, 'utf8').digest('hex');
-}
-
-function utf8Bytes(text: string): number {
-  return Buffer.byteLength(text, 'utf8');
-}
-
 /**
- * Truncates on the UTF-8 byte sequence, then drops a trailing partial character.
+ * `truncateToBytes`, `digestOfText`, and `digestOfUnknown` used to be defined here privately.
  *
- * Slicing bytes can cut a multi-byte character in half, which decodes to U+FFFD -- itself three
- * bytes, which can push the result back over the budget. Dropping the last code unit in that case
- * keeps the guarantee the caller actually needs ("never more than N bytes") rather than an
- * approximate one.
+ * They moved to `@agent-dock/shared`'s `content-digest.ts` (ADI-07) with their behavior unchanged,
+ * because the desktop main process needs the identical rules to sanitize live SSE envelopes before
+ * they reach the renderer, and cannot import from `apps/daemon`. Two copies of a redaction rule is
+ * the failure mode that module's docstring explains. Re-exported here so every existing importer
+ * of `truncateToBytes` from this module keeps working and cites one implementation.
  */
-export function truncateToBytes(text: string, maxBytes: number): string {
-  if (utf8Bytes(text) <= maxBytes) return text;
-  const cut = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
-  return utf8Bytes(cut) <= maxBytes ? cut : cut.slice(0, -1);
-}
-
-/**
- * The canonical string form of an `unknown` payload (`tool.started.input`,
- * `tool.completed.result`), used only as hash input and never stored.
- *
- * A value that cannot be serialized (circular, a BigInt) still needs *some* stable digest, because
- * silently omitting the pair would make "this tool produced nothing" and "this tool produced
- * something we could not encode" indistinguishable on disk. The sentinel below is a constant, so it
- * leaks nothing while remaining recognizable.
- */
-const UNSERIALIZABLE_SENTINEL = '<unserializable>';
-
-function digestOfUnknown(value: unknown): { bytes: number; sha256: string } {
-  let text: string;
-  try {
-    const encoded = JSON.stringify(value);
-    text = encoded === undefined ? UNSERIALIZABLE_SENTINEL : encoded;
-  } catch {
-    text = UNSERIALIZABLE_SENTINEL;
-  }
-  return { bytes: utf8Bytes(text), sha256: sha256Of(text) };
-}
-
-function digestOfText(text: string): { bytes: number; sha256: string } {
-  return { bytes: utf8Bytes(text), sha256: sha256Of(text) };
-}
+export { truncateToBytes };
 
 // ---------------------------------------------------------------------------------------------
 // Persisted event records

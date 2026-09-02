@@ -1,5 +1,6 @@
 export * from './provider.js';
 export * from './events.js';
+export * from './content-digest.js';
 export * from './session.js';
 export * from './schemas.js';
 export * from './protocol.js';

@@ -37,6 +37,9 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
   defaultProvider: 'claude',
+  agentSelectedSessionId: null,
+  agentArchivedSessionIds: [],
+  agentUnreadCounts: {},
 };
 
 export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
