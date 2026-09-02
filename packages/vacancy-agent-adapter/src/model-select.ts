@@ -8,11 +8,12 @@ import { opaqueCapabilityConstraintsSchema, utf8ByteLength, type OpaqueCapabilit
  * per `capabilityIdSchema`'s naming scheme (packages/shared/src/capabilities-v2.ts) so it reads,
  * on the wire, as unambiguously a product extension and never a core AgentDock capability.
  *
- * This module only defines and validates the extension: nothing in this repo constructs a v2
- * session yet (see docs/adr-agentdock-v2-provenance.md and the ADI-04/ADI-05 tickets), so nothing
- * here is wired into a request/response schema. The intended caller is whichever future v2
- * session-creation path exists once that infrastructure lands, requesting this capability as
- * required and resolving it with `resolveModelSelection` before launching a provider process.
+ * This module shipped with no caller (ADI-03) and has one now: ADI-13's `POST /v2/sessions`
+ * (apps/daemon/src/routes/v2-sessions-create.ts) resolves a requested model-select capability with
+ * `resolveModelSelection` against the provider's own detected `availableModels`, before launching
+ * anything. `packages/shared/src/capabilities-v2.ts` duplicates the id literal below (it cannot
+ * import it: that package is this one's dependency, so the import would be a cycle) and
+ * `test/model-select.test.ts` pins the two copies as equal.
  */
 export const MODEL_SELECT_CAPABILITY_ID = 'ext.open_vacancy_radar.model_select';
 

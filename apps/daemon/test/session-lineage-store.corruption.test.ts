@@ -33,6 +33,7 @@ const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await im
 const { tmpdir } = await import('node:os');
 const { basename, dirname, join, resolve } = await import('node:path');
 const { SessionLineageStore } = await import('../src/session-lineage-store.js');
+const { PERSISTED_SCHEMA_VERSION } = await import('../src/persisted-session-schema.js');
 const { eventLine, listFiles, makeRecord, readAllText, seedManifest, seedRecord } = await import(
   './support/lineage-fixtures.js'
 );
@@ -41,7 +42,11 @@ let stateRoot: string;
 
 beforeEach(() => {
   stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-corruption-'));
-  seedManifest(stateRoot, { schemaVersion: 1 });
+  // Seeded at the version this build writes. A manifest at an OLDER readable version is a
+  // legitimate state too, and ADI-13 upgrades it in place -- but that rewrite is a mutation, and the
+  // "nothing ever disappears" sweep below compares raw lines, so exercising it here would make an
+  // intended upgrade look like data loss. `session-lineage-store.upgrade.test.ts` covers it instead.
+  seedManifest(stateRoot, { schemaVersion: PERSISTED_SCHEMA_VERSION });
   calls.length = 0;
 });
 
@@ -320,7 +325,9 @@ describe('corrupt manifest and stray temps', () => {
 
     const store = new SessionLineageStore({ stateRoot });
 
-    expect(JSON.parse(readFileSync(join(storeDir(), 'manifest.json'), 'utf8'))).toEqual({ schemaVersion: 1 });
+    expect(JSON.parse(readFileSync(join(storeDir(), 'manifest.json'), 'utf8'))).toEqual({
+      schemaVersion: PERSISTED_SCHEMA_VERSION,
+    });
     expect(readAllText(join(storeDir(), 'quarantine'))).toContain('not json');
     expect(store.stats().records).toBe(1);
   });

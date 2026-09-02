@@ -26,6 +26,17 @@ export function makeSession(overrides: Partial<AgentSession> = {}): AgentSession
 }
 
 export interface SeedRecordOptions {
+  /**
+   * Defaults to `1`, i.e. the shape every build before ADI-13 wrote.
+   *
+   * Left at `1` on purpose rather than tracking `PERSISTED_SCHEMA_VERSION`: every existing test that
+   * seeds a record therefore keeps exercising the *older* readable version, which is exactly the
+   * state a real user's disk is in on the first launch after upgrading. See
+   * `session-lineage-store.upgrade.test.ts`.
+   */
+  schemaVersion?: 1 | 2;
+  /** ADI-13's negotiated capability selection. Omitted by default, like every pre-ADI-13 record. */
+  selection?: PersistedSessionRecordV1['session']['selection'];
   id?: string;
   rootId?: string;
   provider?: ProviderId;
@@ -45,7 +56,7 @@ export function makeRecord(options: SeedRecordOptions = {}): PersistedSessionRec
   const startedAt = options.startedAt ?? new Date().toISOString();
   const status = options.status ?? 'completed';
   return {
-    schemaVersion: 1,
+    schemaVersion: options.schemaVersion ?? 1,
     protocolVersion: 1,
     session: {
       id,
@@ -70,6 +81,7 @@ export function makeRecord(options: SeedRecordOptions = {}): PersistedSessionRec
       eventsTruncated: false,
       scope: FIXTURE_SCOPE,
       unknownFrames: [],
+      ...(options.selection === undefined ? {} : { selection: options.selection }),
     },
   };
 }

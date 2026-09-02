@@ -10,13 +10,11 @@ import { z } from 'zod';
  * (generic MCP, components, attachments, workflows, worktrees, subagents) are permanent non-goals
  * for this product, not just deferred. See docs/adr-agentdock-v2-provenance.md for the wider plan.
  *
- * Nothing in this repo constructs an `OpaqueExtension` yet, by design: this ticket ships the
- * parsing/bounds machinery, not a wire field that carries one anywhere, because there is no real
- * extension yet to negotiate. The very next ticket in the v2 port plan (model-selection as a
- * capability extension, `ext.open_vacancy_radar.model_select`) is expected to be this module's
- * first real consumer -- wiring an actual extension onto a request/response schema, and adding its
- * id to `ACTIVE_CAPABILITY_EXTENSION_IDS` below once a real handler exists behind it. Until then,
- * this file is deliberately-inert, reviewed groundwork, not dead code to be pruned.
+ * This module shipped inert (ADI-02) and is inert no longer. ADI-13 gave it its first real
+ * consumer: `createSessionV2RequestSchema` (session-v2.ts) carries an `OpaqueExtension` list on the
+ * wire, `POST /v2/sessions` resolves it, and `ACTIVE_CAPABILITY_EXTENSION_IDS` below now names the
+ * one extension this build implements rather than being an empty list. The bounds machinery is
+ * unchanged; only the activation registry and its consumers are new.
  */
 
 const MAX_OPAQUE_BYTES = 64 * 1024;
@@ -203,13 +201,34 @@ export function parseOpaqueExtensions(raw: unknown): readonly OpaqueExtension[] 
 }
 
 /**
- * No capability extension is active in this release: the registry below is the single place that
- * changes when one is. Keeping it as a real (empty) list rather than skipping activation entirely
- * makes "inactive" a checkable fact instead of an implicit absence of code -- see
- * `isCapabilityExtensionActive` and its regression test. ADI-03 is expected to be the first ticket
- * that adds an entry here, once it has a real handler behind the id it activates.
+ * The model-selection extension id, written out as a literal rather than imported.
+ *
+ * Its home is `packages/vacancy-agent-adapter/src/model-select.ts` (ADI-03), which owns the
+ * resolver, the value schema, and the constraint builder. That package **depends on this one**, so
+ * importing the constant back from it would create a cycle between the two workspace packages; the
+ * literal is therefore duplicated here on purpose, and
+ * `packages/vacancy-agent-adapter/test/model-select.test.ts` pins the two copies as equal. That
+ * drift guard is the whole reason the duplication is acceptable: without it, the two packages could
+ * silently disagree on the id string, and the daemon would answer `unsupported_capability` for the
+ * one capability it actually implements.
  */
-export const ACTIVE_CAPABILITY_EXTENSION_IDS: readonly string[] = Object.freeze([]);
+export const MODEL_SELECT_CAPABILITY_ID = 'ext.open_vacancy_radar.model_select';
+
+/**
+ * The capability extensions this build actually implements: the single place that changes when one
+ * is activated. Keeping it as a real list rather than skipping activation entirely makes "inactive"
+ * a checkable fact instead of an implicit absence of code -- see `isCapabilityExtensionActive`.
+ *
+ * ADI-13 is the ticket that added the first entry, and it did so only once there was a real handler
+ * behind the id: `POST /v2/sessions` resolves a requested model-select capability against the
+ * provider's own reviewed catalog (see apps/daemon/src/routes/v2-sessions-create.ts). An id absent
+ * from this list is never a request failure -- it is reported as `unsupported_capability` in the
+ * session's `unavailableOptional`, so a newer client asking an older daemon for something it has
+ * never heard of still gets a session.
+ */
+export const ACTIVE_CAPABILITY_EXTENSION_IDS: readonly string[] = Object.freeze([
+  MODEL_SELECT_CAPABILITY_ID,
+]);
 
 export function isCapabilityExtensionActive(id: string): boolean {
   return ACTIVE_CAPABILITY_EXTENSION_IDS.includes(id);

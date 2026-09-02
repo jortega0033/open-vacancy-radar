@@ -393,11 +393,44 @@ export interface WorkspaceGrantOffer {
   display: WorkspaceGrantDisplay;
 }
 
-export type WorkspaceGrantConsumeResult = { ok: true } | { ok: false; reason: string };
+/**
+ * A successful consumption now also carries an opaque **workspace session ref** (ADI-13): the handle
+ * `startSession` below addresses a trusted workspace by. Optional, so a refusal's shape is unchanged
+ * and a main process that did not mint one still produces a valid result.
+ */
+export type WorkspaceGrantConsumeResult =
+  | { ok: true; workspaceSessionRef?: string }
+  | { ok: false; reason: string };
 
 export type WorkspaceGrantStatus =
   | { state: 'active'; expiresInMs: number }
   | { state: 'gone'; reason: string };
+
+/**
+ * What the renderer learns about a session it started (ADI-13).
+ *
+ * Note the absence of `cwd`. The daemon's own v2 session view has one, and main strips it before
+ * this bridge ever sees a response -- so even a future daemon change that added more path-shaped
+ * fields could not reach here, because this object is rebuilt field by field below.
+ */
+export interface WorkspaceSessionStarted {
+  sessionId: string;
+  provider: string;
+  status: string;
+  model?: string;
+}
+
+export type WorkspaceStartSessionResult =
+  | { ok: true; session: WorkspaceSessionStarted }
+  | { ok: false; reason: string };
+
+/** What the renderer may ask for when starting a session. No path, no workspace id, no incarnation. */
+export interface WorkspaceStartSessionInput {
+  workspaceSessionRef: string;
+  prompt: string;
+  resumeProviderSessionId?: string;
+  capabilities?: unknown;
+}
 
 export interface WorkspaceGrantBridge {
   /** Opens the native picker and confirmation dialog. Takes a provider id and nothing else. */
@@ -406,6 +439,14 @@ export interface WorkspaceGrantBridge {
   consumeGrant(grantHandle: string): Promise<WorkspaceGrantConsumeResult>;
   /** Whether a handle is still usable, and if not, why. Reason strings only, never paths. */
   getGrantStatus(grantHandle: string): Promise<WorkspaceGrantStatus>;
+  /**
+   * Starts an agent session in a workspace the user already approved (ADI-13).
+   *
+   * Addressed by the opaque ref `consumeGrant` returned, never by a location: the signature has
+   * nowhere to put a path, a `workspaceId`, or an `incarnation`, and the four fields it does forward
+   * are copied out explicitly below so an object carrying extras cannot put them on the wire.
+   */
+  startSession(input: WorkspaceStartSessionInput): Promise<WorkspaceStartSessionResult>;
 }
 
 /** Rebuilds the offer field by field, on the same principle as `toDaemonStatus` and `toCvFile`. */
@@ -445,7 +486,11 @@ const workspaceGrantApi: WorkspaceGrantBridge = {
     const result: unknown = await ipcRenderer.invoke('workspace-grant:consume', {
       grantHandle: typeof grantHandle === 'string' ? grantHandle : '',
     });
-    if (result && typeof result === 'object' && (result as { ok?: unknown }).ok === true) return { ok: true };
+    if (result && typeof result === 'object' && (result as { ok?: unknown }).ok === true) {
+      // Rebuilt, not spread: a success payload that grew a `canonicalPath` would otherwise cross.
+      const ref = (result as { workspaceSessionRef?: unknown }).workspaceSessionRef;
+      return { ok: true, ...(typeof ref === 'string' ? { workspaceSessionRef: ref } : {}) };
+    }
     const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
     return { ok: false, reason: typeof reason === 'string' ? reason : 'unknown_handle' };
   },
@@ -460,6 +505,39 @@ const workspaceGrantApi: WorkspaceGrantBridge = {
     }
     const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
     return { state: 'gone', reason: typeof reason === 'string' ? reason : 'unknown_handle' };
+  },
+  async startSession(input) {
+    // Exactly four fields are read off the argument and put on the wire, each coerced here rather
+    // than passed through. A caller that hands this `{ workspaceSessionRef, prompt, cwd, path }`
+    // has the last two dropped at this boundary, not merely rejected after transmission -- the same
+    // reasoning `requestGrant` above applies to its single field.
+    const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+    const resume = source.resumeProviderSessionId;
+    const result: unknown = await ipcRenderer.invoke('workspace:start-session', {
+      workspaceSessionRef: typeof source.workspaceSessionRef === 'string' ? source.workspaceSessionRef : '',
+      prompt: typeof source.prompt === 'string' ? source.prompt : '',
+      ...(typeof resume === 'string' ? { resumeProviderSessionId: resume } : {}),
+      ...(Array.isArray(source.capabilities) ? { capabilities: source.capabilities } : {}),
+    });
+
+    const payload = result && typeof result === 'object' ? (result as Record<string, unknown>) : undefined;
+    const session = payload?.session as Record<string, unknown> | undefined;
+    if (payload?.ok === true && session && typeof session.sessionId === 'string') {
+      // Rebuilt field by field, like `toGrantOffer`: the daemon's own session view carries a `cwd`,
+      // and main already strips it -- this is the second, independent place that cannot pass one on.
+      return {
+        ok: true,
+        session: {
+          sessionId: session.sessionId,
+          provider: typeof session.provider === 'string' ? session.provider : '',
+          status: typeof session.status === 'string' ? session.status : 'starting',
+          ...(typeof session.model === 'string' ? { model: session.model } : {}),
+        },
+      };
+    }
+    const reason = payload?.reason;
+    // Fail-closed: anything this build cannot interpret is a refusal, never a success.
+    return { ok: false, reason: typeof reason === 'string' ? reason : 'refused' };
   },
 };
 

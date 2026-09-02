@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { providerIdSchema } from './schemas.js';
+import { capabilityIdSchema, opaqueExtensionListSchema, opaqueExtensionSchema } from './capabilities-v2.js';
+import { workspaceDigestSchema } from './workspace-v2.js';
 
 /**
  * The v2 session *read view*: what `GET /v2/sessions` and friends return, and nothing else.
@@ -105,6 +107,57 @@ export const unknownFrameViewSchema = z
 export type UnknownFrameView = z.infer<typeof unknownFrameViewSchema>;
 
 /**
+ * Why an *optional* capability the client asked for is not part of this session (ADI-13).
+ *
+ * A closed enum, and that is a storage rule rather than a style preference: this value is written
+ * into the durable session record, whose one rule is that no free-form or caller-supplied text ever
+ * reaches disk (see apps/daemon/src/persisted-session-schema.ts). `resolveModelSelection` produces a
+ * human-readable `reason` string for its `invalid_request` outcome; that string is deliberately
+ * *not* representable here, because `invalid_request` is a malformed request (a 400) rather than an
+ * unavailable capability, and quoting a Zod message into a persisted field would be exactly the leak
+ * the no-content rule exists to prevent.
+ */
+export const capabilityUnavailableReasonV2Schema = z.enum([
+  'unsupported_capability',
+  'unknown_model',
+  'no_catalog',
+]);
+
+export type CapabilityUnavailableReasonV2 = z.infer<typeof capabilityUnavailableReasonV2Schema>;
+
+/**
+ * The outcome of one session's capability negotiation.
+ *
+ * `enabled` reuses the already-shipped `{ id, constraints }` `OpaqueExtension` shape from
+ * capabilities-v2.ts rather than introducing a parallel `{ id, value }` one: a negotiated capability
+ * is recorded exactly as it was requested, so a reader can compare a session's selection against a
+ * later request without a second encoding to keep in sync.
+ *
+ * **Presence is meaningful, and emptiness is a different fact from absence.** An absent `selection`
+ * on a session view means no negotiation happened at all (a v1-created session, or a pre-ADI-13
+ * record); a present-but-empty one means negotiation ran and produced nothing. Nothing in this repo
+ * may default the field to `{ enabled: [], unavailableOptional: [] }`, because doing so would let a
+ * v1 session be presented as carrying a negotiated selection it never had.
+ */
+export const capabilitySelectionV2Schema = z
+  .object({
+    enabled: z.array(opaqueExtensionSchema).max(64),
+    unavailableOptional: z
+      .array(
+        z
+          .object({
+            id: capabilityIdSchema,
+            reason: capabilityUnavailableReasonV2Schema,
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+
+export type CapabilitySelectionV2 = z.infer<typeof capabilitySelectionV2Schema>;
+
+/**
  * One session, as a v2 client sees it.
  *
  * `acceptedWork` is the field this whole schema exists to carry across a daemon restart: it answers
@@ -136,10 +189,48 @@ export const agentSessionV2ViewSchema = z
     eventsTruncated: z.boolean(),
     scope: frozenLaunchScopeViewSchema,
     unknownFrames: z.array(unknownFrameViewSchema),
+    /**
+     * ADI-13. Optional, and genuinely **absent** for any session that never negotiated a capability:
+     * see `capabilitySelectionV2Schema` for why absent and empty are not the same answer.
+     */
+    selection: capabilitySelectionV2Schema.optional(),
   })
   .strict();
 
 export type AgentSessionV2View = z.infer<typeof agentSessionV2ViewSchema>;
+
+/**
+ * `POST /v2/sessions` (ADI-13): the first v2 *write* shape this repo has.
+ *
+ * ADI-05 deferred this deliberately -- creating a session over v2 means freezing a
+ * capability-negotiation request contract, and it refused to invent one inside a persistence
+ * ticket. What makes it inventable now is that there is exactly one real capability to negotiate
+ * (`ext.open_vacancy_radar.model_select`, ADI-03) with a real resolver behind it, so the shape below
+ * carries the already-reviewed `OpaqueExtension` list and nothing speculative.
+ *
+ * Note what the caller must supply and what it cannot get away with:
+ *
+ * - `workspaceId`/`incarnation` are the caller's **claim**, not an assertion of trust. The daemon
+ *   re-resolves both from `cwd` and refuses on any disagreement, exactly as
+ *   `POST /v2/workspaces/consume-grant` does.
+ * - `capabilities` reuses `opaqueExtensionListSchema`, so duplicate ids, an unbounded payload, and a
+ *   malformed capability id are all rejected by the same already-tested rules the negotiation
+ *   machinery uses -- there is no second, parallel `{ id, value }` shape to keep in sync.
+ * - `.strict()`, so an unrecognized key is a 400 rather than something silently dropped.
+ */
+export const createSessionV2RequestSchema = z
+  .object({
+    provider: providerIdSchema,
+    cwd: z.string().min(1).max(4096),
+    workspaceId: workspaceDigestSchema,
+    incarnation: workspaceDigestSchema,
+    prompt: z.string().min(1).max(200_000),
+    resumeProviderSessionId: z.string().min(1).max(256).optional(),
+    capabilities: opaqueExtensionListSchema.optional(),
+  })
+  .strict();
+
+export type CreateSessionV2Request = z.infer<typeof createSessionV2RequestSchema>;
 
 /**
  * How much of the active-session budget is already spoken for, at both scopes. Returned alongside

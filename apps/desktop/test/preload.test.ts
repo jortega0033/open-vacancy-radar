@@ -507,10 +507,14 @@ describe('electron/preload.ts: ADI-06 did not widen any existing namespace', () 
   });
 });
 
-describe('electron/preload.ts: workspaceGrant bridge (ADI-06)', () => {
-  it('exposes exactly the three documented capability functions and nothing else', async () => {
+describe('electron/preload.ts: workspaceGrant bridge (ADI-06, extended by ADI-13)', () => {
+  it('exposes exactly the four documented capability functions and nothing else', async () => {
+    // ADI-13 added `startSession` and nothing else. This list is the whole renderer-facing workspace
+    // surface, and widening it is a deliberate act that has to touch this line.
     const api = await loadPreload('workspaceGrant');
-    expect(Object.keys(api).sort()).toEqual(['consumeGrant', 'getGrantStatus', 'requestGrant'].sort());
+    expect(Object.keys(api).sort()).toEqual(
+      ['consumeGrant', 'getGrantStatus', 'requestGrant', 'startSession'].sort(),
+    );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
@@ -655,19 +659,160 @@ describe('electron/preload.ts: workspaceGrant bridge (ADI-06)', () => {
     });
   });
 
-  it('maps every capability to exactly one hard-coded workspace-grant: channel', async () => {
+  it('maps every capability to exactly one hard-coded channel', async () => {
     const cases: [name: string, channel: string][] = [
       ['requestGrant', 'workspace-grant:request'],
       ['consumeGrant', 'workspace-grant:consume'],
       ['getGrantStatus', 'workspace-grant:status'],
+      ['startSession', 'workspace:start-session'],
     ];
     for (const [name, channel] of cases) {
       invoke.mockReset();
       invoke.mockResolvedValue(null);
       const api = await loadPreload('workspaceGrant');
-      await (api[name] as (arg: string) => Promise<unknown>)('claude');
+      await (api[name] as (arg: unknown) => Promise<unknown>)('claude');
       expect(invoke, name).toHaveBeenCalledTimes(1);
       expect(invoke.mock.calls[0]?.[0], name).toBe(channel);
     }
+  });
+
+  it('passes a workspace session ref back from a successful consumption, and nothing else', async () => {
+    invoke.mockResolvedValue({
+      ok: true,
+      workspaceSessionRef: 'r'.repeat(43),
+      // What a future main-process change might accidentally attach to a success payload.
+      canonicalPath: 'C:/Users/someone/my-project',
+      workspaceId: 'a'.repeat(64),
+    });
+    const api = await loadPreload('workspaceGrant');
+
+    const result = await (api.consumeGrant as (h: string) => Promise<unknown>)('y'.repeat(43));
+
+    expect(result).toEqual({ ok: true, workspaceSessionRef: 'r'.repeat(43) });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('Users');
+    expect(serialized).not.toContain('a'.repeat(64));
+  });
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-13: workspaceGrant.startSession.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+describe('electron/preload.ts: workspaceGrant.startSession (ADI-13)', () => {
+  it('forwards only the four documented fields, dropping any location a caller attached', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'unknown_workspace_ref' });
+    const api = await loadPreload('workspaceGrant');
+
+    await (api.startSession as (input: unknown) => Promise<unknown>)({
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'summarize the repo',
+      // Everything a renderer might try to smuggle. None of these has a reader in the bridge.
+      cwd: 'C:/Users/someone/.ssh',
+      path: 'C:/Users/someone',
+      workspaceId: 'a'.repeat(64),
+      incarnation: 'b'.repeat(64),
+    });
+
+    expect(invoke).toHaveBeenCalledWith('workspace:start-session', {
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'summarize the repo',
+    });
+    const sent = JSON.stringify(invoke.mock.calls[0]);
+    expect(sent).not.toContain('Users');
+    expect(sent).not.toContain('cwd');
+    expect(sent).not.toContain('a'.repeat(64));
+    expect(sent).not.toContain('b'.repeat(64));
+  });
+
+  it('coerces a non-string ref and prompt rather than forwarding an object', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'invalid_request' });
+    const api = await loadPreload('workspaceGrant');
+
+    await (api.startSession as (input: unknown) => Promise<unknown>)({
+      workspaceSessionRef: { toString: () => 'C:/Users/someone' },
+      prompt: { toString: () => 'C:/Users/someone' },
+    });
+
+    expect(invoke).toHaveBeenCalledWith('workspace:start-session', {
+      workspaceSessionRef: '',
+      prompt: '',
+    });
+  });
+
+  it('forwards a resume target and a capability list when they are well-shaped', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'refused' });
+    const api = await loadPreload('workspaceGrant');
+
+    await (api.startSession as (input: unknown) => Promise<unknown>)({
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'continue',
+      resumeProviderSessionId: 'thread-1',
+      capabilities: [{ id: 'ext.open_vacancy_radar.model_select', constraints: {} }],
+    });
+
+    expect(invoke.mock.calls[0]?.[1]).toEqual({
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'continue',
+      resumeProviderSessionId: 'thread-1',
+      capabilities: [{ id: 'ext.open_vacancy_radar.model_select', constraints: {} }],
+    });
+  });
+
+  it('rebuilds the started session, so a cwd in the payload cannot cross', async () => {
+    invoke.mockResolvedValue({
+      ok: true,
+      session: {
+        sessionId: '11111111-2222-4333-8444-555555555555',
+        provider: 'claude',
+        status: 'starting',
+        model: 'opus',
+        // The daemon's own v2 view carries this. Main strips it; this is the second place that must.
+        cwd: 'C:/Users/someone/my-project',
+        rootSessionId: '11111111-2222-4333-8444-555555555555',
+      },
+    });
+    const api = await loadPreload('workspaceGrant');
+
+    const result = await (api.startSession as (input: unknown) => Promise<unknown>)({
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'go',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      session: {
+        sessionId: '11111111-2222-4333-8444-555555555555',
+        provider: 'claude',
+        status: 'starting',
+        model: 'opus',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('Users');
+    expect(JSON.stringify(result)).not.toContain('cwd');
+  });
+
+  it('treats an unrecognized response as a refusal, never as a success', async () => {
+    for (const payload of [null, undefined, {}, { ok: 'yes' }, { ok: true }, { ok: true, session: {} }, 'ok']) {
+      invoke.mockResolvedValue(payload);
+      const api = await loadPreload('workspaceGrant');
+      const result = await (api.startSession as (input: unknown) => Promise<unknown>)({
+        workspaceSessionRef: 'r'.repeat(43),
+        prompt: 'go',
+      });
+      expect(result).toEqual({ ok: false, reason: 'refused' });
+    }
+  });
+
+  it('passes a refusal reason through as a bare string', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'workspace_lease_conflict', path: 'C:/Users/someone' });
+    const api = await loadPreload('workspaceGrant');
+    const result = await (api.startSession as (input: unknown) => Promise<unknown>)({
+      workspaceSessionRef: 'r'.repeat(43),
+      prompt: 'go',
+    });
+    expect(result).toEqual({ ok: false, reason: 'workspace_lease_conflict' });
   });
 });

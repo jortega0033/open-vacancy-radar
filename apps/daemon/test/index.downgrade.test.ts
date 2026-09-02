@@ -10,6 +10,7 @@ import { buildServer, type BuildServerV2Options } from '../src/server.js';
 import { SessionManager } from '../src/session-manager.js';
 import { STATE_DIR_ENV_VAR } from '../src/state-directory.js';
 import { eventLine, makeRecord, seedManifest, seedRecord, snapshotTree } from './support/lineage-fixtures.js';
+import { PERSISTED_SCHEMA_VERSION } from '../src/persisted-session-schema.js';
 
 /**
  * The rollback path: a user runs a newer build, then goes back to this one.
@@ -73,8 +74,17 @@ function boot() {
   return { app, durable, sessionManager };
 }
 
+/**
+ * State written by a build one schema version ahead of this one.
+ *
+ * Derived from `PERSISTED_SCHEMA_VERSION` rather than hardcoded: ADI-13 moved that constant from 1
+ * to 2, which turned every literal `2` here from "a newer build" into "this build" and would have
+ * left this whole suite passing while testing nothing. See the ADI-13 subsection in
+ * docs/rollback-runbook-agentdock-v2.md -- a store written by *this* build (`schemaVersion: 2`) is
+ * exactly the state a pre-ADI-13 daemon sees, and it refuses it the same way.
+ */
 function seedFutureState(): void {
-  seedManifest(stateRoot, { schemaVersion: 2 });
+  seedManifest(stateRoot, { schemaVersion: PERSISTED_SCHEMA_VERSION + 1 });
   const record = makeRecord({ status: 'completed', terminalReason: 'provider_completed', acceptedWork: 'accepted' });
   seedRecord(stateRoot, record, [eventLine(0)]);
 }

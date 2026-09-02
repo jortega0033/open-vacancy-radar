@@ -49,7 +49,9 @@ import {
   WorkspaceGrantManager,
   WorkspaceGrantRefusedError,
   type DaemonConsumeOutcome,
+  type DaemonCreateSessionOutcome,
   type GrantExpiryReason,
+  type StartSessionDenialReason,
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
@@ -465,6 +467,34 @@ async function daemonRefusal(res: Response, fallback: string): Promise<{ message
 }
 
 /**
+ * How `POST /v2/sessions`'s machine-readable codes map onto this process's own reason vocabulary
+ * (ADI-13).
+ *
+ * A closed table, and anything absent from it becomes `refused` -- the fail-closed direction, and
+ * the same shape `consumeGrant`'s mapping uses. A code a newer daemon adds therefore degrades to a
+ * vague refusal, never to an unreviewed string reaching the renderer.
+ */
+const DAEMON_SESSION_REFUSALS: Readonly<Record<string, StartSessionDenialReason>> = Object.freeze({
+  workspace_revoked: 'trust_revoked',
+  workspace_grant_stale: 'trust_revoked',
+  workspace_identity_drift: 'identity_drift',
+  workspace_not_reusable: 'not_trusted',
+  workspace_not_trusted: 'not_trusted',
+  workspace_lease_conflict: 'workspace_lease_conflict',
+  unknown_resume_target: 'unknown_resume_target',
+  resume_cannot_override_model: 'resume_not_allowed',
+  resume_not_supported: 'resume_not_allowed',
+  invalid_request: 'invalid_request',
+  invalid_capability_request: 'invalid_request',
+  unsupported_provider: 'invalid_request',
+  active_session_limit: 'active_session_limit',
+  storage_full: 'storage_full',
+  audit_log_full: 'audit_failure',
+  audit_unavailable: 'audit_failure',
+  audit_write_failed: 'audit_failure',
+});
+
+/**
  * Replaces the tracked daemon instance, expiring every outstanding grant when it actually changed.
  *
  * The first observation (`daemonInstanceId === undefined`) is adoption, not a change, so a normal
@@ -507,6 +537,44 @@ const workspaceGrants = new WorkspaceGrantManager({
       return { ok: false, reason: 'audit_failure' };
     }
     return { ok: false, reason: 'not_trusted' };
+  },
+
+  /**
+   * `POST /v2/sessions` (ADI-13).
+   *
+   * The response body carries the daemon's full v2 session view, and that view has a `cwd` field --
+   * a real filesystem path. So the result is **rebuilt field by field** here rather than passed
+   * through, on the same principle as `toGrantOffer` in preload.ts: a path cannot cross a boundary
+   * it was never copied across, whatever a future daemon build decides to include.
+   *
+   * Failures are mapped from the daemon's machine-readable `code` only, never from its `error` text,
+   * for the reason `daemonRefusal` documents: an audit-store failure's message quotes the filesystem
+   * error that names the daemon's log file.
+   */
+  async createSession(input): Promise<DaemonCreateSessionOutcome> {
+    const res = await daemonFetch('/v2/sessions', { method: 'POST', body: input });
+
+    if (res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { session?: unknown };
+      const session = body.session as Record<string, unknown> | undefined;
+      if (!session || typeof session.id !== 'string') return { ok: false, reason: 'refused' };
+      return {
+        ok: true,
+        session: {
+          sessionId: session.id,
+          // The provider the caller's ref named, never the one the response claimed: this process
+          // knows which workspace it asked about, and echoing the body would be one more field a
+          // future change could widen.
+          provider: input.provider,
+          status: typeof session.status === 'string' ? session.status : 'starting',
+          ...(typeof session.model === 'string' ? { model: session.model } : {}),
+        },
+      };
+    }
+
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+    const code = typeof body.code === 'string' ? body.code : '';
+    return { ok: false, reason: DAEMON_SESSION_REFUSALS[code] ?? 'refused' };
   },
 
   async recordGrantEvent(input): Promise<void> {
@@ -775,6 +843,32 @@ ipcMain.handle('workspace-grant:status', (event, input: unknown) => {
   void event;
   const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
   return workspaceGrants.grantStatus(handle);
+});
+
+/**
+ * `workspace:start-session` (ADI-13): the fourth channel, and the first one that starts real work.
+ *
+ * It takes an opaque workspace session ref, a prompt, and optionally a resume target and a
+ * capability list. **Exactly four fields are read**, and none of them can name a location: a
+ * renderer that attaches `path`, `cwd`, `workspaceId`, or `incarnation` has those arguments dropped
+ * here, because nothing below looks for them. The real path and identity come from the ref record
+ * held in this process, which was populated when the daemon confirmed the user's grant.
+ *
+ * The response is rebuilt in `createSession` above and is reason-only on failure, so no path and no
+ * daemon-authored text crosses back either.
+ */
+ipcMain.handle('workspace:start-session', async (event, input: unknown) => {
+  const payload = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  return workspaceGrants.startSession(
+    {
+      workspaceSessionRef: payload.workspaceSessionRef,
+      prompt: payload.prompt,
+      resumeProviderSessionId: payload.resumeProviderSessionId,
+      capabilities: payload.capabilities,
+    },
+    // Electron's own unspoofable identification of the calling frame, same as the consume channel.
+    event.sender.id,
+  );
 });
 
 ipcMain.handle('dialog:select-directory', async () => {

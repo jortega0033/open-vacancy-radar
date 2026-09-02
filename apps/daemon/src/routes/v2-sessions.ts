@@ -15,12 +15,17 @@ import type { PersistedSessionRecordV1 } from '../persisted-session-schema.js';
 /**
  * The v2 session **read** routes. Registered only when a durable store is active (see server.ts).
  *
- * There is deliberately no `POST /v2/sessions`, no `DELETE`, and no `/cancel` here. Creating a
- * session over v2 means accepting a capability-negotiation request shape, and this repo has no such
- * schema -- inventing one ad hoc, under this ticket, would freeze a public request contract that
- * nothing has reviewed. Session creation and control stay on the v1 routes, which are unchanged and
- * remain the only way to start or stop anything. See
- * docs/adr-agentdock-v2-provenance.md#adi-05 for the full deferral note.
+ * There is deliberately no `POST /v2/sessions`, no `DELETE`, and no `/cancel` **in this file**.
+ *
+ * ADI-05 deferred creation entirely, because it would have meant freezing a capability-negotiation
+ * request contract inside a persistence ticket. ADI-13 added it -- in its own module,
+ * `v2-sessions-create.ts`, registered by its own call in `server.ts`. That separation is not
+ * tidiness: the create route needs the trust store, the audit store, and the lease manager, which
+ * these read-only routes have no business holding, and keeping it separate means disabling the one
+ * registration call rolls creation back without touching anything here (see
+ * `apps/daemon/test/v2-sessions-create.rollback.test.ts`).
+ *
+ * `DELETE` and `/cancel` remain v1-only.
  *
  * `GET /sessions/:id/events` (the live v1 SSE stream) is likewise untouched. The v2 events route
  * below is a **JSON page over the durable, redacted log**, which is a different thing serving a
@@ -28,7 +33,18 @@ import type { PersistedSessionRecordV1 } from '../persisted-session-schema.js';
  * before the last restart".
  */
 
-function toV2View(record: PersistedSessionRecordV1): AgentSessionV2View {
+/**
+ * The one projection from a persisted record to the v2 wire view.
+ *
+ * Exported since ADI-13 so `POST /v2/sessions` returns byte-identically what `GET /v2/sessions/:id`
+ * would return for the same session. Two projections would be two contracts, and the difference
+ * would show up as a client that renders a freshly created session differently from the same
+ * session one refresh later.
+ *
+ * `selection` is spread-or-nothing like every other optional field: a record without one produces a
+ * view without the key, never `selection: undefined` and never a fabricated empty selection.
+ */
+export function toV2View(record: PersistedSessionRecordV1): AgentSessionV2View {
   const s = record.session;
   return {
     schemaVersion: V2_SESSION_VIEW_SCHEMA_VERSION as 1,
@@ -52,6 +68,7 @@ function toV2View(record: PersistedSessionRecordV1): AgentSessionV2View {
     eventsTruncated: s.eventsTruncated,
     scope: s.scope,
     unknownFrames: [...s.unknownFrames],
+    ...(s.selection === undefined ? {} : { selection: s.selection }),
   };
 }
 
