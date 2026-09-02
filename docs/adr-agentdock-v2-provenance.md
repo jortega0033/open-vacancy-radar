@@ -728,3 +728,228 @@ retrofitting them into the grant system would change v1 behavior this ticket pro
 byte-identical. The workspace-grant surface is a **sixth** preload namespace rather than an
 extension of `agentDock`, and `preload.test.ts` asserts all five pre-existing namespaces are
 key-for-key unchanged against literal key lists recorded before this ticket.
+
+## ADI-13: `POST /v2/sessions`, the grant-to-session handoff, and the asymmetric schema bump
+
+ADI-13 (issue #140) is the ticket that gives ADI-06's dormant machinery a caller. ADI-06 built the
+grant contract, the trust store, the audit log, and the execution-lease manager, and deliberately
+shipped the last of those with no caller at all; ADI-13 adds the route that consumes a grant and
+starts a session, which is what turns a folder approval into a running agent.
+
+### Where the boundary actually is
+
+The renderer never names a folder, and after ADI-13 it never learns one either. The chain is:
+
+1. `workspaceGrant.requestGrant(provider)` returns `{ grantHandle, display }`, no path (ADI-06);
+2. `workspaceGrant.consumeGrant(handle)` spends the one-shot handle and returns an opaque
+   `workspaceSessionRef`, again no path;
+3. `workspaceGrant.startSession({ workspaceSessionRef, prompt })` sends that ref to main, which
+   resolves it to a canonical path **in the main process** and puts the real `cwd` on the daemon
+   request;
+4. main rebuilds the daemon's response field by field into `{ sessionId, provider, status, model }`,
+   and `preload.ts` rebuilds it a **second time, independently**.
+
+The double rebuild is the ticket's characteristic move and it is not redundancy. Main and preload
+are different processes with different threat models, and the rule is that preload does not trust
+main blindly: for a `cwd` to reach the renderer, two files in two processes would both have to be
+wrong. `preload.test.ts` asserts the rebuild directly, against a payload carrying `cwd`,
+`workspaceId`, `incarnation`, and a `canonicalPath`.
+
+### The asymmetric schema-version bump
+
+`POST /v2/sessions` accepts an optional capability `selection`, which the durable session record has
+to carry. That is a new field on a persisted shape, so it needed a version bump, and the bump was
+made **asymmetric on purpose**:
+
+- `PERSISTED_SCHEMA_VERSION` is now `2`: every record this build writes is a v2 record.
+- `READABLE_SCHEMA_VERSIONS` is `[1, 2]`: a v1 record on disk, written before this ticket, is still
+  a valid record, because `selection` is optional and its absence is exactly what a v1 record means.
+
+The alternative (bump both, quarantine every existing record) would have discarded a user's real
+session history for a field none of those sessions could have had. The upgrade suite
+(`session-lineage-store.upgrade.test.ts`) is the guard, and it was verified by mutation rather than
+by a green run: narrowing `schemaVersion` to `z.literal(2)` fails 7 of its assertions with the
+records genuinely moved to quarantine, and narrowing `READABLE_SCHEMA_VERSIONS` to `[2]` fails 4.
+
+### Audit before effect, and the re-check after the await
+
+`SessionManager.create()`'s ordering is load-bearing: the `session.workspace_allowed` audit write is
+**awaited, and therefore fsynced, before** a lease is taken or a record is written, so a session
+cannot exist without a durable record that it was allowed. An audit failure is a refusal, not a
+warning. Because that await is a suspension point, step 12 re-checks the workspace epoch immediately
+afterwards, with no await between the check and the lease acquisition it guards, so a revocation
+racing the request lands entirely inside one of the earlier awaits. Two audit-ordering tests bracket
+the whole of `create()` rather than spying on `startSession`, which would still have passed if a
+later edit moved the limiter reservation or the record write ahead of the audit.
+
+### Model-select stopped being dormant
+
+ADI-03 built the `ext.open_vacancy_radar.model_select` capability extension with no route to
+negotiate it. ADI-13 activated it in `capabilities-v2.ts` and wired `resolveModelSelection` into the
+create route. Its `invalid_request` outcome carries a human-readable reason string, and that string
+is deliberately **not** representable in the persisted record's `capabilityUnavailableReasonV2`
+enum: `invalid_request` is a malformed request (a 400), and quoting a Zod message into a persisted
+field would be the leak the no-content rule exists to prevent.
+
+## ADI-07: the concurrent AI Workspace, and a live relay that carries no identifiers
+
+ADI-07 (issue #125) is the first ticket in this series whose deliverable is a screen. Everything
+before it built routes, stores, and boundaries with no user in front of them; this is where a user
+starts two agent sessions in two folders and watches both of them work.
+
+It is also the ticket where a redaction boundary gets its hardest case, because the two things the
+screen has to do pull in opposite directions: show the user what the agent is saying, and never let
+the renderer learn where the agent is saying it.
+
+### The sanitized live-activity relay, and why it has to exist
+
+ADI-05's v2 read routes are **content-free by design**: the durable session store never writes a
+character of model output, so `GET /v2/sessions/:id/events` can only ever answer with SHA-256
+digests and byte counts. That is the right rule for a file on disk and the wrong answer for a live
+timeline. A user watching a session run wants to read the agent's messages, not a list of hashes.
+
+So ADI-07 relays the **live v1 SSE stream**, per v2 session id, through
+`electron/agent-activity-sanitize.ts`. That function is the ADI-07 counterpart of ADI-05's
+`redactEnvelope`, with exactly one rule inverted and every other rule identical:
+
+| field | `redactEnvelope` (to disk) | `toActivityEntry` (to renderer) |
+|---|---|---|
+| `assistant.message.text`, `thinking.delta.text` | digested | **kept**, byte-capped, flagged |
+| `providerSessionId` | kept (bounded) | **dropped** |
+| `toolCallId` | kept (bounded) | **replaced with a local alias** |
+| `tool.*` input/result | digested | digested |
+| `status.detail` | digested | dropped |
+| `error.message`, `session.failed.message` | digested | dropped |
+
+The prose is kept because the renderer is what it is *for*: it is the user's own model output, on
+the user's own screen, in the same process that already renders their CV text. The two identifier
+columns go the other way for the opposite reason. A native provider thread id is a **resume
+capability**, and a native tool-call id is a correlation key the local `t1`/`t2` alias already
+provides, so neither has a legitimate reader in the renderer and neither crosses.
+
+Exhaustiveness is enforced twice, deliberately, because the two checks fail for different reasons.
+The switch's `default` branch is a `never` assertion, so a variant added to the TypeScript union
+without a branch is a **compile error**. That still leaves the Zod schema in `packages/shared` free
+to gain a variant independently, so `agent-activity-sanitize.test.ts` extracts the literal `type`
+values out of `agentEventEnvelopeSchema` **at runtime** and requires the switch's declared inventory
+to match exactly, in both directions. Between the two, a variant cannot be added to either
+declaration without something failing. This mirrors ADI-05's `REDACTED_V1_EVENT_TYPES` check rather
+than importing it: that constant lives in `apps/daemon`, which the desktop app has no dependency on.
+
+The durable-history half (`toHistoryEntry`) is deliberately **not** compile-exhaustive, and the
+asymmetry is the point. The durable log may have been written by a different daemon build, so a
+record with an unrecognized `type` is a thing to skip, not a thing to crash a timeline over. The
+compile-time exhaustiveness belongs on the live switch, which is the only path that ever sees raw
+content.
+
+### `content-digest.ts` moved to `@agent-dock/shared` rather than being copied
+
+ADI-05 wrote the digesting helpers privately inside `apps/daemon/src/persisted-session-schema.ts`.
+ADI-07 needs the same mechanism on the other side of the app, and the desktop app cannot import from
+`apps/daemon` at all. A second copy would have been two security-relevant implementations that look
+correct while drifting: a change to how an unserializable value is digested, or to how a multi-byte
+character is truncated, would silently apply to only one of the two redaction boundaries. So the
+helpers moved to `packages/shared/src/content-digest.ts` verbatim, with the daemon's behavior and
+tests unchanged, and both boundaries now import the one implementation.
+
+### `activeStreamAbort` and `activeSessionId` are gone
+
+`main.ts` held two module-level globals. `forwardSessionEvents` overwrote **both** on every new
+session, which made it a single-slot relay: starting a second session silently orphaned the first
+one's `AbortController`, so `killDaemon()`'s `activeStreamAbort?.abort()` reached only whichever
+stream happened to have started last, and every other one was left open against a daemon about to
+be killed.
+
+`activeSessionId` was worse in a quieter way: it was **write-only state**. It was assigned by
+`daemon:create-session` and cleared at a terminal event, and nothing ever read it. The shutdown path
+had already moved to `sessions.cancelAll()` for exactly this reason (AD-12), so the variable was a
+leftover that still looked like the app's model of "the session".
+
+ADI-07 replaces both with two keyed registries:
+
+- `v1EventForwards: Map<sessionId, AbortController>` for the v1 CV/Letters path, whose *behavior* is
+  untouched (same `daemon:session-event` channel, same raw envelope, same synthesized error event);
+- `AgentWorkspaceRelay`'s own `Map<sessionId, AbortController>` for the new sanitized v2 relay.
+
+`killDaemon()` now aborts every entry in both, which is what that line always claimed to do. The two
+mechanisms stay parallel rather than being folded together because they serve genuinely different
+consumers over different contracts: v1 hands raw envelopes to a one-shot text runner inside an
+app-owned scratch directory, while the relay carries sanitized entries for concurrent sessions
+running in the user's real folders. Merging them would either redact v1 (breaking `useAgentRun`) or
+un-redact v2 (removing the boundary this ticket exists to add).
+
+The same "no single slot" rule is applied one layer up, in the renderer. `workspace-reducer.ts` has
+no active-session concept: `sessions` is a genuine map, `order` is the daemon's listing order, and
+`selectedId` is a **render pointer** read in exactly one place (an unread badge). The decisive test
+is a reference-identity assertion rather than a deep-equality one: dispatching a session-scoped
+action for session B while A is selected must leave `next.sessions.A` **`toBe`** `prev.sessions.A`.
+A reducer that rebuilt every entry on every action would produce deep-equal objects with new
+identities, which is exactly the shape a coupling bug takes.
+
+### Two concurrent sessions need two folders, not one
+
+The most important thing this UI has to communicate honestly is a constraint it did not choose.
+`workspaceLeaseModeFor('legacy-one-shot')` returns `'write'` unconditionally (ADI-13, D4): over this
+repo's one transport the CLI is spawned into the workspace and is not constrained afterwards, so
+every session is an exclusive writer. Two concurrent v2 sessions therefore require **two different
+granted folders**. This is not a limitation of the UI's concurrency; the concurrency is real, and
+the folder is the thing that cannot be shared.
+
+That makes `409 active_session_limit` and `409 workspace_lease_conflict` two different problems
+arriving with the same status code from the same route, and a UI that showed one message for both
+would tell at least half of its users to do something that cannot work:
+
+- **`active_session_limit`**: too many sessions are running *anywhere*. Waiting or stopping one
+  fixes it; changing folder does not. So `NewSessionPanel` shows the live capacity numbers (the
+  thing that has to change) and offers **no** folder action.
+- **`workspace_lease_conflict`**: another session already holds *this folder*. Choosing a different
+  folder fixes it; stopping an unrelated session does not. So the card offers "Choose a different
+  folder", which re-runs the whole native picker flow with the same prompt, and shows **no** capacity
+  numbers, because capacity is not the constraint being hit.
+
+Every refusal reason reaches the user through `refusal-copy.ts`, a closed table mapping a reason
+token to a sentence this repo wrote. That is the last step of a chain that starts at the daemon: the
+daemon answers with a machine-readable code, `daemon-session-refusals.ts` maps it to a reason token
+from a closed set and never forwards the daemon's own `error` text, and this table turns the token
+into prose. A refusal message the user reads has therefore never been near a path, a port, or a
+stack trace.
+
+### Preferences are SQLite-backed, not `localStorage`
+
+Three renderer-local fields (which session is selected, which are archived, per-session unread
+counts) live in `app_settings` alongside every other preference in this app, added by drizzle
+migration `0003`. `localStorage` is where a browser app would put "which row was selected", and it
+was rejected for one reason: this is not a browser app. A user who exports, resets, or backs up
+their workspace database reasonably expects that to carry their app state, and a second store inside
+Chromium's profile directory would silently not be part of any of those operations. The two
+collection-shaped fields are JSON columns, following `cv_documents.profile`'s existing precedent,
+rather than join tables for lists that are never queried, ordered, or joined by SQL. Both are bounded
+in `validate.ts` against a hostile renderer rather than against a product limit anyone will meet.
+
+### What ADI-07 deliberately did not touch
+
+The four grandfathered path-bearing bridges keep their exact behavior: `dialog:select-directory`,
+`cv:get-workspace-dir`, `cv:select-and-read`, and `system:save-file`. They are pre-v2 surfaces, and
+retrofitting them into the grant system would change v1 behavior this ticket promises to leave
+byte-identical.
+
+That grandfathering is precisely why the AI Workspace must not be able to reach any of them. A v2
+session's `cwd` has exactly one legitimate source in this system, and if this screen could obtain a
+path through a second, ungated route, the grant system would still be intact and the property it
+exists to provide would not be. So it is asserted directly rather than argued:
+`test/components/agent-workspace/bridge-isolation.test.tsx` installs all four as spies that
+**throw** (not spies that merely record, so a call from inside any effect surfaces as a failure
+rather than being stepped over) and drives the page through a full session lifecycle: listing, live
+activity for an unselected session, selection, the grant-to-start flow, and a cancel.
+
+Also unchanged: `useAgentRun.ts`, `daemon:create-session`, `daemon:session-event`, and the
+`workspaceGrant` namespace's four keys. There is no v2 cancel route and no new cancel bridge, because
+`agentDock.cancelSession` already reaches a v2 session (both live in the same `SessionManager`) and a
+second verb would be one more thing to keep in agreement with it. There is no `?provider=` query on
+`GET /v2/sessions`: the capacity aggregate reports the **busiest** provider rather than the one a
+particular session uses, and a UI that rendered spare capacity a `POST` would then refuse is worse
+than one that under-promises. The AI Workspace is a **seventh** preload namespace rather than four
+more methods on `workspaceGrant`: reading a session list is not a filesystem trust decision, and
+widening the trust namespace to hold it would mean every future review of "what can the renderer do
+about folders?" has to separate the two concerns again. `preload.test.ts` re-asserts all six earlier
+namespaces key-for-key after the seventh was added.
