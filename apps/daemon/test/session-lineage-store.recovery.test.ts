@@ -25,6 +25,10 @@ function eventLogPath(rootId: string, sessionId: string): string {
   return join(stateRoot, 'sessions-v1', 'lineages', rootId, 'events', `${sessionId}.jsonl`);
 }
 
+function recordPath(rootId: string, sessionId: string): string {
+  return join(stateRoot, 'sessions-v1', 'lineages', rootId, 'records', `${sessionId}.json`);
+}
+
 describe('recovering sessions left non-terminal by a restart', () => {
   it.each(['starting', 'running'] as const)('recovers a %s session as interrupted / daemon_restart', (status) => {
     const record = makeRecord({ status, eventCount: 1 });
@@ -36,6 +40,19 @@ describe('recovering sessions left non-terminal by a restart', () => {
     expect(recovered?.session.status).toBe('interrupted');
     expect(recovered?.session.terminalReason).toBe('daemon_restart');
     expect(recovered?.session.completedAt).toBeDefined();
+
+    // Recovery rewrites the record (a new status, reason, and completedAt), which makes it one of
+    // the few code paths that could invent a `selection` for a session that never negotiated one.
+    // `makeRecord` seeds none, exactly like every pre-ADI-13 and v1-originated record on a real
+    // disk, so the key must still be genuinely *absent* afterwards -- checked with `in` rather than
+    // `=== undefined`, matching `session-lineage-store.upgrade.test.ts`, because a present key
+    // holding `undefined` would read as "negotiation happened" to anything that checks presence.
+    expect('selection' in recovered!.session).toBe(false);
+    // And the same on disk, since the rewrite is what actually persists.
+    const onDisk = JSON.parse(readFileSync(recordPath(record.session.rootSessionId, record.session.id), 'utf8')) as {
+      session: Record<string, unknown>;
+    };
+    expect('selection' in onDisk.session).toBe(false);
   });
 
   it('appends exactly one synthetic session.interrupted event, after the last real one', () => {

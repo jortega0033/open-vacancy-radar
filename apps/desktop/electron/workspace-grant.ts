@@ -173,6 +173,14 @@ export type StartSessionDenialReason =
   | 'unknown_workspace_ref'
   | 'daemon_unavailable'
   | 'workspace_lease_conflict'
+  /**
+   * The folder a still-valid workspace session ref names stopped being a folder this build can host
+   * a session in, between the approval and this request: deleted, renamed, on an unplugged drive
+   * (`invalid_workspace_path`), or remapped to a UNC share (`unc_workspace_unsupported`). Distinct
+   * tokens rather than `refused`, because they are the two refusals a user can actually resolve.
+   */
+  | 'unc_workspace_unsupported'
+  | 'invalid_workspace_path'
   | 'unknown_resume_target'
   | 'resume_not_allowed'
   | 'active_session_limit'

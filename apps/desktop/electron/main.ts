@@ -34,6 +34,7 @@ import {
   type JobRadarReport,
   type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
+import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
 import { resolveWindowIcon } from './resolve-window-icon.js';
@@ -51,7 +52,6 @@ import {
   type DaemonConsumeOutcome,
   type DaemonCreateSessionOutcome,
   type GrantExpiryReason,
-  type StartSessionDenialReason,
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
@@ -467,34 +467,6 @@ async function daemonRefusal(res: Response, fallback: string): Promise<{ message
 }
 
 /**
- * How `POST /v2/sessions`'s machine-readable codes map onto this process's own reason vocabulary
- * (ADI-13).
- *
- * A closed table, and anything absent from it becomes `refused` -- the fail-closed direction, and
- * the same shape `consumeGrant`'s mapping uses. A code a newer daemon adds therefore degrades to a
- * vague refusal, never to an unreviewed string reaching the renderer.
- */
-const DAEMON_SESSION_REFUSALS: Readonly<Record<string, StartSessionDenialReason>> = Object.freeze({
-  workspace_revoked: 'trust_revoked',
-  workspace_grant_stale: 'trust_revoked',
-  workspace_identity_drift: 'identity_drift',
-  workspace_not_reusable: 'not_trusted',
-  workspace_not_trusted: 'not_trusted',
-  workspace_lease_conflict: 'workspace_lease_conflict',
-  unknown_resume_target: 'unknown_resume_target',
-  resume_cannot_override_model: 'resume_not_allowed',
-  resume_not_supported: 'resume_not_allowed',
-  invalid_request: 'invalid_request',
-  invalid_capability_request: 'invalid_request',
-  unsupported_provider: 'invalid_request',
-  active_session_limit: 'active_session_limit',
-  storage_full: 'storage_full',
-  audit_log_full: 'audit_failure',
-  audit_unavailable: 'audit_failure',
-  audit_write_failed: 'audit_failure',
-});
-
-/**
  * Replaces the tracked daemon instance, expiring every outstanding grant when it actually changed.
  *
  * The first observation (`daemonInstanceId === undefined`) is adoption, not a change, so a normal
@@ -574,7 +546,7 @@ const workspaceGrants = new WorkspaceGrantManager({
 
     const body = (await res.json().catch(() => ({}))) as { code?: unknown };
     const code = typeof body.code === 'string' ? body.code : '';
-    return { ok: false, reason: DAEMON_SESSION_REFUSALS[code] ?? 'refused' };
+    return { ok: false, reason: daemonSessionRefusalReason(code) };
   },
 
   async recordGrantEvent(input): Promise<void> {

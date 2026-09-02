@@ -88,15 +88,27 @@ import { toV2View } from './v2-sessions.js';
  * A resume continues a provider-native thread that was already granted a model. Two rules fall out,
  * and both are stricter than v1:
  *
- * - **An unknown resume target is a 409, not a fresh session.** v1 passes an unrecognized
- *   `resumeProviderSessionId` straight to the CLI. Here it is refused, because "resume a thread this
- *   daemon has no record of" is indistinguishable from "start a fresh session while claiming to be a
- *   continuation" -- and the second is a way to launder a model choice past the rule below.
  * - **A model-select capability on a resume is a 400, unconditionally.** The *presence* of the field
  *   is what is refused, not a mismatching value. Comparing values would mean a caller who guesses
  *   the parent's model correctly gets to send the field, which teaches exactly the wrong thing about
  *   what the rule is; and a value that matches today is still a request to re-resolve against a
  *   catalog that may have changed since.
+ * - **An unknown resume target is a 409, not a fresh session.** v1 passes an unrecognized
+ *   `resumeProviderSessionId` straight to the CLI. Here it is refused, because "resume a thread this
+ *   daemon has no record of" is indistinguishable from "start a fresh session while claiming to be a
+ *   continuation" -- and the second is a way to launder a model choice past the rule above.
+ *
+ * **The order of those two checks is load-bearing, and it is the order they are written in above.**
+ * The model-override check is a presence test on the request body: it reads no store, resolves no
+ * parent, and therefore cannot depend on whether the named thread exists. Running the target lookup
+ * first would hand an attacker a free existence oracle: attach any model-select capability to every
+ * guessed `resumeProviderSessionId` and read 409 for a real thread against 400 for a fake one, with
+ * *no* session created either way. That is strictly cheaper than probing without the capability,
+ * where a correct guess spends a real session -- a costly, rate-limited, audited, operator-visible
+ * event. With the presence check first, a caller who attaches the capability gets the same 400
+ * whatever it named, and a 409 can only be reached by a request that attempted no override at all,
+ * which costs exactly what a successful resume costs. `v2-sessions-create.routes.test.ts` pins the
+ * two status codes as equal rather than pinning this comment.
  *
  * A valid resume therefore performs **no capability resolution at all** and inherits `model` and
  * `selection` from the parent record verbatim. If the parent has no `selection` (a v1-originated or
@@ -373,18 +385,19 @@ export function registerV2SessionCreateRoute(
         return;
       }
 
+      // Presence, not value. See this module's header for why comparing values would be weaker --
+      // and for why this runs *before* the resume target is looked up.
+      if ((capabilities ?? []).some((entry) => entry.id === MODEL_SELECT_CAPABILITY_ID)) {
+        await deny(REFUSALS.resume_cannot_override_model, identity);
+        return;
+      }
+
       // The same index `SessionManager.create()` will use to attach the lineage, deliberately: a
       // route that resolved the parent differently could admit a session that then attached itself
       // somewhere else, or none at all.
       const parent = store.findByProviderSessionId(resumeProviderSessionId);
       if (!parent) {
         await deny(REFUSALS.unknown_resume_target, identity);
-        return;
-      }
-
-      // Presence, not value. See this module's header for why comparing values would be weaker.
-      if ((capabilities ?? []).some((entry) => entry.id === MODEL_SELECT_CAPABILITY_ID)) {
-        await deny(REFUSALS.resume_cannot_override_model, identity);
         return;
       }
 

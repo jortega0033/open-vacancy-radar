@@ -139,53 +139,121 @@ function build(withCreateRoute: boolean): FastifyInstance {
   return app;
 }
 
-async function surfaceReport(app: FastifyInstance): Promise<Record<string, number>> {
-  const probes: Array<[string, () => Promise<{ statusCode: number }>]> = [
-    ['GET /health', () => app.inject({ method: 'GET', url: '/health' })],
-    ['GET /providers', () => app.inject({ method: 'GET', url: '/providers', headers: AUTH })],
-    [
-      'POST /sessions',
-      () =>
-        app.inject({
-          method: 'POST',
-          url: '/sessions',
-          headers: AUTH,
-          payload: { provider: 'claude', cwd: workspaceDir, prompt: 'hello' },
-        }),
-    ],
-    ['GET /v2/providers', () => app.inject({ method: 'GET', url: '/v2/providers', headers: AUTH })],
-    ['GET /v2/sessions', () => app.inject({ method: 'GET', url: '/v2/sessions', headers: AUTH })],
-    ['GET /v2/audit', () => app.inject({ method: 'GET', url: '/v2/audit', headers: AUTH })],
+/**
+ * Runs one v1 session all the way through, and reports what came back at both ends.
+ *
+ * A 201 on its own says a handler answered; it does not say a session exists. The follow-up `GET`
+ * is what proves the create actually produced retrievable, persisted state, which is the level of
+ * verification `index.downgrade.test.ts`'s "serves v1 POST /sessions end to end" applies and the
+ * level this file's own claim -- that v1 is untouched by the ADI-13 registration -- needs.
+ */
+async function probeV1SessionEndToEnd(app: FastifyInstance): Promise<string> {
+  const created = await app.inject({
+    method: 'POST',
+    url: '/sessions',
+    headers: AUTH,
+    payload: { provider: 'claude', cwd: workspaceDir, prompt: 'hello' },
+  });
+  if (created.statusCode !== 201) return `create ${created.statusCode}`;
+
+  const id = created.json().id as string;
+  // Polled rather than slept: both configurations have to reach the same terminal state, and a
+  // fixed sleep would make that comparison a race on a loaded machine rather than an assertion.
+  const pending = (res: { json: () => { status?: unknown } }): boolean =>
+    res.json().status === 'starting' || res.json().status === 'running';
+  let fetched = await app.inject({ method: 'GET', url: `/sessions/${id}`, headers: AUTH });
+  for (let attempt = 0; attempt < 40 && pending(fetched); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    fetched = await app.inject({ method: 'GET', url: `/sessions/${id}`, headers: AUTH });
+  }
+  return `create 201 / get ${fetched.statusCode} ${String(fetched.json().status)}`;
+}
+
+/**
+ * Every route other than `POST /v2/sessions`, and what each answers.
+ *
+ * Values are strings rather than bare status codes so a probe can report more than "a handler
+ * replied" where that matters (see `probeV1SessionEndToEnd`). The bodies below are deliberately
+ * minimal: what is being compared is whether a route is *there* and answers the same way, not its
+ * behavior, which `v2-workspaces.routes.test.ts` and `index.test.ts` already cover in full. A route
+ * that had gone missing would answer 404 from the not-found handler instead, which is the one thing
+ * every probe here is shaped to distinguish.
+ */
+async function surfaceReport(app: FastifyInstance): Promise<Record<string, string>> {
+  const code = async (run: Promise<{ statusCode: number }>): Promise<string> => String((await run).statusCode);
+
+  const probes: Array<[string, () => Promise<string>]> = [
+    ['GET /health', () => code(app.inject({ method: 'GET', url: '/health' }))],
+    ['GET /providers', () => code(app.inject({ method: 'GET', url: '/providers', headers: AUTH }))],
+    ['POST /sessions', () => probeV1SessionEndToEnd(app)],
+    ['GET /v2/providers', () => code(app.inject({ method: 'GET', url: '/v2/providers', headers: AUTH }))],
+    ['GET /v2/sessions', () => code(app.inject({ method: 'GET', url: '/v2/sessions', headers: AUTH }))],
+    ['GET /v2/audit', () => code(app.inject({ method: 'GET', url: '/v2/audit', headers: AUTH }))],
     [
       'POST /v2/workspaces/inspect',
       () =>
-        app.inject({
-          method: 'POST',
-          url: '/v2/workspaces/inspect',
-          headers: AUTH,
-          payload: { path: workspaceDir, provider: 'claude' },
-        }),
+        code(
+          app.inject({
+            method: 'POST',
+            url: '/v2/workspaces/inspect',
+            headers: AUTH,
+            payload: { path: workspaceDir, provider: 'claude' },
+          }),
+        ),
+    ],
+    [
+      // ADI-06's grant-consumption route. Probed with a deliberately incomplete body, which its
+      // schema refuses with a 400 before it resolves an identity or writes anything: enough to tell
+      // "the route is registered and answered" from "the route is gone", with no audit entry and no
+      // trust state either configuration could then disagree about.
+      'POST /v2/workspaces/consume-grant',
+      () =>
+        code(
+          app.inject({
+            method: 'POST',
+            url: '/v2/workspaces/consume-grant',
+            headers: AUTH,
+            payload: { provider: 'claude' },
+          }),
+        ),
+    ],
+    [
+      // ADI-06's revocation route. `state: 'trusted'` is the one input it answers with its own
+      // specific 400 (`trust_not_self_assertable`, the D3 refusal) rather than a routing 404 or a
+      // generic schema failure, so this probe reaches a real handler while revoking nothing.
+      'PUT /v2/workspaces/:id/trust',
+      () =>
+        code(
+          app.inject({
+            method: 'PUT',
+            url: `/v2/workspaces/${'c'.repeat(64)}/trust`,
+            headers: AUTH,
+            payload: { state: 'trusted' },
+          }),
+        ),
     ],
     [
       'POST /v2/workspaces/grant-events',
       () =>
-        app.inject({
-          method: 'POST',
-          url: '/v2/workspaces/grant-events',
-          headers: AUTH,
-          payload: {
-            event: 'grant.issued',
-            workspaceId: 'a'.repeat(64),
-            incarnation: 'b'.repeat(64),
-            provider: 'claude',
-            actor: 'user',
-          },
-        }),
+        code(
+          app.inject({
+            method: 'POST',
+            url: '/v2/workspaces/grant-events',
+            headers: AUTH,
+            payload: {
+              event: 'grant.issued',
+              workspaceId: 'a'.repeat(64),
+              incarnation: 'b'.repeat(64),
+              provider: 'claude',
+              actor: 'user',
+            },
+          }),
+        ),
     ],
   ];
 
-  const report: Record<string, number> = {};
-  for (const [name, run] of probes) report[name] = (await run()).statusCode;
+  const report: Record<string, string> = {};
+  for (const [name, run] of probes) report[name] = await run();
   return report;
 }
 
@@ -215,9 +283,16 @@ describe('skipping the ADI-13 registration rolls back exactly one route', () => 
     const after = await surfaceReport(withoutRoute);
 
     expect(after).toEqual(before);
-    // And sanity: the shared surface is genuinely working in both, not uniformly 404ing.
-    expect(before['GET /v2/sessions']).toBe(200);
-    expect(before['POST /sessions']).toBe(201);
+    // And sanity: the shared surface is genuinely working in both, not uniformly 404ing. Each of
+    // these would be '404' if its route had gone missing along with the create route, so the
+    // equality above cannot be satisfied by two identically-broken servers.
+    expect(before['GET /v2/sessions']).toBe('200');
+    // Not just "a handler answered 201": the session is real, persisted, and retrievable.
+    expect(before['POST /sessions']).toBe('create 201 / get 200 completed');
+    expect(before['POST /v2/workspaces/inspect']).toBe('200');
+    expect(before['POST /v2/workspaces/consume-grant']).toBe('400');
+    expect(before['PUT /v2/workspaces/:id/trust']).toBe('400');
+    expect(before['POST /v2/workspaces/grant-events']).toBe('202');
 
     await withRoute.close();
     await withoutRoute.close();

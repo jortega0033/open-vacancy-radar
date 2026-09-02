@@ -505,6 +505,42 @@ describe('POST /v2/sessions: resume', () => {
     expect(res.json().code).toBe('resume_cannot_override_model');
   });
 
+  it('answers a model-select-on-resume identically whether or not the target exists', async () => {
+    const { app, provider, store } = setup();
+    const identity = await trust(app);
+    const parent = await seedParent(app, identity, [modelSelect('opus')]);
+    const startedBefore = provider.started.length;
+    const recordsBefore = store.stats().records;
+
+    // The oracle this ordering closes: a caller attaching a bogus model-select capability to every
+    // guessed thread id must not be able to tell a real target from a fake one. Both of these are
+    // zero-side-effect refusals, so if they carried different status codes they would be a free,
+    // unlimited existence probe -- cheaper than guessing without the capability, where a correct
+    // guess spends a real, audited session.
+    const real = await create(
+      app,
+      createBody(identity, {
+        resumeProviderSessionId: parent.providerSessionId,
+        capabilities: [modelSelect('sonnet')],
+      }),
+    );
+    const fake = await create(
+      app,
+      createBody(identity, {
+        resumeProviderSessionId: 'never-existed',
+        capabilities: [modelSelect('sonnet')],
+      }),
+    );
+
+    expect(fake.statusCode).toBe(real.statusCode);
+    expect(fake.json().code).toBe(real.json().code);
+    expect(real.statusCode).toBe(400);
+    expect(real.json().code).toBe('resume_cannot_override_model');
+    // And neither cost anything, which is what makes the codes the only channel there is.
+    expect(provider.started).toHaveLength(startedBefore);
+    expect(store.stats().records).toBe(recordsBefore);
+  });
+
   it('allows a non-model capability on a resume, without negotiating it', async () => {
     const { app } = setup();
     const identity = await trust(app);
