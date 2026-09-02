@@ -488,7 +488,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
 };
 
-describe('electron/preload.ts: ADI-06 did not widen any existing namespace', () => {
+describe('electron/preload.ts: ADI-06 and ADI-07 did not widen any existing namespace', () => {
   it('leaves all five pre-existing namespaces key-for-key unchanged', async () => {
     for (const [namespace, keys] of Object.entries(PRE_ADI_06_NAMESPACES)) {
       const api = await loadPreload(namespace);
@@ -814,5 +814,320 @@ describe('electron/preload.ts: workspaceGrant.startSession (ADI-13)', () => {
       prompt: 'go',
     });
     expect(result).toEqual({ ok: false, reason: 'workspace_lease_conflict' });
+  });
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-07: the agentWorkspace namespace, the seventh.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+const V2_SESSION_ID = '11111111-2222-4333-8444-555555555555';
+
+describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
+  it('exposes exactly the six documented capability functions and nothing else', async () => {
+    const api = await loadPreload('agentWorkspace');
+    expect(Object.keys(api).sort()).toEqual(
+      ['listSessions', 'getSession', 'getSessionEvents', 'attachActivity', 'detachActivity', 'onActivity'].sort(),
+    );
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('exposes no generic IPC passthrough, no cancel verb, and no way to name a folder', async () => {
+    const api = await loadPreload('agentWorkspace');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+    // Cancelling goes through v1's existing `agentDock.cancelSession`; a second verb here would be
+    // a second thing to keep in agreement with it for no capability gained.
+    expect(api.cancel).toBeUndefined();
+    expect(api.cancelSession).toBeUndefined();
+    expect(api.selectDirectory).toBeUndefined();
+    expect(api.getWorkspaceDir).toBeUndefined();
+  });
+
+  it('maps every capability to exactly one hard-coded agent-workspace: channel', async () => {
+    const cases: [name: string, channel: string, call: (fn: never) => Promise<unknown>][] = [
+      ['listSessions', 'agent-workspace:list', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['getSession', 'agent-workspace:get', (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID)],
+      [
+        'getSessionEvents',
+        'agent-workspace:events',
+        (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
+      ],
+      [
+        'attachActivity',
+        'agent-workspace:attach',
+        (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
+      ],
+      [
+        'detachActivity',
+        'agent-workspace:detach',
+        (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
+      ],
+    ];
+    for (const [name, channel, call] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(null);
+      const api = await loadPreload('agentWorkspace');
+      await call(api[name] as never);
+      expect(invoke, name).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0]?.[0], name).toBe(channel);
+    }
+  });
+
+  it('sends only paging fields, dropping a location a caller tried to smuggle alongside them', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('agentWorkspace');
+
+    await (api.listSessions as (p: unknown) => Promise<unknown>)({
+      cursor: 'abc',
+      limit: 10,
+      cwd: 'C:/Users/someone/.ssh',
+      path: '/etc/passwd',
+      workspaceId: 'a'.repeat(64),
+      provider: 'claude',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('agent-workspace:list', { cursor: 'abc', limit: 10 });
+    const sent = JSON.stringify(invoke.mock.calls[0]);
+    expect(sent).not.toContain('Users');
+    expect(sent).not.toContain('cwd');
+    expect(sent).not.toContain('a'.repeat(64));
+  });
+
+  it('coerces a non-string session id to an empty one rather than forwarding an object', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('agentWorkspace');
+    await (api.getSession as (i: unknown) => Promise<unknown>)({ toString: () => 'C:/Users/someone' });
+    expect(invoke).toHaveBeenCalledWith('agent-workspace:get', { sessionId: '' });
+  });
+
+  it('sends lastSeq only when it is a real index', async () => {
+    const cases: Array<[unknown, Record<string, unknown>]> = [
+      [0, { sessionId: V2_SESSION_ID, lastSeq: 0 }],
+      [7, { sessionId: V2_SESSION_ID, lastSeq: 7 }],
+      [-1, { sessionId: V2_SESSION_ID }],
+      [1.5, { sessionId: V2_SESSION_ID }],
+      ['3', { sessionId: V2_SESSION_ID }],
+      [undefined, { sessionId: V2_SESSION_ID }],
+    ];
+    for (const [lastSeq, expected] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue({ ok: true });
+      const api = await loadPreload('agentWorkspace');
+      await (api.attachActivity as (i: string, s?: unknown) => Promise<unknown>)(V2_SESSION_ID, lastSeq);
+      expect(invoke, String(lastSeq)).toHaveBeenCalledWith('agent-workspace:attach', expected);
+    }
+  });
+
+  it('rebuilds a session summary independently, so a cwd main sent still cannot cross', async () => {
+    // The second of the two rebuilds. Main already dropped these in agent-workspace-view.ts; this
+    // is the assumption that main might one day be wrong.
+    invoke.mockResolvedValue({
+      sessions: [
+        {
+          id: 'ses-1',
+          provider: 'claude',
+          protocolVersion: 1,
+          transportId: 'legacy-one-shot',
+          status: 'running',
+          acceptedWork: 'prompt',
+          rootSessionId: 'ses-1',
+          continuationKind: 'fresh',
+          startedAt: 't',
+          earliestSequence: 0,
+          eventCount: 1,
+          eventsTruncated: false,
+          unknownFrameCount: 0,
+          scope: {
+            authenticated: 'authenticated',
+            platform: 'win32',
+            accountEvidence: 'cli_owned',
+            executablePath: 'C:/Users/someone/npm/claude.cmd',
+          },
+          cwd: 'C:/Users/someone/my-project',
+          providerSessionId: 'native-thread-abc',
+        },
+      ],
+      capacity: { global: { active: 1, limit: 4 }, provider: { active: 1, limit: 2 } },
+    });
+    const api = await loadPreload('agentWorkspace');
+
+    const page = (await (api.listSessions as () => Promise<unknown>)()) as {
+      sessions: Array<Record<string, unknown>>;
+    };
+
+    expect(page.sessions[0]).not.toHaveProperty('cwd');
+    expect(page.sessions[0]).not.toHaveProperty('providerSessionId');
+    expect(page.sessions[0]?.scope).not.toHaveProperty('executablePath');
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain('Users');
+    expect(serialized).not.toContain('my-project');
+    expect(serialized).not.toContain('native-thread-abc');
+  });
+
+  it('never echoes an accountEvidence value main sent', async () => {
+    invoke.mockResolvedValue({
+      id: 'ses-1',
+      scope: { authenticated: 'a', platform: 'p', accountEvidence: 'verified_account' },
+    });
+    const api = await loadPreload('agentWorkspace');
+    const summary = (await (api.getSession as (i: string) => Promise<unknown>)('ses-1')) as {
+      scope: { accountEvidence: string };
+    };
+    expect(summary.scope.accountEvidence).toBe('cli_owned');
+  });
+
+  it('drops a session summary it cannot even name, rather than rendering a nameless row', async () => {
+    invoke.mockResolvedValue({ sessions: [{ provider: 'claude' }, null, 'x', { id: '' }], capacity: {} });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.listSessions as () => Promise<unknown>)()) as { sessions: unknown[] };
+    expect(page.sessions).toEqual([]);
+    expect(await (api.getSession as (i: string) => Promise<unknown>)('x')).toBeNull();
+  });
+
+  it('rebuilds an activity entry per kind, dropping identifiers and prose main should have removed', async () => {
+    invoke.mockResolvedValue({
+      sessionId: 'ses-1',
+      events: [
+        {
+          seq: 0,
+          at: 't',
+          origin: 'live',
+          kind: 'tool.completed',
+          toolName: 'Bash',
+          toolAlias: 't1',
+          // What a future main-process change might accidentally leave on the payload.
+          toolCallId: 'native-call-1',
+          providerSessionId: 'native-thread-abc',
+          cwd: 'C:/Users/someone',
+          detail: 'reading C:/Users/someone/.ssh',
+        },
+        { seq: 1, at: 't', kind: 'error', code: 'read C:/Users/someone failed', recoverable: false },
+        { seq: 2, at: 't', kind: 'something.new' },
+        { seq: -1, at: 't', kind: 'status', status: 'x' },
+      ],
+    });
+    const api = await loadPreload('agentWorkspace');
+
+    const page = (await (api.getSessionEvents as (i: string) => Promise<unknown>)('ses-1')) as {
+      events: Array<Record<string, unknown>>;
+    };
+
+    // The unknown kind and the unorderable seq are dropped, fail-closed.
+    expect(page.events).toHaveLength(2);
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain('native-call-1');
+    expect(serialized).not.toContain('native-thread-abc');
+    expect(serialized).not.toContain('Users');
+    expect(page.events[0]).not.toHaveProperty('toolCallId');
+    expect(page.events[0]).not.toHaveProperty('detail');
+    // A code that is not already a clean identifier has no row to select in the copy table.
+    expect(page.events[1]).not.toHaveProperty('code');
+  });
+
+  it('asserts history origin rather than reading it, so a mislabelled entry cannot win the merge', async () => {
+    // A digest-only entry claiming `origin: 'live'` would displace real prose in the timeline
+    // merge. A page's origin is a fact about which route answered, not about the payload.
+    invoke.mockResolvedValue({
+      sessionId: 'ses-1',
+      events: [{ seq: 0, at: 't', origin: 'live', kind: 'assistant.message', text: 'not from history' }],
+    });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.getSessionEvents as (i: string) => Promise<unknown>)('ses-1')) as {
+      events: Array<{ origin: string }>;
+    };
+    expect(page.events[0]?.origin).toBe('history');
+  });
+
+  it('treats an unrecognized attach response as a refusal, never as a live attachment', async () => {
+    for (const payload of [null, undefined, {}, { ok: 'yes' }, 'ok', { ok: false, reason: 'invented' }]) {
+      invoke.mockResolvedValue(payload);
+      const api = await loadPreload('agentWorkspace');
+      const result = await (api.attachActivity as (i: string) => Promise<unknown>)('ses-1');
+      expect(result).toEqual({ ok: false, reason: 'daemon_unavailable' });
+    }
+  });
+
+  it('passes each known attach refusal reason through unchanged', async () => {
+    for (const reason of ['attach_limit', 'daemon_unavailable', 'invalid_session_id']) {
+      invoke.mockResolvedValue({ ok: false, reason, path: 'C:/Users/someone' });
+      const api = await loadPreload('agentWorkspace');
+      expect(await (api.attachActivity as (i: string) => Promise<unknown>)('ses-1')).toEqual({ ok: false, reason });
+    }
+  });
+
+  it('rebuilds every push before handing it to the renderer, and drops what it cannot read', async () => {
+    const api = await loadPreload('agentWorkspace');
+    const received: unknown[] = [];
+    const unsubscribe = (api.onActivity as (cb: (p: unknown) => void) => () => void)((push) => received.push(push));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'agent-workspace:activity')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+
+    listener?.(
+      {},
+      {
+        sessionId: 'ses-1',
+        entry: {
+          seq: 0,
+          at: 't',
+          origin: 'live',
+          kind: 'assistant.message',
+          text: 'hello',
+          providerSessionId: 'native-thread-abc',
+        },
+        cwd: 'C:/Users/someone',
+      },
+    );
+    listener?.({}, { sessionId: 'ses-1', closed: { reason: 'stream_ended' } });
+    listener?.({}, { sessionId: 'ses-1', closed: { reason: 'invented' } });
+    // Each of these must be dropped, not delivered as a half-built push.
+    listener?.({}, { entry: { seq: 0, kind: 'status', status: 'x' } });
+    listener?.({}, { sessionId: '', entry: { seq: 0, kind: 'status', status: 'x' } });
+    listener?.({}, { sessionId: 'ses-1', entry: { seq: 0, kind: 'something.new' } });
+    listener?.({}, null);
+
+    expect(received).toEqual([
+      { sessionId: 'ses-1', entry: { seq: 0, at: 't', origin: 'live', kind: 'assistant.message', text: 'hello' } },
+      { sessionId: 'ses-1', closed: { reason: 'stream_ended' } },
+      // Fail-closed: an unrecognized close reason still closes the stream.
+      { sessionId: 'ses-1', closed: { reason: 'stream_unavailable' } },
+    ]);
+    expect(JSON.stringify(received)).not.toContain('native-thread-abc');
+    expect(JSON.stringify(received)).not.toContain('Users');
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agent-workspace:activity', listener);
+  });
+});
+
+describe('electron/preload.ts: ADI-07 left the six earlier namespaces alone', () => {
+  it('leaves the five pre-ADI-06 namespaces key-for-key unchanged', async () => {
+    // Same literals as the ADI-06 block above, re-asserted after the seventh namespace was added.
+    for (const [namespace, keys] of Object.entries(PRE_ADI_06_NAMESPACES)) {
+      const api = await loadPreload(namespace);
+      expect(Object.keys(api).sort(), namespace).toEqual([...keys].sort());
+    }
+  });
+
+  it('leaves workspaceGrant at exactly its four keys', async () => {
+    // ADI-07 is the first renderer consumer of this namespace and deliberately does not widen it:
+    // reading a session list is not a filesystem trust decision.
+    const api = await loadPreload('workspaceGrant');
+    expect(Object.keys(api).sort()).toEqual(['consumeGrant', 'getGrantStatus', 'requestGrant', 'startSession'].sort());
+  });
+
+  it('adds no session-reading or activity capability to agentDock', async () => {
+    const api = await loadPreload('agentDock');
+    for (const key of Object.keys(api)) {
+      expect(key).not.toMatch(/activity|attach|workspaceSession/i);
+    }
   });
 });
