@@ -356,3 +356,110 @@ const systemApi: SystemBridge = {
 };
 
 contextBridge.exposeInMainWorld('system', systemApi);
+
+/**
+ * A sixth namespace, for workspace grants (ADI-06).
+ *
+ * Its own namespace rather than three more methods on `agentDock`, for the reason the other
+ * separations exist: this is the app's filesystem-trust boundary, and keeping it isolated means it
+ * can be reviewed, tested, and (in a fork that does not want agent workspaces) deleted on its own
+ * terms. The four pre-existing namespaces are untouched by this ticket, and `preload.test.ts`
+ * asserts that key-for-key.
+ *
+ * Note what is missing, because the omissions are the design:
+ *
+ * - **no path argument anywhere.** `requestGrant` takes a provider id. The folder is chosen by the
+ *   user in a native picker that main opens; the renderer never names it and never learns it.
+ * - **no path in any response.** A grant offer carries an opaque handle and a `display` object
+ *   rebuilt field by field below, so a path accidentally added to the IPC payload later still could
+ *   not cross this boundary.
+ * - **no `workspaceId` or `incarnation`.** Those are the daemon's trust keys. A renderer holding
+ *   them could describe a workspace it was never granted, so they stay in the main process.
+ * - **no way to set trust.** There is no `trust()` here, and no daemon route that would accept one
+ *   (see apps/daemon/src/routes/v2-workspaces.ts).
+ */
+export type WorkspaceGrantEffects = 'unbounded_cli';
+
+export interface WorkspaceGrantDisplay {
+  name: string;
+  branch?: string;
+  dirty: boolean;
+  effects: WorkspaceGrantEffects;
+}
+
+export interface WorkspaceGrantOffer {
+  grantHandle: string;
+  display: WorkspaceGrantDisplay;
+}
+
+export type WorkspaceGrantConsumeResult = { ok: true } | { ok: false; reason: string };
+
+export type WorkspaceGrantStatus =
+  | { state: 'active'; expiresInMs: number }
+  | { state: 'gone'; reason: string };
+
+export interface WorkspaceGrantBridge {
+  /** Opens the native picker and confirmation dialog. Takes a provider id and nothing else. */
+  requestGrant(provider: ProviderId): Promise<WorkspaceGrantOffer | null>;
+  /** Spends a grant, once. Bound in main to the WebContents the grant was issued to. */
+  consumeGrant(grantHandle: string): Promise<WorkspaceGrantConsumeResult>;
+  /** Whether a handle is still usable, and if not, why. Reason strings only, never paths. */
+  getGrantStatus(grantHandle: string): Promise<WorkspaceGrantStatus>;
+}
+
+/** Rebuilds the offer field by field, on the same principle as `toDaemonStatus` and `toCvFile`. */
+function toGrantOffer(value: unknown): WorkspaceGrantOffer | null {
+  if (!value || typeof value !== 'object') return null;
+  const { grantHandle, display } = value as { grantHandle?: unknown; display?: unknown };
+  if (typeof grantHandle !== 'string' || !display || typeof display !== 'object') return null;
+  const { name, branch, dirty } = display as { name?: unknown; branch?: unknown; dirty?: unknown };
+  if (typeof name !== 'string') return null;
+  return {
+    grantHandle,
+    display: {
+      name,
+      ...(typeof branch === 'string' ? { branch } : {}),
+      dirty: dirty === true,
+      // Never read from the payload: the literal is what this build knows how to describe, and
+      // echoing back an effects value main sent would let a future widening reach the UI silently.
+      effects: 'unbounded_cli',
+    },
+  };
+}
+
+const workspaceGrantApi: WorkspaceGrantBridge = {
+  async requestGrant(provider) {
+    // Exactly one field is forwarded, and it is coerced to a string here rather than passed
+    // through: a caller that hands this an OBJECT carrying `{ provider, path }` would otherwise
+    // put that whole object (path included) on the wire, and rely on main's schema parse to reject
+    // it. Rejection after transmission is not the same as never transmitting, so the coercion is
+    // done at the boundary. Main validates the value against `providerIdSchema` regardless.
+    return toGrantOffer(
+      await ipcRenderer.invoke('workspace-grant:request', {
+        provider: typeof provider === 'string' ? provider : '',
+      }),
+    );
+  },
+  async consumeGrant(grantHandle) {
+    const result: unknown = await ipcRenderer.invoke('workspace-grant:consume', {
+      grantHandle: typeof grantHandle === 'string' ? grantHandle : '',
+    });
+    if (result && typeof result === 'object' && (result as { ok?: unknown }).ok === true) return { ok: true };
+    const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
+    return { ok: false, reason: typeof reason === 'string' ? reason : 'unknown_handle' };
+  },
+  async getGrantStatus(grantHandle) {
+    const result: unknown = await ipcRenderer.invoke('workspace-grant:status', {
+      grantHandle: typeof grantHandle === 'string' ? grantHandle : '',
+    });
+    const state = result && typeof result === 'object' ? (result as { state?: unknown }).state : undefined;
+    if (state === 'active') {
+      const expiresInMs = (result as { expiresInMs?: unknown }).expiresInMs;
+      return { state: 'active', expiresInMs: typeof expiresInMs === 'number' ? expiresInMs : 0 };
+    }
+    const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
+    return { state: 'gone', reason: typeof reason === 'string' ? reason : 'unknown_handle' };
+  },
+};
+
+contextBridge.exposeInMainWorld('workspaceGrant', workspaceGrantApi);

@@ -6,6 +6,8 @@ import { MemorySessionStore, type SessionStore } from './session-store.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
 import { toV1Session, type PersistedSessionRecordV1 } from './persisted-session-schema.js';
 import type { SessionLineageStore } from './session-lineage-store.js';
+import type { WorkspaceTrustStore } from './workspace-trust-store.js';
+import { revalidateWorkspaceIdentity } from './workspace-identity.js';
 
 /**
  * Live, non-persistable state for one session: its process handle and buffered event history.
@@ -84,10 +86,72 @@ function completionOrderKey(session: PersistedSessionRecordV1['session']): numbe
  * - an optional `SessionLineageStore`, the crash-safe on-disk record. When it is absent the daemon
  *   behaves exactly as it did before this ticket: memory-only, v1-only.
  */
+/**
+ * Thrown by `create()` for a workspace whose trust has been revoked. A distinct error type (not a
+ * bare `Error`) so a route can answer 403 rather than flattening it into the generic 500 that an
+ * unrecognized throw becomes.
+ */
+export class RevokedWorkspaceError extends Error {
+  readonly code = 'workspace_revoked';
+
+  constructor(readonly workspaceId: string) {
+    super('this workspace is no longer trusted, so a new session cannot start in it');
+    this.name = 'RevokedWorkspaceError';
+  }
+}
+
+/**
+ * The workspace-trust collaborators ADI-06 adds, as one optional bag rather than more positional
+ * constructor parameters. Absent for every v1 call site and every existing test, which is why none
+ * of them changed.
+ */
+export interface SessionManagerWorkspaceOptions {
+  trustStore: WorkspaceTrustStore;
+  /** Injection seam for the identity re-check. Defaults to the real `revalidateWorkspaceIdentity`. */
+  revalidate?: (
+    canonicalPath: string,
+    expected: { workspaceId: string; incarnation: string },
+  ) => Promise<boolean>;
+}
+
+/** Everything `workspaceIsTrusted` needs. See that method for why the path must come from the caller. */
+export interface WorkspaceTrustCheck {
+  workspaceId: string;
+  incarnation: string;
+  /** The caller's own canonical path. The trust store deliberately stores no paths. */
+  canonicalPath: string;
+  /** The epoch read *before* the caller started making its decision. See `workspaceEpoch`. */
+  expectedEpoch: number;
+}
+
 export class SessionManager {
   private readonly runtime = new Map<string, RuntimeState>();
   /** FIFO of session ids in the order they reached a terminal state: see `MAX_RETAINED_COMPLETED_SESSIONS`. */
   private readonly completedOrder: string[] = [];
+
+  /**
+   * Workspaces that must not admit another session. Written **synchronously** by `blockWorkspace`,
+   * before any persistence is even scheduled: that ordering is what makes revocation win every race,
+   * because a concurrent admission decision reads this set with no await in between.
+   */
+  private readonly blockedWorkspaces = new Set<string>();
+  /**
+   * Per-workspace revocation counter. Bumped on every block and every allow, so any decision that
+   * spans an `await` can prove nothing changed underneath it by comparing the epoch it started with.
+   * A counter rather than a boolean because block-then-allow-then-block must not look like "no
+   * change" to a decision that straddled all three.
+   */
+  private readonly workspaceRevocationEpochs = new Map<string, number>();
+  /** workspaceId -> live session ids. The index that makes "cancel everything here" implementable. */
+  private readonly sessionsByWorkspace = new Map<string, Set<string>>();
+  /** sessionId -> workspaceId, so terminal cleanup can find the index entry to remove. */
+  private readonly workspaceBySession = new Map<string, string>();
+
+  private readonly workspaceTrust?: WorkspaceTrustStore;
+  private readonly revalidateIdentity: (
+    canonicalPath: string,
+    expected: { workspaceId: string; incarnation: string },
+  ) => Promise<boolean>;
 
   constructor(
     private readonly registry: ProviderRegistry,
@@ -95,7 +159,11 @@ export class SessionManager {
     private readonly store: SessionStore = new MemorySessionStore(),
     private readonly limiter: ActiveSessionLimiter = new ActiveSessionLimiter(),
     private readonly durable?: SessionLineageStore,
+    workspace?: SessionManagerWorkspaceOptions,
   ) {
+    this.workspaceTrust = workspace?.trustStore;
+    this.revalidateIdentity =
+      workspace?.revalidate ?? ((path, expected) => revalidateWorkspaceIdentity(path, expected));
     // Sessions recovered from disk are presented to v1 clients as `failed` with an explanatory
     // error string (see `toV1Session`), so a client that was mid-session when the daemon restarted
     // gets a definite answer from `GET /sessions/:id` instead of a 404 that looks like the session
@@ -153,10 +221,18 @@ export class SessionManager {
     resumeProviderSessionId?: string,
     model?: string,
     protocolVersion: 1 | 2 = 1,
+    workspaceId?: string,
   ): AgentSession {
     const providerImpl = this.registry.get(provider);
     if (!providerImpl) {
       throw new Error(`no provider registered for id: ${provider}`);
+    }
+
+    // ADI-06, and it is a synchronous read of a synchronously-written set, on purpose: a revoked
+    // workspace must be refused with no window in which a concurrent request could slip past. v1
+    // callers pass no `workspaceId` and are unaffected; ADI-13's v2 create path is what supplies one.
+    if (workspaceId !== undefined && this.blockedWorkspaces.has(workspaceId)) {
+      throw new RevokedWorkspaceError(workspaceId);
     }
 
     const id = randomUUID();
@@ -222,6 +298,9 @@ export class SessionManager {
       ...(unknownFrames ? { unknownFrames } : {}),
     };
     this.runtime.set(id, runtimeEntry);
+    // Indexed only once the session is genuinely live, so a launch that threw above leaves no entry
+    // for `revokeWorkspace` to try to cancel.
+    if (workspaceId !== undefined) this.indexWorkspaceSession(workspaceId, id);
     // `.catch` rather than a bare assignment: a provider generator that throws instead of ending
     // with a terminal event would otherwise make `done` a rejected promise nobody awaits until
     // `cancelAll()` does -- surfacing first as an unhandled rejection, and then as a rejection out
@@ -335,6 +414,11 @@ export class SessionManager {
       // reservation never expires -- it permanently shrinks the daemon's capacity until restart.
       this.limiter.release(id);
 
+      // Same reasoning as the release above, and the same `finally`: a terminal session is no
+      // longer running in its workspace, so leaving it in the index would make `revokeWorkspace`
+      // try to cancel finished sessions forever and would keep the index growing without bound.
+      this.unindexWorkspaceSession(id);
+
       // The loop only exits after the provider's terminal event closed its channel (exactly one,
       // always last: see run-session.ts), so reaching here means the session is now terminal.
       // Track it for bounded retention (AD-11) rather than keeping every RuntimeState forever.
@@ -382,6 +466,132 @@ export class SessionManager {
         error,
       });
     }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // ADI-06: workspace admission, revocation, and the epoch-bracketed trust check
+  // -------------------------------------------------------------------------------------------
+
+  /** The current revocation epoch for a workspace. Read this *before* starting any decision. */
+  workspaceEpoch(workspaceId: string): number {
+    return this.workspaceRevocationEpochs.get(workspaceId) ?? 0;
+  }
+
+  /** True when this workspace is currently refused outright, with no filesystem or store lookup. */
+  isWorkspaceBlocked(workspaceId: string): boolean {
+    return this.blockedWorkspaces.has(workspaceId);
+  }
+
+  /**
+   * Lifts a block. Synchronous, and it bumps the epoch like a block does: a decision that started
+   * while the workspace was blocked must not silently become valid because it was unblocked
+   * mid-flight, any more than the reverse.
+   */
+  allowWorkspace(workspaceId: string): void {
+    this.blockedWorkspaces.delete(workspaceId);
+    this.bumpWorkspaceEpoch(workspaceId);
+  }
+
+  /**
+   * Refuses a workspace, immediately.
+   *
+   * **Fully synchronous, and the ordering is the security property.** The set membership and the
+   * epoch bump both happen before this returns, so every concurrent decision either read the old
+   * epoch (and will fail its post-await re-check) or reads the new state directly. Nothing is
+   * persisted here: persistence is `WorkspaceTrustStore`'s job and it can fail, whereas this must
+   * not be able to.
+   */
+  blockWorkspace(workspaceId: string): void {
+    this.blockedWorkspaces.add(workspaceId);
+    this.bumpWorkspaceEpoch(workspaceId);
+  }
+
+  /**
+   * Blocks a workspace and cancels every session running in it.
+   *
+   * The block happens first and synchronously (see `blockWorkspace`); only the cancellation, which
+   * genuinely has to wait for provider processes to die, is async. A caller that awaits this learns
+   * the processes are gone; a caller that does not still gets the admission block, which is the half
+   * that must never be skippable.
+   */
+  async revokeWorkspace(workspaceId: string): Promise<string[]> {
+    this.blockWorkspace(workspaceId);
+    const sessionIds = [...(this.sessionsByWorkspace.get(workspaceId) ?? [])];
+    await Promise.all(
+      sessionIds.map(async (sessionId) => {
+        const runtime = this.runtime.get(sessionId);
+        if (!runtime) return;
+        await this.cancelRuntime(sessionId, runtime);
+      }),
+    );
+    return sessionIds;
+  }
+
+  /**
+   * Answers "may a session start in this workspace right now?", with the epoch re-checked after
+   * every single await.
+   *
+   * The re-checks are the actual security property, not defensive decoration. Each `await` hands
+   * control back to the event loop, and the only thing that happens on this loop that matters here
+   * is `blockWorkspace` -- which is synchronous, so it always completes entirely inside one of these
+   * gaps. Re-reading the epoch after each gap is therefore both necessary and sufficient: necessary
+   * because a revocation in gap N is invisible to a check made before gap N, and sufficient because
+   * a revocation cannot be half-done when we look.
+   *
+   * Removing any one of these four checks reintroduces a real window:
+   *
+   * - the entry check catches a revocation between the caller reading the epoch and calling here;
+   * - the post-revalidation check catches one during the filesystem round trip;
+   * - the post-inspection check catches one during the trust-store read;
+   * - the final comparison is what the returned `true` actually means.
+   */
+  async workspaceIsTrusted(check: WorkspaceTrustCheck): Promise<boolean> {
+    if (!this.workspaceTrust) return false;
+    if (this.blockedWorkspaces.has(check.workspaceId)) return false;
+    if (this.workspaceEpoch(check.workspaceId) !== check.expectedEpoch) return false;
+
+    const stillTheSameWorkspace = await this.revalidateIdentity(check.canonicalPath, {
+      workspaceId: check.workspaceId,
+      incarnation: check.incarnation,
+    });
+    if (this.workspaceEpoch(check.workspaceId) !== check.expectedEpoch) return false;
+    if (!stillTheSameWorkspace) return false;
+
+    const inspection = await this.workspaceTrust.inspect(check.workspaceId);
+    if (this.workspaceEpoch(check.workspaceId) !== check.expectedEpoch) return false;
+
+    const trusted = inspection.state === 'trusted' && inspection.incarnation === check.incarnation;
+    return (
+      trusted &&
+      !this.blockedWorkspaces.has(check.workspaceId) &&
+      this.workspaceEpoch(check.workspaceId) === check.expectedEpoch
+    );
+  }
+
+  /** Live session ids in one workspace. Exposed for revocation reporting and for tests. */
+  sessionsInWorkspace(workspaceId: string): string[] {
+    return [...(this.sessionsByWorkspace.get(workspaceId) ?? [])];
+  }
+
+  private bumpWorkspaceEpoch(workspaceId: string): void {
+    this.workspaceRevocationEpochs.set(workspaceId, this.workspaceEpoch(workspaceId) + 1);
+  }
+
+  private indexWorkspaceSession(workspaceId: string, sessionId: string): void {
+    const existing = this.sessionsByWorkspace.get(workspaceId) ?? new Set<string>();
+    existing.add(sessionId);
+    this.sessionsByWorkspace.set(workspaceId, existing);
+    this.workspaceBySession.set(sessionId, workspaceId);
+  }
+
+  private unindexWorkspaceSession(sessionId: string): void {
+    const workspaceId = this.workspaceBySession.get(sessionId);
+    if (workspaceId === undefined) return;
+    this.workspaceBySession.delete(sessionId);
+    const set = this.sessionsByWorkspace.get(workspaceId);
+    if (!set) return;
+    set.delete(sessionId);
+    if (set.size === 0) this.sessionsByWorkspace.delete(workspaceId);
   }
 
   private evictOldestCompletedIfOverCap(): void {
@@ -472,6 +682,7 @@ export class SessionManager {
     }
     this.runtime.delete(id);
     this.store.delete(id);
+    this.unindexWorkspaceSession(id);
     const orderIndex = this.completedOrder.indexOf(id);
     if (orderIndex !== -1) this.completedOrder.splice(orderIndex, 1);
     // The durable record is deliberately NOT deleted here. DELETE /sessions/:id removes a session

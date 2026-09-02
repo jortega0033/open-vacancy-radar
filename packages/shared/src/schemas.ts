@@ -165,6 +165,17 @@ export const healthResponseSchema = z
      * above stays `1` forever regardless, so an old client reading only that field never sees a
      * change. */
     supportedProtocolVersions: supportedProtocolVersionsSchema.optional(),
+    /**
+     * A UUID minted once when the daemon process starts, stable for its whole lifetime (ADI-06).
+     *
+     * Optional, because a pre-ADI-06 daemon does not send one and this schema must still validate
+     * that response. Its purpose is entirely on the client side: the desktop app captures it when
+     * the daemon becomes ready, and a *changed* value means the daemon it granted a workspace to no
+     * longer exists. Every outstanding grant is expired at that point, because the daemon that
+     * would have honored it has been replaced by one that never saw the user's confirmation.
+     * Bounded and charset-pinned like every other v2 identifier.
+     */
+    daemonInstanceId: z.string().uuid().optional(),
   })
   .superRefine((health, ctx) => {
     // A daemon that still supports v1 must say so in both fields consistently: `protocolVersion`

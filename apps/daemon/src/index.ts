@@ -13,6 +13,7 @@ import { buildServer, type BuildServerV2Options } from './server.js';
 import { SessionManager } from './session-manager.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
 import { openDurableStore } from './open-durable-store.js';
+import { openWorkspaceStores } from './open-workspace-stores.js';
 import type { McpCredentialStore } from './mcp/types.js';
 import { OsMcpCredentialStore } from './mcp/credential-store.js';
 import { McpConnectionManager } from './mcp/manager.js';
@@ -44,12 +45,25 @@ async function main() {
   const registry = buildProviderRegistry(logger);
   const limiter = new ActiveSessionLimiter();
   const durable = openDurableStore(appId, logger);
-  const sessionManager = new SessionManager(registry, logger, undefined, limiter, durable);
+  // ADI-06. Opened before the session manager because the manager takes the trust store as a
+  // collaborator: `workspaceIsTrusted` has to read the same store the routes write, or a revocation
+  // would be visible to one and not the other.
+  const workspaceStores = openWorkspaceStores(appId, logger);
+  const sessionManager = new SessionManager(
+    registry,
+    logger,
+    undefined,
+    limiter,
+    durable,
+    workspaceStores ? { trustStore: workspaceStores.trustStore } : undefined,
+  );
   const token = generateToken();
   const mcpCredentials = new OsMcpCredentialStore();
   const mcpManager = buildMcpManager(mcpCredentials, logger);
 
-  const v2: BuildServerV2Options | undefined = durable ? { store: durable, limiter } : undefined;
+  const v2: BuildServerV2Options | undefined = durable
+    ? { store: durable, limiter, ...(workspaceStores ? { workspace: workspaceStores } : {}) }
+    : undefined;
   const app = buildServer({ registry, sessionManager, token, logger, mcpManager, ...(v2 ? { v2 } : {}) });
 
   const requestedPort = Number(process.env.AGENT_DOCK_PORT ?? '0');
@@ -67,6 +81,9 @@ async function main() {
     shuttingDown = true;
     logger.info('shutting down', { signal });
     await sessionManager.cancelAll();
+    // Closed before the server stops accepting requests finishes unwinding: a trust decision that
+    // arrives during shutdown must be refused, not recorded by a daemon that is about to vanish.
+    workspaceStores?.auditStore.close('the daemon is shutting down');
     await mcpManager.close();
     await app.close();
     removeDiscoveryFile(appId);

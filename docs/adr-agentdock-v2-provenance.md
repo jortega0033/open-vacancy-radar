@@ -466,3 +466,242 @@ so in a comment rather than inventing a check against guessed paths, which would
 protection while verifying nothing. Closing this properly needs the desktop app to pass its database
 paths to the daemon explicitly; that is a real gap this ticket leaves open, not one it claims to
 close.
+
+## ADI-06: workspace identity, trust grants, leases, audit, and exact approvals
+
+ADI-06 (issue #124) is the trust boundary: it decides whether a v2 session may touch a real
+directory of the user's, and it is the first ADI ticket whose failure mode is a security failure
+rather than a lost feature. Four things ship wired in (workspace identity, the trust store, the
+audit log, and the workspace/audit HTTP routes), one ships dormant (the execution-lease manager),
+and one is deliberately not built at all (the approval/interaction-broker trio).
+
+### The ten-step grant contract is this repo's invention
+
+Upstream AgentDock permits **renderer-asserted trust**. Its renderer sends
+`{ cwd, incarnation, state: 'trusted' }` to a trust route and the daemon writes exactly that, which
+means any process that can reach the route can grant itself access to any directory it can name. In
+an Electron app the renderer is the least trustworthy process in the system, so that is the wrong
+place for the decision to originate.
+
+This repo replaces it with a grant contract that runs entirely in the main process
+(`apps/desktop/electron/workspace-grant.ts`):
+
+1. the renderer asks for a grant, naming only a **provider id**;
+2. main opens the native directory picker, so only the user can choose the folder;
+3. main asks the daemon to inspect that path (identity, Git binding, dirty state, trust state);
+4. main shows a native confirmation dialog whose default and cancel buttons are both Cancel;
+5. main mints a 32-random-byte handle, bound to the requesting `WebContents` **and** to the daemon
+   instance that answered step 3;
+6. the daemon records `grant.issued` durably before main returns anything;
+7. main returns `{ grantHandle, display }` and nothing else: no path, no `workspaceId`, no
+   `incarnation`;
+8. navigation, `WebContents` destruction, a daemon restart, a trust revocation, or a five-minute TTL
+   expires the grant;
+9. consumption deletes the record **synchronously, before any await**, so exactly one caller wins;
+10. the daemon re-resolves the identity from the path, refuses on any drift, and only then marks the
+    workspace trusted, atomically with the audit write.
+
+**D3, the invariant the whole ticket turns on:** `PUT /v2/workspaces/:id/trust` cannot express
+`'trusted'` at all. The schema's enum is `['untrusted', 'revoking']`, and a body naming `'trusted'`
+is answered with a specific `400 { code: 'trust_not_self_assertable' }` rather than being ignored,
+so a caller that believed it could set trust finds out it cannot. The route can only *lower* trust.
+The single path to `trusted` is `POST /v2/workspaces/consume-grant`, and reaching it is not enough:
+a caller cannot assert trust by naming a state (no route accepts one), cannot assert it by naming an
+identity pair (the pair is re-derived from the filesystem and compared), and cannot assert it by
+naming a path (the path must produce the pair it already claimed). `v2-workspaces.routes.test.ts`
+pins this with an exhaustive negative that fires every method/URL combination carrying
+`state: 'trusted'` and asserts the workspace stays untrusted after each.
+
+Step 9 is pinned separately, because it is the kind of correctness that reads fine and is wrong:
+`workspace-grant.test.ts` fires two (and then twenty) genuinely concurrent consumptions of one handle
+and requires exactly one success and exactly one daemon round trip. This mirrors
+`ActiveSessionLimiter.reserve()`'s await-free critical section, and for the same reason: a check
+followed by an await followed by a mutation is not a check.
+
+### D1: `realpath` vs `realpath.native`, and why identity is keyed on `dev`+`ino`
+
+Upstream derives `workspaceId` from the **canonical path string**. On Windows that is a fail-open,
+and the failure is reachable without any exotic setup: a single physical directory has more than one
+canonical-looking string form. `C:\PROGRA~1\x` (an 8.3 short name) and `C:\Program Files\x` are the
+same object; so are two paths differing only in case. Two ids for one directory means two
+*exclusive write leases* over the same bytes, which is precisely what an exclusive lease exists to
+prevent.
+
+`apps/daemon/src/workspace-identity.ts` therefore keys on the filesystem object's own identity:
+
+```
+workspaceId = sha256("workspace-object-v1\0" + dev + "\0" + ino)                                  // non-Git
+            = sha256("workspace-git-object-v1\0" + worktree(dev,ino) + "\0" + common(dev,ino))    // Git
+incarnation = sha256("workspace-incarnation-v1\0" + dev, ino, birthtimeNs, canonical path, git keys)
+```
+
+`incarnation` keeps the canonical path, unchanged from upstream and on purpose: it answers a
+different question, and a rename genuinely *should* require re-confirmation even though the object is
+the same. The regression test proves both halves: renaming a directory keeps its `workspaceId` and
+changes its `incarnation`.
+
+The Windows finding that makes this work is worth recording on its own, because it is easy to get
+wrong twice. **`fs.realpath` (the JS implementation) does not expand 8.3 short names, and it throws
+`EISDIR` on a `\\?\` device path.** Only the OS resolver does both correctly. There is a second trap
+underneath it: `fs.promises.realpath` has **no** `.native` variant at all -- the native resolver is
+exposed only on the callback API (`fs.realpath.native`) and synchronously
+(`fs.realpathSync.native`), so this module promisifies the callback form rather than reaching for the
+promises API that looks like the modern choice. Every canonicalization in the module goes through
+that one helper.
+
+On this repo's own development machine 8.3 generation is enabled, so
+`workspace-identity.test.ts` obtains a real `PROGRA~1`-style path (via
+`Scripting.FileSystemObject.ShortPath`, fed over stdin so a directory name containing a space is not
+re-tokenized by PowerShell) and asserts it produces the identical `workspaceId` **and**
+`incarnation` as the long form. On a volume with 8.3 generation disabled there is no short form to
+resolve, and the test says so explicitly rather than skipping silently; the same property is also
+covered platform-independently by resolving two different path strings against one stubbed stat
+result.
+
+One further hardening over upstream: when the filesystem cannot give a stable object identity, both
+`workspaceId` **and** `incarnation` are random 32-byte values, not just the incarnation. On a
+filesystem reporting `dev: 0`/`ino: 0` for everything, a derived id would be identical for every
+directory on that mount, silently merging their trust and lease state. A random id can never be
+matched, trusted, or shared, which is the correct outcome for an identity the filesystem refused to
+provide. `WorkspaceTrustStore.setTrusted()` refuses such an identity outright rather than storing a
+record no later check could ever honor.
+
+### D6, and its honest limitation: UNC yes, mapped drives only fail-closed
+
+UNC roots are rejected outright at the boundary, before any filesystem access, with their own error
+type and code (`unc_workspace_unsupported`) and a message the app shows verbatim. The check runs
+against both the raw input and the `.native` canonical form, and again against anything Git reports,
+because a junction or symlink pointing at a share is only visible after canonicalization. `\\?\C:\`
+and `\\.\C:\` device paths for local volumes are deliberately *not* treated as UNC.
+
+**Mapped network drives are a documented gap, not a closed one.** D6 as approved says to reject them
+outright; no Node API can identify one. `GetDriveType`/`QueryDosDevice` are not exposed, `statfs`
+reports nothing usable on Windows, and shelling out to `net use` is locale-dependent. What ships
+instead is the fail-closed path: a mapped drive that reports unstable or zero `dev`/`ino` (the
+common case for SMB redirectors) gets a non-reusable identity, which can never revalidate and which
+the trust store refuses to remember. A mapped drive that *does* report a stable identity would be
+trustable. That is a narrower guarantee than "rejected outright" and is called out here rather than
+papered over.
+
+### Leases ship dormant; ADI-13 is the wiring ticket
+
+`apps/daemon/src/workspace-execution-lease.ts` is fully implemented and exhaustively unit-tested
+(write-vs-write, write-vs-read, read-vs-read on a clean tree, read-vs-read on a dirty tree without
+the opt-in, the pending-writer marker that closes the check-then-await window, idempotent release),
+and **nothing in the daemon calls `acquire()`**. Leases only mean something at the moment a session
+is created against a workspace, and this repo has no v2 session-creation path: `POST /v2/sessions` is
+ADI-13's ticket, and v1's `POST /sessions` is explicitly out of scope for ADI-06.
+
+This is the same shipped-dormant pattern as ADI-04's `FallbackGate` and ADI-03's `model-select.ts`,
+adopted for the same reason: the ticket that turns leasing on does so against already-reviewed
+concurrency rules instead of writing safety logic under deadline. **ADI-13 is named here as the
+ticket that gives this a real caller**, and it inherits one more obligation: replacing
+`workspaceLeaseModeFor()`, which returns `'write'` unconditionally today because over
+`legacy-one-shot` every session is a writer. Upstream's `workspaceLeaseMode(selection)` derives the
+mode from a negotiated `CapabilitySelection` over an `Effect` catalog, and porting it would have
+meant importing a vocabulary with no producer and no consumer.
+
+`isWorkspaceDirty()` fails closed and the direction matters: `git status` failing (not a repository,
+Git missing, a timeout) answers `true`. "We could not check" must never authorize the read-sharing
+that only a provably clean tree earns.
+
+### The approval trio is deferred to ADI-08
+
+No `Effect` catalog, no `CapabilitySelection`, no `permission-policy.ts`, no `interaction-state.ts`,
+no `interaction-broker.ts`, no turn algebra, and no execution graph. Those need `approval.requested`
+frames, a turn protocol, and an effect vocabulary that do not exist in this repo, and that ADI-13
+explicitly refused to invent early. `packages/shared/src/workspace-v2.ts` is a local schema module
+for exactly the shapes the three shipped routes carry, not a port of upstream's `policy-v2.ts`.
+
+**D4 falls out of that deferral, and is a security property rather than a placeholder.** A grant
+carries the literal `'unbounded_cli'`, and the confirmation dialog spells it out in plain language:
+"read, write, run commands, and access the network within this folder". Over `legacy-one-shot` the
+CLI is spawned with the workspace as its `cwd` and is not constrained afterwards, so a narrowed
+`['read', 'write']`-style array would be a **false claim in a security confirmation dialog**, which
+is worse than no claim at all. This mirrors the `accountEvidence: 'cli_owned'` honesty precedent
+ADI-04 set. The preload bridge replaces whatever `effects` value main sent with the literal, so a
+future widening cannot reach the UI silently.
+
+### D5: no hash chain, and why that is the honest choice
+
+The audit log validates **contiguous sequence numbers from zero** on load, and quarantines (never
+deletes) the file on any gap, any non-zero first sequence, any unparseable line, or any entry this
+build cannot validate. That detects truncation and deletion, and it does not detect editing.
+
+A hash chain would not change that. This repo's own threat model (SECURITY.md) names a **same-user
+local attacker**, who can read and write the log, the chain, and the code that verifies it. Shipping
+one would look like tamper-evidence while providing none, so the smaller claim that can actually be
+kept is the one that ships.
+
+### The audit store's retention policy is the inverse of `SessionLineageStore`'s
+
+`SessionLineageStore` evicts oldest-first at its quota, because losing old session history degrades a
+feature. `apps/daemon/src/audit-store.ts` **throws** at its 64 MB cap, because an audit log that
+silently forgets is not an audit log. The consequence is the design, not a side effect: when the log
+cannot record a decision, the decision is refused. Refusing access to a folder is a recoverable
+inconvenience; granting access that nothing recorded is not.
+
+Three further properties, each enforced rather than intended:
+
+- **Ordering.** Writes are serialized on a promise tail, so sequence assignment and the append that
+  carries it cannot interleave.
+- **No entry after a failure.** One failed write or a `close()` latches the store unhealthy, and
+  every later `append()` throws -- even after the underlying fault clears, because the position of
+  the next entry on disk is unknowable once one write failed halfway.
+- **Audit before allow.** Every route that changes trust awaits its append (and therefore its fsync)
+  before responding. `v2-workspaces.routes.test.ts` asserts the exact order
+  `audit:grant.consumed -> trust:set -> audit:trust.granted -> responded`, and
+  `audit-store.durability.test.ts` instruments `node:fs` to prove the fsync precedes the resolved
+  promise.
+
+It is built on ADI-05's `appendDurably`/`quarantine` rather than ported from upstream's hand-rolled
+append, which has a real bug this repo already fixed once: a single `writeFile` with no short-write
+loop can tear a line.
+
+The entry shape is `.strict()` and holds only digests, enums, a uuid, and a timestamp. There is
+deliberately **no `displayName`**, even though the trust view has one: a directory's own name is the
+user's data (a project name, a client name, an employer name), and ADI-05's no-content-on-disk
+discipline applies here too. A sentinel sweep runs the full issue-consume-revoke cycle and greps
+every byte the two stores wrote for a path substring, a drive letter, and both separator characters.
+
+### `SessionManager`: the epoch-bracketed re-check
+
+`SessionManager` gains a `blockedWorkspaces` set, a `workspaceRevocationEpochs` counter map, a
+`workspaceId`-keyed session index, and `allowWorkspace`/`blockWorkspace`/`revokeWorkspace`/
+`workspaceIsTrusted`.
+
+`blockWorkspace()` is **fully synchronous**, and that ordering is the security property: the set
+membership and the epoch bump both complete before it returns, before any persistence is even
+scheduled, so a concurrent admission decision either reads the new state directly or fails its
+post-await re-check. `workspaceIsTrusted()` re-reads the epoch after **every single await** --
+entry, after identity revalidation, after the trust-store inspection, and once more before returning.
+Those re-checks are not decorative: `session-manager.workspace.test.ts` injects a revocation at each
+of the three distinct gaps and requires `false` from each, so deleting any one re-check breaks
+exactly one test. The counter is a counter and not a boolean specifically so that a
+block-then-allow cycle straddling the whole check is still visible.
+
+`create()` remains **100% synchronous and `await`-free**, the structural constraint ADI-05 pinned.
+None of the new async trust logic runs inside it; the only thing `create()` gained is a synchronous
+blocked-workspace check and an index write, both await-free, and both no-ops for a v1 caller that
+passes no `workspaceId`.
+
+### D7: `daemonInstanceId` on `/health`
+
+A UUID minted once per daemon process, added to the health response. `healthResponseSchema` is not
+`.strict()` and the field is optional, so a pre-ADI-06 daemon's response still validates -- but the
+field had to be *declared* in the schema regardless, because Zod strips undeclared keys and the
+desktop app would otherwise never see it. Its whole purpose is on the client side: main captures it
+at readiness and expires every outstanding grant when it changes, because the successor daemon never
+saw the approval those grants record. Without a per-process id there is nothing to notice, since the
+port, the token, and the discovery file can all be identical across a restart.
+
+### What ADI-06 deliberately did not touch
+
+v1 `POST /sessions`, `createSessionRequestSchema`, and `daemon:create-session` are unchanged,
+including v1's still-unvalidated `cwd` passthrough. The CV/Letters `ai-workspace` scratch flows get
+no trust gate, no lease, and no new dialog. `dialog:select-directory` and `system:save-file` keep
+their existing behavior: they are grandfathered pre-v2 bridges per ADI-07's own framing, and
+retrofitting them into the grant system would change v1 behavior this ticket promises to leave
+byte-identical. The workspace-grant surface is a **sixth** preload namespace rather than an
+extension of `agentDock`, and `preload.test.ts` asserts all five pre-existing namespaces are
+key-for-key unchanged against literal key lists recorded before this ticket.

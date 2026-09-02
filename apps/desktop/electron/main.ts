@@ -11,7 +11,11 @@ import {
   mcpCredentialInputSchema,
   mcpProviderIdSchema,
   mcpSearchRequestSchema,
+  providerIdSchema,
   sessionIdParamSchema,
+  workspaceTrustViewSchema,
+  type ProviderId,
+  type WorkspaceTrustView,
 } from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
 import {
@@ -40,6 +44,13 @@ import {
 import { sendToRenderer } from './send-to-renderer.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, SCAN_BUSY_OTHER_PROCESS } from './scan-guard.js';
+import { confirmWorkspaceGrant } from './workspace-confirm.js';
+import {
+  WorkspaceGrantManager,
+  WorkspaceGrantRefusedError,
+  type DaemonConsumeOutcome,
+  type GrantExpiryReason,
+} from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
 import {
@@ -106,6 +117,26 @@ let mainWindow: BrowserWindow | undefined;
 let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
 let activeSessionId: string | undefined;
 let activeStreamAbort: AbortController | undefined;
+
+/**
+ * The daemon's loopback address and per-launch bearer token, kept here so the ADI-06 workspace
+ * routes can be called directly.
+ *
+ * `AgentDockClient` deliberately has no workspace methods: adding them would widen a package that
+ * three other consumers depend on, for one caller. This is the same token and the same origin the
+ * client already uses, so nothing new is exposed -- and, as everywhere else in this file, it never
+ * crosses into the renderer (see SECURITY.md and the preload bridge's own docstring).
+ */
+let daemonConnection: { baseUrl: string; token: string } | undefined;
+/**
+ * The UUID `/health` reports for the currently-connected daemon process (ADI-06, D7).
+ *
+ * A change means the daemon that the user granted workspace access to no longer exists, so every
+ * outstanding grant refers to an approval its replacement never saw. Comparing this on every
+ * readiness transition is what makes "restarting the daemon revokes outstanding grants" structural
+ * rather than something a future edit has to remember.
+ */
+let daemonInstanceId: string | undefined;
 
 let vacancyDb: Database | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
@@ -338,11 +369,17 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
     if (existsSync(file) && statSync(file).mtimeMs >= spawnedAt - 1000) {
       try {
         const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        const candidate = new AgentDockClient({ baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token });
+        const baseUrl = `http://127.0.0.1:${parsed.port}`;
+        const candidate = new AgentDockClient({ baseUrl, token: parsed.token });
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
-        await candidate.health();
+        const health = await candidate.health();
         client = candidate;
+        daemonConnection = { baseUrl, token: parsed.token };
+        // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
+        // different process, so every outstanding approval is void. Done before the status goes
+        // `ready`, so no renderer can consume a stale grant against the new daemon.
+        adoptDaemonInstance(health.daemonInstanceId);
         sendStatus({ state: 'ready' });
         return;
       } catch {
@@ -353,6 +390,130 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error('timed out waiting for daemon to become ready');
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-06: workspace grants.
+ *
+ * Everything below keeps one rule: the renderer never sees a filesystem path. It asks for a grant
+ * (naming only a provider), main runs the native picker and the native confirmation dialog, and
+ * what comes back is an opaque handle plus a bounded folder name. The path lives in the grant
+ * record in this process and is handed only to the daemon, over loopback, at consumption time.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+const PROVIDER_DISPLAY_NAMES: Readonly<Record<ProviderId, string>> = Object.freeze({
+  claude: 'Claude Code',
+  codex: 'Codex',
+});
+
+/** One authenticated request to a daemon route `@agent-dock/client` does not model. */
+async function daemonFetch(path: string, init: { method: string; body?: unknown }): Promise<Response> {
+  if (!daemonConnection) throw new Error('daemon is not ready yet');
+  return fetch(`${daemonConnection.baseUrl}${path}`, {
+    method: init.method,
+    headers: {
+      Authorization: `Bearer ${daemonConnection.token}`,
+      ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+  });
+}
+
+/** The daemon's own refusal message, when it sent one, and never a raw status code alone. */
+async function daemonErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    return typeof body.error === 'string' && body.error.length > 0 ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Replaces the tracked daemon instance, expiring every outstanding grant when it actually changed.
+ *
+ * The first observation (`daemonInstanceId === undefined`) is adoption, not a change, so a normal
+ * startup expires nothing. Every later differing value is a restart.
+ */
+function adoptDaemonInstance(nextInstanceId: string | undefined): void {
+  if (daemonInstanceId !== undefined && nextInstanceId !== daemonInstanceId) {
+    const expired = workspaceGrants.expireAll('daemon_generation');
+    if (expired.length > 0) {
+      void workspaceGrants.reportExpiries(expired, 'daemon_generation', 'daemon_restart');
+    }
+  }
+  daemonInstanceId = nextInstanceId;
+}
+
+const workspaceGrants = new WorkspaceGrantManager({
+  async inspectWorkspace({ path, provider }): Promise<WorkspaceTrustView> {
+    const res = await daemonFetch('/v2/workspaces/inspect', { method: 'POST', body: { path, provider } });
+    if (!res.ok) {
+      throw new WorkspaceGrantRefusedError(
+        await daemonErrorMessage(res, 'this folder could not be inspected'),
+        'inspect_failed',
+      );
+    }
+    const body = (await res.json()) as { workspace?: unknown };
+    // Parsed rather than cast: this response feeds a security confirmation dialog, and a malformed
+    // one must fail loudly instead of rendering `undefined` where a folder name belongs.
+    return workspaceTrustViewSchema.parse(body.workspace);
+  },
+
+  async consumeGrant(input): Promise<DaemonConsumeOutcome> {
+    const res = await daemonFetch('/v2/workspaces/consume-grant', { method: 'POST', body: input });
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+    // The daemon's machine-readable code is mapped onto the local reason vocabulary. Anything
+    // unrecognized becomes `not_trusted`, which is the fail-closed direction: an outcome this build
+    // cannot interpret must never read as success.
+    const code = typeof body.code === 'string' ? body.code : '';
+    if (code === 'workspace_identity_drift') return { ok: false, reason: 'identity_drift' };
+    if (code === 'workspace_revoked') return { ok: false, reason: 'trust_revoked' };
+    if (code === 'audit_log_full' || code === 'audit_unavailable' || code === 'audit_write_failed') {
+      return { ok: false, reason: 'audit_failure' };
+    }
+    return { ok: false, reason: 'not_trusted' };
+  },
+
+  async recordGrantEvent(input): Promise<void> {
+    const res = await daemonFetch('/v2/workspaces/grant-events', { method: 'POST', body: input });
+    if (!res.ok) {
+      throw new WorkspaceGrantRefusedError(
+        await daemonErrorMessage(res, 'this action could not be recorded in the security log, so it was not performed'),
+        'audit_failure',
+      );
+    }
+  },
+
+  async pickDirectory(): Promise<string | null> {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose a folder for the agent to work in',
+      properties: ['openDirectory'],
+    });
+    const picked = result.filePaths[0];
+    if (result.canceled || !picked) return null;
+    return picked;
+  },
+
+  confirm: (input) => confirmWorkspaceGrant(mainWindow, input),
+  daemonInstanceId: () => daemonInstanceId,
+  providerName: (provider) => PROVIDER_DISPLAY_NAMES[provider],
+  onEvent: (message, meta) => console.warn(`[workspace-grant] ${message}`, meta ?? {}),
+});
+
+/** Expires (and audits) every grant a `WebContents` holds. Wired to navigation and destruction. */
+function expireGrantsForWebContents(webContentsId: number, reason: GrantExpiryReason): void {
+  const expired = workspaceGrants.expireForWebContents(webContentsId, reason);
+  if (expired.length === 0) return;
+  void workspaceGrants.reportExpiries(
+    expired,
+    reason,
+    reason === 'navigation' ? 'navigation' : 'policy',
+  );
 }
 
 /** Streams one session's events to the renderer and clears `activeSessionId` at its terminal event. */
@@ -452,10 +613,27 @@ function createWindow(): void {
     openExternalIfSafe(url);
     return { action: 'deny' };
   });
+
+  // Captured eagerly, and used by both handlers below. Reading `webContents.id` inside the
+  // `destroyed` handler would be reading a property of an object Electron has already torn down,
+  // which is exactly the moment the id is needed.
+  const webContentsId = mainWindow.webContents.id;
+
   mainWindow.webContents.on('will-navigate', (event, url) => {
+    // ADI-06: every navigation attempt expires this WebContents' grants, including one to an
+    // allowed target. A grant is bound to the page the user was looking at when they approved it,
+    // and a reload replaces that page: the new document never showed anyone a dialog, so it must
+    // ask again. Expiring before the allow-check means a same-origin reload is covered too.
+    expireGrantsForWebContents(webContentsId, 'navigation');
     if (isAllowedNavigationTarget(url)) return;
     event.preventDefault();
     openExternalIfSafe(url);
+  });
+
+  // A destroyed WebContents can never present a handle again, but the record would otherwise sit in
+  // the map until its TTL, still consumable by a `webContentsId` the OS is free to reuse.
+  mainWindow.webContents.on('destroyed', () => {
+    expireGrantsForWebContents(webContentsId, 'webcontents_destroyed');
   });
 
   // Deny every permission request by default except the one this UI genuinely uses:
@@ -524,6 +702,44 @@ ipcMain.handle('daemon:cancel-session', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   const { sessionId } = sessionIdParamSchema.parse({ sessionId: input });
   await client.sessions.cancel(sessionId);
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Workspace grant IPC (ADI-06).
+ *
+ * Three channels, and **none of them accepts a path**. `workspace-grant:request` takes a provider
+ * id and nothing else, so a renderer that sends a path along has it dropped here; the folder can
+ * only ever come from the native picker main opens. `workspace-grant:consume` and
+ * `workspace-grant:status` take a 43-character opaque handle. Every response is built field by
+ * field from a bounded display object, never passed through from the grant record.
+ *
+ * `dialog:select-directory` above is deliberately NOT retrofitted into this system. It is a
+ * pre-v2 bridge the existing Run panel depends on, grandfathered per ADI-07's framing, and folding
+ * it in would change v1 behavior that this ticket promises to leave byte-identical.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+ipcMain.handle('workspace-grant:request', async (event, input: unknown) => {
+  // Parsed from the whole payload's `provider` field only. Anything else a renderer attached
+  // (a `path`, a `cwd`, a pre-baked workspace id) has no reader here and cannot reach the daemon.
+  const provider = providerIdSchema.parse(
+    input && typeof input === 'object' ? (input as { provider?: unknown }).provider : input,
+  );
+  return workspaceGrants.requestGrant(provider, event.sender.id);
+});
+
+ipcMain.handle('workspace-grant:consume', async (event, input: unknown) => {
+  const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
+  // `event.sender.id` is Electron's own, unspoofable identification of the calling frame: the
+  // renderer cannot claim to be a different WebContents than the one the grant was issued to.
+  return workspaceGrants.consumeGrant(handle, event.sender.id);
+});
+
+ipcMain.handle('workspace-grant:status', (event, input: unknown) => {
+  void event;
+  const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
+  return workspaceGrants.grantStatus(handle);
 });
 
 ipcMain.handle('dialog:select-directory', async () => {
