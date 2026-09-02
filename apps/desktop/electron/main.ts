@@ -34,17 +34,13 @@ import {
   type JobRadarReport,
   type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
-import { toHistoryEntry } from './agent-activity-sanitize.js';
+import {
+  AGENT_WORKSPACE_ACTIVITY_CHANNEL,
+  createSessionAliasBook,
+  registerAgentWorkspaceHandlers,
+} from './agent-workspace-ipc.js';
 import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
-import { toCapacity, toSessionSummary } from './agent-workspace-view.js';
-import type {
-  ActivityPush,
-  AttachResult,
-  HistoryEntry,
-  SessionEventsPage,
-  SessionListPage,
-  SessionSummary,
-} from './agent-workspace-types.js';
+import type { ActivityPush } from './agent-workspace-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
@@ -79,11 +75,6 @@ import {
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
-  parseAgentWorkspaceAttachInput,
-  parseAgentWorkspaceDetachInput,
-  parseAgentWorkspaceEventsInput,
-  parseAgentWorkspaceGetInput,
-  parseAgentWorkspaceListInput,
 } from './workspace/validate.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
@@ -902,53 +893,22 @@ ipcMain.handle('workspace:start-session', async (event, input: unknown) => {
  * ---------------------------------------------------------------------------------------------
  * AI Workspace IPC (ADI-07): the seventh preload namespace.
  *
- * Five channels, and the same rule the grant channels above keep: **none of them accepts or
- * returns a location**. Every request payload is parsed by an allow-listing validator
- * (workspace/validate.ts) that has no `path`, `cwd`, `workspaceId`, or `incarnation` parser at all,
- * and every response is rebuilt field by field (agent-workspace-view.ts, agent-activity-sanitize.ts)
- * so a `cwd` the daemon's own v2 view carries cannot cross even if a future daemon build added
- * more path-shaped fields beside it.
- *
- * The renderer never talks to the daemon. These handlers are the only thing that does, over
- * loopback, with a bearer token that stays in this process.
+ * The five channels, their paging helpers, and their per-session tool-call alias book all live in
+ * electron/agent-workspace-ipc.ts, not here. Nothing in this module's scope belongs to the feature
+ * beyond the handful of lines below, and that is the point: main.ts's other ~fifty channels cannot
+ * be reached by it, and rolling the feature back is deleting one call rather than untangling
+ * shared globals. See that module's docstring for the no-location rule all five channels keep.
  * ---------------------------------------------------------------------------------------------
  */
 
-/**
- * One tool-call alias map per session, shared by the live relay and the history reader.
- *
- * A native `toolCallId` never crosses to the renderer; a locally-minted `t1`/`t2` alias does, so a
- * `tool.started` and its `tool.completed` stay pairable in the UI. Both halves have to consult the
- * *same* map or a session's live entries and its history entries would disagree about which alias
- * belongs to which call. Bounded by eviction alongside the relay: a session that is neither
- * attached nor being paged keeps its map only until the next sweep below.
- */
-const sessionToolAliases = new Map<string, Map<string, string>>();
-
-/** How many sessions' alias maps are kept. Well above the daemon's own four-session ceiling. */
-const MAX_ALIAS_BOOKS = 64;
-
-function aliasesForSession(sessionId: string): Map<string, string> {
-  const existing = sessionToolAliases.get(sessionId);
-  if (existing) return existing;
-  // Oldest-first eviction, matching `WorkspaceGrantManager`'s tombstone bound: an unbounded map in
-  // a process that runs for days is a leak, and losing an alias map only costs a re-numbering of
-  // that session's tool aliases on its next read.
-  while (sessionToolAliases.size >= MAX_ALIAS_BOOKS) {
-    const oldest = sessionToolAliases.keys().next();
-    if (oldest.done) break;
-    sessionToolAliases.delete(oldest.value);
-  }
-  const created = new Map<string, string>();
-  sessionToolAliases.set(sessionId, created);
-  return created;
-}
+/** Shared by the live relay and the history reader so both agree on a session's tool aliases. */
+const aliasesForSession = createSessionAliasBook();
 
 const agentWorkspaceRelay = new AgentWorkspaceRelay({
   // Read fresh rather than captured: `client` is replaced on a daemon restart.
   client: () => client,
   aliasesFor: aliasesForSession,
-  push: (message: ActivityPush) => sendToRenderer(mainWindow, 'agent-workspace:activity', message),
+  push: (message: ActivityPush) => sendToRenderer(mainWindow, AGENT_WORKSPACE_ACTIVITY_CHANNEL, message),
   onEvent: (message, meta) => console.warn(`[agent-workspace] ${message}`, meta ?? {}),
 });
 
@@ -965,62 +925,10 @@ async function daemonGetJson(path: string): Promise<Record<string, unknown> | un
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
 }
 
-/** `?cursor=&limit=` for a v2 read route, built here so no caller hand-concatenates a query. */
-function pageQuery(page: { cursor?: string; limit: number }): string {
-  const params = new URLSearchParams({ limit: String(page.limit) });
-  if (page.cursor !== undefined) params.set('cursor', page.cursor);
-  return `?${params.toString()}`;
-}
-
-function readCursor(body: Record<string, unknown> | undefined): string | undefined {
-  const cursor = body?.nextCursor;
-  return typeof cursor === 'string' && cursor.length > 0 ? cursor : undefined;
-}
-
-ipcMain.handle('agent-workspace:list', async (_event, input: unknown): Promise<SessionListPage> => {
-  const page = parseAgentWorkspaceListInput(input);
-  const body = await daemonGetJson(`/v2/sessions${pageQuery(page)}`);
-  const raw = Array.isArray(body?.sessions) ? body.sessions : [];
-  const sessions: SessionSummary[] = [];
-  for (const view of raw) {
-    const summary = toSessionSummary(view);
-    if (summary !== null) sessions.push(summary);
-  }
-  const nextCursor = readCursor(body);
-  return {
-    sessions,
-    ...(nextCursor === undefined ? {} : { nextCursor }),
-    capacity: toCapacity(body?.capacity),
-  };
-});
-
-ipcMain.handle('agent-workspace:get', async (_event, input: unknown): Promise<SessionSummary | null> => {
-  const sessionId = parseAgentWorkspaceGetInput(input);
-  const body = await daemonGetJson(`/v2/sessions/${encodeURIComponent(sessionId)}`);
-  return body === undefined ? null : toSessionSummary(body.session);
-});
-
-ipcMain.handle('agent-workspace:events', async (_event, input: unknown): Promise<SessionEventsPage> => {
-  const { sessionId, ...page } = parseAgentWorkspaceEventsInput(input);
-  const body = await daemonGetJson(`/v2/sessions/${encodeURIComponent(sessionId)}/events${pageQuery(page)}`);
-  const raw = Array.isArray(body?.events) ? body.events : [];
-  const aliases = aliasesForSession(sessionId);
-  const events: HistoryEntry[] = [];
-  for (const record of raw) {
-    const entry = toHistoryEntry(record, aliases);
-    if (entry !== null) events.push(entry);
-  }
-  const nextCursor = readCursor(body);
-  return { sessionId, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
-});
-
-ipcMain.handle('agent-workspace:attach', (_event, input: unknown): AttachResult => {
-  const { sessionId, lastSeq } = parseAgentWorkspaceAttachInput(input);
-  return agentWorkspaceRelay.attach(sessionId, lastSeq);
-});
-
-ipcMain.handle('agent-workspace:detach', (_event, input: unknown): void => {
-  agentWorkspaceRelay.detach(parseAgentWorkspaceDetachInput(input));
+registerAgentWorkspaceHandlers(ipcMain, {
+  getJson: daemonGetJson,
+  aliasesFor: aliasesForSession,
+  relay: agentWorkspaceRelay,
 });
 
 ipcMain.handle('dialog:select-directory', async () => {
