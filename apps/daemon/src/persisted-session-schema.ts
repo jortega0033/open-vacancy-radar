@@ -1,8 +1,9 @@
 import { z } from 'zod';
+// The digest helpers live behind their own subpath rather than the `@agent-dock/shared` barrel
+// because they import `node:crypto`; see that package's `src/index.ts` for why the barrel has to
+// stay free of Node built-ins. This file is daemon-only, so importing them here costs nothing.
+import { digestOfText, digestOfUnknown, truncateToBytes } from '@agent-dock/shared/content-digest';
 import {
-  digestOfText,
-  digestOfUnknown,
-  truncateToBytes,
   capabilitySelectionV2Schema,
   providerIdSchema,
   sessionStatusV2Schema,

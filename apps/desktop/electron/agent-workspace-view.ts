@@ -1,4 +1,7 @@
-import { truncateToBytes } from '@agent-dock/shared';
+// Subpath, not the `@agent-dock/shared` barrel: these helpers import `node:crypto`, which the
+// barrel must stay clear of so `preload.ts` can keep importing it. See that package's
+// `src/index.ts`. This module is main-process-only.
+import { truncateToBytes } from '@agent-dock/shared/content-digest';
 import type {
   SessionCapacity,
   SessionScopeSummary,

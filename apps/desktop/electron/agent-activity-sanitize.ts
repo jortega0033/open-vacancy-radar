@@ -1,11 +1,9 @@
-import {
-  digestOfText,
-  digestOfUnknown,
-  truncateToBytes,
-  utf8Bytes,
-  type AgentEventEnvelope,
-  type AgentEventType,
-} from '@agent-dock/shared';
+// The digest helpers live behind their own subpath rather than the `@agent-dock/shared` barrel
+// because they import `node:crypto`; see that package's `src/index.ts` for why the barrel has to
+// stay free of Node built-ins. This module is bundled into `main.ts` only -- never into the
+// sandboxed `preload.ts` -- so it is free to reach for them.
+import { digestOfText, digestOfUnknown, truncateToBytes, utf8Bytes } from '@agent-dock/shared/content-digest';
+import type { AgentEventEnvelope, AgentEventType } from '@agent-dock/shared';
 import type { ActivityDigest, ActivityEntry, ActivityText, HistoryEntry } from './agent-workspace-types.js';
 
 /**
