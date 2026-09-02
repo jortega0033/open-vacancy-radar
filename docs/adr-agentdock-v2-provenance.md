@@ -953,3 +953,131 @@ more methods on `workspaceGrant`: reading a session list is not a filesystem tru
 widening the trust namespace to hold it would mean every future review of "what can the renderer do
 about folders?" has to separate the two concerns again. `preload.test.ts` re-asserts all six earlier
 namespaces key-for-key after the seventh was added.
+
+## ADI-08b: hardening Claude's CLI transport, and the flag that was ruled out
+
+ADI-08b (issue #126) is the unblocked half of a ticket that was split twice. The original ADI-08
+bundled two structurally independent rich transports; its first split moved the Claude Agent SDK out
+to [ADI-08c](https://github.com/jortega0033/open-vacancy-radar/issues/144) on the finding that every
+restriction the ticket's rules demanded ("disable unapproved Bash/settings/MCP/plugins/skills/agents/
+hooks") was already an existing `claude` CLI flag, making a first third-party runtime dependency
+unnecessary. Its second split, recorded in the issue's comments, hit a real machine-level stop
+condition on the Codex half.
+
+**The Codex app-server transport remains blocked and no code exists for it.** This machine's
+standalone Codex 0.147.0 install is missing `codex-windows-sandbox-setup.exe`, so every sandboxed
+`command/exec` call fails before running anything, while `codex doctor` self-reports "ready"
+throughout. That is "incomplete sandbox evidence", one of the parent ticket's own stop conditions,
+and it is unblocked only by an ACL remediation across the user's home directory, a reinstall from the
+MSIX package, or a version bump that reopens the pin. Nothing in this section should be read as a
+claim that it shipped.
+
+### What ADI-08b actually is
+
+No new transport, no SDK, no dependency. `transportId` is still `'legacy-one-shot'` for everything
+Claude does, and `CLAUDE_LEGACY_COMPATIBILITY` is unchanged. The entire change is an argv suffix,
+`CLAUDE_HARDENING_ARGS` in `providers/claude/build-args.ts`, appended when a new optional
+`StartSessionOptions.hardened` is set:
+
+```
+--safe-mode --strict-mcp-config --setting-sources "" --disable-slash-commands
+--tools Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch
+--disallowed-tools Bash,PowerShell
+```
+
+It is a frozen constant rather than a builder, and `hardened` is a boolean rather than a policy
+object, for the same reason: the restriction set takes no input from the request, so no caller can
+compose a weaker variant of it. A route that could tune the hardening would be a route that could
+turn it off.
+
+### Gated on `protocolVersion`, which already existed
+
+`SessionManager.create()` already takes the v1/v2 discriminator as its sixth positional parameter
+(defaulting to `1`), so hardening threads through with no new plumbing and no second source of truth
+that could disagree with the one the durable record is written with. The key is **spread away**, not
+set to `false`, for v1 -- so a v1 session's start options object is deep-equal to the one it produced
+before this ticket, not merely equivalent. `apps/daemon/test/session-manager.hardening.test.ts`
+asserts that by key set, and `packages/agent-runtime/test/claude-build-args.test.ts` asserts the
+resulting argv against the literal strings the *pre-change* suite pinned, transcribed rather than
+regenerated -- a test that built its expectation by calling the function under test would pass no
+matter what that function did. `apps/daemon/src/routes/sessions.ts` and
+`createSessionRequestSchema` have empty diffs.
+
+### Every value was verified against the real binary, and one assumption was wrong
+
+Claims here are quoted from `claude --help` on the pinned 2.1.228 build and were additionally checked
+end-to-end by reading the `system`/`init` frame of real hardened and unhardened sessions.
+
+The verification mattered. **`--safe-mode` does not disable `Bash`.** A session started with
+`--safe-mode --strict-mcp-config --setting-sources "" --disable-slash-commands` and no tool flags
+still reported both `Bash` *and* `PowerShell` in its init frame -- exactly as that flag's own help
+text says it would, since it promises "Auth, model selection, built-in tools, and permissions work
+normally". Had the tool flags been treated as belt-and-braces on top of `--safe-mode`, this ticket
+would have shipped believing shell access was disabled when it was not. `PowerShell` has to be named
+alongside `Bash` because this daemon's primary platform is Windows, where it is a second, equally
+capable shell that the rule's literal wording does not mention.
+
+The other verified findings:
+
+- `--setting-sources ""` is the most restrictive real value, and the flag is genuinely validated
+  rather than ignored: `--setting-sources bogus` is rejected with "Invalid setting source: bogus.
+  Valid options are: user, project, local", while `""` is accepted. Its effect is observable -- an
+  unhardened session in the same folder picked up the host user's configured model from
+  `settings.json`; the hardened one did not.
+- `--tools` is an allowlist and **fails closed**: an unrecognized name is silently dropped rather
+  than causing the flag to be ignored. So the list is stated positively, and a built-in tool added by
+  a future `claude` release is not granted by default.
+- A hardened session's init frame reports `"mcp_servers":[]`, `"slash_commands":[]`, `"skills":[]`,
+  `"plugins":[]`, and fires no `hook_started` frame -- where the unhardened baseline in the same
+  scratch folder picked up three MCP servers (one of them a remote one), fourteen MCP tools, roughly
+  seventy slash commands, the `Skill` tool, and an automatically-executed `SessionStart` hook.
+- `--strict-mcp-config` is redundant with `--safe-mode` today and is kept anyway: two independent
+  statements of "no MCP", so a future change to either cannot silently re-enable it alone.
+
+The allowlist excludes sub-agent and background-task machinery (`Task*`, `Monitor`, `ToolSearch`),
+anything that creates standing state outliving the session (`Cron*`, `ScheduleWakeup`,
+`RemoteTrigger`, `Workflow`), out-of-band egress channels (`Artifact`, `PushNotification`,
+`SendMessage`, `ReportFindings`, `DesignSync`), and `EnterWorktree`/`ExitWorktree` -- a git worktree
+is a second directory, and a v2 session's exclusive *workspace* lease cannot bound writes to it.
+`WebFetch`/`WebSearch` are the one egress it does permit, deliberately: read-only network reads are
+what this product's sessions exist to do.
+
+### The flag that is prohibited, and why the prohibition is a test
+
+There is a flag that reads like a stronger `--safe-mode` and is not interchangeable with it. Its own
+help text on the same 2.1.228 build:
+
+> Minimal mode: skip hooks, LSP, plugin sync, attribution, auto-memory, background prefetches,
+> keychain reads, and CLAUDE.md auto-discovery. Sets CLAUDE_CODE_SIMPLE=1. **Anthropic auth is
+> strictly ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and keychain are never read).**
+
+That last sentence is disqualifying. Under it the CLI stops reading the OAuth session the user
+already established, so the only way to make a session authenticate at all would be for this daemon
+to obtain and pass an `ANTHROPIC_API_KEY` -- the exact thing SECURITY.md's "What the daemon will
+never do" list forbids ("Read a Claude/Codex/any-provider credential file, keychain entry, or OAuth
+token directly") and that `providers/claude/adapter.ts` promises in its own doc comment. Adopting it
+would not be a tightening; it would convert an adapter that handles no credentials into one that must
+handle a long-lived secret. The properties it adds over `--safe-mode` (skipping LSP, attribution,
+background prefetches) are not security properties this ticket asked for, and `--safe-mode` was
+confirmed to preserve auth in practice: a hardened session reports `"apiKeySource":"none"`.
+
+A comment cannot stop a future maintainer from adding a flag, so
+`packages/agent-runtime/test/claude-bare-prohibition.test.ts` does it: an exhaustive matrix of
+`StartSessionOptions` shapes whose argv must never contain it, plus a repo-wide scan of every
+`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` file outside `node_modules` and build output. The scan looks for the
+flag only in **quoted** form -- an argv element is a string, so it cannot reach a spawned process
+otherwise -- which is what lets `build-args.ts` discuss the prohibition at length in prose without
+tripping its own test, and avoids trying to strip TypeScript comments with a regex. Both halves of
+the test were mutation-tested: adding it to `CLAUDE_HARDENING_ARGS` fails six assertions across both.
+The flag's name appears in this repo's source only in prose -- in that doc comment and in the test's
+own -- and the test assembles it at runtime rather than quoting it, so it has no occurrence of the
+string it is looking for.
+
+### What ADI-08b deliberately did not touch
+
+v1 in its entirety: `routes/sessions.ts`, `createSessionRequestSchema`, and the argv any v1 session
+constructs. The compatibility manifest is unchanged, because hardening does not create a second
+transport -- it is the same `legacy-one-shot` spawn with a stricter command line, and giving it its
+own manifest entry would be the thing that lets the fallback gate ever say "allowed". Codex's adapter
+ignores `hardened` (it has nothing reviewed to restrict), and the Codex app-server transport remains
+untouched and blocked per this section's opening.

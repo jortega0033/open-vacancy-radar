@@ -22,6 +22,21 @@ export interface StartSessionOptions {
    * producer; `runProviderSession` is the only intended consumer.
    */
   launchProbe?: SessionLaunchProbe;
+  /**
+   * Ask the provider adapter to restrict the CLI to a reviewed, non-customizable configuration
+   * (ADI-08b). Optional, and **omitted by every v1 caller**, which is what makes the v1 argv
+   * byte-identical before and after this field existed.
+   *
+   * This is a *request*, not a contract: an adapter with nothing to restrict ignores it. Codex
+   * ignores it today. Claude honors it in `providers/claude/build-args.ts`, which is where the
+   * exact flag set and the reasoning for each value live.
+   *
+   * The field is deliberately a plain boolean rather than a policy object. There is exactly one
+   * reviewed hardening profile per provider, defined next to that provider's argv construction, so
+   * a caller can ask for it but cannot compose a weaker variant of it -- the restriction set is not
+   * request-derived, and a route that could tune it would be a route that could turn it off.
+   */
+  hardened?: boolean;
 }
 
 /**
