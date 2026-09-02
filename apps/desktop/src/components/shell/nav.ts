@@ -1,15 +1,29 @@
 import type { WorkspaceCounts } from '../../window.js';
 
 /**
- * The app's seven destinations.
+ * The app's eight destinations.
  *
  * These ids are deliberately the same strings the persistence schema stores in
  * `app_settings.start_page` / `app_settings.last_opened_page` (see
  * electron/workspace/schema.ts), so "restore the page the user was on" is a direct comparison
  * with no translation table in between. `startPage` additionally allows `'last_opened'`, which is
  * an instruction rather than a destination and therefore is not a `NavPage`.
+ *
+ * ADI-07 added `'agent-workspace'` as the eighth. It is a `NavPage` (so it can be remembered as
+ * `lastOpenedPage`) but deliberately **not** a `startPage` option: a screen whose whole purpose is
+ * to show what is running right now is a poor thing to land on cold, and `START_PAGES` in
+ * electron/workspace/validate.ts is left unchanged for that reason. The order here matches that
+ * file's own `NAV_PAGES` array, so the two lists read the same way.
  */
-export type NavPage = 'search' | 'saved' | 'applications' | 'cv' | 'letters' | 'runtime' | 'settings';
+export type NavPage =
+  | 'search'
+  | 'saved'
+  | 'applications'
+  | 'cv'
+  | 'letters'
+  | 'agent-workspace'
+  | 'runtime'
+  | 'settings';
 
 export const NAV_PAGES: readonly NavPage[] = [
   'search',
@@ -17,6 +31,7 @@ export const NAV_PAGES: readonly NavPage[] = [
   'applications',
   'cv',
   'letters',
+  'agent-workspace',
   'runtime',
   'settings',
 ];
@@ -43,8 +58,16 @@ export const PRIMARY_NAV: readonly NavItem[] = [
   { id: 'letters', label: 'Letters', badge: 'letters' },
 ];
 
-/** Below the divider: things that configure the app rather than track a job hunt. */
+/**
+ * Below the divider: the AI surfaces and the things that configure the app, rather than the job
+ * hunt itself.
+ *
+ * "AI Workspace" sits directly above "AI Runtime" because the two answer adjacent questions (what
+ * is running, and what could run) and because the Workspace's refusal copy points at the Runtime
+ * page by name when the local runtime is down.
+ */
 export const SECONDARY_NAV: readonly NavItem[] = [
+  { id: 'agent-workspace', label: 'AI Workspace' },
   { id: 'runtime', label: 'AI Runtime' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -76,6 +99,11 @@ export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: str
       return { title: 'CV', subtitle: 'Documents used for match analysis and letters' };
     case 'letters':
       return { title: 'Letters', subtitle: `${counts.letters} documents` };
+    case 'agent-workspace':
+      // No count: the number of sessions is not part of `WorkspaceCounts` (it lives in the daemon,
+      // not the workspace database), and inventing a badge for it would mean a second source of
+      // truth the shell would have to keep in step with the page's own list.
+      return { title: 'AI Workspace', subtitle: 'Agent sessions running in folders you approved' };
     case 'runtime':
       return { title: 'AI Runtime', subtitle: 'Your own Claude Code / Codex CLI, via AgentDock' };
     case 'settings':
