@@ -242,7 +242,16 @@ export function useAgentWorkspace(): AgentWorkspaceApi {
     return () => {
       for (const id of [...attached]) {
         attached.delete(id);
-        void window.agentWorkspace.detachActivity(id).catch(() => {});
+        try {
+          // Wrapped, unlike the other fire-and-forget calls in this hook, because this one runs in
+          // React's commit phase: an exception thrown out of a cleanup function is not caught by the
+          // effect that scheduled it, it tears down the whole tree and surfaces as an uncaught
+          // render error. A bridge that is missing or that rejects synchronously must cost us a
+          // leaked relay in main (which `killDaemon`'s `detachAll` still closes), not the app.
+          void Promise.resolve(window.agentWorkspace?.detachActivity(id)).catch(() => {});
+        } catch {
+          // as above
+        }
       }
     };
   }, []);

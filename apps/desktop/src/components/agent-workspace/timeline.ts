@@ -146,10 +146,24 @@ function replaceExisting(state: TimelineState, entry: ActivityEntry): TimelineSt
   const existing = index === -1 ? undefined : state.entries[index];
   if (existing === undefined) return state;
 
-  // Rule 1. `origin` is the whole test: history describes the same event with strictly less
-  // information, so it never displaces a live entry. Anything else replaces in place, which covers
-  // both a live entry arriving over a history one (an upgrade) and a same-origin re-delivery.
-  if (existing.origin === 'live' && entry.origin === 'history') return state;
+  // Rule 1, stated as what it actually is: **the only collision that carries new information is a
+  // live entry landing on a history one.** `origin` decides all four cases, and three of them are
+  // no-ops:
+  //
+  //   existing | incoming | outcome
+  //   ---------|----------|---------------------------------------------------------------
+  //   history  | live     | replace. The upgrade: digest-only becomes real prose.
+  //   history  | history  | keep. The same record re-read from a re-fetched page.
+  //   live     | history  | keep. History carries strictly less for the same event.
+  //   live     | live     | keep. A `lastSeq` reconnect replays *from* that id, so the daemon
+  //                         re-delivers events already held; the frames are the same frames.
+  //
+  // Returning the identical state object for all three is not an optimization. The reducer above
+  // decides "did this session's slice change?" by reference, and it must answer *no* for a
+  // re-delivered event, or a reconnect bumps the unread badge for messages the user already read.
+  // It also makes the merge genuinely idempotent, which is what "convergent" in this module's
+  // docstring means: replaying any prefix of the input twice reaches the same timeline.
+  if (existing.origin === 'live' || entry.origin === 'history') return state;
 
   const entries = [...state.entries];
   entries[index] = entry;

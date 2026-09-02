@@ -361,6 +361,11 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return {
         ...state,
         sessions,
+        // A *conditional* spread, so hydration can only ever set a selection, never clear one. The
+        // prefs read is asynchronous and the user can have clicked a session while it was in
+        // flight; a remembered id that no longer resolves must not then yank them off the session
+        // they deliberately opened. Same rule App.tsx's `hasNavigatedRef` applies to the remembered
+        // start page, for the same reason.
         ...(selectedId === undefined ? {} : { selectedId }),
         prefsLoaded: true,
       };
