@@ -29,6 +29,12 @@ export function parseClaudeAuthStatus(rawStdout: string): AuthStatus {
  * independent questions: an installed-but-unauthenticated CLI is a distinct, expected state,
  * not an error. Auth is read via `claude auth status --json`, which reports the CLI's own
  * cached login state. This never reads or touches Claude's credential storage directly.
+ *
+ * Both probes run under ADI-15's default-deny environment allowlist (via `execCapture` ->
+ * `spawnProcess`), with no `ANTHROPIC_API_KEY` reachable by the child. Verified against the real
+ * 2.1.228 binary: `auth status --json` still reports `loggedIn: true` with `authMethod: claude.ai`,
+ * because the CLI resolves its own on-disk OAuth state, which is exactly the arrangement this repo
+ * wants and never touches.
  */
 export async function detectClaude(logger: Logger): Promise<ProviderStatus> {
   const base = {

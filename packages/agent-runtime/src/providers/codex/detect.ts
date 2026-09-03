@@ -25,6 +25,11 @@ export function parseCodexLoginStatus(output: string): AuthStatus {
  * human-readable line ("Logged in using ChatGPT" / "Logged in using API key" / not-logged-in
  * variants) rather than JSON. We pattern-match conservatively and fall back to 'unknown' rather
  * than guessing, since a wrong "authenticated: 'authenticated'" is far worse than an honest "unknown".
+ *
+ * Both probes run under ADI-15's default-deny environment allowlist (via `execCapture` ->
+ * `spawnProcess`), with no `OPENAI_API_KEY` reachable by the child. `CODEX_HOME` is allowlisted, so
+ * a relocated Codex config directory is still found. Verified against the real 0.147.0 binary:
+ * `login status` still reports `Logged in using ChatGPT`.
  */
 export async function detectCodex(logger: Logger): Promise<ProviderStatus> {
   const base = { id: 'codex' as const, name: 'Codex', capabilities: CODEX_CAPABILITIES };

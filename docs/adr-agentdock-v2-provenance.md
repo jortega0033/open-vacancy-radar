@@ -1168,3 +1168,165 @@ elements with `-` in the prompt position.
 Claude's transport (already stdin, unchanged), the 200,000-character prompt cap, `run-session.ts`'s
 stdin-write mechanism, and the daemon's session-creation schema. No consumer outside the adapter
 depended on the old Codex argv shape.
+
+## ADI-15: a default-deny environment allowlist for spawned provider processes
+
+Until this change `process/spawn-process.ts` ended in `env: opts.env ?? process.env`, and no caller
+in the repo ever set `opts.env` -- `StartSessionOptions.env`'s own doc comment said as much. Every
+`claude` and `codex` child therefore inherited the daemon's entire environment. SECURITY.md
+documented this as *"a deliberate tradeoff, not an oversight"*, and the reasoning it gave was sound
+as far as it went: a CLI that cannot find its own config reports a false "not authenticated", which
+for a project whose whole premise is "use the CLI's own auth" is a worse failure than an over-broad
+environment.
+
+What that argument never did was *measure* the safe subset. It reasoned that a hand-picked list
+"risks silently breaking legitimate CLI authentication" and stopped there, so the risk was accepted
+permanently on the strength of an untested assumption. This ticket tested it.
+
+### The measurement, which is the whole basis of the change
+
+Against the real installed binaries on the development machine (`claude` 2.1.228, `codex-cli`
+0.147.0 on Windows 11), an environment restricted to exactly the allowlist left every
+authentication-relevant path behaving identically to full inheritance: `where claude`/`where codex`
+(the PATH lookup `detect-executable.ts` itself performs), `claude --version`, `codex --version`,
+`claude auth status --json` returning `{"loggedIn": true, "authMethod": "claude.ai", ...}`, and
+`codex login status` returning `Logged in using ChatGPT`. OAuth authentication survives because it
+resolves through the CLI's own on-disk state, with no `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` present,
+which is the arrangement this repo wants.
+
+What was measured is OAuth, and the first draft of this section said "authentication is unaffected"
+without that qualifier. Independent review caught it. Environment-variable authentication is
+deliberately no longer supported: API-key auth, Bedrock routing and Vertex routing all stop working,
+and because a name must clear both lists, a user cannot re-enable them. That is the intended posture
+-- a long-lived key handed to a process that reads untrusted scraped content is the authority this
+ticket withdraws -- but the symptom is a false "not authenticated", so it is documented in
+SECURITY.md and on the deny list itself rather than left to be rediscovered.
+
+A per-variable removal sweep then asked which entries are actually load-bearing. `PATHEXT` is:
+without it `where` cannot match `claude.exe` and executable detection fails outright. The rest were
+individually removable *for those particular checks*, and are kept anyway -- a version/auth probe is
+a small fraction of what a real session does, they are non-secret platform paths, and the stop
+condition on this work is explicitly that over-restriction is a real regression. Reviewed breadth,
+not minimality, is the goal.
+
+An end-to-end real session was also run through the actual adapter as a negative control. It failed
+to authenticate -- and failed *identically* under old-style full inheritance, on the same machine,
+in the same minute. That comparison is the point: the failure is a property of the development
+machine's OAuth state (a nested CLI whose refresh channel belongs to a host session), not something
+the allowlist introduced. A verification that only ran the new path would not have been able to tell
+those two apart.
+
+### Two lists, and why the ordering is tested rather than assumed
+
+The same shape `providers/claude/build-args.ts` already uses for tool restriction: a positively
+stated allowlist so that a variable introduced by a future dependency is not granted by default
+(drift fails closed, visibly, rather than open), plus a deny list checked *after* it and able to
+override it.
+
+The two are disjoint in the shipped configuration, which means the deny branch never actually fires
+in production and its veto cannot be observed by ordinary use. Rather than assert the property in a
+comment, `buildProviderEnvironment` takes an `allowlistOverride` test seam whose only purpose is to
+construct the overlap and prove the deny list vetoes a granted name (`denyOverridesAllowlist`). It is
+worth being precise that this is a conjunction rather than an evaluation order -- a name must be
+granted *and* not denied, so testing deny first or second is unobservable, and the earlier phrasing
+of "checked after the allowlist so it overrides it" described a sequence with no consequence. The
+deny list also
+names this daemon's and this product's own internals explicitly -- `AGENT_DOCK_*`, `ELECTRON_*`, the
+vacancy-source credential names -- even though the allowlist would never have granted them, so that
+"a provider child never sees the daemon's own state" is a tested guarantee rather than a lucky
+consequence of the allowlist happening to be narrow.
+
+### The exposure this actually closed, which is not the one the ticket assumed
+
+The ticket suspected this product's keyring-backed credential store. That was checked and ruled out:
+`apps/daemon/src/mcp/credential-store.ts` (`@napi-rs/keyring`) never places a secret in any process
+environment, and the per-launch discovery token is not an environment variable either -- it is
+written to a `0600` discovery file and held in memory.
+
+The real path is duller and worse. `packages/vacancy-engine/src/config.ts` reads this product's
+vacancy-source credentials (`AI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `ADZUNA_APP_ID`/`ADZUNA_APP_KEY`,
+`JOOBLE_API_KEY`, `REED_API_KEY`, `JOBSPIPE_API_KEY`) straight out of `process.env`, and
+`apps/desktop/electron/main.ts` spawns the daemon with `{ ...process.env, ... }`. On a machine where
+those are exported they reached every provider child verbatim. `ADZUNA_APP_ID` is the instructive
+one: it matches none of the credential-shaped deny patterns and is excluded only because the
+allowlist never granted it, which is precisely why the allowlist is the load-bearing half and the
+deny list is a backstop.
+
+### One policy point, not five
+
+The ticket listed five entry points to wire up (`spawn-process.ts`, `run-session.ts`,
+`exec-capture.ts`, both `detect.ts`). All five already funnel through `spawnProcess`, so the policy
+is applied once, at the single point where the process is actually created, and the other four
+inherit it structurally -- calling the builder again at each layer would have been the "several
+divergent copies" the ticket was trying to avoid. Their doc comments now say the policy applies and
+where it lives; tests verify each path rather than trusting the funnel.
+
+`SpawnOptions.env` and `StartSessionOptions.env` changed meaning as part of this: they now select
+*which* environment gets filtered rather than whether filtering happens. There is deliberately no
+opt-out, because no caller needs one -- every `spawnProcess` use in the repo is a provider CLI or a
+`where`/`which` lookup on behalf of one. The one test that had relied on passing a variable through
+`SpawnOptions.env` (the Job Host argv-fidelity test) was changed to write relative to its own cwd,
+which keeps it about argv fidelity, all it was ever about.
+
+### Two limits recorded rather than papered over
+
+**Windows re-adds eleven variables regardless of policy.** libuv's `make_program_env` merges its own
+`required_vars` in from the real parent environment, so even `spawn(..., { env: {} })` yields a child
+with `HOMEDRIVE`, `HOMEPATH`, `LOGONSERVER`, `PATH`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`,
+`USERDOMAIN`, `USERNAME`, `USERPROFILE`, `WINDIR`. Verified directly by dumping a child's
+`process.env` under an empty env. The allowlist is deliberately *not* padded with these to make the
+"strict subset" assertion look tidier -- they are a separate documented constant, the subset test
+names them as a platform addition, and a test asserts the deny list never claims to block one of
+them, since the runtime would silently override it and the guarantee would be a fiction.
+
+**A proxy URL can embed credentials.** `HTTP_PROXY`/`HTTPS_PROXY` are allowlisted because without
+them a CLI behind a corporate proxy cannot reach its own auth endpoint, and no name-based pattern can
+distinguish `http://proxy.example` from `http://user:pass@proxy.example`. Named as a residual, the
+same way `build-args.ts` names the `WebFetch` egress residual, rather than left implicit.
+
+The POSIX allowlist is the one part not empirically re-verified -- no macOS or Linux machine was
+available, the same caveat this repo already carries for the POSIX process-group termination path.
+
+### What independent review changed
+
+The review found no bypass and no critical defect -- it verified independently that
+`spawn-process.ts` holds the only `spawn()` in the package, that the Job Host's `lpEnvironment =
+NULL` really does preserve the restriction across the second hop, and that `allowlistOverride` is
+unreachable from any spawn path. What it did find was that the *compatibility* surface was narrower
+than the confidence expressed about it, and two tests claimed more than they proved:
+
+- The API-key/Bedrock/Vertex breakage above was undocumented, and both the code and SECURITY.md said
+  "authentication is unaffected".
+- `POSIX_REQUIRED_VARIABLES` omitted `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which is the
+  most likely way the acknowledged "POSIX unverified" caveat would actually have bitten: a
+  libsecret/gnome-keyring lookup needs both, and without them a Linux user gets a false
+  not-logged-in. `ALL_PROXY` was likewise missing, breaking Codex behind a SOCKS proxy while the
+  surrounding comment claimed to cover proxied installs generally. Both added.
+- The `__proto__` test was vacuous: `{ __proto__: 'poison' }` in an object literal is the
+  prototype-setter syntax and creates no own property, so the builder's loop never saw the key. Now
+  written with a computed key, which does. (The code was correct either way; only the test's claim
+  was false.)
+- More importantly, **no test asserted that the allowlist grants anything.** Every sweep was an
+  absence assertion, and a `buildProviderEnvironment` that returned `{}` would have passed all of
+  them -- leaving the suite able to detect under-restriction only, and blind to the over-restriction
+  this design names as its primary feared failure mode. Positive-grant assertions were added at both
+  the unit level and against the real spawned child.
+- The Windows direct-spawn path (`useJobHostOnWindows: false`), which is the one *all* provider
+  detection actually takes, was never swept -- only the Job Host path was. Now both are.
+- The single-choke-point guarantee rested on convention, with nothing stopping a future `execFile`
+  import elsewhere in the package. Now enforced by an ESLint `no-restricted-imports` rule on
+  `node:child_process` scoped to `packages/agent-runtime/src/**`, exempting only `spawn-process.ts`.
+
+One review point was considered and deliberately not acted on: `dropped` is discarded at the only
+call site, so there is no runtime observability into over-restriction. `spawnProcess` takes no
+logger, and threading one through purely to log this would be a larger change than the diagnostic is
+worth while the tests cover the property directly.
+
+### What ADI-15 deliberately did not touch
+
+What the provider CLI reads from its own on-disk state once running (OAuth session files, keychain
+entries) -- this bounds only what the daemon hands a child, per the standing "never read a provider
+credential" invariant. The v1/v2 session-creation schemas and routes, which are untouched: this is
+purely a subprocess-environment-construction change and is invisible at the API level. And
+`apps/desktop/electron/main.ts`'s spawn of the *daemon*, which legitimately needs `AGENT_DOCK_*` to
+function and is not a provider child.

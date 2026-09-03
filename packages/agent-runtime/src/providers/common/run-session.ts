@@ -127,6 +127,9 @@ export function runProviderSession(
     // comment on why the caller must not have to separately track or assume it.
     notify(() => probe?.onSpawnAttempt?.({ viaStdin: config.promptViaStdin === true }));
     try {
+      // `options.env` is undefined at every caller (see StartSessionOptions.env). Since ADI-15 that
+      // means the child gets `buildProviderEnvironment(process.env)` rather than `process.env`
+      // itself; passing an env here would select what gets filtered, not bypass the filter.
       spawned = spawnProcess(exePath, args, { cwd: options.cwd, env: options.env });
     } catch (err) {
       // A synchronous spawn throw proves no process was created, so the prompt provably never
