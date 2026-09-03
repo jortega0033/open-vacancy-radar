@@ -139,7 +139,8 @@ distinctions are already covered by the generic `tools` flag plus each tool even
   session id are the same value from the start, instead of needing to reconcile two ids after the
   fact. Resuming is reachable end to end via `POST /sessions`'s `resumeProviderSessionId` field.
   **The prompt itself is not an argv element**: it's written to the child's stdin and the stdin
-  stream is then closed (`run-session.ts`'s `promptViaStdin` config, only set for Claude). Two
+  stream is then closed (`run-session.ts`'s `promptViaStdin` config; as of ADI-14 Codex sets it
+  too, so both shipped adapters now use this path). Two
   reasons: an argv element has to fit inside Windows' `CreateProcess` command-line limit (~32,767
   characters), well under what the shared request schema permits (200,000), and an argv-passed
   prompt is visible to any same-user process for the whole life of the process (`ps`/Task
@@ -172,11 +173,20 @@ Claude's response and token usage came back as normalized events, and the sessio
   line (`"Logged in using ChatGPT"`, `"Logged in using API key"`, or a not-logged-in variant)
   rather than JSON. The parser matches conservatively and falls back to `'unknown'` rather than
   guessing when the text doesn't clearly say one way or the other.
-- **Execution**: `codex exec <prompt> --json --skip-git-repo-check`, or
-  `codex exec resume <providerSessionId> <prompt> --json --skip-git-repo-check` to continue a
+- **Execution**: `codex exec - --json --skip-git-repo-check`, or
+  `codex exec resume <providerSessionId> - --json --skip-git-repo-check` to continue a
   prior thread (argv construction is in `build-args.ts`). `--skip-git-repo-check` is required
   because a session's working directory is whatever the user picked, not necessarily a git
   repository. Resuming is reachable end to end via `POST /sessions`'s `resumeProviderSessionId` field.
+  **The prompt itself is not an argv element** (ADI-14): the `-` above is the placeholder Codex
+  documents for its `[PROMPT]` positional (*"If not provided as an argument (or if `-` is used),
+  instructions are read from stdin"*, `codex exec --help` on the pinned 0.147.0 build; `codex exec
+  resume --help` says the same for the resume shape), and the prompt is written to the child's stdin
+  and the stream closed. Same two reasons as Claude: a 200,000-character prompt cannot fit Windows'
+  ~32,767-character `CreateProcess` command line, and an argv-passed prompt -- here routinely a CV
+  plus a scraped vacancy description -- is readable by any same-user process for the whole life of
+  the process. Until ADI-14 this adapter did embed the prompt in argv; that is what changed, and it
+  also moved Codex's accepted-work boundary (see below).
 - **Parsing** (`parser.ts`): `thread.started` → captures the thread id as `providerSessionId`;
   `item.started` / `item.completed` → `tool.started` / `tool.completed` for `command_execution`,
   `file_change`, and `mcp_tool_call` items, `assistant.message` for a completed `agent_message`
@@ -273,7 +283,12 @@ guessing, and so it is never answered optimistically by accident.
 | Provider | Pinned version | Transport | Accepted-work boundary | Why |
 |---|---|---|---|---|
 | Claude Code | `2.1.228` | `legacy-one-shot` | `first-prompt-byte-to-stdin` | `build-args.ts` deliberately keeps the prompt out of argv and `adapter.ts` sets `promptViaStdin`, so nothing reaches the CLI until the stdin write. Everything before that write is provably undelivered. |
-| Codex | `0.147.0` | `legacy-one-shot` | `process-spawn-attempt` | `build-args.ts` puts the prompt directly in argv (`codex exec <prompt>`), so it is handed over atomically by the act of creating the process. There is no later moment to observe. |
+| Codex | `0.147.0` | `legacy-one-shot` | `first-prompt-byte-to-stdin` | Since ADI-14, `build-args.ts` emits Codex's documented `-` stdin placeholder rather than the prompt and `adapter.ts` sets `promptViaStdin`, so nothing reaches the CLI until the stdin write. It read `process-spawn-attempt` before that, when the prompt was an argv element (`codex exec <prompt>`) and was therefore handed over by the act of creating the process. |
+
+No entry declares `process-spawn-attempt` any more. That value is deliberately kept in the union
+anyway, because it is still what `acceptedWorkBoundaryFor` returns on a manifest miss (see
+[the fail-closed rule](#the-fail-closed-manifest-miss-rule)), and the fail-closed default must stay
+expressible even when no reviewed entry uses it.
 
 The supervisor does not actually read this table's boundary column at runtime to decide *when* to
 mark work accepted, and deliberately so: it reads `runProviderSession`'s own `promptViaStdin` flag
@@ -287,14 +302,20 @@ what the supervisor assumes it did. The manifest's boundary column above still d
 boundary applies to each pinned version, for fixture classification and this table, but is not the
 enforcement mechanism.
 
-Because of this, both providers reach the same terminal accepted-work value for a successful
-session — `acceptedWork: 'accepted'` — just via different observable moments, which the conformance
-suite asserts rather than assumes: Claude's `'accepted'` follows an observed stdin flush (direct
-evidence of delivery); Codex's `'accepted'` follows the spawn attempt itself, since an argv-embedded
-prompt is handed over unconditionally and atomically the instant the process is created — there is
-no in-flight window analogous to a stdin write that could still fail. `AcceptedWorkState` measures
-delivery (retry-safety), never completion, so "accepted" here never implies the CLI has finished, or
-even started, acting on the prompt — only that it has provably received it.
+Both providers reach the same terminal accepted-work value for a successful session —
+`acceptedWork: 'accepted'` — and, since ADI-14, both reach it at the same observable moment: an
+observed stdin flush, which is direct evidence of delivery. `AcceptedWorkState` measures delivery
+(retry-safety), never completion, so "accepted" here never implies the CLI has finished, or even
+started, acting on the prompt — only that it has provably received it.
+
+An argv-transport adapter would instead latch `'accepted'` at the spawn attempt itself, since an
+argv-embedded prompt is handed over unconditionally and atomically the instant the process is
+created — there is no in-flight window analogous to a stdin write that could still fail. Codex
+worked that way until ADI-14, and the conformance suite still describes both cases: its
+"accepted-work boundary timing" section samples the latch from inside the probe callbacks, and
+requires a stdin-transport provider to read `not_accepted` immediately after the spawn attempt,
+reaching `'accepted'` only once the write is flushed. Asserting the terminal value alone would not
+have distinguished the two, which is why the timing is sampled rather than inferred.
 
 ### The fail-closed manifest-miss rule
 

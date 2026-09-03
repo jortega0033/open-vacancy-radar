@@ -36,6 +36,11 @@ export type ProviderImplementation = 'claude' | 'codex' | 'fake';
  * - `'process-spawn-attempt'` — the prompt is already embedded in the process command line, so it
  *   is delivered atomically by the act of creating the process. There is no later moment to
  *   observe, and no earlier one that is safe to assume.
+ *
+ * As of ADI-14 no entry in this manifest declares `'process-spawn-attempt'` any more: both shipped
+ * adapters now deliver their prompt over stdin. The value is deliberately kept rather than removed,
+ * because it is still the value `acceptedWorkBoundaryFor` returns for an unrecognized
+ * provider/version pairing — the fail-closed default, which must stay expressible.
  */
 export type AcceptedWorkBoundary = 'first-prompt-byte-to-stdin' | 'process-spawn-attempt';
 
@@ -65,17 +70,29 @@ export const CLAUDE_LEGACY_COMPATIBILITY: ProviderCompatibilityManifestEntry = O
 });
 
 /**
- * Codex. `providers/codex/build-args.ts` places the prompt directly in argv (`codex exec <prompt>`),
- * so by the time the process exists the prompt has already been handed over. The boundary is
- * therefore the spawn attempt itself.
+ * Codex. `providers/codex/adapter.ts` sets `promptViaStdin: true` and
+ * `providers/codex/build-args.ts` emits Codex's documented `-` prompt placeholder rather than the
+ * prompt itself, so the boundary is the stdin write, not the spawn.
  *
- * Verified against `codex --version` reporting `codex-cli 0.147.0`.
+ * **This changed in ADI-14.** Until then this entry read `'process-spawn-attempt'`, on the
+ * reasoning that `codex exec <prompt>` embeds the prompt in the command line and therefore hands it
+ * over unconditionally the instant the process exists. That reasoning was correct for the argv
+ * shape and is simply no longer the shape this adapter builds: with the prompt on stdin there *is*
+ * a later, more precise moment to observe, and everything before that write is provably undelivered.
+ * Note that this is documentation of a fact, not the enforcement mechanism -- `session-supervisor.ts`
+ * drives the accepted-work latch off `runProviderSession`'s real `promptViaStdin` flag reported at
+ * the actual call site, which is exactly why this migration could not silently mis-classify a
+ * session even in the window before this line was updated.
+ *
+ * Verified against `codex --version` reporting `codex-cli 0.147.0`. The `-` placeholder was
+ * verified against that same build's `codex exec --help` / `codex exec resume --help` text and by
+ * running both real argv shapes; see `providers/codex/build-args.ts`.
  */
 export const CODEX_LEGACY_COMPATIBILITY: ProviderCompatibilityManifestEntry = Object.freeze({
   provider: 'codex',
   providerVersion: '0.147.0',
   transportId: LEGACY_ONE_SHOT_TRANSPORT_ID,
-  acceptedWorkBoundary: 'process-spawn-attempt',
+  acceptedWorkBoundary: 'first-prompt-byte-to-stdin',
   fixtureSet: 'codex-legacy-0.147.0-v1',
 });
 

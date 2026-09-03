@@ -48,9 +48,18 @@ describe('PROVIDER_COMPATIBILITY_MANIFEST', () => {
       expect(CLAUDE_LEGACY_COMPATIBILITY.acceptedWorkBoundary).toBe('first-prompt-byte-to-stdin');
     });
 
-    it('codex puts the prompt in argv, so its boundary is the spawn attempt', () => {
-      expect(buildCodexArgs(opts)).toContain(prompt);
-      expect(CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary).toBe('process-spawn-attempt');
+    it('codex keeps the prompt out of argv too, so its boundary is the stdin write (ADI-14)', () => {
+      expect(buildCodexArgs(opts).join(' ')).not.toContain(prompt);
+      expect(buildCodexArgs({ ...opts, resumeProviderSessionId: 'thread-1' }).join(' ')).not.toContain(prompt);
+      expect(CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary).toBe('first-prompt-byte-to-stdin');
+    });
+
+    it('leaves no manifest entry claiming the argv boundary, since no adapter uses it any more', () => {
+      // The negative half of the same claim, so a future adapter that moves a prompt back into argv
+      // without updating this table fails here rather than silently under-reporting retry safety.
+      expect(
+        PROVIDER_COMPATIBILITY_MANIFEST.filter((e) => e.acceptedWorkBoundary === 'process-spawn-attempt'),
+      ).toEqual([]);
     });
   });
 });
@@ -117,6 +126,16 @@ describe('acceptedWorkBoundaryFor fails closed on a manifest miss', () => {
 
   it('returns the entry boundary when there is a real match, for both providers', () => {
     expect(acceptedWorkBoundaryFor(CLAUDE_LEGACY_COMPATIBILITY)).toBe('first-prompt-byte-to-stdin');
-    expect(acceptedWorkBoundaryFor(CODEX_LEGACY_COMPATIBILITY)).toBe('process-spawn-attempt');
+    expect(acceptedWorkBoundaryFor(CODEX_LEGACY_COMPATIBILITY)).toBe('first-prompt-byte-to-stdin');
+  });
+
+  it('still fails closed to the argv boundary even though no entry declares it (ADI-14)', () => {
+    // Both shipped entries now declare the stdin boundary, so the fail-closed default is no longer
+    // reachable by simply reading any real entry. That is exactly why it is asserted separately:
+    // the default must stay the conservative one, not drift toward "whatever the entries say".
+    expect(acceptedWorkBoundaryFor(undefined)).toBe('process-spawn-attempt');
+    expect(
+      PROVIDER_COMPATIBILITY_MANIFEST.some((e) => e.acceptedWorkBoundary === acceptedWorkBoundaryFor(undefined)),
+    ).toBe(false);
   });
 });

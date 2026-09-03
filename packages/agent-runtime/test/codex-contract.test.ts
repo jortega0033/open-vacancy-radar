@@ -19,8 +19,10 @@ describeProviderContract({
   },
   expectedAssistantText: 'done',
   expectedProviderSessionId: 'codex-fixture-thread-id',
-  // ADI-04. Codex's adapter sets no `promptViaStdin`: buildCodexArgs puts the prompt in argv.
+  // ADI-04, updated by ADI-14: Codex's adapter now sets `promptViaStdin: true` and buildCodexArgs
+  // emits the `-` stdin placeholder instead of the prompt. The suite cross-checks this claim against
+  // the real argv builder, so it cannot be set here without build-args.ts actually agreeing.
   // `fixtureSet` mirrors CODEX_LEGACY_COMPATIBILITY in providers/compatibility-manifest.ts.
-  promptViaStdin: false,
+  promptViaStdin: true,
   fixtureSet: 'codex-legacy-0.147.0-v1',
 });

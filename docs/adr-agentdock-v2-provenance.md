@@ -248,17 +248,40 @@ per provider. Everything the supervisor learns, it learns either by reading even
 through anyway, or through an `@internal`, optional `launchProbe` seam on `StartSessionOptions`.
 
 That seam was added rather than approximated. The alternative considered was treating "first
-observed event" as the acceptance signal, which needs no new field — but it collapses both
-accepted-work boundaries into one heuristic, making the Claude/Codex distinction decorative. With
-the probe, the boundaries genuinely differ at runtime: Claude's `'accepted'` follows the stdin
-flush, Codex's follows the spawn attempt itself (an argv-embedded prompt is delivered unconditionally
-the instant the process exists), and the conformance suite asserts both reach `'accepted'`, not that
-one of them settles for the weaker `'unknown'` — `AcceptedWorkState` measures delivery, not whether
-the CLI has acted on the prompt yet, and delivery is certain in both cases, just observed at a
-different moment. An earlier draft of this mechanism read the accepted-work timing off the
-manifest's `acceptedWorkBoundary` field instead of the probe's own `viaStdin` evidence, and got this
-exact case wrong (marking Codex `'unknown'`) before an adversarial review caught it — see the note
-directly below for why that approach was replaced.
+observed event" as the acceptance signal, which needs no new field — but it collapses the
+accepted-work boundary into a heuristic that cannot tell the two transports apart at all. With the
+probe, the boundary is derived from what the adapter actually did: `'accepted'` is recorded at the
+observed stdin flush for a stdin-transport adapter, and at the spawn attempt itself for an
+argv-transport one (an argv-embedded prompt is delivered unconditionally the instant the process
+exists). Either way the conformance suite asserts the session reaches `'accepted'` rather than
+settling for the weaker `'unknown'` — `AcceptedWorkState` measures delivery, not whether the CLI has
+acted on the prompt yet, and delivery is certain in both cases, just observed at a different moment.
+An earlier draft of this mechanism read the accepted-work timing off the manifest's
+`acceptedWorkBoundary` field instead of the probe's own `viaStdin` evidence, and got the
+argv-transport case wrong (marking it `'unknown'`) before an adversarial review caught it — see the
+note directly below for why that approach was replaced.
+
+**Updated by ADI-14.** When this section was written, Claude was the stdin-transport adapter and
+Codex was the argv-transport one, and the two boundaries were described as a Claude-versus-Codex
+distinction. That is no longer true: `providers/codex/build-args.ts` now emits Codex's documented
+`-` stdin placeholder instead of the prompt and `providers/codex/adapter.ts` sets
+`promptViaStdin: true`, so **both** shipped adapters now latch `'accepted'` at the stdin flush, and
+`CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary` reads `'first-prompt-byte-to-stdin'` to match. The
+argv boundary survives only as `acceptedWorkBoundaryFor`'s fail-closed default for an unrecognized
+CLI build. Codex moved for the reasons in `providers/codex/build-args.ts`: a 200,000-character
+prompt cap cannot fit Windows' ~32,767-character `CreateProcess` command line, and an argv-embedded
+prompt containing a user's CV and a scraped vacancy description is readable by any same-user process
+for the whole life of the child.
+
+This migration is also the mechanism below working exactly as designed, which is why it needed no
+change to `run-session.ts` or `session-supervisor.ts`: flipping one `promptViaStdin` flag moved both
+what the adapter does and what the supervisor concludes, in lockstep, because they are the same
+flag. Had the manifest column been left stale in that same change, the supervisor would still have
+been correct and would have logged the disagreement rather than mis-classifying the session. The
+timing change is proven rather than asserted — `test/support/supervisor-contract.ts`'s
+"accepted-work boundary timing" section samples the latch from inside the probe callbacks and
+requires Codex to still read `not_accepted` immediately after the spawn attempt, reaching
+`'accepted'` only once the stdin write is flushed.
 
 ### Fixed: a manifest hit can fail open where a manifest miss fails closed
 
@@ -1081,3 +1104,67 @@ transport -- it is the same `legacy-one-shot` spawn with a stricter command line
 own manifest entry would be the thing that lets the fallback gate ever say "allowed". Codex's adapter
 ignores `hardened` (it has nothing reviewed to restrict), and the Codex app-server transport remains
 untouched and blocked per this section's opening.
+
+## ADI-14: moving Codex's prompt from argv to stdin
+
+Until this change `providers/codex/build-args.ts` returned `['exec', opts.prompt, ...]`: the user's
+prompt was a literal argv element of the spawned `codex exec` process. Claude's adapter had never
+done this (see the doc comment on `providers/claude/build-args.ts`, which this change is a straight
+port of), and the two reasons it gives applied to Codex identically:
+
+1. **Correctness on this repo's primary platform.** `packages/shared/src/schemas.ts` caps a session
+   prompt at 200,000 characters. Windows' `CreateProcess` caps the *entire* command line at ~32,767.
+   A long-enough request -- and for this product a prompt is a CV plus a scraped vacancy description
+   plus instructions, so "long enough" is an ordinary request, not a pathological one -- could
+   therefore truncate or fail to spawn. The cap is unchanged by this ticket; what changed is that it
+   is now safe to use for Codex.
+2. **Disclosure.** An argv element is readable by any same-user process for the entire lifetime of
+   the child: Task Manager's command-line column, `wmic process`, `ps`. That is a continuous
+   exposure of the user's CV text, not a transient one at spawn.
+
+The fix is the `-` placeholder the Codex CLI documents for exactly this. From `codex exec --help` on
+the pinned `codex-cli 0.147.0` build: *"Initial instructions for the agent. If not provided as an
+argument (or if `-` is used), instructions are read from stdin"*, and from `codex exec resume
+--help`: *"Prompt to send after resuming the session. If `-` is used, read from stdin"*. Both shapes
+were exercised against the real installed binary rather than trusted from help text alone: with an
+empty stdin, `codex exec - --json --skip-git-repo-check` and
+`codex exec resume <uuid> - --json --skip-git-repo-check` each parse their argv and then fail with
+Codex's own `No prompt provided via stdin.`, which is positive proof that the `-` was accepted as the
+`[PROMPT]` positional *and* that it switched the CLI to reading stdin. The placeholder occupies
+exactly the argv slot the raw prompt used to, so the only difference in the spawned command line is
+which string sits in the prompt position.
+
+### Why this needed no change to the shared machinery
+
+`run-session.ts` already implemented the stdin write generically behind
+`ProviderRunConfig.promptViaStdin` (AD-05), and ADI-04 already made the accepted-work latch derive
+from that same flag as reported at the real call site rather than from the compatibility manifest's
+hand-maintained column. So the whole runtime change is one `promptViaStdin: true` on
+`CodexProvider`, and the boundary moved with it automatically: `session-supervisor.ts` was not
+touched, and could not have gone stale, because there is only one flag governing both what the
+adapter does and what the supervisor concludes it did.
+`CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary` was updated from `'process-spawn-attempt'` to
+`'first-prompt-byte-to-stdin'` in the same change so the documentation does not carry a now-false
+claim, but that column is documentation, not enforcement -- had it been left stale, the supervisor
+would still have been correct and would have logged the disagreement.
+
+This is a real, observable behavior change and is tested as one rather than asserted in a comment.
+`test/support/supervisor-contract.ts` gained an "accepted-work boundary timing" section that samples
+the latch from *inside* the two probe callbacks `runProviderSession` fires back to back -- the only
+interval in which the two boundaries differ, since both end a successful session at `'accepted'`.
+For Codex it now requires `not_accepted` immediately after the spawn attempt and `'accepted'` only
+after the stdin flush; running that same assertion against the pre-ADI-14 configuration fails with
+`expected 'accepted' to be 'not_accepted'`, which is the change stated as a failing test.
+
+`test/run-session.test.ts` adds an end-to-end section that spawns a real child whose argv is built by
+the real `buildCodexArgs` and which echoes back both its own argv and everything it read on stdin
+(`test/fixtures/fake-codex-stdin-echo.mjs`). It proves both acceptance criteria in one run: a
+200,000-character prompt -- roughly six times the Windows command-line limit, and the schema's own
+cap -- round-trips byte for byte over stdin while the spawned process's real argv stays four short
+elements with `-` in the prompt position.
+
+### What ADI-14 deliberately did not touch
+
+Claude's transport (already stdin, unchanged), the 200,000-character prompt cap, `run-session.ts`'s
+stdin-write mechanism, and the daemon's session-creation schema. No consumer outside the adapter
+depended on the old Codex argv shape.
