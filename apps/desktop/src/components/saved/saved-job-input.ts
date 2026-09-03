@@ -21,5 +21,9 @@ export function toSavedJobInput(job: SavedJobRecord): SavedJobInput {
     sourceUrl: job.sourceUrl,
     notes: job.notes,
     status: job.status,
+    // Carried through so an undo does not silently discard a kept gap analysis. Its `savedAt`-style
+    // timestamp is re-derived by the main process on insert, exactly like `savedAt` itself: the
+    // recreated row is honestly a new row, and its analysis is honestly stored as of now.
+    gapAnalysis: job.gapAnalysis,
   };
 }

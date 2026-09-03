@@ -34,7 +34,10 @@ import * as workspace from '../electron/workspace/repository.js';
  *     and empty strings, so a migration that silently rewrote or dropped data would show up.
  *  3. The database is closed and reopened through the ordinary `createWorkspaceDb` path -- the
  *     exact call `main.ts` makes -- which finds 0000-0002 already recorded in
- *     `__drizzle_migrations` and applies only the pending 0003.
+ *     `__drizzle_migrations` and applies everything after them, starting with 0003. (Once later
+ *     migrations exist they are applied by the same reopen, which is exactly what an install
+ *     sitting on the pre-0003 schema really gets; the assertions below count the journal rather
+ *     than a hardcoded "one more".)
  *  4. Everything is then asserted through `repository.ts`'s normal readers, since "the migration
  *     ran" is not the claim worth making; "the app can still read the user's data afterwards" is.
  *
@@ -52,16 +55,35 @@ const PRE_0003_TAGS = ['0000_familiar_giant_man', '0001_misty_hobgoblin', '0002_
 type JournalEntry = { idx: number; version: string; when: number; tag: string; breakpoints: boolean };
 type Journal = { version: string; dialect: string; entries: JournalEntry[] };
 
+function readJournal(): Journal {
+  return JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+}
+
+/**
+ * How many migrations `createWorkspaceDb` records once it has finished with a database. Read from
+ * the real journal rather than written down as a number, because this test seeds a *prefix* of the
+ * history and then opens the database with the shipped migrations folder: everything after the
+ * prefix is pending, which is 0003 today and 0003 plus whatever follows it later.
+ */
+function migrationCount(): number {
+  return readJournal().entries.length;
+}
+
 /**
  * Copies the real 0000-0002 migrations into `<root>/drizzle-0002` with a journal that stops there.
- * Fails loudly if the real journal ever stops matching `PRE_0003_TAGS`, so a future 0004 (or a
- * squashed history) cannot quietly turn this into a test of the wrong prior version.
+ * Fails loudly if the real journal's first three entries ever stop being `PRE_0003_TAGS`, or if
+ * 0003 stops being the entry that immediately follows them, so a rewritten or squashed history
+ * cannot quietly turn this into a test of the wrong prior version.
  */
 function seedPre0003MigrationsFolder(root: string): string {
-  const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+  const journal = readJournal();
   const kept = journal.entries.filter((entry) => PRE_0003_TAGS.includes(entry.tag));
   expect(kept.map((entry) => entry.tag)).toEqual(PRE_0003_TAGS);
-  expect(journal.entries.at(-1)?.tag).toBe('0003_curved_shotgun');
+  expect(journal.entries.slice(0, kept.length).map((entry) => entry.tag)).toEqual(PRE_0003_TAGS);
+  // The migration under test is the next one after the seeded prefix. It is deliberately not
+  // required to be the *last* entry in the journal: migrations added after it (0004 and onwards)
+  // are applied by the same reopen below, and that is the real upgrade an existing install gets.
+  expect(journal.entries[kept.length]?.tag).toBe('0003_curved_shotgun');
 
   const folder = join(root, 'drizzle-0002');
   mkdirSync(join(folder, 'meta'), { recursive: true });
@@ -255,7 +277,7 @@ describe('the seeded fixture really is a pre-0003 database', () => {
 });
 
 describe('migration 0003 applied to a database that already has real data', () => {
-  it('opens without throwing and applies exactly the one pending migration', () => {
+  it('opens without throwing and applies every pending migration, 0003 included', () => {
     seedPre0003Database();
 
     const opened = createWorkspaceDb(dir);
@@ -264,7 +286,7 @@ describe('migration 0003 applied to a database that already has real data', () =
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0003_TAGS.length + 1);
+      expect(applied.n).toBe(migrationCount());
       expect(columnNames(connection, 'app_settings')).toEqual(
         expect.arrayContaining(['agent_selected_session_id', 'agent_archived_session_ids', 'agent_unread_counts']),
       );
@@ -398,7 +420,7 @@ describe('migration 0003 applied to a database that already has real data', () =
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0003_TAGS.length + 1);
+      expect(applied.n).toBe(migrationCount());
     } finally {
       connection.close();
     }

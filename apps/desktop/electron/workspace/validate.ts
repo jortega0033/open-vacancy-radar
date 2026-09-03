@@ -55,6 +55,12 @@ export const LIMITS = {
   cvText: 2_000_000,
   /** a generated letter */
   letterBody: 200_000,
+  /**
+   * A kept gap analysis. Same order of magnitude as a letter and for the same reason: it is one
+   * CLI answer, not a document the user assembles, so anything approaching this bound is a bug or
+   * a hostile caller rather than a long analysis.
+   */
+  gapAnalysis: 200_000,
 } as const;
 
 export class WorkspaceInputError extends Error {
@@ -213,6 +219,9 @@ export function parseSavedJobInput(value: unknown): SavedJobInput {
     sourceUrl: nullableStr(input.sourceUrl, 'sourceUrl', LIMITS.short),
     notes: input.notes === undefined ? '' : str(input.notes, 'notes', LIMITS.medium),
     status: input.status === undefined ? 'considering' : oneOf(input.status, 'status', SAVED_JOB_STATUSES),
+    // Nullable, and null is the default: a newly saved job has no analysis. `gapAnalysisAt` is
+    // deliberately absent from this allow-list, so a renderer cannot date a stored analysis.
+    gapAnalysis: nullableStr(input.gapAnalysis, 'gapAnalysis', LIMITS.gapAnalysis),
   };
 }
 
@@ -231,6 +240,7 @@ export function parseSavedJobPatch(value: unknown): SavedJobPatch {
   patch(input, out, 'sourceUrl', (v) => nullableStr(v, 'sourceUrl', LIMITS.short));
   patch(input, out, 'notes', (v) => str(v, 'notes', LIMITS.medium));
   patch(input, out, 'status', (v) => oneOf(v, 'status', SAVED_JOB_STATUSES));
+  patch(input, out, 'gapAnalysis', (v) => nullableStr(v, 'gapAnalysis', LIMITS.gapAnalysis));
   return out;
 }
 

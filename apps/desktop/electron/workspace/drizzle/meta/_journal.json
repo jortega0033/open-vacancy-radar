@@ -29,6 +29,13 @@
       "when": 1788346206600,
       "tag": "0003_curved_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788468595251,
+      "tag": "0004_damp_dust",
+      "breakpoints": true
     }
   ]
 }

@@ -78,6 +78,11 @@ function toSavedJob(row: SavedJobRow): SavedJobRecord {
     notes: row.notes,
     status: row.status,
     savedAt: iso(row.savedAt),
+    // Both null on every row written before migration 0004, and on every job whose analysis was
+    // never kept. `?? null` rather than a bare read because better-sqlite3 hands back `undefined`
+    // for a column an older row has no value in, and the wire contract says `null`.
+    gapAnalysis: row.gapAnalysis ?? null,
+    gapAnalysisAt: row.gapAnalysisAt ? iso(row.gapAnalysisAt) : null,
   };
 }
 
@@ -101,6 +106,7 @@ export function createSavedJob(db: WorkspaceDb, input: SavedJobInput): SavedJobR
       sourceUrl: input.sourceUrl ?? null,
       notes: input.notes ?? '',
       status: input.status ?? 'considering',
+      ...gapAnalysisColumns(input.gapAnalysis),
     })
     .returning()
     .all();
@@ -108,15 +114,36 @@ export function createSavedJob(db: WorkspaceDb, input: SavedJobInput): SavedJobR
   return toSavedJob(row);
 }
 
+/**
+ * The `gap_analysis` / `gap_analysis_at` pair, derived together from the one field the caller may
+ * set. The timestamp is this process's clock, never the renderer's (see `SavedJobInput`), and the
+ * two columns are written as a unit so "null exactly when the other is null" cannot drift: clearing
+ * an analysis clears its date rather than leaving a date for text that is gone.
+ *
+ * `undefined` in, `{}` out: the caller did not mention the field, so neither column is touched.
+ */
+function gapAnalysisColumns(
+  value: string | null | undefined,
+): { gapAnalysis: string | null; gapAnalysisAt: Date | null } | Record<string, never> {
+  if (value === undefined) return {};
+  return value === null
+    ? { gapAnalysis: null, gapAnalysisAt: null }
+    : { gapAnalysis: value, gapAnalysisAt: new Date() };
+}
+
 export function updateSavedJob(db: WorkspaceDb, id: string, values: SavedJobPatch): SavedJobRecord {
+  const { gapAnalysis, ...rest } = values;
+  const set = { ...rest, ...gapAnalysisColumns(gapAnalysis) };
+
   // An empty patch is a no-op read rather than an invalid `set {}` statement. The renderer
-  // sending "nothing changed" should not be an error.
-  if (Object.keys(values).length === 0) {
+  // sending "nothing changed" should not be an error. Measured after the columns above are
+  // derived, so a patch carrying only an untouched `gapAnalysis` still counts as empty.
+  if (Object.keys(set).length === 0) {
     const existing = db.select().from(savedJobs).where(eq(savedJobs.id, id)).get();
     if (!existing) throw new WorkspaceNotFoundError('saved job', id);
     return toSavedJob(existing);
   }
-  const [row] = db.update(savedJobs).set(values).where(eq(savedJobs.id, id)).returning().all();
+  const [row] = db.update(savedJobs).set(set).where(eq(savedJobs.id, id)).returning().all();
   if (!row) throw new WorkspaceNotFoundError('saved job', id);
   return toSavedJob(row);
 }
