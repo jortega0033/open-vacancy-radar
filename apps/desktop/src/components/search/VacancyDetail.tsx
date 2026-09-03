@@ -70,6 +70,39 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
   ];
 }
 
+/**
+ * The cross-company duplicate suggestion, stated as a suggestion.
+ *
+ * Nothing here removes, hides or reorders a row. Every listing in a group is still its own row in
+ * the results list, at its own rank, with its own Save and Open buttons. This notice exists so the
+ * reader can recognise a repost for themselves and decide, which is the only safe thing to do with
+ * a local text heuristic: matching text really can turn out to be two different openings, and
+ * quietly collapsing them would lose a real vacancy.
+ *
+ * The copy says exactly what the heuristic measured and nothing more. Company names are not part of
+ * the signal at all (see `cross-company-duplicates.ts` v3), so the wording must not imply that two
+ * similar-looking employer names had anything to do with this notice appearing.
+ */
+function DuplicateGroupNotice({ group }: { group: { otherVacancyIds: string[]; otherCompanies: string[] } }) {
+  const count = group.otherVacancyIds.length;
+  return (
+    <div className="alert alert-warning alert-soft mt-3 text-sm" role="note">
+      <div>
+        <div className="font-semibold">
+          Possibly also posted under {count} other company {count === 1 ? 'record' : 'records'}
+        </div>
+        <p className="mt-1 text-xs leading-relaxed">
+          Nearly the same posting text, under the same job title and location, also appears under{' '}
+          {group.otherCompanies.join(', ')}. This is a local comparison of the posting text only.
+          Company names were not used, and this is not a confirmed link between employers. Every one
+          of these listings is kept as its own result, so you can compare, save or ignore them
+          separately.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export interface VacancyDetailProps {
   result: SearchResult;
   /** Netherlands report provenance, or null when the worldwide market is selected. */
@@ -155,6 +188,10 @@ export function VacancyDetail({
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
             {saveError}
           </div>
+        )}
+
+        {result.market === 'netherlands' && result.raw.duplicateGroup && (
+          <DuplicateGroupNotice group={result.raw.duplicateGroup} />
         )}
 
         <div className="mt-4 grid grid-cols-1 gap-2.5 md:grid-cols-3">

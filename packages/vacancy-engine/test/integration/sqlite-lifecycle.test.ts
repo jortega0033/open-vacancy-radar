@@ -55,6 +55,7 @@ import {
   commitSuccessfulSourceScan,
 } from '../../src/pipeline/vacancies.js';
 import { loadCandidateProfile } from '../../src/candidate/profile.js';
+import { renderHtmlReport } from '../../src/reporting/report.js';
 import { buildJobRadarReport } from '../../src/reporting/repository.js';
 import { persistVacancyScan } from '../../src/vacancies/repository.js';
 
@@ -146,6 +147,112 @@ function vacancy(externalId: string, source = 'integration-fixture'): Normalized
   };
 }
 
+/**
+ * Cross-company duplicate fixtures (issue #139). Kept in sync with, and deliberately duplicated
+ * from, `test/reporting/cross-company-duplicates.test.ts`: that suite proves the heuristic itself,
+ * this one proves the wiring actually carries its verdict from `buildJobRadarReport` onto a
+ * `ReportVacancy`, in both directions.
+ */
+const CROSS_COMPANY_DUPLICATE_TITLE = 'Senior Backend Engineer';
+
+const PAYMENTS_ROLE_AS_POSTED_BY_EMPLOYER = [
+  'Contoso is hiring a Senior Backend Engineer for our payments platform team in Amsterdam.',
+  'You will design, build and operate the services that settle transactions for our European merchants.',
+  'Our stack is TypeScript, Node.js and PostgreSQL, running on Kubernetes.',
+  'You will own services end to end, from schema design through deployment and on-call.',
+  'We are looking for at least five years of professional backend experience, a strong grasp of',
+  'distributed systems and relational data modelling, and the judgement to keep a payments system boring.',
+  'You will work in a small team of six engineers alongside product and design.',
+  'We offer a permanent contract, thirty days of holiday, a learning budget and a hybrid working arrangement.',
+].join(' ');
+
+const PAYMENTS_ROLE_AS_REPOSTED_WITH_EDITS = [
+  'Our client Contoso Netherlands is hiring a Senior Backend Engineer for their payments platform team in Amsterdam.',
+  'You will design, build and operate the services that settle transactions for European merchants.',
+  'The stack is TypeScript, Node.js and PostgreSQL, running on Kubernetes.',
+  'You will own services end to end, from schema design through deployment and on-call.',
+  'We are looking for at least five years of professional backend experience, a strong grasp of',
+  'distributed systems and relational data modelling, and the judgement to keep a payments system boring.',
+  'You will work in a small team of six engineers alongside product and design.',
+  'On offer is a permanent contract, thirty days of holiday, a learning budget and a hybrid working arrangement.',
+  'Apply through this posting and we will come back to you within two working days.',
+].join(' ');
+
+/** The unedited applicant-tracking-system skeleton both adversarial postings were typed into. */
+const UNEDITED_ATS_TEMPLATE = [
+  'We are looking for a talented Senior Backend Engineer to join our growing team in Amsterdam.',
+  'You will be responsible for designing, developing and maintaining high quality software solutions.',
+  'You will work closely with cross functional teams to deliver features on time and to a high standard.',
+  'Requirements: 3+ years of experience in software development, strong communication skills, and the',
+  'ability to work independently as well as part of a team in a fast paced environment.',
+  "A bachelor's degree or equivalent practical experience is required. Excellent written and spoken",
+  'English is essential. Experience with agile methodologies and a proven track record of delivering',
+  'projects on time is a plus. Attention to detail and strong problem solving skills are important.',
+  'What we offer: a competitive salary and benefits package, a hybrid working arrangement, a pension',
+  'scheme, 25 days of holiday, a personal development budget and opportunities for career growth.',
+  'We are an equal opportunity employer and we celebrate diversity. All qualified applicants will',
+  'receive consideration for employment without regard to race, colour, religion, gender, sexual',
+  'orientation, national origin, disability or veteran status.',
+  'If this sounds like you, apply now and we look forward to receiving your application.',
+].join(' ');
+
+const APEX_STAFFING_ROLE = [
+  UNEDITED_ATS_TEMPLATE,
+  'Apex Systems places contract and permanent engineers with enterprise clients across the Benelux,',
+  'and this role sits on site with our client delivering .NET and Java integration work.',
+].join(' ');
+
+const APEX_FUND_ADMINISTRATION_ROLE = [
+  UNEDITED_ATS_TEMPLATE,
+  'Apex Group administers investment funds worldwide, and this role builds the net asset value',
+  'calculation and investor reporting platform used by our fund accounting teams.',
+].join(' ');
+
+/**
+ * The round-2 adversarial pair, the one that ended the bag-of-words design.
+ *
+ * Two independently written postings that share their entire substantive vocabulary bar a single
+ * domain noun, and share none of their phrasing. The retired measure scored this pair 0.944, above
+ * its own genuine-repost fixture; the shipped shingle measure scores it 0.000. Carried through the
+ * real pipeline here because that is where a regression would actually reach the user.
+ */
+const ATLAS_PLATFORM_TITLE = 'Platform Engineer';
+
+const ATLAS_FINTECH_ROLE = [
+  'The payments platform runs on AWS.',
+  'Python microservices are packaged into Docker images, scheduled by Kubernetes and described in Terraform.',
+  'Events are streamed by Kafka into PostgreSQL, where deployment automation runs schema migrations.',
+  'The engineer owns monitoring, alerting and observability dashboards covering latency, throughput and availability across the pipelines.',
+  'The infrastructure sits in Rotterdam.',
+].join(' ');
+
+const ATLAS_VAN_LINES_ROLE = [
+  'In Rotterdam the infrastructure sits across the pipelines.',
+  'Covering availability, throughput and latency, dashboards for observability, alerting and monitoring are what the engineer owns.',
+  'Automation of deployment runs schema migrations through PostgreSQL, into which events are streamed by Kafka.',
+  'Terraform described what Kubernetes scheduled: Docker images packaged from Python microservices.',
+  'On AWS the relocations platform runs.',
+].join(' ');
+
+function crossCompanyVacancy(
+  externalId: string,
+  description: string,
+  overrides: { title?: string; location?: string } = {},
+): NormalizedVacancy {
+  return {
+    externalId,
+    title: overrides.title ?? CROSS_COMPANY_DUPLICATE_TITLE,
+    description,
+    location: overrides.location ?? 'Amsterdam',
+    remote: false,
+    workplaceMode: 'hybrid',
+    url: `https://jobs.integration.test/vacancies/${externalId}`,
+    postedAt: new Date('2026-08-20T12:00:00.000Z'),
+    employmentType: 'Full-time',
+    source: 'cross-company-fixture',
+  };
+}
+
 async function insertCompanyAndSource(): Promise<{ companyId: string; careerSourceId: string }> {
   const [company] = await database()
     .insert(companies)
@@ -174,6 +281,78 @@ async function insertCompanyAndSource(): Promise<{ companyId: string; careerSour
   if (source === undefined) throw new Error('Career-source fixture insert did not return an id');
 
   return { companyId: company.id, careerSourceId: source.id };
+}
+
+/**
+ * The same fixture as `insertCompanyAndSource`, but under a caller-chosen brand name and domain, so
+ * a test can put two *different* company records in the database at once. Used by the
+ * cross-company-duplicate cases below, which are meaningless with a single company.
+ */
+async function insertNamedCompanyAndSource(
+  brandName: string,
+  slug: string,
+): Promise<{ companyId: string; careerSourceId: string }> {
+  const [company] = await database()
+    .insert(companies)
+    .values({
+      brandName,
+      domain: `${slug}.integration.test`,
+      mappingConfidence: 'high',
+      mappingSource: 'integration-test',
+      scanEnabled: true,
+    })
+    .returning({ id: companies.id });
+  if (company === undefined) throw new Error(`Company fixture "${brandName}" returned no id`);
+
+  const [source] = await database()
+    .insert(careerSources)
+    .values({
+      companyId: company.id,
+      sourceType: 'ats_api',
+      provider: 'greenhouse',
+      baseUrl: `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`,
+      boardIdentifier: slug,
+      discoveryMethod: 'integration-test',
+      status: 'active',
+    })
+    .returning({ id: careerSources.id });
+  if (source === undefined) throw new Error(`Career-source fixture "${brandName}" returned no id`);
+
+  return { companyId: company.id, careerSourceId: source.id };
+}
+
+/** Scores every persisted vacancy at the profile version the report joins on, so the fixtures reach
+ * the report at all. The values themselves are irrelevant to what these tests assert. */
+async function scoreEveryVacancy(): Promise<void> {
+  const persisted = await database()
+    .select({ id: vacancies.id, contentHash: vacancies.contentHash })
+    .from(vacancies);
+  if (persisted.length === 0) throw new Error('No vacancies to score');
+  await database()
+    .insert(vacancyScores)
+    .values(
+      persisted.map((row) => ({
+        vacancyId: row.id,
+        candidateProfileVersion: candidateProfileVersion,
+        scoringVersion: DETERMINISTIC_SCORING_VERSION,
+        deterministicScore: 85,
+        finalScore: 85,
+        technicalFit: 90,
+        roleFit: 85,
+        seniorityFit: 90,
+        languageFit: 100,
+        locationFit: 100,
+        dutchRequired: false,
+        dutchPreferred: false,
+        languageEvidence: [],
+        primaryFit: 'Backend product engineering',
+        matchingSkills: ['TypeScript'],
+        gaps: [],
+        reasons: ['Integration fixture'],
+        contentHash: row.contentHash,
+        scoredAt: new Date('2026-08-28T09:05:00.000Z'),
+      })),
+    );
 }
 
 const recognisedSponsor = {
@@ -1277,6 +1456,155 @@ describe('Embedded SQLite destructive lifecycle integration', () => {
     // The vacancy above is real (score !== undefined would make it "relevant"), but nothing was
     // ever scored against the empty profile, so it must not be counted as a relevance match.
     expect(report.statistics.relevantVacancies).toBe(0);
+  });
+
+  it('annotates a real cross-company duplicate end to end, without dropping either row', async () => {
+    // The gap the standalone heuristic tests and the renderer tests both left: nothing exercised
+    // the actual path from two database rows, through buildJobRadarReport's own dedup and mapping,
+    // onto a ReportVacancy.duplicateGroup. This drives the real repository against the real
+    // migrated schema.
+    const employer = await insertNamedCompanyAndSource('Contoso', 'contoso');
+    const nameVariant = await insertNamedCompanyAndSource(
+      'Contoso Netherlands B.V.',
+      'contoso-nl',
+    );
+    await persistVacancyScan(database(), {
+      ...employer,
+      vacancies: [crossCompanyVacancy('contoso-direct', PAYMENTS_ROLE_AS_POSTED_BY_EMPLOYER)],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await persistVacancyScan(database(), {
+      ...nameVariant,
+      vacancies: [crossCompanyVacancy('contoso-nl-repost', PAYMENTS_ROLE_AS_REPOSTED_WITH_EDITS)],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await scoreEveryVacancy();
+    const [scanRun] = await database()
+      .insert(scanRuns)
+      .values({
+        command: 'cross-company-duplicate-integration',
+        status: 'succeeded',
+        finishedAt: new Date('2026-08-28T09:10:00.000Z'),
+      })
+      .returning({ id: scanRuns.id });
+    if (scanRun === undefined) throw new Error('Cross-company scan-run fixture was not persisted');
+
+    const report = await buildJobRadarReport(database(), {
+      scanRunId: scanRun.id,
+      generatedAt: new Date('2026-08-28T12:00:00.000Z'),
+      maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
+      indVerificationEnabled: false,
+    });
+
+    // Group, never merge: both rows are still in the report, each with its own url and company.
+    expect(report.vacancies).toHaveLength(2);
+    expect(report.statistics.duplicateVacanciesCollapsed).toBe(0);
+    expect(new Set(report.vacancies.map((row) => row.url)).size).toBe(2);
+    expect([...report.vacancies.map((row) => row.company)].sort()).toEqual([
+      'Contoso',
+      'Contoso Netherlands B.V.',
+    ]);
+
+    const byCompany = new Map(report.vacancies.map((row) => [row.company, row] as const));
+    const direct = byCompany.get('Contoso');
+    const repost = byCompany.get('Contoso Netherlands B.V.');
+    if (direct === undefined || repost === undefined) throw new Error('Report rows are missing');
+    expect(direct.duplicateGroup?.otherCompanies).toEqual(['Contoso Netherlands B.V.']);
+    expect(direct.duplicateGroup?.otherVacancyIds).toEqual([repost.id]);
+    expect(repost.duplicateGroup?.otherCompanies).toEqual(['Contoso']);
+    expect(repost.duplicateGroup?.otherVacancyIds).toEqual([direct.id]);
+    // One group, not two overlapping pairs.
+    expect(direct.duplicateGroup?.groupId).toBe(repost.duplicateGroup?.groupId);
+  });
+
+  it('leaves both known adversarial pairs unannotated end to end', async () => {
+    // The true-negative half of the same wiring, and the regression guard for both confirmed false
+    // positives at the level the user actually sees.
+    //
+    // Round 1: two real, unrelated companies -- a US IT staffing firm and a Bermuda fund
+    // administrator -- posting two genuinely different roles under an identical job title in the
+    // same city on the same untouched ATS template.
+    //
+    // Round 2: two independently written postings sharing an entire modern platform stack and
+    // differing in one domain noun. This is the pair that beat every bag-of-words threshold, and
+    // the reason the measure is now word-shingle overlap rather than token-set overlap.
+    //
+    // Nothing in this report may be labelled. Note that the company names alone would have been
+    // enough to trigger the retired heuristic in both cases ("apex" against "apex", and "Atlas" as
+    // a token subset of "Atlas Van Lines"); names are no longer read at all.
+    const staffing = await insertNamedCompanyAndSource('Apex Systems', 'apex-systems');
+    const fundAdministrator = await insertNamedCompanyAndSource('Apex Group', 'apex-group');
+    const atlas = await insertNamedCompanyAndSource('Atlas', 'atlas');
+    const atlasVanLines = await insertNamedCompanyAndSource('Atlas Van Lines', 'atlas-van-lines');
+    await persistVacancyScan(database(), {
+      ...staffing,
+      vacancies: [crossCompanyVacancy('apex-systems-role', APEX_STAFFING_ROLE)],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await persistVacancyScan(database(), {
+      ...fundAdministrator,
+      vacancies: [crossCompanyVacancy('apex-group-role', APEX_FUND_ADMINISTRATION_ROLE)],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await persistVacancyScan(database(), {
+      ...atlas,
+      vacancies: [
+        crossCompanyVacancy('atlas-role', ATLAS_FINTECH_ROLE, {
+          title: ATLAS_PLATFORM_TITLE,
+          location: 'Rotterdam',
+        }),
+      ],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await persistVacancyScan(database(), {
+      ...atlasVanLines,
+      vacancies: [
+        crossCompanyVacancy('atlas-van-lines-role', ATLAS_VAN_LINES_ROLE, {
+          title: ATLAS_PLATFORM_TITLE,
+          location: 'Rotterdam',
+        }),
+      ],
+      complete: true,
+      observedAt: new Date('2026-08-28T09:00:00.000Z'),
+    });
+    await scoreEveryVacancy();
+    const [scanRun] = await database()
+      .insert(scanRuns)
+      .values({
+        command: 'cross-company-false-positive-integration',
+        status: 'succeeded',
+        finishedAt: new Date('2026-08-28T09:10:00.000Z'),
+      })
+      .returning({ id: scanRuns.id });
+    if (scanRun === undefined) throw new Error('Adversarial scan-run fixture was not persisted');
+
+    const report = await buildJobRadarReport(database(), {
+      scanRunId: scanRun.id,
+      generatedAt: new Date('2026-08-28T12:00:00.000Z'),
+      maximumPostingAgeDays: 365,
+      profilePath: testProfilePath,
+      indVerificationEnabled: false,
+    });
+
+    // All four rows survive, and not one of them carries a grouping claim.
+    expect(report.vacancies).toHaveLength(4);
+    expect([...report.vacancies.map((row) => row.company)].sort()).toEqual([
+      'Apex Group',
+      'Apex Systems',
+      'Atlas',
+      'Atlas Van Lines',
+    ]);
+    for (const row of report.vacancies) {
+      expect(row.duplicateGroup).toBeUndefined();
+    }
+    // The rendered report must say nothing about duplicates either.
+    expect(renderHtmlReport(report)).not.toContain('Possibly also posted under');
   });
 
   it('seeds trusted discovery inventory and commits bounded attempts atomically without promoting candidates', async () => {

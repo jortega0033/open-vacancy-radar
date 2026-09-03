@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import type { MappingConfidence, WorkplaceMode } from '../domain/models.js';
+import type { CrossCompanyDuplicateGroup } from './cross-company-duplicates.js';
 
 export type ReportStatistics = {
   sponsorsLoaded: number;
@@ -60,6 +61,16 @@ export type ReportVacancy = {
   gaps?: string[];
   reasons?: string[];
   sponsorLegalNames: string[];
+  /**
+   * Set only when a local heuristic (see `cross-company-duplicates.ts`) thinks this same listing is
+   * also posted under one or more *other* company records, e.g. via a staffing agency or an
+   * employer scanned under two name variants. Absent means no such suggestion, which is the normal
+   * case; the check always runs, so there is no separate "not evaluated" state to distinguish.
+   *
+   * This is an annotation and nothing more. Every row in a group stays in `vacancies` in its own
+   * right, at its own score, with its own URL: the grouping never removes, hides or rewrites a row.
+   */
+  duplicateGroup?: CrossCompanyDuplicateGroup;
   mappingConfidence: MappingConfidence;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -188,6 +199,15 @@ function renderVacancy(vacancy: ReportVacancy): string {
           ? ''
           : ` (${escapeHtml(vacancy.sourceOutcomeStatus.replaceAll('_', ' '))})`
       }</strong>`;
+  // Rendered as an extra note on a row that is otherwise completely untouched: both rows of a group
+  // appear in this report in full, in their own category, with their own official link.
+  const duplicateNote = vacancy.duplicateGroup
+    ? `<p class="warning"><strong>Possibly also posted under ${
+        vacancy.duplicateGroup.otherVacancyIds.length
+      } other company record${vacancy.duplicateGroup.otherVacancyIds.length === 1 ? '' : 's'}</strong> (${escapeHtml(
+        vacancy.duplicateGroup.otherCompanies.join(', '),
+      )}). Matching posting text only, compared locally; company names were not used, and this is not a confirmed link between employers. Both listings are shown here separately.</p>`
+    : '';
   const scored = vacancy.score !== undefined;
   const scoreBadge = scored
     ? `<div class="score" aria-label="Score ${vacancy.score}">${vacancy.score}</div>`
@@ -214,6 +234,7 @@ function renderVacancy(vacancy: ReportVacancy): string {
       <p>${escapeHtml(vacancy.location ?? 'Location unknown')} · ${escapeHtml(remoteLabel)}</p>
       <p>${languageFlag}</p>
       <p>${verificationFlag}</p>
+      ${duplicateNote}
       ${primaryFitLine}
       ${dimensions}
       ${scoringDetails}
