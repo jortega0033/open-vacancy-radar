@@ -16,7 +16,8 @@ import {
   findProviderCompatibility,
   LEGACY_ONE_SHOT_TRANSPORT_ID,
 } from '../../src/providers/compatibility-manifest.js';
-import type { AgentProvider, StartSessionOptions } from '../../src/types.js';
+import type { AcceptedWorkState } from '../../src/providers/common/accepted-work.js';
+import type { AgentProvider, SessionLaunchProbe, StartSessionOptions } from '../../src/types.js';
 
 const fixturesDir = fileURLToPath(new URL('../fixtures', import.meta.url));
 
@@ -66,8 +67,18 @@ export function describeSupervisorContract(spec: SupervisorContractSpec): void {
       rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     });
 
-    /** A real `AgentProvider` whose `startSession` is the genuine shared engine, aimed at a fixture. */
-    function fixtureProvider(fixtureName: string): AgentProvider {
+    /**
+     * A real `AgentProvider` whose `startSession` is the genuine shared engine, aimed at a fixture.
+     *
+     * `wrapProbe` is an optional interceptor for the supervisor's own `launchProbe`. It exists for
+     * the boundary-timing section below, which has to observe the latch *between* two callbacks
+     * that `runProviderSession` fires back to back; nothing else can see that interval. It is a
+     * pass-through by default, so every other test in this suite runs the unmodified probe.
+     */
+    function fixtureProvider(
+      fixtureName: string,
+      wrapProbe?: (probe: SessionLaunchProbe | undefined) => SessionLaunchProbe | undefined,
+    ): AgentProvider {
       return {
         id: spec.providerId,
         name: spec.providerId,
@@ -81,7 +92,7 @@ export function describeSupervisorContract(spec: SupervisorContractSpec): void {
               parseLine: spec.parseLine,
               promptViaStdin: spec.promptViaStdin,
             },
-            options,
+            wrapProbe ? { ...options, launchProbe: wrapProbe(options.launchProbe) } : options,
             noopLogger,
           ),
       };
@@ -139,6 +150,92 @@ export function describeSupervisorContract(spec: SupervisorContractSpec): void {
         );
         return collect(handle.events).then(() => undefined);
       });
+    });
+
+    /**
+     * The *timing* half of the accepted-work contract, as opposed to the terminal-value half the
+     * "success path" section already covers.
+     *
+     * Both providers finish a successful session at `'accepted'`, so asserting the final value
+     * alone cannot distinguish a stdin-boundary adapter from an argv-boundary one — which is
+     * precisely the distinction ADI-14 changed for Codex. This section instead samples the latch
+     * from *inside* the two probe callbacks `runProviderSession` fires back to back, which is the
+     * only interval in which the two boundaries look different, and it does so against the real
+     * engine and the real supervisor rather than a stand-in.
+     */
+    describe('accepted-work boundary timing', () => {
+      /** `'handle-unset'` would mean a probe fired before `superviseProviderSession` returned. */
+      type Mark = { at: string; state: AcceptedWorkState | 'handle-unset' };
+
+      async function recordTimeline(): Promise<{ marks: Mark[]; evidence: boolean[] }> {
+        const marks: Mark[] = [];
+        const evidence: boolean[] = [];
+        // A holder rather than a bare `let`, because the probe callbacks below close over it and
+        // run before `superviseProviderSession` has returned the handle to assign.
+        const supervised: { handle?: SupervisedSessionHandle } = {};
+        // Deliberately not a throw when unset: `runProviderSession` swallows a throwing probe
+        // callback by design, so throwing here would silently skip the observation instead of
+        // failing. A sentinel value that no assertion accepts fails loudly instead.
+        const peek = (): AcceptedWorkState | 'handle-unset' =>
+          supervised.handle?.acceptedWork() ?? 'handle-unset';
+
+        const provider = fixtureProvider(spec.fixtures.success, (probe) => ({
+          ...probe,
+          onSpawnAttempt: (spawnEvidence) => {
+            evidence.push(spawnEvidence.viaStdin);
+            marks.push({ at: 'before onSpawnAttempt', state: peek() });
+            probe?.onSpawnAttempt?.(spawnEvidence);
+            marks.push({ at: 'after onSpawnAttempt', state: peek() });
+          },
+          onPromptDelivered: () => {
+            marks.push({ at: 'before onPromptDelivered', state: peek() });
+            probe?.onPromptDelivered?.();
+            marks.push({ at: 'after onPromptDelivered', state: peek() });
+          },
+        }));
+
+        supervised.handle = superviseProviderSession({
+          provider,
+          status: status(),
+          start: { sessionId: 'boundary-timing-session', cwd, prompt: 'hello' },
+        });
+        await collect(supervised.handle.events);
+        return { marks, evidence };
+      }
+
+      it('reports its real transport as spawn evidence, and observes the latch at both callbacks', async () => {
+        const { marks, evidence } = await recordTimeline();
+
+        expect(evidence).toEqual([spec.promptViaStdin]);
+        // Never sampled before the handle existed, so every state below is a real reading.
+        expect(marks.map((m) => m.state)).not.toContain('handle-unset');
+        // Nothing has been observed yet at the very first callback, under either boundary.
+        expect(marks[0]).toEqual({ at: 'before onSpawnAttempt', state: 'not_accepted' });
+      });
+
+      if (spec.promptViaStdin) {
+        it('is still not_accepted immediately after the spawn attempt, and only latches on the stdin flush', async () => {
+          const { marks } = await recordTimeline();
+
+          // The behavioral change ADI-14 makes for Codex, stated as the two adjacent readings that
+          // straddle the spawn: creating the process is NOT delivery when the prompt is on stdin.
+          expect(marks.find((m) => m.at === 'after onSpawnAttempt')?.state).toBe('not_accepted');
+          expect(marks.find((m) => m.at === 'before onPromptDelivered')?.state).toBe('not_accepted');
+          expect(marks.find((m) => m.at === 'after onPromptDelivered')?.state).toBe('accepted');
+
+          // And the stdin flush really did happen after the spawn, not merely somewhere else.
+          const lastSpawnMark = marks.map((m) => m.at).lastIndexOf('after onSpawnAttempt');
+          const firstDeliveryMark = marks.map((m) => m.at).indexOf('before onPromptDelivered');
+          expect(firstDeliveryMark).toBeGreaterThan(lastSpawnMark);
+        });
+      } else {
+        it('latches at the spawn attempt itself, with no stdin flush to wait for', async () => {
+          const { marks } = await recordTimeline();
+
+          expect(marks.find((m) => m.at === 'after onSpawnAttempt')?.state).toBe('accepted');
+          expect(marks.some((m) => m.at.endsWith('onPromptDelivered'))).toBe(false);
+        });
+      }
     });
 
     /**

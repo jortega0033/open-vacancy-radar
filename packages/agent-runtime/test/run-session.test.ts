@@ -7,7 +7,9 @@ import type { AgentEvent } from '@agent-dock/shared';
 import { noopLogger } from '../src/logger.js';
 import { runProviderSession } from '../src/providers/common/run-session.js';
 import { parseClaudeLine } from '../src/providers/claude/parser.js';
+import { buildCodexArgs } from '../src/providers/codex/build-args.js';
 import { parseCodexLine } from '../src/providers/codex/parser.js';
+import type { StartSessionOptions } from '../src/types.js';
 
 const fixturesDir = fileURLToPath(new URL('./fixtures', import.meta.url));
 
@@ -256,6 +258,86 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
 
       expect(collected.at(-1)).toEqual({ type: 'session.cancelled' });
     }, 10_000);
+  });
+
+  /**
+   * ADI-14, the Codex half of the same guarantee, run end to end against a real spawned process
+   * whose argv is built by the **real** `buildCodexArgs` rather than a test-local stand-in. The
+   * fixture echoes back both its own argv and everything it read from stdin, so a single run proves
+   * the two acceptance criteria together: the prompt arrives intact over stdin, and it appears
+   * nowhere in the command line of the process that was actually created.
+   */
+  describe('codex prompt via stdin (ADI-14)', () => {
+    async function runCodexStdinEcho(prompt: string, overrides: Partial<StartSessionOptions> = {}) {
+      const handle = runProviderSession(
+        {
+          providerId: 'codex',
+          executableNames: [process.execPath],
+          // The fixture script stands in for the `codex` binary, and everything after it is the
+          // genuine argv this adapter would hand the real CLI.
+          buildArgs: (opts) => [join(fixturesDir, 'fake-codex-stdin-echo.mjs'), ...buildCodexArgs(opts)],
+          parseLine: parseCodexLine,
+          promptViaStdin: true,
+        },
+        { sessionId: 'codex-stdin-echo-session', cwd, prompt, ...overrides },
+        noopLogger,
+      );
+      const events = await collectEvents(handle.events);
+      const messages = events.filter((e) => e.type === 'assistant.message') as Array<{ text: string }>;
+      return {
+        events,
+        // Emitted in this order by the fixture: argv first, then the stdin payload.
+        childArgv: JSON.parse(messages[0]!.text) as string[],
+        receivedPrompt: messages[1]?.text,
+      };
+    }
+
+    it('delivers the prompt over stdin while the spawned process argv carries only the `-` placeholder', async () => {
+      const prompt = 'a distinctive codex prompt that must not be visible in any process list';
+      const { childArgv, receivedPrompt } = await runCodexStdinEcho(prompt);
+
+      expect(receivedPrompt).toBe(prompt);
+      expect(childArgv).toEqual(['exec', '-', '--json', '--skip-git-repo-check']);
+      expect(childArgv.join(' ')).not.toContain(prompt);
+    });
+
+    it('does the same when resuming a prior thread', async () => {
+      const prompt = 'a resumed codex prompt that must also stay off the command line';
+      const { childArgv, receivedPrompt } = await runCodexStdinEcho(prompt, {
+        resumeProviderSessionId: 'prior-thread-id',
+      });
+
+      expect(receivedPrompt).toBe(prompt);
+      expect(childArgv).toEqual(['exec', 'resume', 'prior-thread-id', '-', '--json', '--skip-git-repo-check']);
+      expect(childArgv.join(' ')).not.toContain(prompt);
+    });
+
+    it('preserves spaces, quotes, embedded newlines, and multi-byte Unicode exactly', async () => {
+      const prompt = 'line one\nline "two" with quotes\n  emoji 🎉🚀, CJK 日本語テスト, café résumé   ';
+      const { receivedPrompt } = await runCodexStdinEcho(prompt);
+      expect(receivedPrompt).toBe(prompt);
+    });
+
+    it('carries a prompt that could never have been spawned as argv on Windows', async () => {
+      // 200,000 characters: the shared request schema's own cap, and roughly six times Windows'
+      // ~32,767-character CreateProcess command-line limit. Under the pre-ADI-14 argv shape this
+      // exact request would have failed to spawn or silently truncated on this repo's primary
+      // platform; here it round-trips byte for byte and the argv stays four short elements.
+      const prompt = 'y'.repeat(200_000);
+      const { childArgv, receivedPrompt } = await runCodexStdinEcho(prompt);
+
+      expect(receivedPrompt).toBe(prompt);
+      expect(receivedPrompt?.length).toBe(200_000);
+      expect(childArgv.join(' ').length).toBeLessThan(100);
+    }, 15_000);
+
+    it('still reaches session.completed carrying the provider thread id', async () => {
+      const { events } = await runCodexStdinEcho('hi');
+      expect(events.at(-1)).toEqual({
+        type: 'session.completed',
+        providerSessionId: 'codex-stdin-echo-thread-id',
+      });
+    });
   });
 
   it('kills a grandchild process on cancellation, not just the direct child (no orphaned tool subprocess)', async () => {

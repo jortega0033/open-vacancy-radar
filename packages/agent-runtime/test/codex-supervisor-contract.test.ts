@@ -5,10 +5,12 @@ describeSupervisorContract({
   providerId: 'codex',
   pinnedVersion: '0.147.0',
   parseLine: parseCodexLine,
-  // Mirrors providers/codex/adapter.ts, which sets no `promptViaStdin`: buildCodexArgs embeds the
-  // prompt in argv. Selects the 'process-spawn-attempt' boundary: process creation hands the prompt
-  // over unconditionally, so the spawn attempt itself is 'accepted', not a weaker 'unknown'.
-  promptViaStdin: false,
+  // Mirrors providers/codex/adapter.ts as of ADI-14, which now sets `promptViaStdin: true`.
+  // Selects the 'first-prompt-byte-to-stdin' boundary, so an observed stdin flush -- not the spawn
+  // attempt -- is what makes work 'accepted'. The terminal value is unchanged ('accepted'); what
+  // changed is *when* the latch gets there, which the suite's "accepted-work boundary timing"
+  // section proves directly rather than leaving to this comment.
+  promptViaStdin: true,
   expectedAcceptedWorkAfterOutput: 'accepted',
   fixtures: {
     success: 'fake-codex-success.mjs',
