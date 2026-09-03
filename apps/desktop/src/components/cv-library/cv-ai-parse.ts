@@ -15,6 +15,15 @@ function extractJsonPayload(raw: string): string {
   return start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed;
 }
 
+/**
+ * Re-exported under a module-qualified name for the "Fill from CV" search-profile bridge
+ * (`components/settings/search-profile-cv-bridge.ts`), which parses a different JSON answer out of
+ * the same kind of coding-agent response and must salvage it by exactly the same rule. Additive:
+ * nothing changes for `parseCvAiResponse` below. Mirrors the `clamp as clampPromptText` re-export
+ * idiom in `components/cv/prompts.ts`.
+ */
+export { extractJsonPayload as extractAiJsonPayload };
+
 function stringField(value: unknown, limit: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim().slice(0, limit);
