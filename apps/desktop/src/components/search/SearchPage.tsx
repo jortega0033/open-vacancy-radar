@@ -4,6 +4,7 @@ import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vac
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
+import type { SelectedVacancy } from '../letters/index.js';
 import { EmptyState } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
@@ -53,6 +54,18 @@ const SALARY_NOTE: Record<SearchMarket, string> = {
  */
 export function toVacancyLead(result: SearchResult): VacancyLead {
   return result.lead;
+}
+
+/**
+ * `SearchResult` → `SelectedVacancy`, for the "Generate Letter" handoff to the Letters page.
+ *
+ * `SelectedVacancy` is `VacancyLead` plus the discovery `key` (see components/letters/types.ts),
+ * so this is `toVacancyLead` with that one extra field attached -- the same `result.lead` fields a
+ * letter can already use, nothing invented on top of it (no `description`/`requirements` beyond
+ * what the lead already carries).
+ */
+export function selectedVacancyFor(result: SearchResult): SelectedVacancy {
+  return { ...result.lead, key: result.key };
 }
 
 /**
@@ -155,7 +168,17 @@ function SearchLoadingSkeleton() {
  * "Clear filters" is the one exception: it resets and re-applies immediately, since an explicit
  * reset needs no confirmation click of its own.
  */
-export function SearchPage() {
+export interface SearchPageProps {
+  /**
+   * Fired when the user clicks "Generate Letter" on the vacancy detail view, with the selected
+   * vacancy already converted to what the Letters page expects. `App.tsx` wires this to the
+   * Search -> Letters handoff; the page works standalone (the button becomes a no-op) with nothing
+   * supplied.
+   */
+  onGenerateLetter?: (vacancy: SelectedVacancy) => void;
+}
+
+export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
@@ -506,6 +529,11 @@ export function SearchPage() {
     }
   }, [selected]);
 
+  const handleGenerateLetter = useCallback(() => {
+    if (!selected) return;
+    onGenerateLetter?.(selectedVacancyFor(selected));
+  }, [selected, onGenerateLetter]);
+
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
     : 'idle';
@@ -650,6 +678,7 @@ export function SearchPage() {
               saveState={saveState}
               {...(saveError ? { saveError } : {})}
               onSave={() => void handleSave()}
+              onGenerateLetter={handleGenerateLetter}
               assistantOpen={assistantForKey === selected.key}
               onToggleAssistant={() =>
                 setAssistantForKey((current) => (current === selected.key ? null : selected.key))

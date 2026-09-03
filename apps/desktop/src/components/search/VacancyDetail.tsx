@@ -80,6 +80,8 @@ export interface VacancyDetailProps {
   saveState: SaveState;
   saveError?: string;
   onSave: () => void;
+  /** Builds a `SelectedVacancy` from this vacancy and hands it off to the Letters page. */
+  onGenerateLetter: () => void;
   assistantOpen: boolean;
   onToggleAssistant: () => void;
   /** The CV assistant, rendered by the page so this component stays presentational. */
@@ -104,6 +106,7 @@ export function VacancyDetail({
   saveState,
   saveError,
   onSave,
+  onGenerateLetter,
   assistantOpen,
   onToggleAssistant,
   assistant,
@@ -131,6 +134,9 @@ export function VacancyDetail({
             >
               {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
               {saveState === 'saved' ? 'Saved' : 'Save job'}
+            </button>
+            <button className="btn btn-outline btn-sm" type="button" onClick={onGenerateLetter}>
+              Generate Letter
             </button>
             <button className="btn btn-primary btn-sm" type="button" onClick={onToggleAssistant}>
               {assistantOpen ? 'Hide AI assistant' : 'Use for AI'}

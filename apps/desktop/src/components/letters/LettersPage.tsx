@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
 import { LetterGenerator } from './LetterGenerator.js';
 import { LettersLibrary } from './LettersLibrary.js';
@@ -25,6 +25,20 @@ export interface LettersPageProps {
   model?: string;
   /** Fired whenever the number of saved letters may have changed, for the sidebar badge. */
   onLettersChanged?: () => void;
+  /**
+   * Land directly on the Generator tab, pre-selected on `vacancy`, instead of this page's normal
+   * library-first open. Set only by the Search page's "Generate Letter" handoff (see App.tsx): a
+   * `vacancy` supplied without this still opens on the Library exactly as before, which is what
+   * every other caller of this page relies on.
+   */
+  openOnGenerator?: boolean;
+  /**
+   * Fired once, right after mount, when a handoff `vacancy` was supplied. Lets the caller (App.tsx)
+   * clear its own pending-handoff state now that this page holds its own independent copy of it
+   * (see `handoffVacancy` below), so a later, unrelated visit to Letters -- through the nav
+   * sidebar, not this handoff -- never replays a stale vacancy.
+   */
+  onVacancyConsumed?: () => void;
 }
 
 /**
@@ -44,14 +58,35 @@ export interface LettersPageProps {
  * Returning to it reopens the last letter *as last saved*: an unsaved draft is not carried across,
  * which is why the editor labels unsaved changes and offers Save before anything else.
  */
-export function LettersPage({ vacancy = null, model, onLettersChanged }: LettersPageProps) {
-  const [view, setView] = useState<View>({ tab: 'library' });
+export function LettersPage({
+  vacancy = null,
+  model,
+  onLettersChanged,
+  openOnGenerator = false,
+  onVacancyConsumed,
+}: LettersPageProps) {
+  // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
+  // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
+  // from under a generator that has already opened on it. Every use of the handed-off vacancy for
+  // the rest of this page's lifetime goes through this snapshot, never the live prop.
+  const handoffVacancy = useRef(vacancy).current;
+
+  const [view, setView] = useState<View>(() =>
+    handoffVacancy && openOnGenerator ? { tab: 'generator', letter: null, seq: 0 } : { tab: 'library' },
+  );
   const [refreshToken, setRefreshToken] = useState(0);
   // A ref, not state: this counter only ever feeds the editor's key, and incrementing it inside a
   // state updater would make it double-count under StrictMode's double-invoked reducers.
   const editorSeq = useRef(0);
   /** What the generator tab shows when it is re-entered without opening a specific letter. */
   const lastEditor = useRef<{ letter: LetterRecord | null; seq: number }>({ letter: null, seq: 0 });
+
+  // Runs once on mount only: notify the caller that this page now holds its own snapshot of the
+  // handoff vacancy, so it can clear its pending state immediately rather than waiting for the
+  // user to navigate elsewhere.
+  useEffect(() => {
+    if (handoffVacancy) onVacancyConsumed?.();
+  }, []);
 
   const openLibrary = useCallback(() => setView({ tab: 'library' }), []);
 
@@ -136,7 +171,7 @@ export function LettersPage({ vacancy = null, model, onLettersChanged }: Letters
           <LetterGenerator
             key={`letter-editor-${view.seq}`}
             letter={view.letter}
-            vacancy={vacancy}
+            vacancy={handoffVacancy}
             {...(model ? { model } : {})}
             onSaved={handleSaved}
             onClose={openLibrary}

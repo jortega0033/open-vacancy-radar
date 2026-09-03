@@ -6,7 +6,7 @@ import { SearchPage } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
-import { LettersPage } from './components/letters/index.js';
+import { LettersPage, type SelectedVacancy } from './components/letters/index.js';
 import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
@@ -29,6 +29,13 @@ export function App() {
   const [nav, setNav] = useState<NavPage>('search');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [counts, setCounts] = useState<WorkspaceCounts>(EMPTY_COUNTS);
+
+  // The one piece of cross-page state this shell carries: a vacancy handed off from the Search
+  // page's "Generate Letter" action, waiting to be picked up by the Letters page. Cleared as soon
+  // as `LettersPage` reports it consumed (see `handleVacancyConsumed`) and, defensively, on every
+  // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
+  // never replays a stale handoff.
+  const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -97,6 +104,10 @@ export function App() {
   const handleNavigate = useCallback((page: NavPage) => {
     hasNavigatedRef.current = true;
     setNav(page);
+    // Any nav through the sidebar is, by definition, not the "Generate Letter" handoff -- including
+    // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
+    // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
+    setPendingVacancy(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
     void window.workspace?.updateSettings({ lastOpenedPage: page }).catch(() => {});
@@ -105,6 +116,21 @@ export function App() {
     // three of the five pages, so refreshing on every navigation is simpler than wiring one to each.
     void refreshCounts();
   }, [refreshCounts]);
+
+  // The Search page's "Generate Letter" action: distinct from `handleNavigate` because it needs to
+  // set `pendingVacancy` *and* navigate in the same step, without that navigation's own
+  // stale-handoff guard immediately wiping out the vacancy it just set.
+  const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(vacancy);
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  // Passed to `LettersPage`: fired once it has captured its own copy of `pendingVacancy`, so this
+  // state can be cleared immediately rather than waiting for the user to navigate elsewhere.
+  const handleVacancyConsumed = useCallback(() => setPendingVacancy(null), []);
 
   const handleToggleSidebar = useCallback(() => {
     setSidebarCollapsed((previous) => {
@@ -195,11 +221,18 @@ export function App() {
             <div className="alert alert-error alert-soft mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</div>
           )}
 
-          {nav === 'search' && <SearchPage />}
+          {nav === 'search' && <SearchPage onGenerateLetter={handleGenerateLetter} />}
           {nav === 'saved' && <SavedJobsPage />}
           {nav === 'applications' && <ApplicationsPage />}
           {nav === 'cv' && <CvLibraryPage />}
-          {nav === 'letters' && <LettersPage onLettersChanged={refreshCounts} />}
+          {nav === 'letters' && (
+            <LettersPage
+              vacancy={pendingVacancy}
+              openOnGenerator={pendingVacancy !== null}
+              onVacancyConsumed={handleVacancyConsumed}
+              onLettersChanged={refreshCounts}
+            />
+          )}
           {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
 
           {/* ADI-07. Mounted only while it is the active page, which is what makes the hook's

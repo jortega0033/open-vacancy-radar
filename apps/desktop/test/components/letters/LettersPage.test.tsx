@@ -113,6 +113,32 @@ describe('LettersPage', () => {
     await waitFor(() => expect(onLettersChanged).toHaveBeenCalled());
   });
 
+  it('with openOnGenerator, opens directly on the Generator tab pre-selected on the handoff vacancy and reports it consumed', async () => {
+    setup();
+    const onVacancyConsumed = vi.fn();
+
+    render(<LettersPage vacancy={LETTER_VACANCY} openOnGenerator onVacancyConsumed={onVacancyConsumed} />);
+
+    // Straight to the Generator, not the library-first default this page otherwise always opens on.
+    expect(await screen.findByRole('textbox', { name: /letter title/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    // Pre-selected on the handed-off vacancy, not "enter the job manually".
+    expect(screen.getByRole('combobox', { name: 'Job' })).toHaveValue('live');
+    expect(screen.getByText(LETTER_VACANCY.title)).toBeInTheDocument();
+
+    await waitFor(() => expect(onVacancyConsumed).toHaveBeenCalledTimes(1));
+  });
+
+  it('a vacancy without openOnGenerator still opens on the Library, exactly as before -- openOnGenerator is what changed, not passing `vacancy` alone', async () => {
+    setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+
+    render(<LettersPage vacancy={LETTER_VACANCY} />);
+
+    await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('"Back to library" from the generator returns to the list', async () => {
     setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
 
