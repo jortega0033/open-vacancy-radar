@@ -421,11 +421,18 @@ a `will-navigate` handler that compares real origins in dev mode (not a `startsW
 check, which a URL like `http://localhost:5173.evil.example` would have passed against an allowed
 `http://localhost:5173`), and in packaged mode allows only the exact `file://` URL of the app's own
 `dist/index.html`, not any local file path); anything else opens in the OS's default browser
-instead via `shell.openExternal`, **but only when it is an `http:`/`https:` URL**
-(`electron/external-url.ts`). That scheme check is not optional politeness: `shell.openExternal`
-hands the string to the OS shell, which acts on far more than web links: `file:` can launch a
-local executable or reach a UNC path (leaking an SMB handshake to an attacker-named host), and any
-protocol handler an installed application has registered is reachable by name. A
+instead via `shell.openExternal`, **but only when it is an absolute `https:` URL with a non-empty
+host and no embedded userinfo** (`electron/external-url.ts`). That check is not optional politeness:
+`shell.openExternal` hands the string to the OS shell, which acts on far more than web links:
+`file:` can launch a local executable or reach a UNC path (leaking an SMB handshake to an
+attacker-named host), and any protocol handler an installed application has registered is reachable
+by name. `http:` used to pass this check and no longer does: a cleartext link handed to the OS
+browser is one whose destination anything on the path can rewrite, and the string being handed over
+was scraped from a third-party page to begin with. Embedded userinfo is rejected for a different
+reason — `https://www.boards.greenhouse.io@attacker.invalid/` is a URL whose *host* is
+`attacker.invalid` while its visible prefix is a brand the user trusts. UNC (`\\host\share`),
+drive-letter, rooted and protocol-relative forms all fail too, because `new URL` is called with no
+base and so parses absolute URLs only. A
 `session.setPermissionRequestHandler` denies every permission request (camera, microphone,
 geolocation, notifications, etc.) by default, since nothing in this UI asks for any of them.
 
@@ -440,6 +447,34 @@ the feed (`httpUrl()` in `packages/vacancy-engine/src/global-remote/discovery-sh
 re-checks it at the point the OS action is actually taken. The renderer's CSP (`script-src 'self'`,
 no `unsafe-inline`) independently neutralizes a `javascript:` URL, which React 18 does not block on
 its own. It only warns.
+
+### Every IPC handler verifies its sender
+
+`ipcMain.handle(channel, listener)` is process-global: it answers **any** frame in **any**
+`WebContents` the main process hosts, and a handler that does not look at `event` cannot tell the
+app's own window from an `<iframe>`, a `<webview>`, a second window, or a devtools-hosted page.
+Until ADI-16 only the three `workspace-grant:*` channels looked at the caller at all, and even those
+used `event.sender.id` to bind a *grant* to a `WebContents` — an authorization check on a handle,
+not an authentication check on the caller.
+
+Every one of the 51 `invoke` channels is now registered through `createGuardedIpc`
+(`electron/ipc-sender-guard.ts`) instead of `ipcMain` directly. Before any listener runs, the
+invoking event must satisfy both of:
+
+1. `event.sender.id` equals the `WebContents` id captured when `createWindow()` built the app's
+   window (cleared again when that window is destroyed, so there is no window-less "allow"); and
+2. `event.senderFrame` is that `WebContents`' **top-level** frame — it has no parent, and its
+   `frameTreeNodeId` matches `event.sender.mainFrame`'s. `frameTreeNodeId` is compared rather than
+   object identity or `routingId` because Electron documents it as browser-global and fixed for the
+   frame's lifetime, whereas `WebFrameMain` instances are re-created across a cross-process
+   navigation and `routingId` is unique only within one renderer process.
+
+Anything the check cannot positively confirm — no window yet, a `senderFrame` Electron has already
+released, a `WebContents` throwing mid-teardown — is a refusal with a fixed message, not a guess.
+`apps/desktop/test/ipc-sender-guard.test.ts` reads `electron/`'s own source and fails if a direct
+`ipcMain.handle` appears anywhere, or if the set of guarded channels stops matching the set
+`preload.ts` invokes, so a handler added later without the guard fails a test rather than shipping
+unverified.
 
 The preload script (`electron/preload.ts`) exposes twelve narrow, single-purpose, typed operations
 via `contextBridge`, across three independent namespaces: never a generic "invoke this IPC channel

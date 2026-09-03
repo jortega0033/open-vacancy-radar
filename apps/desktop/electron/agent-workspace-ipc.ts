@@ -1,5 +1,6 @@
 import { toHistoryEntry } from './agent-activity-sanitize.js';
 import { toCapacity, toSessionSummary } from './agent-workspace-view.js';
+import type { GuardedIpcHandle } from './ipc-sender-guard.js';
 import type {
   AttachResult,
   HistoryEntry,
@@ -93,7 +94,16 @@ export function createSessionAliasBook(maxBooks: number = MAX_ALIAS_BOOKS): (ses
 /** An `ipcMain.handle` listener, narrowed to what these handlers actually use. */
 export type IpcInvokeHandler = (event: unknown, ...args: unknown[]) => unknown;
 
-/** The one method these registrations need from `ipcMain`, named so a test can supply a stub. */
+/**
+ * The one method these registrations need from `ipcMain`, named so a test can supply a stub.
+ *
+ * `registerAgentWorkspaceHandlers` itself takes `GuardedIpcHandle` (ipc-sender-guard.ts), not this
+ * interface, even though the shape is identical -- ADI-16 found that two structurally-identical
+ * "ipc registrar" interfaces are indistinguishable to TypeScript, so a future module wired to raw
+ * `ipcMain` by copy-paste would typecheck fine here. Requiring the branded type instead makes that
+ * mistake a compile error. A test that needs a plain stub (no real guard behavior) casts it to the
+ * branded type explicitly, which is a visible, deliberate opt-out rather than an accidental one.
+ */
 export interface IpcHandleRegistrar {
   handle(channel: string, listener: IpcInvokeHandler): void;
 }
@@ -134,7 +144,7 @@ function readCursor(body: Record<string, unknown> | undefined): string | undefin
  * Not calling it is the feature's off switch: nothing else in main.ts reads anything this module
  * owns, so the remaining channels behave identically with or without this call.
  */
-export function registerAgentWorkspaceHandlers(ipc: IpcHandleRegistrar, deps: AgentWorkspaceIpcDeps): void {
+export function registerAgentWorkspaceHandlers(ipc: GuardedIpcHandle, deps: AgentWorkspaceIpcDeps): void {
   const { getJson, aliasesFor, relay } = deps;
 
   ipc.handle('agent-workspace:list', async (_event, input: unknown): Promise<SessionListPage> => {

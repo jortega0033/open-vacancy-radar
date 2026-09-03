@@ -13,6 +13,7 @@ import {
   type IpcInvokeHandler,
 } from '../electron/agent-workspace-ipc.js';
 import type { AttachResult, SessionEventsPage, SessionListPage, SessionSummary } from '../electron/agent-workspace-types.js';
+import type { GuardedIpcHandle } from '../electron/ipc-sender-guard.js';
 
 /**
  * The desktop half of ADI-07's rollback story, and an honest statement of how far it goes.
@@ -60,9 +61,16 @@ function source(file: string): string {
   return readFileSync(join(ELECTRON_DIR, file), 'utf8');
 }
 
-/** Every channel name main.ts registers an `ipcMain.handle` for, read out of its source. */
+/**
+ * Every channel name main.ts registers a handler for, read out of its source.
+ *
+ * The receiver is `guardedIpc`, not `ipcMain`, since ADI-16: every registration now goes through the
+ * sender-verifying registrar in electron/ipc-sender-guard.ts, and a direct `ipcMain.handle` anywhere
+ * under electron/ is itself a test failure (see test/ipc-sender-guard.test.ts). Only the receiver
+ * changed -- the channel names, and everything this file asserts about them, did not.
+ */
 function mainHandleChannels(): string[] {
-  return [...source('main.ts').matchAll(/ipcMain\.handle\(\s*'([^']+)'/g)].map((match) => match[1] as string);
+  return [...source('main.ts').matchAll(/guardedIpc\.handle\(\s*'([^']+)'/g)].map((match) => match[1] as string);
 }
 
 /** Every channel preload.ts talks on: `invoke`, plus the `on`/`removeListener` push channels. */
@@ -126,7 +134,11 @@ function harness(overrides: Partial<AgentWorkspaceIpcDeps> = {}): Harness {
   const detach = vi.fn(() => true);
   const aliasesFor = createSessionAliasBook();
 
-  registerAgentWorkspaceHandlers(registrar, {
+  // registerAgentWorkspaceHandlers now requires the branded GuardedIpcHandle (ADI-16), so real
+  // callers can't wire it to an unguarded ipcMain by mistake. This stub deliberately opts out of
+  // that check -- it isn't guarded, and it's not meant to be; this file is testing registration and
+  // paging behavior, not the sender guard, which has its own test.
+  registerAgentWorkspaceHandlers(registrar as unknown as GuardedIpcHandle, {
     getJson,
     aliasesFor,
     relay: { attach, detach },
