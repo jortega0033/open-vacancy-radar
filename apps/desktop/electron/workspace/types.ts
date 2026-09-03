@@ -71,6 +71,13 @@ export interface SavedJobRecord {
   status: SavedJobStatus;
   /** ISO-8601 */
   savedAt: string;
+  /**
+   * The kept gap-analysis result for this job, or null when the user has never saved one. Plain
+   * text, exactly as the AI CLI produced it. See `schema.ts` for why it lives on this row.
+   */
+  gapAnalysis: string | null;
+  /** ISO-8601, or null. Non-null exactly when `gapAnalysis` is. */
+  gapAnalysisAt: string | null;
 }
 
 export interface SavedJobInput {
@@ -86,6 +93,15 @@ export interface SavedJobInput {
   sourceUrl?: string | null;
   notes?: string;
   status?: SavedJobStatus;
+  /**
+   * The kept gap-analysis result. Writable (this is what "Save analysis" sends) and clearable by
+   * sending an explicit `null`.
+   *
+   * There is deliberately no `gapAnalysisAt` here: the timestamp is derived by the main process
+   * from its own clock whenever this field is written, the way `letters.updatedAt` already is. A
+   * renderer that could set it could claim an analysis was kept at a time it was not.
+   */
+  gapAnalysis?: string | null;
 }
 
 export type SavedJobPatch = Partial<SavedJobInput>;

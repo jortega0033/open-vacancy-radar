@@ -651,6 +651,8 @@ describe('SearchPage', () => {
       notes: '',
       status: 'considering',
       savedAt: '2026-08-29T12:00:00.000Z',
+      gapAnalysis: null,
+      gapAnalysisAt: null,
     };
     const workspace = installWorkspaceBridge({
       getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultMarket: 'netherlands' }),

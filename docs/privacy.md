@@ -10,8 +10,8 @@ Everything the app stores lives in Electron's per-user application-data director
 (`app.getPath('userData')` — on Windows, `%APPDATA%\Open Vacancy Radar\`):
 
 - **`workspace.db`** (SQLite): your saved jobs, applications, CV library entries (including any CV
-  text you upload or type in), generated letters, and app settings. This is the personal data this
-  app exists to manage.
+  text you upload or type in), generated letters, any gap analysis you chose to keep, and app
+  settings. This is the personal data this app exists to manage.
 - **`vacancy-engine.db`** (SQLite): the local cache of vacancies discovered from public sources
   (see [the job source policy](job-source-policy.md)) — job postings, not data about you.
 - **`ai-workspace/`**: an empty scratch directory handed to AI CLI sessions as their working
@@ -106,6 +106,12 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
 
 - **Saved jobs, applications, CVs, letters**: retained until you delete them through the app (with
   confirm-before-delete and a short undo window on most deletes) or delete `workspace.db` directly.
+- **Saved gap analyses**: when you click "Save analysis" on a gap-analysis result, that result — the
+  AI CLI's own text about your CV against that vacancy — is stored in `workspace.db` on the saved
+  job it is about, and is kept there until you delete that saved job. Nothing is stored unless you
+  click that button; running an analysis and navigating away keeps nothing. This is storage only:
+  the prompt behind it already left your machine when the analysis ran (see "What leaves your
+  computer" above), and keeping the answer sends nothing anywhere.
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.

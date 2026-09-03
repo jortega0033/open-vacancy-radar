@@ -47,6 +47,12 @@ function blankToNull(value: string): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+/** Same shape as `SavedJobsTable`'s: a plain local date, falling back to the raw value. */
+function formatKeptAt(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+}
+
 /**
  * Right-side add/edit drawer for a saved job, per the prototype's `EntityEditorDrawer`
  * (`export-src.html` Saved Jobs row "Edit" action / "Add job manually" button). A plain fixed
@@ -220,6 +226,33 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               onChange={(e) => set('notes', e.target.value)}
             />
           </label>
+
+          {/*
+            The kept gap analysis, when there is one. Read-only and outside the form's `FormState`
+            on purpose: this is generated output the user chose to keep, not a field of the job,
+            and the drawer's Save must never rewrite it. It is left out of `SavedJobInput` here, so
+            `parseSavedJobPatch` sees no `gapAnalysis` key and the stored text survives an edit
+            untouched. Rendered like `AiOutput`'s answer surface (bordered, scrolling, wrapped)
+            rather than as a textarea, for the same reason.
+          */}
+          {job?.gapAnalysis && (
+            <section className="block" aria-label="Saved gap analysis">
+              <span className="mb-1 block text-sm font-medium">
+                Gap analysis
+                {job.gapAnalysisAt && (
+                  <span className="ml-2 font-normal text-base-content/60">
+                    saved {formatKeptAt(job.gapAnalysisAt)}
+                  </span>
+                )}
+              </span>
+              <div className="rounded-box max-h-64 overflow-y-auto border border-base-300 bg-base-100 p-3 text-sm leading-relaxed whitespace-pre-wrap">
+                {job.gapAnalysis}
+              </div>
+              <p className="mt-1 text-xs text-base-content/60">
+                Kept on this computer. Deleting this saved job deletes it too.
+              </p>
+            </section>
+          )}
 
           {validationError && (
             <p className="text-sm text-error" role="alert">

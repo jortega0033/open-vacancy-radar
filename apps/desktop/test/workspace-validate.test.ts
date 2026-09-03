@@ -47,8 +47,28 @@ describe('workspace input validation: allow-listing', () => {
         'sourceUrl',
         'notes',
         'status',
+        'gapAnalysis',
       ].sort(),
     );
+  });
+
+  it('lets a caller keep a gap analysis, but never date one: gapAnalysisAt is the main process’s', () => {
+    // The text is the renderer's to send; the timestamp is derived in `repository.ts` from this
+    // process's clock. A renderer that could set it could claim an analysis was kept at a time it
+    // was not, which is the kind of thing the retention disclosure in docs/privacy.md relies on.
+    const parsed = parseSavedJobPatch({
+      gapAnalysis: '## Strengths\nEight years of Angular.',
+      gapAnalysisAt: '1999-01-01T00:00:00.000Z',
+    });
+    expect(parsed).toEqual({ gapAnalysis: '## Strengths\nEight years of Angular.' });
+    expect(parsed).not.toHaveProperty('gapAnalysisAt');
+
+    // An explicit null clears it; an absent key leaves the stored analysis alone.
+    expect(parseSavedJobPatch({ gapAnalysis: null })).toEqual({ gapAnalysis: null });
+    expect(parseSavedJobPatch({ notes: 'unrelated edit' })).not.toHaveProperty('gapAnalysis');
+
+    // And it is bounded, like every other free-text field on this boundary.
+    expect(() => parseSavedJobPatch({ gapAnalysis: 'x'.repeat(200_001) })).toThrow(/at most/i);
   });
 
   it('refuses to let a patch set isDefault on a CV: promotion must go through set-default', () => {

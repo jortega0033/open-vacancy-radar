@@ -31,6 +31,23 @@ export const savedJobs = sqliteTable('saved_jobs', {
   notes: text('notes').notNull().default(''),
   status: text('status', { enum: ['considering', 'preparing', 'applied'] }).notNull().default('considering'),
   savedAt: integer('saved_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /**
+   * The gap-analysis answer the user explicitly chose to keep for this job, exactly as the AI CLI
+   * returned it (plain text). Nullable, and null is the normal state: analysis is on-demand, most
+   * saved jobs never have one, and nothing writes here except the "Save analysis" action.
+   *
+   * It is a column on `saved_jobs` rather than its own table because there is exactly one kept
+   * analysis per job -- clicking "Save analysis" again replaces it -- so a table would be a
+   * one-row-per-job join with no query anyone would ever write against it. This mirrors
+   * `letters.body`, the app's other stored AI output.
+   *
+   * Storing it is disclosed in docs/privacy.md's retention section: the *prompt* already left the
+   * machine before this column existed, but the *output* now stays on disk until the job is
+   * deleted, and that is a separate fact a user is entitled to be told.
+   */
+  gapAnalysis: text('gap_analysis'),
+  /** When `gapAnalysis` was last written. Null exactly when `gapAnalysis` is null. */
+  gapAnalysisAt: integer('gap_analysis_at', { mode: 'timestamp_ms' }),
 });
 
 export const cvDocuments = sqliteTable('cv_documents', {
