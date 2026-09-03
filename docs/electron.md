@@ -97,12 +97,20 @@ directly over loopback, but only from the main process:
   bounded folder basename — and there is no `trust()` verb, because no daemon route would accept one
   (see [daemon.md](daemon.md#workspace-trust-routes)).
 
-Each function maps to one `ipcMain.handle(...)` in `main.ts` (or, for `workspace`/`cv`, in their own
-main-process modules under `electron/workspace/`). If you're adding a new capability the renderer
-needs, add a narrow, single-purpose function to the namespace it belongs with, or a new namespace if
-none fits. Resist the temptation to add a generic "send arbitrary IPC channel + payload" escape
-hatch, since that's exactly the shape that would let a compromised renderer reach something it
-shouldn't.
+Each function maps to one `guardedIpc.handle(...)` in `main.ts` (or, for `workspace`/`cv`, in their
+own main-process modules under `electron/workspace/`). `guardedIpc` is `ipcMain` wrapped by
+`createGuardedIpc` (`electron/ipc-sender-guard.ts`, ADI-16): it verifies that the invoking event
+really came from the main window's own top-level frame before the handler runs at all, since
+`ipcMain.handle` by itself answers any frame in any `WebContents` this process hosts. **Register
+through `guardedIpc`, never through `ipcMain` directly** — a bare `ipcMain.handle` anywhere under
+`electron/` fails `test/ipc-sender-guard.test.ts`. See
+[SECURITY.md](../SECURITY.md#every-ipc-handler-verifies-its-sender) for what the check compares and
+why.
+
+If you're adding a new capability the renderer needs, add a narrow, single-purpose function to the
+namespace it belongs with, or a new namespace if none fits. Resist the temptation to add a generic
+"send arbitrary IPC channel + payload" escape hatch, since that's exactly the shape that would let a
+compromised renderer reach something it shouldn't.
 
 ## Daemon lifecycle from Electron's side
 

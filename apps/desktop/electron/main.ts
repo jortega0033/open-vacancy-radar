@@ -43,6 +43,7 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
+import { createGuardedIpc } from './ipc-sender-guard.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
 import { resolveWindowIcon } from './resolve-window-icon.js';
 import {
@@ -115,6 +116,17 @@ type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'una
 let daemonChild: ChildProcess | undefined;
 let client: AgentDockClient | undefined;
 let mainWindow: BrowserWindow | undefined;
+/**
+ * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
+ * this file will answer (ADI-16).
+ *
+ * Captured at window creation and cleared on that window's destruction, for the same reason the
+ * ADI-06 grant channels capture `webContents.id` eagerly: reading it later, from a `BrowserWindow`
+ * Electron has already torn down, is reading a property of a destroyed object -- and "the window is
+ * gone" is exactly the moment the guard needs an answer. `undefined` (no window yet, or none any
+ * more) rejects every call rather than allowing one: see electron/ipc-sender-guard.ts.
+ */
+let mainWindowWebContentsId: number | undefined;
 /**
  * The single source of truth `daemon:get-status` reads from. Without this, that handler had to
  * re-derive a status from `client` alone (set or not), which can only ever mean "ready" or
@@ -738,6 +750,11 @@ function createWindow(): void {
   // `destroyed` handler would be reading a property of an object Electron has already torn down,
   // which is exactly the moment the id is needed.
   const webContentsId = mainWindow.webContents.id;
+  // ADI-16: the same id, published to the IPC sender guard. Assigned here rather than derived from
+  // `mainWindow` on demand so that the guard reads a plain number and never touches a possibly
+  // destroyed `BrowserWindow`, and so a window recreated by macOS's `activate` (which reassigns
+  // `mainWindow`) simply replaces it.
+  mainWindowWebContentsId = webContentsId;
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
     // ADI-06: every navigation attempt expires this WebContents' grants, including one to an
@@ -754,6 +771,10 @@ function createWindow(): void {
   // the map until its TTL, still consumable by a `webContentsId` the OS is free to reuse.
   mainWindow.webContents.on('destroyed', () => {
     expireGrantsForWebContents(webContentsId, 'webcontents_destroyed');
+    // ADI-16: stop answering IPC for an id whose window no longer exists. Guarded on identity so a
+    // late teardown of an older window cannot clear the id of the one that replaced it -- the same
+    // reason `forwardSessionEvents` checks controller identity before deleting its registration.
+    if (mainWindowWebContentsId === webContentsId) mainWindowWebContentsId = undefined;
   });
 
   // Deny every permission request by default except the one this UI genuinely uses:
@@ -778,34 +799,59 @@ function createWindow(): void {
   });
 }
 
-ipcMain.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-16: every channel below is registered through `guardedIpc`, never through `ipcMain` directly.
+ *
+ * `guardedIpc.handle` is `ipcMain.handle` with one thing added: before the listener runs at all, the
+ * invoking event's sender is checked to be the top-level frame of the window `createWindow()` built.
+ * Anything else -- a subframe, a second window, a `<webview>`, a devtools-hosted page -- is refused
+ * with a fixed message and never reaches the handler body. See electron/ipc-sender-guard.ts for what
+ * "the main window's own top-level frame" means mechanically and why `event.sender.id` alone is not
+ * it.
+ *
+ * A direct registration on `ipcMain` anywhere under electron/ fails test/ipc-sender-guard.test.ts, so a
+ * handler added later without this cannot ship unverified. `ipcMain` is imported solely to be handed
+ * to `createGuardedIpc` below.
+ * ---------------------------------------------------------------------------------------------
+ */
+const guardedIpc = createGuardedIpc(ipcMain, {
+  mainWindowWebContentsId: () => mainWindowWebContentsId,
+  onRejected: ({ channel }) =>
+    // No payload, no sender id, no frame detail: a rejection is a security event worth seeing in the
+    // log, and the channel name alone says which surface was probed. Everything else would either
+    // repeat what the renderer already sent or describe this process's internals.
+    console.warn(`[ipc-sender-guard] refused an invoke on '${channel}' from an unverified sender`),
+});
 
-ipcMain.handle('daemon:list-providers', async () => {
+guardedIpc.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
+
+guardedIpc.handle('daemon:list-providers', async () => {
   if (!client) throw new Error('daemon is not ready yet');
   return client.providers.list();
 });
 
-ipcMain.handle('daemon:mcp-statuses', async () => {
+guardedIpc.handle('daemon:mcp-statuses', async () => {
   if (!client) throw new Error('daemon is not ready yet');
   return client.mcp.statuses();
 });
 
-ipcMain.handle('daemon:mcp-search', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:mcp-search', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   return client.mcp.search(mcpSearchRequestSchema.parse(input));
 });
 
-ipcMain.handle('daemon:mcp-set-credential', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:mcp-set-credential', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   await client.mcp.setCredential(mcpCredentialInputSchema.parse(input));
 });
 
-ipcMain.handle('daemon:mcp-remove', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:mcp-remove', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   await client.mcp.remove(mcpProviderIdSchema.parse(input));
 });
 
-ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   // Validated here too, at the IPC boundary from the (untrusted) renderer. @agent-dock/client
   // validates again before it ever builds a request, but that's a different concern (protecting
@@ -819,7 +865,7 @@ ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
   return session;
 });
 
-ipcMain.handle('daemon:cancel-session', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:cancel-session', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   const { sessionId } = sessionIdParamSchema.parse({ sessionId: input });
   await client.sessions.cancel(sessionId);
@@ -841,7 +887,7 @@ ipcMain.handle('daemon:cancel-session', async (_event, input: unknown) => {
  * ---------------------------------------------------------------------------------------------
  */
 
-ipcMain.handle('workspace-grant:request', async (event, input: unknown) => {
+guardedIpc.handle('workspace-grant:request', async (event, input: unknown) => {
   // Parsed from the whole payload's `provider` field only. Anything else a renderer attached
   // (a `path`, a `cwd`, a pre-baked workspace id) has no reader here and cannot reach the daemon.
   const provider = providerIdSchema.parse(
@@ -850,14 +896,14 @@ ipcMain.handle('workspace-grant:request', async (event, input: unknown) => {
   return workspaceGrants.requestGrant(provider, event.sender.id);
 });
 
-ipcMain.handle('workspace-grant:consume', async (event, input: unknown) => {
+guardedIpc.handle('workspace-grant:consume', async (event, input: unknown) => {
   const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
   // `event.sender.id` is Electron's own, unspoofable identification of the calling frame: the
   // renderer cannot claim to be a different WebContents than the one the grant was issued to.
   return workspaceGrants.consumeGrant(handle, event.sender.id);
 });
 
-ipcMain.handle('workspace-grant:status', (event, input: unknown) => {
+guardedIpc.handle('workspace-grant:status', (event, input: unknown) => {
   void event;
   const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
   return workspaceGrants.grantStatus(handle);
@@ -875,7 +921,7 @@ ipcMain.handle('workspace-grant:status', (event, input: unknown) => {
  * The response is rebuilt in `createSession` above and is reason-only on failure, so no path and no
  * daemon-authored text crosses back either.
  */
-ipcMain.handle('workspace:start-session', async (event, input: unknown) => {
+guardedIpc.handle('workspace:start-session', async (event, input: unknown) => {
   const payload = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   return workspaceGrants.startSession(
     {
@@ -925,13 +971,13 @@ async function daemonGetJson(path: string): Promise<Record<string, unknown> | un
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
 }
 
-registerAgentWorkspaceHandlers(ipcMain, {
+registerAgentWorkspaceHandlers(guardedIpc, {
   getJson: daemonGetJson,
   aliasesFor: aliasesForSession,
   relay: agentWorkspaceRelay,
 });
 
-ipcMain.handle('dialog:select-directory', async () => {
+guardedIpc.handle('dialog:select-directory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -959,7 +1005,7 @@ async function ensureAiWorkspaceDir(): Promise<string> {
   return dir;
 }
 
-ipcMain.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
+guardedIpc.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
 
 /**
  * Opens a native file picker and returns the CV's extracted plain text: never a path the renderer
@@ -968,7 +1014,7 @@ ipcMain.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceD
  * `dialog:select-directory` above (null on cancel / no window); a genuine read or parse failure
  * rejects, so the UI can show the reason instead of a silent empty state.
  */
-ipcMain.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => {
+guardedIpc.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select your CV',
@@ -1019,7 +1065,7 @@ function assertSaveFileInput(input: unknown): asserts input is SaveFileInput {
  * the `docx`/`jspdf` packages) and hands it across as one payload; main only ever names a path and
  * writes bytes, never generates document content itself.
  */
-ipcMain.handle('system:save-file', async (_event, input: unknown): Promise<{ saved: boolean; path?: string }> => {
+guardedIpc.handle('system:save-file', async (_event, input: unknown): Promise<{ saved: boolean; path?: string }> => {
   assertSaveFileInput(input);
   if (!mainWindow) return { saved: false };
   const buffer = Buffer.from(input.data, input.encoding);
@@ -1046,7 +1092,7 @@ ipcMain.handle('system:save-file', async (_event, input: unknown): Promise<{ sav
  * panel's existing "Checking vacancy engine status…" state, and `{ ready: false }` now means only
  * what the renderer already assumes it means: initialization actually failed.
  */
-ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
+guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
   try {
     await ensureVacancyEngine();
     return { ready: true };
@@ -1055,9 +1101,9 @@ ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?:
   }
 });
 
-ipcMain.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
 
-ipcMain.handle('vacancy:run-scan', async (_event, query: unknown): Promise<GlobalRemoteReport> => {
+guardedIpc.handle('vacancy:run-scan', async (_event, query: unknown): Promise<GlobalRemoteReport> => {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
@@ -1082,9 +1128,9 @@ ipcMain.handle('vacancy:run-scan', async (_event, query: unknown): Promise<Globa
  * so that outcome is translated into the same error message `vacancy:run-scan` uses: from the
  * renderer's point of view "another scan is running" is one condition, not two.
  */
-ipcMain.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
+guardedIpc.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
 
-ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
+guardedIpc.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
   const db = await ensureVacancyEngine();
   const lock = vacancyScanLock;
   if (!lock) throw new Error('vacancy engine is not initialized');
@@ -1113,7 +1159,7 @@ async function candidateProfilePath(): Promise<string> {
   return join(await vacancyEngineDataRoot(), 'config', 'candidate-profile-v1.json');
 }
 
-ipcMain.handle('vacancy:get-search-profile', async (): Promise<CandidateProfile> => {
+guardedIpc.handle('vacancy:get-search-profile', async (): Promise<CandidateProfile> => {
   return loadCandidateProfile(await candidateProfilePath());
 });
 
@@ -1156,7 +1202,7 @@ function nextProfileVersion(): string {
  * keys its cached deterministic scores off this version, so a save that left it unchanged would let
  * stale scores survive a profile edit.
  */
-ipcMain.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
+guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
   const patch = parseCandidateProfilePatch(rawPatch);
   return withProfileSaveQueue(async () => {
     const path = await candidateProfilePath();
@@ -1191,82 +1237,82 @@ ipcMain.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown):
  * ---------------------------------------------------------------------------------------------
  */
 
-ipcMain.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:settings:update', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
   workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input)),
 );
 
 /** Badge counts for the sidebar: a dedicated read so the shell never has to fetch three lists. */
-ipcMain.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
   workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
 );
 
-ipcMain.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
+guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
   const { id, patch } = parseIdAndPatch(input);
   return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
 });
 
-ipcMain.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
   workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:applications:list', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) =>
   workspace.listApplications(await ensureWorkspaceDb(), parseApplicationFilter(input)),
 );
 
-ipcMain.handle('workspace:applications:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:applications:create', async (_event, input: unknown) =>
   workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
 );
 
-ipcMain.handle('workspace:applications:update', async (_event, input: unknown) => {
+guardedIpc.handle('workspace:applications:update', async (_event, input: unknown) => {
   const { id, patch } = parseIdAndPatch(input);
   return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
 });
 
-ipcMain.handle('workspace:applications:delete', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
   workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
   workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
 );
 
-ipcMain.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
+guardedIpc.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
   const { id, patch } = parseIdAndPatch(input);
   return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
 });
 
-ipcMain.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
   workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
   workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:letters:create', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:letters:create', async (_event, input: unknown) =>
   workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
 );
 
-ipcMain.handle('workspace:letters:update', async (_event, input: unknown) => {
+guardedIpc.handle('workspace:letters:update', async (_event, input: unknown) => {
   const { id, patch } = parseIdAndPatch(input);
   return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
 });
 
-ipcMain.handle('workspace:letters:delete', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:letters:delete', async (_event, input: unknown) =>
   workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
   workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
 
@@ -1281,7 +1327,7 @@ ipcMain.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
  * not this app. The preference still persists in settings and applies in packaged builds.
  * ---------------------------------------------------------------------------------------------
  */
-ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
+guardedIpc.handle('system:set-login-item', (_event, input: unknown) => {
   if (typeof input !== 'boolean') throw new Error('"enabled" must be a boolean');
   if (!app.isPackaged) return;
   app.setLoginItemSettings({ openAtLogin: input });
@@ -1289,7 +1335,7 @@ ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
 
 /** Reads `package.json`'s `version` via Electron's own resolution: never a hand-maintained
  * string the Settings page's About section could drift from. */
-ipcMain.handle('system:get-app-version', (): string => app.getVersion());
+guardedIpc.handle('system:get-app-version', (): string => app.getVersion());
 
 if (gotSingleInstanceLock) {
   app.on('second-instance', () => {
