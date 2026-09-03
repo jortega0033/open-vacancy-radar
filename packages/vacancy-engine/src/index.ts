@@ -27,5 +27,16 @@ export {
 
 export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit } from './global-remote/models.js';
 export type { JobRadarReport, ReportVacancy } from './reporting/report.js';
+export {
+  descriptionShingleSimilarity,
+  findCrossCompanyDuplicateGroups,
+  CROSS_COMPANY_DUPLICATE_VERSION,
+  CROSS_COMPANY_MINIMUM_DESCRIPTION_TOKENS,
+  CROSS_COMPANY_MINIMUM_SUBSTANTIVE_DESCRIPTION_TOKENS,
+  CROSS_COMPANY_SHINGLE_LENGTH,
+  CROSS_COMPANY_SHINGLE_SIMILARITY_THRESHOLD,
+  type CrossCompanyDuplicateCandidate,
+  type CrossCompanyDuplicateGroup,
+} from './reporting/cross-company-duplicates.js';
 
 export { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './geo/countries.js';

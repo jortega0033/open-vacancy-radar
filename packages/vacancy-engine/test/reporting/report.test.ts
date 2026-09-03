@@ -168,6 +168,53 @@ describe('report generation', () => {
     expect(html).not.toContain('No Dutch requirement detected');
   });
 
+  it('labels a cross-company duplicate group without dropping either row from the report', () => {
+    const base = reportWithScore(90);
+    const first = base.vacancies[0]!;
+    const html = renderHtmlReport({
+      ...base,
+      vacancies: [
+        {
+          ...first,
+          id: 'job-1',
+          company: 'Contoso',
+          url: 'https://jobs.example.com/job-1',
+          duplicateGroup: {
+            groupId: 'group-1',
+            otherVacancyIds: ['job-2'],
+            otherCompanies: ['Contoso Netherlands B.V.'],
+          },
+        },
+        {
+          ...first,
+          id: 'job-2',
+          company: 'Contoso Netherlands B.V.',
+          url: 'https://jobs.example.com/job-2',
+          duplicateGroup: {
+            groupId: 'group-1',
+            otherVacancyIds: ['job-1'],
+            otherCompanies: ['Contoso'],
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain('Possibly also posted under 1 other company record<');
+    expect(html).toContain('not a confirmed link between employers');
+    // Posting text is the whole of the signal, and the copy says so rather than hinting at a
+    // company-name resemblance that no longer plays any part. See cross-company-duplicates.ts v3.
+    expect(html).toContain('Matching posting text only');
+    expect(html).toContain('company names were not used');
+    // Both rows survive in full, each with its own official link: this is a label, not a merge.
+    expect(html).toContain('https://jobs.example.com/job-1');
+    expect(html).toContain('https://jobs.example.com/job-2');
+    expect(html.match(/OPEN OFFICIAL VACANCY/g)).toHaveLength(2);
+  });
+
+  it('says nothing about duplicates for a row with no group', () => {
+    expect(renderHtmlReport(reportWithScore(90))).not.toContain('Possibly also posted under');
+  });
+
   it('keeps unknown and boundary-age postings but rejects anything older', () => {
     const generatedAt = new Date('2026-08-28T12:00:00.000Z');
     expect(isPostingFresh(null, generatedAt, 365)).toBe(true);

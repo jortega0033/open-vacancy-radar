@@ -20,6 +20,11 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
     result.market === 'worldwide' ? { text: decisionLabel(result.raw.decision), tone: null } : null,
+    // A hint only, and a neutral one: the row stays in the list at its own rank, selectable and
+    // saveable on its own. The detail pane carries the full, hedged explanation.
+    result.market === 'netherlands' && result.raw.duplicateGroup
+      ? { text: 'Possible duplicate', tone: null }
+      : null,
   ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (

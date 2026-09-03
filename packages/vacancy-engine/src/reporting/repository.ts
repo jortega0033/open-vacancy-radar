@@ -16,6 +16,7 @@ import {
 import { DETERMINISTIC_SCORING_VERSION, RELEVANCE_THRESHOLD } from '../filtering/index.js';
 import { OFFICIAL_IND_WORK_REGISTER_URL } from '../ind/source.js';
 import { createVacancySemanticFingerprint } from '../vacancies/hash.js';
+import { findCrossCompanyDuplicateGroups } from './cross-company-duplicates.js';
 import {
   type JobRadarReport,
   type ReportStatistics,
@@ -356,6 +357,11 @@ export async function buildJobRadarReport(
       seenFingerprints.add(fingerprint);
       return true;
     });
+  // Runs *after* the same-company collapse above and changes none of its behavior: it removes
+  // nothing and reorders nothing, it only annotates. `deduplicatedVacancyRows` is the right input
+  // because the same-company duplicates are already gone by here, so every remaining pair this
+  // looks at genuinely crosses a company-record boundary. See `cross-company-duplicates.ts`.
+  const crossCompanyDuplicateGroups = findCrossCompanyDuplicateGroups(deduplicatedVacancyRows);
   const reportVacancies: ReportVacancy[] = deduplicatedVacancyRows.map((vacancy) => {
     // Left-joined scoring columns: null (no matching vacancyScores row -- either an unconfigured
     // profile or a genuinely stale cache) means the whole scoring group is omitted from the
@@ -381,7 +387,11 @@ export async function buildJobRadarReport(
           gaps: vacancy.gaps!,
           reasons: vacancy.reasons!,
         };
+    // Absent, never an empty group: `exactOptionalPropertyTypes` makes "the key is not there" the
+    // only honest way to say "this row has no cross-company duplicate suggestion".
+    const duplicateGroup = crossCompanyDuplicateGroups.get(vacancy.id);
     return {
+      ...(duplicateGroup ? { duplicateGroup } : {}),
       id: vacancy.id,
       title: vacancy.title,
       description: vacancy.description,
