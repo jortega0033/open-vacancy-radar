@@ -10,9 +10,19 @@ export interface StartSessionOptions {
   /** One of the provider's `availableModels`, passed straight through to its CLI's model flag.
    * A provider with no model selection (no `availableModels`) ignores this field entirely. */
   model?: string;
-  /** Unset by every caller in this codebase today. The spawned process inherits the daemon's
-   * full `process.env` by default, deliberately, since the CLI needs its own PATH/HOME/etc. to
-   * find its config and credentials. See SECURITY.md#environment-inheritance-a-deliberate-tradeoff-not-an-oversight. */
+  /**
+   * Unset by every caller in this codebase today, and it no longer matters that it is.
+   *
+   * This used to be the *only* thing standing between a provider child and the daemon's entire
+   * environment: unset meant full `process.env` inheritance. As of ADI-15 the child gets a
+   * default-deny allowlist either way, and this field selects which environment is *filtered*
+   * rather than whether filtering happens -- so leaving it unset is now the safe case rather than
+   * the dangerous one. The old reasoning (a CLI needs `PATH`/`HOME`/etc. to find its own config and
+   * credentials) still holds and is exactly what the allowlist grants; what changed is that the
+   * required subset was measured against the real installed CLIs instead of assumed to be
+   * unknowable. See `providers/common/provider-environment.ts` and
+   * SECURITY.md#environment-allowlist-for-spawned-provider-processes.
+   */
   env?: NodeJS.ProcessEnv;
   /**
    * Observation-only seam for the v2 session supervisor (ADI-04). Optional and unset by every

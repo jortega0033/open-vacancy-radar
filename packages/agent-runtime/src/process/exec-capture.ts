@@ -11,6 +11,13 @@ export interface ExecResult {
  * Runs a short-lived command (version checks, auth status) and captures its output. Not for
  * long-running sessions. Use spawnProcess + readLines for those. Always bounded by a timeout
  * so a hung CLI can't stall provider detection indefinitely.
+ *
+ * The environment is not this function's decision (ADI-15): `opts.env` is forwarded to
+ * `spawnProcess`, which filters it (or `process.env` when it is unset, as it is at every call site
+ * here) through `buildProviderEnvironment`. Both providers' `detect.ts` reach a CLI through this
+ * function, so their auth and version probes run under the same allowlist a real session does --
+ * which is the point: a detection path that saw a broader environment than the session path would
+ * make detection results say nothing about what a session will actually get.
  */
 export async function execCapture(
   command: string,

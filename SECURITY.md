@@ -240,20 +240,144 @@ well-established process-group mechanism but was not independently re-verified o
 this audit (no such machine was available). Treat it as documented behavior, not empirically
 re-confirmed on every platform.
 
-## Environment inheritance (a deliberate tradeoff, not an oversight)
+## Environment allowlist for spawned provider processes
 
-Provider CLIs are spawned with the daemon's **full environment** (`process.env`) unless a caller
-overrides `StartSessionOptions.env`, which nothing in this codebase currently does. This is a
-conscious choice, not an accident: `claude`/`codex` need `PATH`, `HOME`/`USERPROFILE`, and
-platform-specific variables to even locate their own config and credentials, and stripping the
+Provider CLIs are spawned with a **default-deny environment allowlist**
+(`packages/agent-runtime/src/providers/common/provider-environment.ts`), not with the daemon's own
+environment. A child receives only the platform and provider-config variables it actually needs;
+everything else is dropped, including variables that match no "secret-looking" pattern at all.
+
+### What this replaced, and why the old reasoning was half right
+
+This section previously documented full `process.env` inheritance as *a deliberate tradeoff, not an
+oversight*, on the grounds that `claude`/`codex` need `PATH`, `HOME`/`USERPROFILE` and
+platform-specific variables to locate their own config and credentials, and that "stripping the
 environment down to a hand-picked safe subset risks silently breaking legitimate CLI
-authentication: a worse failure mode for a boilerplate whose entire point is "use the CLI's own
-auth" than inheriting a somewhat broader environment than strictly necessary. The daemon itself
-never returns its environment (or the child's) through any API response or log line. If you fork
-this project into a context where the daemon's own process might carry secrets unrelated to the
-providers (e.g. it's started from a shell profile that also exports cloud credentials), that's a
-reason to start the daemon from a more minimal environment yourself, not something this codebase
-currently does for you.
+authentication" — a worse failure for a project whose whole point is "use the CLI's own auth".
+
+That risk was real and is still taken seriously; it is why over-restriction is treated as a genuine
+regression rather than an inconvenience. What the old reasoning got wrong was treating the safe
+subset as unknowable. It was never measured. It has been now, against the real installed binaries
+rather than asserted from documentation: under an environment restricted to exactly the allowlist,
+`claude --version`, `codex --version`, `where claude`/`where codex`, `claude auth status --json`
+(`{"loggedIn": true, "authMethod": "claude.ai", ...}`) and `codex login status`
+(`Logged in using ChatGPT`) all behave identically to a full-inheritance run. **OAuth**
+authentication is unaffected, because it resolves through the CLI's own on-disk state, which this
+daemon still never reads or touches. A per-variable removal sweep additionally identified `PATHEXT`
+as independently load-bearing — without it, executable detection fails outright.
+
+Stated precisely, because "authentication is unaffected" without qualification would overclaim what
+was measured: **environment-variable-based authentication is deliberately no longer supported.**
+Three configurations stop working, and cannot be re-enabled by the user, since a name must clear
+both lists and no allowlist entry overrides a denied one:
+
+- **API-key auth** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). A real configuration, not a hypothetical:
+  `parseCodexLoginStatus` already recognizes a "Logged in using API key" state.
+- **Bedrock routing** (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `AWS_*`).
+- **Vertex routing** (`ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`,
+  `GOOGLE_APPLICATION_CREDENTIALS`).
+
+That is taken knowingly. A long-lived API key or a set of cloud credentials handed to a process that
+reads untrusted scraped content and can reach the network is exactly the authority this change
+withdraws, and this product's premise is the CLI's own OAuth session. But an affected user's symptom
+is a false "not authenticated", so it is written down here rather than left to be rediscovered.
+Re-enabling any of it is a policy decision to be made in review, not a flag.
+
+So the tradeoff is not deleted, it is resolved: the failure mode it feared is the one the
+measurement rules out, and the exposure it accepted is no longer necessary to accept.
+
+### Why this mattered here specifically
+
+Not hypothetical. `packages/vacancy-engine/src/config.ts` reads this product's own vacancy-source
+credentials (`AI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `ADZUNA_APP_ID`/`ADZUNA_APP_KEY`,
+`JOOBLE_API_KEY`, `REED_API_KEY`, `JOBSPIPE_API_KEY`) directly from `process.env`, and
+`apps/desktop/electron/main.ts` spawns the daemon with `{ ...process.env, ... }`. On a machine
+where those are exported, they previously reached the daemon and then every provider CLI child
+verbatim, along with `AGENT_DOCK_STATE_DIR`, `AGENT_DOCK_APP_ID` and anything else in the launching
+shell. A provider session reads untrusted content by design (a scraped job posting can carry
+injected instructions) and can reach the network, so "the child could read the environment" was a
+real path, not a theoretical one.
+
+The daemon's keyring-backed MCP credential store (`apps/daemon/src/mcp/credential-store.ts`, via
+`@napi-rs/keyring`) was checked and is **not** part of this exposure: it never places a secret in
+any process environment. Nor is the per-launch discovery token an environment variable — it is
+written to a `0600` discovery file and held in memory (see [Single daemon instance](#single-daemon-instance)).
+
+### The two lists
+
+Same shape as the tool restriction in `providers/claude/build-args.ts`:
+
+1. **A required allowlist**, stated positively so a variable introduced by a future dependency is
+   not granted by default. Drift therefore fails closed (something goes missing, visibly) rather
+   than open. On Windows: `PATH`, `PATHEXT`, `COMSPEC`, `SystemRoot`, `SystemDrive`, `windir`,
+   `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `ProgramData`,
+   `ProgramFiles`, `ProgramFiles(x86)`, `ProgramW6432`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS`,
+   `OS`, `PROCESSOR_ARCHITECTURE`. On POSIX the structural analogue (`HOME`, `TMPDIR`, `SHELL`,
+   `USER`, `LOGNAME`, the `LANG`/`LC_*` and `XDG_*` roots, plus `XDG_RUNTIME_DIR` and
+   `DBUS_SESSION_BUS_ADDRESS`, without which a libsecret/gnome-keyring credential lookup fails and
+   the CLI reports itself not logged in). Plus, on both: each provider's own config namespace
+   (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) and the proxy/CA variables a CLI needs to reach its auth
+   endpoint on a managed network (`ALL_PROXY` included — Codex is Rust/reqwest and honors it).
+2. **An always-enforced deny list**, applied as a conjunction with the allowlist rather than a
+   sequential override, so a credential-shaped name can never reach a child even if a later edit
+   adds an overlapping entry to the allowlist. It covers the usual credential shapes (`SECRET`, `TOKEN`, `PASSWORD`,
+   `CREDENTIAL`, `API_KEY`, `_KEY$`, `AWS_`/`AZURE_`/`GCP_`/`GOOGLE_APPLICATION_`/`GH_`/`GITHUB_`/
+   `NPM_`/`OPENAI_`/`ANTHROPIC_`/`SSH_`/`VAULT_`) *and* this daemon's and product's own internals
+   (`AGENT_DOCK_*`, `ELECTRON_*`, and the vacancy-source credential names above). A granted name
+   must clear the allowlist *and* this list — a conjunction, not an evaluation order, so "deny wins"
+   describes the result rather than a sequence. The two lists are disjoint today, which means the
+   deny branch never fires in production and its veto cannot be observed by ordinary use; a test
+   constructs the overlap on purpose so the veto is exercised rather than merely asserted.
+
+`StartSessionOptions.env` and `SpawnOptions.env` now select *which* environment gets filtered, not
+whether filtering happens. There is no opt-out: every `spawnProcess` caller in this repo is a
+provider CLI or a `where`/`which` lookup on behalf of one, so the policy is applied once, at the
+single point where the process is actually created, and every other entry point (`exec-capture.ts`,
+`detect-executable.ts`, `run-session.ts`, both providers' `detect.ts`) inherits it structurally
+rather than re-implementing it. Provider *detection* therefore runs under the same environment a
+real session does, which is what makes a detection result mean anything about a later session.
+
+### This bounds the session's tools, not only the CLI
+
+Everything the agent runs *inside* a session — build commands, test runners, `git`, an MCP server it
+starts — are descendants of the bounded child and inherit the same environment. `PATH` survives, so
+most tooling still resolves, but toolchain variables do not (`JAVA_HOME`, `CARGO_HOME`, `GOPATH`,
+`VIRTUAL_ENV`, `CONDA_PREFIX`, `PYENV_ROOT`, `NVM_DIR`, `ANDROID_HOME`, `NODE_OPTIONS`), and
+`SSH_AUTH_SOCK` is denied, so agent-forwarded `git push` over SSH will not work from inside a
+session. That is the intended posture — an SSH agent socket reachable by a process that reads
+untrusted scraped postings is authority worth withdrawing — but it is a real behavior change for a
+toolchain-heavy workspace, and it fails in ways that will not look like an environment problem.
+
+### Enforcing the choke point
+
+`packages/agent-runtime/src/process/spawn-process.ts` holds the only `spawn()` call in the package,
+with the filter applied on the line above it. That the guarantee is *structural* rather than
+conventional is enforced by an ESLint `no-restricted-imports` rule on `node:child_process` across
+`packages/agent-runtime/src/**`, exempting only that file: without it, a future `execFile` import
+elsewhere in the package would bypass the entire policy silently and no test would notice.
+
+### Two honest limits
+
+- **Windows re-adds eleven variables regardless.** libuv merges its own `required_vars` in from the
+  real parent environment, so even `spawn(..., { env: {} })` produces a child with `HOMEDRIVE`,
+  `HOMEPATH`, `LOGONSERVER`, `PATH`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`, `USERDOMAIN`, `USERNAME`,
+  `USERPROFILE`, `WINDIR`. **Verified directly** by spawning a `process.env` dump with an empty env.
+  None is credential-shaped, and a test asserts the deny list never claims to block one of them —
+  because the runtime would silently override it and the guarantee would be a fiction. The
+  allowlist is deliberately *not* padded with these to make the subset assertion look tidier.
+- **A proxy URL can embed credentials.** `HTTP_PROXY`/`HTTPS_PROXY` are allowlisted because without
+  them a CLI behind a corporate proxy cannot reach its own auth endpoint — the exact false "not
+  authenticated" this design is trying to avoid — and no name-based pattern can tell
+  `http://proxy.example` from `http://user:pass@proxy.example`. Named here rather than left implicit.
+
+The daemon still never returns its environment (or a child's) through any API response or log line.
+The environment builder reports which variables it dropped by **name only**; a dropped variable's
+value is the thing most likely to be a secret, so the return type gives a caller nothing to log by
+accident.
+
+The POSIX allowlist is the one part not empirically re-verified: no macOS or Linux machine was
+available, the same caveat this document already carries for the POSIX process-group termination
+path. Treat it as documented intent pending a first-run check on those platforms.
 
 ## Single daemon instance
 

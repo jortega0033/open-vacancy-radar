@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcessByStdio } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import type { Readable, Writable } from 'node:stream';
+import { buildProviderEnvironment } from '../providers/common/provider-environment.js';
 import { encodeWindowsJobHostArguments, resolveWindowsJobHostPath } from './windows-job-host.js';
 
 export interface ProcessExitResult {
@@ -51,6 +52,32 @@ export interface SpawnResult {
 
 export interface SpawnOptions {
   cwd: string;
+  /**
+   * The environment to **filter**, not the environment to use. Defaults to `process.env`.
+   *
+   * ADI-15 changed what this field means, and the change is deliberate. It used to be a full
+   * replacement (`env: opts.env ?? process.env`), which made the safe default depend on every call
+   * site remembering to pass something -- and no call site ever did, so every provider child
+   * inherited the daemon's entire environment. Whatever is supplied here now goes through
+   * `buildProviderEnvironment` on its way to the child, so there is exactly one place the policy is
+   * decided and no argument a caller can pass that escapes it.
+   *
+   * There is no opt-out, because there is no caller that needs one: every use of `spawnProcess` in
+   * this repo is a provider CLI or a `where`/`which` lookup performed on behalf of one (see
+   * `detect-executable.ts`, `exec-capture.ts`, `run-session.ts`). A future non-provider caller
+   * wanting a different environment should get its own reviewed policy, not a flag that turns this
+   * one off.
+   *
+   * **The filter is by name, so the values passed here are trusted.** Supplying an env cannot smuggle
+   * an unlisted *variable* through, but it fully controls the values of the listed ones -- and
+   * `PATH`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and the proxy
+   * variables are respectively code execution in the child, redirection of the CLI's credential
+   * directory, TLS trust, and traffic interception. Nothing populates this field today (it is
+   * `undefined` at every call site, and no wire schema carries an env field), and it must never be
+   * populated from a client-supplied or workspace-supplied source. Said explicitly because the
+   * sentence above -- "no argument a caller can pass that escapes it" -- is true of names only, and
+   * is otherwise easy to read as a broader assurance than it is.
+   */
   env?: NodeJS.ProcessEnv;
   /** Test/embedding seam. Production resolves the helper relative to the daemon bundle. */
   windowsJobHostPath?: string;
@@ -283,7 +310,14 @@ function publicWindowsProcess(child: NativeProcess): SpawnedProcess {
 }
 
 /**
- * Spawns a command with an argv array (never a shell string) and no shell interpolation.
+ * Spawns a command with an argv array (never a shell string) and no shell interpolation, and with a
+ * default-deny environment (ADI-15): the child sees only `buildProviderEnvironment`'s allowlisted
+ * subset, never the daemon's own environment. Every other subprocess entry point in this package
+ * (`exec-capture.ts`, `detect-executable.ts`, `run-session.ts`, both providers' `detect.ts`) reaches
+ * the OS through this function, so that policy is inherited structurally rather than re-implemented
+ * per call site. On Windows the provider is created by the Job Host with `lpEnvironment = NULL`,
+ * i.e. it inherits the host's own block -- and the host got this filtered environment, so the
+ * restriction survives the extra hop rather than being undone by it.
  *
  * POSIX launches the provider detached, in its own process group. Windows launches the shipped Job
  * Object host, which creates the provider as a job member at process-creation time (suspended,
@@ -303,9 +337,14 @@ export function spawnProcess(command: string, args: string[], opts: SpawnOptions
   const actualArgs = usesWindowsJobHost
     ? encodeWindowsJobHostArguments({ ownerPid: process.pid, executable: command, cwd: opts.cwd, args })
     : args;
+  // ADI-15: the single point where the provider environment policy is applied. Note it uses the
+  // real `process.platform` rather than `opts.platform`: that seam exists to exercise the Job Host
+  // branch, and the environment a child needs is a fact about the machine actually running it, not
+  // about which branch a test is driving.
+  const { env } = buildProviderEnvironment(opts.env ?? process.env);
   const nativeChild = spawn(actualCommand, actualArgs, {
     cwd: opts.cwd,
-    env: opts.env ?? process.env,
+    env,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,

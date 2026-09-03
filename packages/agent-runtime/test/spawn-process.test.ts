@@ -244,14 +244,18 @@ describe('spawnProcess process-tree lifecycle', () => {
         '',
       ];
       await mkdir(shimDirectory, { recursive: true });
+      // The recorder writes to a path relative to its own cwd (`temp`) rather than reading one out
+      // of the environment. It used to take it from an `OVR_ARGV_LOG` variable passed through
+      // `SpawnOptions.env`, which ADI-15 made impossible on purpose: that field now selects the
+      // environment to *filter*, so an unlisted name no longer reaches the child. Using cwd keeps
+      // this test about argv fidelity, which is all it was ever about.
       await writeFile(
         recorder,
-        "import { writeFileSync } from 'node:fs'; writeFileSync(process.env.OVR_ARGV_LOG, JSON.stringify(process.argv.slice(2)));",
+        "import { writeFileSync } from 'node:fs'; writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)));",
       );
       await writeFile(shim, `@echo off\r\n"${process.execPath}" "${recorder}" %*\r\n`);
       const tree = spawnProcess(shim, literalArguments, {
         cwd: temp,
-        env: { ...process.env, OVR_ARGV_LOG: invocationLog },
         windowsJobHostPath: JOB_HOST,
       });
       const stdout = collect(tree.child.stdout);
