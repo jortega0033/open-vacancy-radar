@@ -1,9 +1,11 @@
 /**
- * Public surface of the Search feature. The app shell only needs `SearchPage`, which takes no
- * props; the pieces below it are exported for tests and for a future layout that splits the
- * master/detail pair across screens.
+ * Public surface of the Search feature. The app shell only needs `SearchPage`, whose one prop
+ * (`onGenerateLetter`, for the Search -> Letters handoff -- see App.tsx) is optional; the pieces
+ * below it are exported for tests and for a future layout that splits the master/detail pair
+ * across screens.
  */
-export { SearchPage, savedJobInputFor, toVacancyLead } from './SearchPage.js';
+export { SearchPage, savedJobInputFor, selectedVacancyFor, toVacancyLead } from './SearchPage.js';
+export type { SearchPageProps } from './SearchPage.js';
 export { SearchFilterBar } from './SearchFilterBar.js';
 export type { SearchFilterBarProps } from './SearchFilterBar.js';
 export { SearchResultList, SearchResultRow } from './SearchResultList.js';

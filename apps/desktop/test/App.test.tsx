@@ -1,9 +1,84 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
+import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import { App } from '../src/App.js';
-import type { AgentDockBridge, DaemonStatus } from '../src/window.js';
+import type { AgentDockBridge, DaemonStatus, VacancyEngineStatus } from '../src/window.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from './workspace-bridge.js';
+
+/**
+ * One worldwide vacancy, enough to drive the "Generate Letter" handoff tests below. Matches
+ * `test/components/search/SearchPage.test.tsx`'s own fixtures, trimmed to the one row these tests
+ * need; the default persisted market (see `DEFAULT_SETTINGS` in `workspace-bridge.ts`) is already
+ * 'worldwide', so this is what Search hydrates with no market switch required.
+ */
+function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
+  return {
+    key: 'ww-1',
+    provider: 'remotive',
+    company: 'Acme Corp',
+    title: 'Remote Frontend Engineer',
+    url: 'https://example.invalid/jobs/ww-1',
+    location: 'Worldwide',
+    employmentType: 'full_time',
+    currency: 'USD',
+    salaryPeriod: 'year',
+    advertisedMinimum: 120_000,
+    annualizedMinimumUsd: 120_000,
+    decision: 'official_review_candidate',
+    reasons: ['Explicit frontend role'],
+    contentHash: 'hash-ww-1',
+    description: 'Join our fully-remote engineering team building the next generation of tooling.',
+    postedAt: null,
+    profileScore: null,
+    worldwideSponsorMatch: null,
+    ...overrides,
+  };
+}
+
+function makeWorldwideReport(vacancies: DiscoveryVacancyAudit[]): GlobalRemoteReport {
+  return {
+    runId: 'ww-run-1',
+    generatedAt: '2026-08-29T11:00:00.000Z',
+    profileVersion: 'global-remote-profile-v1',
+    criteria: {
+      role: 'frontend',
+      fullyRemote: true,
+      applicantLocation: 'anywhere-outside-us-nl',
+      usCitizenshipRequired: false,
+      minimumAnnualBaseUsd: 100_000,
+      currency: 'USD',
+    },
+    statistics: {
+      discoveryRequests: 1,
+      discoveryListings: vacancies.length,
+      discoveryUniqueListings: vacancies.length,
+      discoveryOfficialReviewCandidates: vacancies.length,
+      officialBoardsOrPagesAttempted: 0,
+      officialRequests: 0,
+      strictMatches: 0,
+      manualReview: 0,
+      nearMisses: 0,
+      excludedOrInactive: 0,
+      blockedOrErrored: 0,
+      registrySources: 0,
+      activeRegistrySources: 0,
+      gatedRegistrySources: 0,
+      manualOrProhibitedRegistrySources: 0,
+    },
+    sourceRegistry: [],
+    discoverySources: [],
+    strictMatches: [],
+    manualReview: [],
+    nearMisses: [],
+    excludedOrInactive: [],
+    blockedOrErrored: [],
+    officialAudit: [],
+    discoveryAudit: vacancies,
+    methodology: [],
+    attribution: [],
+  };
+}
 
 const TEST_CAPABILITIES: ProviderCapabilities = {
   resume: true,
@@ -122,5 +197,69 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText(/codex ready/i)).toBeInTheDocument());
+  });
+
+  /**
+   * ADI-06 wired the shell itself; these cover the Search -> Letters live-vacancy handoff (the one
+   * piece of cross-page state App.tsx now carries -- see `pendingVacancy`).
+   */
+  describe('Search -> Letters vacancy handoff', () => {
+    it('clicking "Generate Letter" on the vacancy detail navigates to Letters with that vacancy pre-selected, no manual retyping', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      });
+
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
+      // "Live" job source, pre-selected on the handed-off vacancy -- LetterGenerator received it.
+      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('live');
+      expect(screen.getByText('Remote Frontend Engineer')).toBeInTheDocument();
+    });
+
+    it('a manual visit to Letters through the sidebar shows no vacancy pre-selected', async () => {
+      render(<App />);
+      await waitFor(() => expect(screen.getByText(/find relevant roles/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      // Opens on the Library, exactly as an ordinary visit always has.
+      expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
+
+      fireEvent.click(screen.getByRole('tab', { name: /generator/i }));
+
+      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('manual');
+    });
+
+    it('the handoff does not persist: leaving Letters and returning through the sidebar no longer replays the handed-off vacancy', async () => {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      });
+
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('live');
+
+      // Leave Letters for an unrelated page, then come back through the sidebar -- an ordinary,
+      // non-handoff visit.
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
+
+      fireEvent.click(screen.getByRole('tab', { name: /generator/i }));
+
+      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('manual');
+    });
   });
 });

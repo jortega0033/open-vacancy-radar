@@ -696,6 +696,38 @@ describe('SearchPage', () => {
     expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
   });
 
+  it('clicking "Generate Letter" hands the selected vacancy off as a SelectedVacancy, unchanged by any AI logic', async () => {
+    const onGenerateLetter = vi.fn();
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+    });
+
+    render(<SearchPage onGenerateLetter={onGenerateLetter} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+
+    expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+    expect(onGenerateLetter).toHaveBeenCalledWith({
+      title: 'Senior Frontend Architect',
+      company: 'Redwood Software',
+      location: 'Amsterdam',
+      url: 'https://example.invalid/jobs/nl-1',
+      key: 'nl-1',
+    });
+  });
+
+  it('"Generate Letter" is a harmless no-op when the page is used standalone, with no handler wired', async () => {
+    installAllBridges({
+      getNetherlandsReport: vi.fn().mockResolvedValue(makeNetherlandsReport([makeNetherlandsVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
+
+    expect(() => fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }))).not.toThrow();
+  });
+
   it('opens the CV assistant on demand for the selected vacancy', async () => {
     installAllBridges({
       getNetherlandsReport: vi.fn().mockResolvedValue(

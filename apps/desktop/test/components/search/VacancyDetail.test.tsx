@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { VacancyDetail } from '../../../src/components/search/VacancyDetail.js';
 import type { SearchResult } from '../../../src/components/search/results.js';
@@ -48,7 +48,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
   } as SearchResult;
 }
 
-function renderDetail(result: SearchResult) {
+function renderDetail(result: SearchResult, overrides: { onGenerateLetter?: () => void } = {}) {
   render(
     <VacancyDetail
       result={result}
@@ -57,6 +57,7 @@ function renderDetail(result: SearchResult) {
       defaultCvName={null}
       saveState="idle"
       onSave={vi.fn()}
+      onGenerateLetter={overrides.onGenerateLetter ?? vi.fn()}
       assistantOpen={false}
       onToggleAssistant={vi.fn()}
       assistant={null}
@@ -75,5 +76,15 @@ describe('VacancyDetail', () => {
     renderDetail(worldwideResult({ description: null, provider: 'remotive' }));
 
     expect(screen.getByText(/remotive did not include description text/i)).toBeInTheDocument();
+  });
+
+  it('offers "Generate Letter" alongside "Save job", firing the handler on click', () => {
+    const onGenerateLetter = vi.fn();
+    renderDetail(worldwideResult(), { onGenerateLetter });
+
+    expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+
+    expect(onGenerateLetter).toHaveBeenCalledTimes(1);
   });
 });
