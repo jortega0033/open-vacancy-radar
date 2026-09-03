@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
 import { SettingsRow, SettingsSection, SettingsSubheading, ToggleSwitch } from './controls.js';
+import { FillProfileFromCv } from './FillProfileFromCv.js';
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -133,6 +135,32 @@ export function SearchProfileSection({
     [profile, onSaved, onSaveError],
   );
 
+  /**
+   * The "Fill from CV" drawer's save. Same IPC, same allow-list, same merge-onto-disk semantics as
+   * every other field on this form: `vacancy:save-search-profile` takes a *patch*, so the six
+   * fields that drawer sends are the only six that change and everything else in the profile
+   * (target roles, primary country, salary floor, both toggles) survives untouched.
+   *
+   * Awaited rather than fire-and-forget like `commit` above, because the drawer needs the outcome:
+   * it stays open and shows the failure inline instead of closing on a save that did not land. The
+   * error is deliberately not also routed to `onSaveError`, or one failure would report itself
+   * twice, once in the drawer and once in the page's toast.
+   */
+  const applyFromCv = useCallback(
+    async (patch: CandidateProfilePatch) => {
+      const seq = ++saveSeq.current;
+      const saved = await window.vacancyRadar.saveSearchProfile(patch);
+      // Guarding onSaved too, not just the state update: a newer save (manual or another CV fill)
+      // that lands first has already reported its own success, and firing this one too would surface
+      // a stray, misleading confirmation for a save this response no longer reflects.
+      if (seq !== saveSeq.current) return;
+      setProfile(saved);
+      setDraft(toDraft(saved));
+      onSaved();
+    },
+    [onSaved],
+  );
+
   const commitToggle = useCallback(
     (patch: { dutchRequired: boolean } | { allowRemoteEuSupportingNetherlands: boolean }) => {
       if (!profile) return;
@@ -251,6 +279,12 @@ export function SearchProfileSection({
       )}
 
       <SettingsSubheading>Identity</SettingsSubheading>
+      <SettingsRow
+        label="Fill from CV"
+        description="Reads a CV from your library and prefills current role, years, location, professional language and skills for you to review. Target roles, considered roles, excluded role families, country and salary are never filled in from a CV."
+      >
+        <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
+      </SettingsRow>
       <SettingsRow label="Name" htmlFor="profile-candidate-name">
         <input
           id="profile-candidate-name"
