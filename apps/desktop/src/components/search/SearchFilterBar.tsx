@@ -74,20 +74,26 @@ export function SearchFilterBar({
         </select>
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+          {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
           Search
         </button>
 
-        <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
-          <input
-            className="checkbox checkbox-sm"
-            type="checkbox"
-            checked={filters.sponsorOnly}
-            onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
-            disabled={busy}
-          />
-          Possible IND sponsor match only
-        </label>
+        {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
+            `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just
+            silently empty the list -- for any other country selection. Shown only once "Netherlands"
+            is the selected country, not for "All countries" or any other one. */}
+        {filters.country === 'Netherlands' && (
+          <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+            <input
+              className="checkbox checkbox-sm"
+              type="checkbox"
+              checked={filters.sponsorOnly}
+              onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
+              disabled={busy}
+            />
+            Possible IND sponsor match only
+          </label>
+        )}
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">

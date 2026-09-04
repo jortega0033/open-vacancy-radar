@@ -110,7 +110,7 @@ export function GapAnalysis({ cv, vacancy, model, provider, savedJobId }: GapAna
             Cancel
           </button>
           <button className="btn btn-outline" type="button" onClick={() => void handleSave()} disabled={!canSave}>
-            {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+            {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
             Save analysis
           </button>
           {saveState === 'saved' && (

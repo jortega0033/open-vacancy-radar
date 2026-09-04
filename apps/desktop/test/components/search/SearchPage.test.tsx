@@ -108,6 +108,67 @@ describe('SearchPage', () => {
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
+  it('reattaches to a scan already running on mount, instead of looking idle', async () => {
+    // Real regression: the Search page's own `scanning` state is component-local, so it used to
+    // reset to false every time this page (re)mounted -- including after the user navigated away
+    // from Search mid-scan and back. The scan itself runs entirely in the main process and knows
+    // nothing about the renderer's page lifecycle, so it kept running regardless; the page just
+    // stopped knowing about it, looked idle, and then failed outright with "a vacancy scan is
+    // already running" the moment the user clicked Search again.
+    const getScanStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ scanning: true })
+      .mockResolvedValueOnce({ scanning: true })
+      .mockResolvedValue({ scanning: false });
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      getScanStatus,
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    // Search itself is blocked while reattached to that scan -- no way to double-trigger it.
+    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(bridge.runScan).not.toHaveBeenCalled();
+
+    vi.mocked(bridge.getReport).mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
+
+    await waitFor(() => expect(getScanStatus).toHaveBeenCalledTimes(3), { timeout: 10_000 });
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0), {
+      timeout: 10_000,
+    });
+    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+  }, 15_000);
+
+  it('a scan-already-running rejection stays in the scanning state instead of reporting itself as a failure', async () => {
+    // The narrow race this is a safety net for: the reattachment check above found no scan in
+    // flight, the user clicked Search, and it lost a race to a scan that started in between.
+    const getScanStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ scanning: false }) // the mount-time reattachment check
+      .mockResolvedValueOnce({ scanning: true }) // still going, once runScan's own poll starts
+      .mockResolvedValue({ scanning: false });
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockRejectedValue(new Error('a vacancy scan is already running')),
+      getScanStatus,
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+
+    vi.mocked(bridge.getReport).mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })]));
+
+    await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0), { timeout: 10_000 });
+    expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
+  }, 15_000);
+
   it('shows a distinct empty state when the candidate profile has no targets configured', async () => {
     installAllBridges({
       getReport: vi

@@ -61,7 +61,7 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
   return (
     <div className="flex items-center gap-2">
       <button className="btn btn-primary btn-sm" type="button" onClick={handlePick} disabled={isPicking}>
-        {isPicking && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+        {isPicking && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
         Upload CV
       </button>
       {error && (

@@ -134,6 +134,25 @@ describe('FillProfileFromCvDrawer', () => {
     expect(panel.getByLabelText('Additional skills')).toHaveValue('RxJS');
   });
 
+  it("runs through the user's configured default provider, not a hardcoded Claude Code fallback", async () => {
+    // Real regression: this drawer used to call useAgentRun.start() with no provider option at
+    // all, which silently falls back to Claude Code regardless of what the user set as their
+    // default runtime -- failing outright for anyone who set Codex because Claude Code isn't
+    // authenticated on their machine.
+    const bridges = installBridges();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'codex' }),
+    });
+
+    render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} />);
+    await runExtraction(bridges, GOOD_RESPONSE);
+
+    expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex' }),
+    );
+  });
+
   it('never renders an input for a field a CV cannot honestly state', async () => {
     const bridges = installBridges();
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });

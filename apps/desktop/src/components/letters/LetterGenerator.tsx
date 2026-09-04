@@ -693,7 +693,7 @@ export function LetterGenerator({
             onClick={() => void handleSave()}
             disabled={!hasBody || saveState === 'saving' || run.isBusy}
           >
-            {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+            {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
             {letterId ? 'Save changes' : 'Save letter'}
           </button>
           <button
@@ -706,7 +706,7 @@ export function LetterGenerator({
           </button>
           <div className="dropdown dropdown-end">
             <button tabIndex={0} className="btn btn-outline" type="button" disabled={!hasBody || exportState === 'exporting'}>
-              {exportState === 'exporting' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {exportState === 'exporting' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
               Export
             </button>
             <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-44 border border-base-300 p-2 shadow">

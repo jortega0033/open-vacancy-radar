@@ -333,15 +333,19 @@ export async function runGlobalRemoteScan(
     },
   });
   const reuseDiscovery = options.officialOnly === true || options.offlineReclassify === true;
-  const [baseDiscovery, official] = await Promise.all([
+  // All three run independently -- workableGlobal consumes neither baseDiscovery's nor official's
+  // output (it is only merged into the result afterward, below) -- so they run in parallel rather
+  // than one after another. Workable's global "all customers" listing is comfortably the slowest
+  // of the three; running it after the other two used to add its own full duration on top of
+  // theirs instead of overlapping with it, which is most of the difference between a scan taking
+  // a couple of minutes and one taking upwards of ten.
+  const [baseDiscovery, official, workableGlobal] = await Promise.all([
     reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),
+    reuseDiscovery ? Promise.resolve(null) : runWorkableGlobalDiscovery(safeClient, profile, projectRoot),
   ]);
-  const workableGlobal = reuseDiscovery
-    ? null
-    : await runWorkableGlobalDiscovery(safeClient, profile, projectRoot);
   const discovery =
     workableGlobal === null
       ? baseDiscovery

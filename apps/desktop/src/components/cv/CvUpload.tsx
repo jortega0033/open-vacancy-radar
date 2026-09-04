@@ -52,7 +52,7 @@ export function CvUpload({ cv, onCvChange }: CvUploadProps) {
 
         <div className="flex flex-wrap items-center gap-2">
           <button className="btn" type="button" onClick={handleSelect} disabled={isLoading}>
-            {isLoading && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+            {isLoading && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
             {cv ? 'Replace CV' : 'Choose CV file'}
           </button>
           {cv && (

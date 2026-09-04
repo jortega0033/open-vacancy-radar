@@ -24,13 +24,23 @@ export interface ExclusiveScanOptions {
  * The lock is read through a getter rather than passed in, because it is created lazily alongside
  * the engine database and a handler can be invoked before that finishes.
  */
-export function createScanGuard(getLock: () => ScanLock | undefined) {
+export interface ScanGuard {
+  runExclusiveScan<T>(run: () => Promise<T>, options: ExclusiveScanOptions): Promise<T>;
+  /**
+   * Whether a scan started through this guard is still running. The renderer's own `scanning`
+   * state is just a piece of component state, gone the moment the Search page unmounts (the user
+   * navigates away); the scan itself runs entirely in this process and keeps going regardless.
+   * This lets a remounted Search page notice that a scan is already in flight -- one it may have
+   * started itself before navigating away -- and reflect that instead of looking idle and then
+   * failing with `SCAN_BUSY_IN_PROCESS` the moment the user clicks Search again.
+   */
+  isScanInFlight(): boolean;
+}
+
+export function createScanGuard(getLock: () => ScanLock | undefined): ScanGuard {
   let inFlight = false;
 
-  return async function runExclusiveScan<T>(
-    run: () => Promise<T>,
-    options: ExclusiveScanOptions,
-  ): Promise<T> {
+  async function runExclusiveScan<T>(run: () => Promise<T>, options: ExclusiveScanOptions): Promise<T> {
     if (inFlight) throw new Error(SCAN_BUSY_IN_PROCESS);
     inFlight = true;
     try {
@@ -46,5 +56,7 @@ export function createScanGuard(getLock: () => ScanLock | undefined) {
       // every later scan is refused as "already running".
       inFlight = false;
     }
-  };
+  }
+
+  return { runExclusiveScan, isScanInFlight: () => inFlight };
 }

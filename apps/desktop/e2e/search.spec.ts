@@ -25,20 +25,24 @@ test.describe('Search', () => {
     await expect(window.getByRole('button', { name: /run the first scan/i })).toBeVisible();
     await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
 
-    // The best-effort sponsor-match filter and the plain country selector are always offered --
-    // there is no separate pipeline switch any more.
-    await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toBeVisible();
+    // The plain country selector is always offered -- there is no separate pipeline switch any
+    // more. The best-effort sponsor-match filter is Netherlands-specific (the engine never
+    // attempts that check for any other country), so it starts hidden on "All countries".
     const countrySelect = window.getByRole('combobox', { name: 'Country' });
     await expect(countrySelect).toBeVisible();
     await expect(countrySelect).toHaveValue('all');
+    await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toHaveCount(0);
 
     // Picking a country is a plain, instant filter over whatever is already loaded -- it never
-    // starts a scan or changes the empty-state copy.
+    // starts a scan or changes the empty-state copy. Selecting Netherlands reveals the sponsor
+    // filter; leaving it hides it again.
     await countrySelect.selectOption('Netherlands');
     await expect(countrySelect).toHaveValue('Netherlands');
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
+    await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toBeVisible();
 
     await countrySelect.selectOption('all');
     await expect(countrySelect).toHaveValue('all');
+    await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toHaveCount(0);
   });
 });

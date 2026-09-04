@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ProviderId } from '@agent-dock/shared';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import type { CvDocumentRecord } from '../../window.js';
@@ -107,6 +108,25 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
   // as CvDrawer's parse run.
   const run = useAgentRun({ chunkSeparator: '' });
   const appliedRef = useRef(false);
+  const [provider, setProvider] = useState<ProviderId>('claude');
+
+  // The default provider is a settings preference (set from the AI Runtime page); a failure here
+  // just leaves the Claude Code default in place rather than blocking the feature. Without this,
+  // `run.start` would fall back to its own hardcoded 'claude' default regardless of what the user
+  // configured, which fails outright for anyone who set Codex as default because Claude Code
+  // isn't authenticated on their machine.
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setProvider(settings.defaultProvider);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Only CVs with extracted text can be read: a scanned PDF that produced nothing is listed nowhere
   // here rather than being offered and then failing with an empty answer.
@@ -160,7 +180,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
     setParseError(undefined);
     setSaveError(undefined);
     setForm(undefined);
-    void run.start(buildSearchProfileFromCvPrompt(selected.name, selected.text));
+    void run.start(buildSearchProfileFromCvPrompt(selected.name, selected.text), { provider });
   }
 
   function set<K extends keyof ReviewForm>(key: K, value: string) {
@@ -256,7 +276,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
                     onClick={handleRead}
                     disabled={busy || !selected}
                   >
-                    {run.isBusy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    {run.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
                     Read CV
                   </button>
                   {run.isBusy && (
@@ -373,7 +393,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
               Cancel
             </button>
             <button type="button" className="btn btn-primary" onClick={() => void handleSave()} disabled={!form || busy}>
-              {saving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {saving && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
               Save to profile
             </button>
           </div>
