@@ -5,17 +5,17 @@ import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '
 import { SessionManager } from '../src/session-manager.js';
 
 /**
- * ADI-08b (issue #126): the daemon-side half of Claude CLI hardening.
+ * ADI-08b (issue #126) hardened only v2 sessions. Issue #173 found that left every v1 caller
+ * (GapAnalysis/CoverLetter/CvAssistant/TailorCv, via `routes/sessions.ts`) unhardened in
+ * production, with untrusted scraped vacancy text in the prompt and Bash/PowerShell/MCP/hooks/
+ * slash-commands all live. The v1/v2 split was incidental plumbing, not a security boundary, so
+ * `SessionManager.create()` now hardens every session regardless of protocol version.
  *
- * `SessionManager.create()` is the single junction where a session's protocol version turns into
- * provider start options, so it is the only place the v1/v2 split can be asserted without standing
- * up a route. What the flag *does* once it reaches the adapter is `packages/agent-runtime`'s
- * business and is pinned in `claude-build-args.test.ts`; what matters here is strictly which
- * sessions get it.
- *
- * The load-bearing claim is the negative one: a v1 session's options object must not merely carry a
- * falsy `hardened`, it must not carry the key at all -- so the object a v1 caller produces is
- * deep-equal to the one it produced before this ticket existed.
+ * `SessionManager.create()` is the single junction where start options are built, so it is the
+ * only place "every session gets `hardened: true`" can be asserted without standing up a route.
+ * What the flag *does* once it reaches the adapter is `packages/agent-runtime`'s business and is
+ * pinned in `claude-build-args.test.ts`; what matters here is strictly that no call shape --
+ * default v1, explicit v1, resumed, v2, v2 with a workspace lease -- produces a session without it.
  */
 
 function makeIdleHandle(): ProviderSessionHandle {
@@ -60,33 +60,33 @@ function setup() {
   return { provider, sessionManager: new SessionManager(registry, noopLogger) };
 }
 
-describe('SessionManager.create: v1 start options are unchanged by ADI-08b', () => {
-  it('passes no `hardened` key at all for a default (v1) create', () => {
+describe('SessionManager.create: v1 sessions are hardened too (issue #173)', () => {
+  it('sets `hardened: true` for a default (v1) create, the exact shape `routes/sessions.ts` uses', () => {
     const { provider, sessionManager } = setup();
-    // Exactly the five arguments `routes/sessions.ts` passes -- that call site is untouched by this
-    // ticket, and this test fails if it ever stops being reachable with the v1 result.
+    // Exactly the five arguments `routes/sessions.ts` passes -- the real call site every shipped
+    // CV feature (GapAnalysis/CoverLetter/CvAssistant/TailorCv) reaches today.
     const session = sessionManager.create('claude', '/tmp/work', 'find me some roles');
 
     expect(provider.started).toHaveLength(1);
     const options = provider.started[0]!;
-    expect('hardened' in options).toBe(false);
     expect(options).toEqual({
       sessionId: session.id,
       cwd: '/tmp/work',
       prompt: 'find me some roles',
       resumeProviderSessionId: undefined,
       model: undefined,
+      hardened: true,
     });
   });
 
-  it('passes no `hardened` key for an explicit protocolVersion of 1, with a model and a resume', () => {
+  it('sets `hardened: true` for an explicit protocolVersion of 1, with a model and a resume', () => {
     const { provider, sessionManager } = setup();
     sessionManager.create('claude', '/tmp/work', 'continue', 'thread-1', 'fable', 1);
 
     const options = provider.started[0]!;
-    expect('hardened' in options).toBe(false);
+    expect(options.hardened).toBe(true);
     expect(Object.keys(options).sort()).toEqual(
-      ['cwd', 'model', 'prompt', 'resumeProviderSessionId', 'sessionId'].sort(),
+      ['cwd', 'hardened', 'model', 'prompt', 'resumeProviderSessionId', 'sessionId'].sort(),
     );
   });
 });
