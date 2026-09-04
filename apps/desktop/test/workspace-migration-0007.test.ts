@@ -53,6 +53,31 @@ function seedPre0007MigrationsFolder(root: string): string {
   return folder;
 }
 
+/**
+ * Copies the real 0000-0007 migrations into `<root>/drizzle-0007` with a journal that stops there.
+ *
+ * Used instead of `createWorkspaceDb` (which always applies the app's full, current migration
+ * chain) for the tests below that verify 0007's own behavior specifically: migration 0008 later
+ * adds an unrelated column on top, so running the full chain would make this file's own
+ * migration-count assertions fail for a reason that has nothing to do with 0007 itself. Migration
+ * history is immutable -- an earlier migration's regression test must keep proving what that
+ * migration did at the time, independent of what a later migration adds on top.
+ */
+function seedThrough0007MigrationsFolder(root: string): string {
+  const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+  const tags = [...PRE_0007_TAGS, '0007_cheerful_talos'];
+  const kept = journal.entries.filter((entry) => tags.includes(entry.tag));
+  expect(kept.map((entry) => entry.tag)).toEqual(tags);
+
+  const folder = join(root, 'drizzle-0007');
+  mkdirSync(join(folder, 'meta'), { recursive: true });
+  for (const entry of kept) {
+    cpSync(join(REAL_MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries: kept }, null, 2));
+  return folder;
+}
+
 function openRaw(databasePath: string): Database.Database {
   const connection = new Database(databasePath);
   connection.pragma('journal_mode = WAL');
@@ -112,7 +137,10 @@ describe('migration 0007 adds minimizeToTrayOnClose', () => {
   it('applies cleanly to a populated database, adding the column without disturbing existing values', () => {
     seedPre0007Database();
 
-    createWorkspaceDb(dir).close();
+    const through0007 = seedThrough0007MigrationsFolder(dir);
+    const upgrade = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(upgrade), { migrationsFolder: through0007 });
+    upgrade.close();
 
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
@@ -154,8 +182,13 @@ describe('migration 0007 adds minimizeToTrayOnClose', () => {
   it('is a no-op the second time: reopening an already-migrated database applies nothing more', () => {
     seedPre0007Database();
 
-    createWorkspaceDb(dir).close();
-    createWorkspaceDb(dir).close();
+    const through0007 = seedThrough0007MigrationsFolder(dir);
+    const firstOpen = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(firstOpen), { migrationsFolder: through0007 });
+    firstOpen.close();
+    const secondOpen = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(secondOpen), { migrationsFolder: through0007 });
+    secondOpen.close();
 
     const connection = openRaw(join(dir, 'workspace.db'));
     try {

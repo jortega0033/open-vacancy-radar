@@ -330,6 +330,37 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     })();
   }, [waitForScanToFinish]);
 
+  /**
+   * #195: a background scan can finish entirely while this window is hidden (minimized to tray),
+   * which the mount-time reattachment effect above does not cover -- that effect runs once, only
+   * on mount, and only reattaches when a scan is *still* running; it does nothing for one that
+   * already finished while hidden, so showing the window again would otherwise keep displaying a
+   * stale report. On `visibilitychange` to `'visible'`, unconditionally re-fetch the report by
+   * resetting `hasHydrated` and bumping `reloadTick` (re-running the hydration effect above), and
+   * separately re-check scan status to re-arm the "Scanning..." banner if one is still running.
+   * The two checks are independent, not one replacing the other: a finished scan's result and a
+   * still-running scan's status are different questions.
+   */
+  useEffect(() => {
+    function onVisibilityChange(): void {
+      if (document.visibilityState !== 'visible') return;
+      hasHydrated.current = false;
+      setReloadTick((tick) => tick + 1);
+      void (async () => {
+        try {
+          const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
+          if (unmountedRef.current || !stillScanning) return;
+          setScanning(true);
+          waitForScanToFinish();
+        } catch {
+          // No status available: nothing to reattach to.
+        }
+      })();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [waitForScanToFinish]);
+
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
   useEffect(() => {

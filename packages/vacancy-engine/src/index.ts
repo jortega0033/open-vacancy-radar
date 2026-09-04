@@ -10,6 +10,7 @@ export { createDatabaseClient, migrateDatabase, type Database, type DatabaseClie
 export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/advisory-lock.js';
 
 export { runGlobalRemoteScan, type GlobalRemoteScanResult } from './pipeline/global-remote.js';
+export { readGlobalRemoteReport } from './global-remote/report.js';
 export { runSponsorSync } from './pipeline/sponsors.js';
 export {
   candidateProfileSchema,

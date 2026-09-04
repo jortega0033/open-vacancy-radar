@@ -3,6 +3,17 @@ import { withScanAdvisoryTryLock, type ScanLock } from '@open-vacancy-radar/vaca
 export const SCAN_BUSY_IN_PROCESS = 'a vacancy scan is already running';
 export const SCAN_BUSY_OTHER_PROCESS = 'a vacancy scan is already running in another process';
 
+/**
+ * True for exactly the two errors `runExclusiveScan` throws to mean "another scan already owns
+ * the lock" -- both real, expected outcomes a background-scan timer (#195) must swallow silently
+ * rather than log as a failure, since a manual "Search" click or another process's scan winning
+ * the race is normal, not broken. `createScanGuard` throws plain `Error`s, not a distinguishable
+ * subclass or code, so this compares `error.message` rather than using `instanceof`.
+ */
+export function isExpectedScanBusyError(error: unknown): boolean {
+  return error instanceof Error && (error.message === SCAN_BUSY_IN_PROCESS || error.message === SCAN_BUSY_OTHER_PROCESS);
+}
+
 export interface ExclusiveScanOptions {
   /** Whether this guard should take the engine's cross-process advisory lock itself. */
   takeAdvisoryLock: boolean;

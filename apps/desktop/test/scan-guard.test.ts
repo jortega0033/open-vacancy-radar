@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import type { ScanLock } from '@open-vacancy-radar/vacancy-engine';
-import { createScanGuard, SCAN_BUSY_IN_PROCESS, SCAN_BUSY_OTHER_PROCESS } from '../electron/scan-guard.js';
+import {
+  createScanGuard,
+  isExpectedScanBusyError,
+  SCAN_BUSY_IN_PROCESS,
+  SCAN_BUSY_OTHER_PROCESS,
+} from '../electron/scan-guard.js';
 
 interface CountingLock extends ScanLock {
   acquisitions: number;
@@ -124,5 +129,41 @@ describe('createScanGuard', () => {
       runExclusiveScan(async () => Promise.reject(new Error('network down')), { takeAdvisoryLock: true }),
     ).rejects.toThrow('network down');
     expect(isScanInFlight()).toBe(false);
+  });
+
+  it('a background-triggered scan and a manual scan cannot run concurrently, and the loser is a swallowable refusal (#195)', async () => {
+    // Models the real #195 race: the background timer and a manual "Search" click share the exact
+    // same `runExclusiveScan`, so whichever loses is refused with one of the two known messages --
+    // which the timer path must be able to recognize and swallow silently, not log as a failure.
+    const { runExclusiveScan: guard } = createScanGuard(() => grantingLock());
+    const background = deferred<string>();
+
+    const backgroundScan = guard(() => background.promise, { takeAdvisoryLock: true });
+    const manualScan = guard(async () => 'manual', { takeAdvisoryLock: true }).catch((error: unknown) => {
+      expect(isExpectedScanBusyError(error)).toBe(true);
+      return 'swallowed';
+    });
+
+    await expect(manualScan).resolves.toBe('swallowed');
+    background.resolve('background');
+    await expect(backgroundScan).resolves.toBe('background');
+  });
+});
+
+describe('isExpectedScanBusyError', () => {
+  it('recognizes the in-process busy message', () => {
+    expect(isExpectedScanBusyError(new Error(SCAN_BUSY_IN_PROCESS))).toBe(true);
+  });
+
+  it('recognizes the cross-process busy message', () => {
+    expect(isExpectedScanBusyError(new Error(SCAN_BUSY_OTHER_PROCESS))).toBe(true);
+  });
+
+  it('does not recognize an unrelated error', () => {
+    expect(isExpectedScanBusyError(new Error('network down'))).toBe(false);
+  });
+
+  it('does not recognize a non-Error thrown value', () => {
+    expect(isExpectedScanBusyError('a vacancy scan is already running')).toBe(false);
   });
 });
