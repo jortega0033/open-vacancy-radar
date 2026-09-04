@@ -5,7 +5,7 @@ import type { CvDocument, VacancyLead } from './types.js';
  * Prompt construction lives here, apart from the components, so the exact instructions sent to the
  * user's Claude Code CLI are reviewable and testable as data rather than buried in JSX.
  *
- * Three deliberate properties across both prompts:
+ * Three deliberate properties shared by every prompt in this file:
  *
  * 1. **Bounded input.** CV and posting text are clamped (below) before interpolation. An
  *    unbounded CV or a scraped page dumped into a prompt is how a "why is this taking four
@@ -14,9 +14,12 @@ import type { CvDocument, VacancyLead } from './types.js';
  *    will happily start reading the working directory if the prompt sounds like a task about
  *    files. Telling it explicitly to answer from the supplied text keeps the run fast, keeps
  *    `cwd` untouched, and keeps the answer grounded in the CV instead of the filesystem.
- * 3. **No invention.** Both prompts forbid fabricated employers, dates, certifications and
- *    contact names. A cover letter that quietly invents a hiring manager or a year of experience
- *    is worse than no cover letter, because the user may not catch it.
+ * 3. **No invention.** Every prompt forbids fabricated employers, dates, certifications and
+ *    contact names, via the one shared `GROUNDING_RULES` block below rather than a per-prompt
+ *    paraphrase of it. A cover letter that quietly invents a hiring manager or a year of
+ *    experience is worse than no cover letter, because the user may not catch it; a *tailored CV*
+ *    that does the same is worse still, because the user is likely to paste it into an
+ *    application as their own factual record.
  */
 export const MAX_CV_PROMPT_CHARS = 14_000;
 export const MAX_VACANCY_TEXT_CHARS = 6_000;
@@ -167,6 +170,36 @@ ${CV_PROFILE_FIELD_BULLETS}
 
 === CANDIDATE CV (${field(fileName)}) ===
 ${clamp(text, MAX_CV_PROMPT_CHARS)}`;
+}
+
+/**
+ * Re-orders and re-emphasizes the candidate's own CV for one posting. Unlike the cover letter,
+ * whose output is obviously new prose the user proofreads, this returns something shaped like a
+ * factual record: the user's likely next move is to paste it into an application. So the
+ * no-invention rule is restated here in the terms this specific task invites breaking it, on top
+ * of `GROUNDING_RULES` rather than instead of it. The two failure modes worth naming are the
+ * posting asking for a skill the CV is silent on, and the model "helpfully" adding a summary
+ * section the source CV never had.
+ *
+ * The result is never written anywhere: the caller streams it for review and offers copy, with no
+ * save path back into the CV library (see `TailorCv.tsx`).
+ */
+export function buildCvTailorPrompt(cv: CvDocument, vacancy: VacancyLead): string {
+  return `You are helping a candidate tailor their CV for one specific vacancy, using their real CV as the only source of content.
+
+${GROUNDING_RULES}
+This is a reordering and re-emphasis task, not a rewriting task: every employer, title, date, degree, certification, technology, responsibility and metric in the output must already appear in the CV below. Do not add a single fact, skill, tool, employer, title, date or metric that is not already there, even if the vacancy asks for it and the CV is silent on it.
+Reorder sections and bullet points so the experience most relevant to this vacancy comes first, and re-word (without inventing) bullet points to foreground the framing, terminology and emphasis this vacancy asks for, drawing only on what the CV already says.
+Keep the candidate's real employers, titles, dates and structure intact: this is the same CV, re-emphasized for one posting, not a new document with a different shape.
+Do not add a summary, objective, or cover-letter-style opening sentence that is not already a section of the source CV.
+
+Output the tailored CV text only: no title, no commentary before or after it, no Markdown headings.
+
+=== VACANCY ===
+${formatVacancy(vacancy)}
+
+=== CANDIDATE CV (${field(cv.fileName)}) ===
+${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
 export function buildCoverLetterPrompt(cv: CvDocument, vacancy: VacancyLead): string {

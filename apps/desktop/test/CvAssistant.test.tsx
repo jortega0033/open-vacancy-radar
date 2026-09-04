@@ -8,7 +8,7 @@ afterEach(() => {
 });
 
 describe('CvAssistant', () => {
-  it('uploads the CV once and enables both AI features from that single upload', async () => {
+  it('uploads the CV once and enables all three AI features from that single upload', async () => {
     installBridges({
       cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }) },
     });
@@ -17,14 +17,45 @@ describe('CvAssistant', () => {
 
     expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /draft cover letter/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /draft tailored cv/i })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeEnabled());
     expect(screen.getByRole('button', { name: /draft cover letter/i })).toBeEnabled();
+    // The third card reads the same single upload as the other two, rather than asking again.
+    expect(screen.getByRole('button', { name: /draft tailored cv/i })).toBeEnabled();
     expect(screen.getByText(/jake\.pdf/)).toBeInTheDocument();
     // The vacancy under consideration is named, so the user knows what these buttons act on.
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
+  });
+
+  it('runs each card as its own session, so one draft never lands in another card', async () => {
+    const bridges = installBridges({
+      cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }) },
+    });
+
+    render(<CvAssistant vacancy={TEST_VACANCY} />);
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: /draft tailored cv/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].prompt ?? '';
+    expect(prompt).toContain('reordering and re-emphasis task');
+    expect(prompt).not.toContain('motivation letter');
+    expect(prompt).not.toContain('## Overall fit');
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Tailored CV body.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const tailored = await screen.findByRole('log', { name: /tailored cv draft/i });
+    expect(tailored).toHaveTextContent('Tailored CV body.');
+    // The other two cards share the process-wide event stream but filter by session id, so they
+    // render no output panel at all rather than mirroring the tailoring run's text.
+    expect(screen.queryByRole('log', { name: /cover letter draft/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('log', { name: /gap analysis result/i })).not.toBeInTheDocument();
   });
 
   it('warns, without crashing, when Claude Code is not installed', async () => {
