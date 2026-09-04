@@ -35,7 +35,9 @@ describe('GapAnalysis', () => {
 
     const input = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0];
     expect(input?.provider).toBe('claude');
-    expect(input?.cwd).toBe('/userData/ai-workspace'); // from window.cv.getWorkspaceDir(), not guessed
+    // No `cwd` field at all (issue #175): main pins every session's cwd itself and never reads one
+    // from the renderer, so the call this component makes cannot even attempt to send one.
+    expect(input).not.toHaveProperty('cwd');
     expect(input?.model).toBe('sonnet');
     expect(input?.prompt).toContain('## Gaps');
     expect(input?.prompt).toContain('Senior Frontend Engineer');

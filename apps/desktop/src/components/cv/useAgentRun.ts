@@ -165,12 +165,11 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
       setStatus('starting');
 
       try {
-        // The daemon validates that `cwd` exists, so it comes from main (an app-owned scratch
-        // directory) rather than being guessed in the renderer. See main.ts's ensureAiWorkspaceDir.
-        const cwd = await window.cv.getWorkspaceDir();
+        // `cwd` is not a field this call can send (issue #175): main pins every session to its own
+        // app-owned scratch directory unconditionally and never reads a renderer-supplied path. See
+        // main.ts's `ensureAiWorkspaceDir` and the `daemon:create-session` handler.
         const session = await window.agentDock.createSession({
           provider: options.provider ?? 'claude',
-          cwd,
           prompt,
           ...(options.model ? { model: options.model } : {}),
         });

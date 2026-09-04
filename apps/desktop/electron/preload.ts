@@ -25,9 +25,12 @@ import type { WorkspaceBridge } from './workspace/types.js';
  */
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
 
+/**
+ * `cwd` is deliberately absent (issue #175): `daemon:create-session`'s main-process handler pins
+ * every v1 session to its own app-owned scratch directory and never reads a renderer-supplied one.
+ */
 export interface CreateSessionInput {
   provider: ProviderId;
-  cwd: string;
   prompt: string;
   model?: string;
 }
