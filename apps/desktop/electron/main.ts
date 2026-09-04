@@ -43,6 +43,7 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
+import { buildDaemonEnvironment } from './daemon-environment.js';
 import { createGuardedIpc } from './ipc-sender-guard.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
 import { resolveWindowIcon } from './resolve-window-icon.js';
@@ -341,7 +342,7 @@ function spawnDaemon(): void {
   daemonChild = spawn(process.execPath, args, {
     cwd,
     env: {
-      ...process.env,
+      ...buildDaemonEnvironment(process.env),
       ELECTRON_RUN_AS_NODE: '1',
       AGENT_DOCK_APP_ID: APP_ID,
       // ADI-05: pins the daemon's durable v2 session state under the same per-user data root that

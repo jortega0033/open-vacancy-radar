@@ -5,17 +5,20 @@ import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
+import { TailorCv } from './TailorCv.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
  *
- * It owns exactly one piece of shared state (the loaded CV) so the two AI features below it read
- * the same document without the user uploading it twice. Everything else (session lifecycle,
- * streaming, errors) belongs to the individual feature components.
+ * It owns exactly one piece of shared state (the loaded CV) so the three AI features below it read
+ * the same document without the user uploading it three times. Everything else (session lifecycle,
+ * streaming, errors) belongs to the individual feature components, which each run their own
+ * session: gap analysis reports, the cover letter drafts new prose, and the tailored CV re-orders
+ * the document itself.
  */
 export interface CvAssistantProps {
-  /** The vacancy both features work against; null until the Vacancy Leads screen selects one. */
+  /** The vacancy all three features work against; null until the Vacancy Leads screen selects one. */
   vacancy: VacancyLead | null;
   /** Optional: skip the model picker and pin a model. */
   model?: string;
@@ -116,6 +119,12 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         {...(effectiveModel ? { model: effectiveModel } : {})}
       />
       <CoverLetter
+        cv={cv}
+        vacancy={vacancy}
+        provider={provider}
+        {...(effectiveModel ? { model: effectiveModel } : {})}
+      />
+      <TailorCv
         cv={cv}
         vacancy={vacancy}
         provider={provider}
