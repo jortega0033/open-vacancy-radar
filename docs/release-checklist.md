@@ -67,6 +67,11 @@ Exercise the golden paths a real user would hit first, on the installed build sp
 
 ## 6. Artifact hashes
 
+Automated by [.github/workflows/release.yml](../.github/workflows/release.yml) as of this section's
+last update: pushing the tag in step 7 builds the installer fresh, computes its SHA-256, and
+publishes both. Nothing to do by hand here unless that workflow itself needs debugging -- in which
+case, fall back to the manual command it automates:
+
 - [ ] Compute and record a SHA-256 for the installer:
       `Get-FileHash "dist-packages\Open Vacancy Radar-Setup-<version>.exe" -Algorithm SHA256`
 - [ ] Publish the hash alongside the release artifact so users can verify their download.
@@ -74,7 +79,16 @@ Exercise the golden paths a real user would hit first, on the installed build sp
 ## 7. Tag and publish
 
 - [ ] Tag the release commit (`git tag v<version>`), push the tag.
-- [ ] Create the GitHub release, attach the installer and its hash, paste in the release notes.
+- [ ] Pushing the tag triggers `.github/workflows/release.yml`, which builds the installer on a
+      fresh checkout of that exact commit, verifies it was produced (the same check
+      `package-windows.yml` runs on every push/PR), computes its SHA-256, and publishes both as a
+      GitHub Release -- using `docs/release-notes-v<version>.md` from step 1 as the release notes
+      if that file exists, or `gh`'s auto-generated notes otherwise. Watch the workflow run to
+      confirm it succeeds; if it fails, the release was not published and nothing needs rolling
+      back.
+- [ ] Confirm the published release: the installer and a matching `.sha256` file are both attached,
+      and the release notes are what step 1 wrote (not the auto-generated fallback, unless that was
+      intended).
 - [ ] Link the release from any relevant open issue (e.g. the release-readiness epic).
 
 ## Rollback
