@@ -115,8 +115,8 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.
-- **Uninstalling the app**: see [docs/packaging.md](packaging.md) for exactly what the Windows
-  uninstaller does and does not remove from `%APPDATA%`.
+- **Uninstalling the app**: see [Uninstall behavior](packaging.md#uninstall-behavior) for exactly
+  what the Windows uninstaller does and does not remove from `%APPDATA%`.
 - **MCP credentials**: removed via the app's own "disconnect provider" action, which calls the same
   OS-credential-store deletion described in SECURITY.md — not simply left behind by uninstalling.
 - **Session history (`agentdock-state/`)**: pruned automatically, oldest-first, on every daemon

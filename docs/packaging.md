@@ -146,13 +146,45 @@ unsigned OSS boilerplate build, not a packaging bug. Code signing was explicitly
 this milestone; see [troubleshooting.md](troubleshooting.md) if you need to click through it for
 local testing.
 
+## Uninstall behavior
+
+`apps/desktop/electron-builder.yml`'s `nsis:` block sets no `deleteAppDataOnUninstall` key.
+electron-builder's own documented default for that option is `false`, so the NSIS uninstaller
+removes the install directory, the Start Menu shortcut, and the registry uninstall entries, and
+**leaves user data in `%APPDATA%` untouched**. The only custom NSIS hook this repo ships,
+`apps/desktop/assets/app-icons/installer.nsh`, defines a `customInstall` macro (a silent VC++
+redistributable install, per [What electron-builder treats as a runtime
+dependency](#what-electron-builder-treats-as-a-runtime-dependency)) and no `customUnInstall` macro
+at all -- there is no script anywhere in this repo that touches user data during uninstall, on
+purpose or otherwise.
+
+`app.setName('Open Vacancy Radar')` is called before any `app.getPath(...)` call in
+`electron/main.ts`, so the data directory the uninstaller leaves behind is
+`%APPDATA%\Open Vacancy Radar`. It holds every piece of local state the app has ever written: the
+workspace SQLite database (saved jobs, applications, CV documents, letters, settings), the
+vacancy-engine database, the `ai-workspace/` scratch directory the CV/AI features use, and
+AgentDock's own daemon state directory. None of it is removed by uninstalling the app, and there is
+currently no in-app "delete all my data" action either -- removing that folder by hand (or with
+Windows' "Reset this app"/"Uninstall and delete data" prompts, where offered) is the only way to
+clear it today. This is determined from the packaging config and the absence of any uninstall
+script, not from a live install/uninstall/inspect cycle -- see [Verifying a packaging-sensitive
+change](#verifying-a-packaging-sensitive-change) for why an actual install-time verification pass
+(clean-machine install, restart, uninstall, confirm what's left) still needs a human or a real
+Windows CI runner: this repository's automated environment cannot launch an installer, run it
+elevated, or inspect a live `%APPDATA%` the way that check requires.
+
 ## Platform matrix
 
 | | source / dev | production build | packaged app | installer | uninstall |
 |---|---|---|---|---|---|
-| **Windows** | verified | verified | verified (installed, launched, closed, relaunched, second-instance-blocked) | verified (NSIS, silent install/uninstall) | verified |
+| **Windows** | verified | verified | verified (installed, launched, closed, relaunched, second-instance-blocked) | verified (NSIS, silent install/uninstall) | verified (uninstaller runs and completes cleanly) |
 | **macOS** | untested | untested | untested | not implemented | n/a |
 | **Linux** | untested | untested | untested | not implemented | n/a |
+
+The "uninstall" column above is about the uninstaller *process* completing without error, live-tested
+against a real install. What it does or doesn't remove from `%APPDATA%` is a separate claim, covered
+in [Uninstall behavior](#uninstall-behavior) above -- determined from the packaging config, not
+(yet) from a live inspect-before/after cycle.
 
 **Supported OS/version**: Windows 10 or later, 64-bit (x64) only — `electron-builder.yml`'s `win.target.arch`
 is `[x64]` exclusively, and the bundled Electron 44 itself no longer supports Windows 7/8/8.1.
