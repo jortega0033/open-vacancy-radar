@@ -72,19 +72,28 @@ export const SECONDARY_NAV: readonly NavItem[] = [
   { id: 'settings', label: 'Settings' },
 ];
 
-export const EMPTY_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
-
-export function badgeCount(counts: WorkspaceCounts, badge: NavBadge | undefined): number | undefined {
-  return badge === undefined ? undefined : counts[badge];
+/**
+ * `undefined` means "not loaded yet, or the last fetch failed" -- deliberately not defaulted to a
+ * zeroed `WorkspaceCounts` (issue #178). A "0" badge or "0 saved" subtitle rendered before the
+ * first successful `getCounts()` call looked identical to a genuine zero, which is exactly the
+ * fabricated-count `headerCopy`'s own doc comment already promises not to show. Callers render
+ * nothing (badge) or a loading placeholder (subtitle) for `undefined` instead of guessing.
+ */
+export function badgeCount(counts: WorkspaceCounts | undefined, badge: NavBadge | undefined): number | undefined {
+  return badge === undefined || counts === undefined ? undefined : counts[badge];
 }
 
 /**
  * Title + contextual subtitle for the 52px workspace header.
  *
  * The subtitles are counts and plain statements of fact on purpose. This header is the one
- * always-visible piece of chrome, so it is the wrong place for a claim the app cannot back up.
+ * always-visible piece of chrome, so it is the wrong place for a claim the app cannot back up --
+ * including, per issue #178, a count that has not actually loaded yet.
  */
-export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: string; subtitle: string } {
+export function headerCopy(
+  page: NavPage,
+  counts: WorkspaceCounts | undefined,
+): { title: string; subtitle: string } {
   switch (page) {
     case 'search':
       return {
@@ -92,13 +101,16 @@ export function headerCopy(page: NavPage, counts: WorkspaceCounts): { title: str
         subtitle: 'Find relevant roles, evaluate employers, and prepare applications',
       };
     case 'saved':
-      return { title: 'Saved Jobs', subtitle: `${counts.savedJobs} saved` };
+      return { title: 'Saved Jobs', subtitle: counts === undefined ? 'Loading…' : `${counts.savedJobs} saved` };
     case 'applications':
-      return { title: 'Applications', subtitle: `${counts.activeApplications} active` };
+      return {
+        title: 'Applications',
+        subtitle: counts === undefined ? 'Loading…' : `${counts.activeApplications} active`,
+      };
     case 'cv':
       return { title: 'CV', subtitle: 'Documents used for match analysis and letters' };
     case 'letters':
-      return { title: 'Letters', subtitle: `${counts.letters} documents` };
+      return { title: 'Letters', subtitle: counts === undefined ? 'Loading…' : `${counts.letters} documents` };
     case 'agent-workspace':
       // No count: the number of sessions is not part of `WorkspaceCounts` (it lives in the daemon,
       // not the workspace database), and inventing a badge for it would mean a second source of

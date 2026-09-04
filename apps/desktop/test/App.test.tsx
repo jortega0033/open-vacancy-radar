@@ -5,6 +5,7 @@ import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-ra
 import { App } from '../src/App.js';
 import type { AgentDockBridge, DaemonStatus, VacancyEngineStatus } from '../src/window.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from './workspace-bridge.js';
+import type { WorkspaceCounts } from '../src/window.js';
 
 /**
  * One worldwide vacancy, enough to drive the "Generate Letter" handoff tests below. Matches
@@ -197,6 +198,60 @@ describe('App', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText(/codex ready/i)).toBeInTheDocument());
+  });
+
+  /**
+   * Issue #178: before this fix, `counts` defaulted to a zeroed `WorkspaceCounts`, so "not loaded
+   * yet" and "genuinely zero" rendered identically -- a "0" badge, a "0 saved" subtitle. Neither
+   * test below waits for the badge/subtitle to *appear*; that would trivially pass against the old
+   * behavior too. They assert on the state *before* the count is known, and after a load that fails.
+   */
+  describe('sidebar badge counts (issue #178)', () => {
+    it('shows no numeric badge and a loading subtitle before the first getCounts() resolves', async () => {
+      let resolveCounts: ((counts: WorkspaceCounts) => void) | undefined;
+      installWorkspaceBridge({
+        getCounts: vi.fn(
+          () =>
+            new Promise<WorkspaceCounts>((resolve) => {
+              resolveCounts = resolve;
+            }),
+        ),
+      });
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+
+      // The subtitle never claims a count it does not have yet.
+      expect(screen.getByText('Loading…')).toBeInTheDocument();
+      expect(screen.queryByText(/\d+ saved/)).not.toBeInTheDocument();
+      // No sidebar badge at all next to "Saved Jobs" -- not "0", nothing.
+      expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs');
+
+      resolveCounts?.({ savedJobs: 3, activeApplications: 0, letters: 0 });
+      await waitFor(() => expect(screen.getByText('3 saved')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs3');
+    });
+
+    it('keeps the last successfully loaded counts, rather than resetting to zero, when a later refresh fails', async () => {
+      // `mockResolvedValue` (not `Once`): both the mount fetch and the "Saved Jobs" click's own
+      // re-sync (`handleNavigate` refreshes on every navigation) must see the real value.
+      const getCounts = vi.fn().mockResolvedValue({ savedJobs: 5, activeApplications: 0, letters: 0 });
+      installWorkspaceBridge({ getCounts });
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
+
+      // Every subsequent call (the next navigation's re-sync) fails.
+      getCounts.mockRejectedValue(new Error('workspace unavailable'));
+      fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+
+      // Still 5, not reset to 0 and not "Loading…" again -- the last real value survives a failed refresh.
+      await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
+    });
   });
 
   /**
