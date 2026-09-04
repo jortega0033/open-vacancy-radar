@@ -162,10 +162,10 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the five documented capability functions and nothing else', async () => {
+  it('exposes exactly the six documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
-      ['getReport', 'getStatus', 'runScan', 'getSearchProfile', 'saveSearchProfile'].sort(),
+      ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -194,6 +194,15 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     await (api.runScan as () => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', undefined);
+  });
+
+  it('getScanStatus invokes only vacancy:get-scan-status, no arguments', async () => {
+    invoke.mockResolvedValue({ scanning: true });
+    const api = await loadPreload('vacancyRadar');
+    const status = await (api.getScanStatus as () => Promise<{ scanning: boolean }>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:get-scan-status');
+    expect(status).toEqual({ scanning: true });
   });
 
   it('runScan forwards the query string to vacancy:run-scan unchanged', async () => {
@@ -426,7 +435,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'setMcpCredential',
     'removeMcpProvider',
   ],
-  vacancyRadar: ['getReport', 'getStatus', 'runScan', 'getSearchProfile', 'saveSearchProfile'],
+  vacancyRadar: ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'],
   workspace: [
     'getSettings',
     'updateSettings',

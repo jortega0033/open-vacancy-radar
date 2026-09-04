@@ -4,6 +4,7 @@ import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
+import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
 import { EmptyState } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
@@ -76,10 +77,6 @@ export function savedJobInputFor(result: SearchResult): SavedJobInput {
     sourceUrl: isWebUrl(result.url) ? result.url : null,
     status: 'considering',
   };
-}
-
-function describeError(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }
 
 /**
@@ -272,6 +269,67 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     setReloadTick((tick) => tick + 1);
   }, []);
 
+  // Backs `waitForScanToFinish` below: true once this component has unmounted, checked before
+  // every state update the poll loop makes so a page the user has since navigated away from never
+  // writes into stale state. A ref, not a `useEffect` cleanup flag local to one effect, because
+  // this same loop is started from two different places (mount, and a losing "already running"
+  // collision in `runScan` below) and must not each own an independent, only-sometimes-cleaned-up
+  // timer.
+  const unmountedRef = useRef(false);
+  useEffect(
+    () => () => {
+      unmountedRef.current = true;
+    },
+    [],
+  );
+
+  /**
+   * Polls until a scan this page did not itself start (or lost the race to start) finishes, then
+   * refreshes the report. Used both when this page mounts onto an already-running scan -- most
+   * often its own, from before the user navigated to another page and back -- and when `runScan`
+   * below loses a race against one. The scan itself runs entirely in the main process and outlives
+   * this component's `scanning` state (which resets to `false` on every mount), so this is the
+   * only way the page can ever stop looking idle/failed while a scan it knows nothing else about
+   * is genuinely still running.
+   */
+  const waitForScanToFinish = useCallback(function poll() {
+    void (async () => {
+      try {
+        const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
+        if (unmountedRef.current) return;
+        if (stillScanning) {
+          setTimeout(poll, 3000);
+          return;
+        }
+        // Finished, successfully or not; either way `getReport()` reflects the true current
+        // state, so pick that up rather than staying on whatever was loaded (or not) before.
+        setScanning(false);
+        const report = await window.vacancyRadar.getReport();
+        if (unmountedRef.current) return;
+        setWorldwideReport(report);
+        hasHydrated.current = true;
+      } catch {
+        // A failed status check just stops reattaching; it does not invent a scan failure for a
+        // scan this page never itself started and has no error message for.
+        if (!unmountedRef.current) setScanning(false);
+      }
+    })();
+  }, []);
+
+  // Reattaches to a scan already running when this page mounts (see `waitForScanToFinish` above).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { scanning: alreadyScanning } = await window.vacancyRadar.getScanStatus();
+        if (unmountedRef.current || !alreadyScanning) return;
+        setScanning(true);
+        waitForScanToFinish();
+      } catch {
+        // No status available (e.g. engine not initialized yet): nothing to reattach to.
+      }
+    })();
+  }, [waitForScanToFinish]);
+
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
   useEffect(() => {
@@ -359,12 +417,23 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     try {
       setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
       hasHydrated.current = true;
-    } catch (error) {
-      setScanError(describeError(error, 'scan failed'));
-    } finally {
       setScanning(false);
+    } catch (error) {
+      const message = describeError(error, 'scan failed');
+      // The reattachment effect above disables Search while a scan (including one from before
+      // this page mounted) is already running, so this should be unreachable in normal use. It
+      // survives as a safety net for a narrow race (e.g. a scan started by another process just
+      // after the status check resolved): stays in the "scanning" state and waits for the real
+      // scan to finish, rather than reporting this attempt's own rejection as "scan failed", which
+      // would read as this attempt having broken something.
+      if (message.includes('already running')) {
+        waitForScanToFinish();
+      } else {
+        setScanning(false);
+        setScanError(message);
+      }
     }
-  }, [filters.query]);
+  }, [filters.query, waitForScanToFinish]);
 
   // "Search" commits the draft filters (so the list reflects exactly what the form currently
   // shows) and goes to get fresh data, whether or not a report already exists -- there is
@@ -381,11 +450,14 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   }, []);
 
   /** The filter bar's country selector: a plain, instant, client-side filter over whatever is
-   * already loaded. */
+   * already loaded. Moving off "Netherlands" also clears `sponsorOnly`: that checkbox is hidden
+   * for every other country (the engine never attempts the check outside Netherlands), so a
+   * value left on here would silently keep narrowing the list with no visible control to undo it. */
   const handleLocationChange = useCallback((value: string) => {
     hasEditedLocationRef.current = true;
-    setFilters((current) => ({ ...current, country: value }));
-    setAppliedFilters((current) => ({ ...current, country: value }));
+    const patch = value === 'Netherlands' ? { country: value } : { country: value, sponsorOnly: false };
+    setFilters((current) => ({ ...current, ...patch }));
+    setAppliedFilters((current) => ({ ...current, ...patch }));
   }, []);
 
   // The one filter action that applies immediately, with no separate Search click: an explicit
@@ -462,7 +534,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
               onClick={retryEngineCheck}
               disabled={checkingEngine}
             >
-              {checkingEngine && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
               Retry
             </button>
           </div>

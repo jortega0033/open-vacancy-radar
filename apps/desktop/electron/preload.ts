@@ -68,6 +68,9 @@ export interface VacancyRadarBridge {
    * default and filtering everything client-side afterward. Omitted or blank keeps that default.
    */
   runScan(query?: string): Promise<GlobalRemoteReport>;
+  /** Whether a scan is currently running -- possibly one this window started before the user
+   * navigated away from Search and back, since the scan itself outlives the page's own state. */
+  getScanStatus(): Promise<{ scanning: boolean }>;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
@@ -182,6 +185,9 @@ const vacancyApi: VacancyRadarBridge = {
   },
   runScan(query) {
     return ipcRenderer.invoke('vacancy:run-scan', query);
+  },
+  getScanStatus() {
+    return ipcRenderer.invoke('vacancy:get-scan-status');
   },
   getSearchProfile() {
     return ipcRenderer.invoke('vacancy:get-search-profile');
