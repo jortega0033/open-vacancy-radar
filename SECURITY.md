@@ -491,22 +491,22 @@ released, a `WebContents` throwing mid-teardown — is a refusal with a fixed me
 `preload.ts` invokes, so a handler added later without the guard fails a test rather than shipping
 unverified.
 
-The preload script (`electron/preload.ts`) exposes twelve narrow, single-purpose, typed operations
-via `contextBridge`, across three independent namespaces: never a generic "invoke this IPC channel
-with this payload" tunnel, and never the daemon's connection info (see "Renderer never talks to the
-daemon directly" above):
-
-- `agentDock` (seven): daemon status (queried once, and pushed on change), list providers, create a
-  session, cancel a session, subscribe to session events, open a native directory picker.
-- `vacancyRadar` (three): engine status, last report, run a scan. No daemon token, no filesystem access.
-- `cv` (two): a native-dialog-gated file pick that returns already-extracted text rather than a path,
-  and a scratch-workspace-directory getter.
+The preload script (`electron/preload.ts`) exposes seven narrow, single-purpose namespaces via
+`contextBridge`, never a generic "invoke this IPC channel with this payload" tunnel, and never the
+daemon's connection info (see "Renderer never talks to the daemon directly" above): `agentDock` (the
+only one that talks to the daemon, via `AgentDockClient`), `vacancyRadar`, `workspace`, `cv`,
+`system`, `workspaceGrant` (ADI-06's filesystem-trust boundary), and `agentWorkspace` (ADI-07's
+read-only session views). See [docs/electron.md](docs/electron.md#the-preload-bridge) for what each
+one actually exposes -- deliberately not repeated here as a maintained per-function count, since
+that list drifts every time a namespace gains a function, which is exactly how this section came to
+claim "twelve operations across three namespaces" long after a fourth, fifth, sixth, and seventh
+namespace existed (issue #179).
 
 `apps/desktop/test/preload.test.ts` pins each namespace's key set against the real module, so an
-added capability fails the suite rather than arriving unnoticed. The two daemon-status functions
-(and `cv.selectAndRead`) reconstruct a clean object from the IPC payload rather than passing it
-through once its shape looks roughly right, so an accidental extra field on the main-process
-side (a token, a base URL, an absolute path) can't ride along. There is no `remote` module, no
+added capability fails the suite rather than arriving unnoticed. The daemon-status functions (and
+`cv.selectAndRead`) reconstruct a clean object from the IPC payload rather than passing it through
+once its shape looks roughly right, so an accidental extra field on the main-process side (a token,
+a base URL, an absolute path) can't ride along. There is no `remote` module, no
 `eval`, and no path by which the renderer
 can execute an arbitrary shell command, read an arbitrary file, or reach any daemon route this
 bridge doesn't explicitly expose. The page's `Content-Security-Policy` is

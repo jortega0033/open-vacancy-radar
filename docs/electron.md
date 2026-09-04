@@ -45,7 +45,7 @@ permissions), but it's cheap defense in depth for a fork that later adds either 
 
 ## The preload bridge
 
-`electron/preload.ts` exposes six separate `contextBridge` namespaces on `window`, each a fixed,
+`electron/preload.ts` exposes seven separate `contextBridge` namespaces on `window`, each a fixed,
 narrow set of functions: never a generic "invoke this channel with this payload" tunnel, and never
 the daemon's base URL or bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a
 clean status object from the IPC payload rather than passing it through once its shape looks
@@ -72,9 +72,9 @@ interface AgentDockBridge {
 }
 ```
 
-The other five namespaces never go through `AgentDockClient`. Four are product-specific to Open
-Vacancy Radar and never touch the daemon at all; the fifth (`workspaceGrant`) reaches the daemon
-directly over loopback, but only from the main process:
+The other six namespaces never go through `AgentDockClient`. Four are product-specific to Open
+Vacancy Radar and never touch the daemon at all; the other two (`workspaceGrant`, `agentWorkspace`)
+reach the daemon directly over loopback, but only from the main process:
 
 - **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
   `getNetherlandsReport`, `runNetherlandsScan`, `getSearchProfile`, `saveSearchProfile`: reads and
@@ -88,17 +88,28 @@ directly over loopback, but only from the main process:
   rather than the database.
 - **`window.system`** (`SystemBridge`) — `setLaunchAtLogin`, `getAppVersion`, `saveFile`: the handful
   of OS-level integrations that don't fit any of the other namespaces.
-- **`window.workspaceGrant`** (`WorkspaceGrantBridge`, ADI-06) — `requestGrant`, `consumeGrant`,
-  `getGrantStatus`: the app's filesystem-trust boundary, which is why it is its own namespace rather
-  than three more methods on `agentDock`. Note what it does **not** have. `requestGrant` takes a
-  provider id and nothing else, so the renderer cannot name a folder: only the user can, in the
-  native picker that main opens, and only after confirming a native dialog. Nothing here returns a
-  path, a `workspaceId`, or an `incarnation` — a grant is an opaque 43-character handle plus a
-  bounded folder basename — and there is no `trust()` verb, because no daemon route would accept one
-  (see [daemon.md](daemon.md#workspace-trust-routes)).
+- **`window.workspaceGrant`** (`WorkspaceGrantBridge`, ADI-06, plus `startSession` added by ADI-13)
+  — `requestGrant`, `consumeGrant`, `getGrantStatus`, `startSession`: the app's filesystem-trust
+  boundary, which is why it is its own namespace rather than more methods on `agentDock`. Note what
+  it does **not** have. `requestGrant` takes a provider id and nothing else, so the renderer cannot
+  name a folder: only the user can, in the native picker that main opens, and only after confirming
+  a native dialog. `startSession` is addressed by the opaque ref `consumeGrant` returned, never by a
+  location. Nothing here returns a path, a `workspaceId`, or an `incarnation` — a grant is an opaque
+  43-character handle plus a bounded folder basename — and there is no `trust()` verb, because no
+  daemon route would accept one (see [daemon.md](daemon.md#workspace-trust-routes)).
+- **`window.agentWorkspace`** (`AgentWorkspaceBridge`, ADI-07) — `listSessions`, `getSession`,
+  `getSessionEvents`, `attachActivity`, `detachActivity` (five `guardedIpc.handle` channels), plus
+  `onActivity` (a local listener over the one-way `agent-workspace:activity` push channel main sends
+  on, not an `invoke`). Read-only views over the daemon's v2 sessions for the AI Workspace page:
+  every response is rebuilt field by field from a bounded, sanitized shape rather than passed
+  through, so it carries no filesystem path and no daemon-authored text. See the doc comment at the
+  top of `electron/agent-workspace-ipc.ts` for the no-location rule all six functions keep.
 
-Each function maps to one `guardedIpc.handle(...)` in `main.ts` (or, for `workspace`/`cv`, in their
-own main-process modules under `electron/workspace/`). `guardedIpc` is `ipcMain` wrapped by
+Each function maps to one `guardedIpc.handle(...)` registered directly in `main.ts`, except
+`agentWorkspace`'s five, which `main.ts` registers by handing `guardedIpc` to
+`registerAgentWorkspaceHandlers` in its own module, `electron/agent-workspace-ipc.ts` (ADI-07's
+registrar-parameter pattern, so that feature's whole IPC surface is one call to roll back rather
+than fifty handler bodies tangled through `main.ts`). `guardedIpc` is `ipcMain` wrapped by
 `createGuardedIpc` (`electron/ipc-sender-guard.ts`, ADI-16): it verifies that the invoking event
 really came from the main window's own top-level frame before the handler runs at all, since
 `ipcMain.handle` by itself answers any frame in any `WebContents` this process hosts. **Register
