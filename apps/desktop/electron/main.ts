@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -44,7 +44,7 @@ import { isSafeExternalUrl } from './external-url.js';
 import { buildDaemonEnvironment } from './daemon-environment.js';
 import { createGuardedIpc } from './ipc-sender-guard.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
-import { resolveWindowIcon } from './resolve-window-icon.js';
+import { resolveTrayIcon, resolveWindowIcon } from './resolve-window-icon.js';
 import {
   resolveVacancyEngineDataRoot,
   resolveVacancyEngineMigrationsFolder,
@@ -115,6 +115,21 @@ type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'una
 let daemonChild: ChildProcess | undefined;
 let client: AgentDockClient | undefined;
 let mainWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
+/**
+ * Mirrors the `minimizeToTrayOnClose` workspace setting for the `close` handler below, which
+ * cannot `await workspace.getSettings()` mid-event -- `close` is synchronous and a queued async
+ * read would let the default (unwanted) OS close behavior proceed before the answer arrives.
+ * Hydrated once from the database after `ensureWorkspaceDb()` resolves, and kept in sync by the
+ * `workspace:settings:update` handler on every write (ADI-22).
+ */
+let minimizeToTrayOnClose = false;
+/**
+ * Set only by the real quit paths (tray "Quit", `before-quit`). The `close` handler checks this
+ * to tell "user clicked the window's X button" (hide to tray) apart from "the app is actually
+ * quitting" (let the window close for real) -- both fire the same `close` event.
+ */
+let isQuitting = false;
 /**
  * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
  * this file will answer (ADI-16).
@@ -297,6 +312,9 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     const { db, close } = createWorkspaceDb(app.getPath('userData'));
     workspaceDb = db;
     closeWorkspaceDb = close;
+    // ADI-22: hydrate the `close`-handler mirror once, here, since `close` itself can't await a
+    // fresh read. Kept in sync afterward by the `workspace:settings:update` handler.
+    minimizeToTrayOnClose = workspace.getSettings(db).minimizeToTrayOnClose;
     return db;
   })();
 
@@ -793,6 +811,65 @@ function createWindow(): void {
   mainWindow.webContents.on('did-finish-load', () => {
     if (client) sendStatus({ state: 'ready' });
   });
+
+  // #194: when the setting is on, closing the window hides it to the tray instead of quitting --
+  // `isQuitting` (set only by the tray's own "Quit" item and `before-quit`) distinguishes that from
+  // an actual app quit, since both reach this same `close` event.
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !minimizeToTrayOnClose) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+}
+
+/**
+ * Windows-only (see electron-builder.yml: no `linux:`/`mac:` target). Built once and held at
+ * module scope -- Electron destroys a `Tray` instance the moment it's garbage-collected, so a
+ * local variable here would silently vanish the tray icon at an unpredictable point.
+ */
+function createTray(): void {
+  const iconPath = resolveTrayIcon({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+  if (!iconPath) return;
+
+  tray = new Tray(iconPath);
+  tray.setToolTip('Open Vacancy Radar');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Open Open Vacancy Radar',
+        click: () => {
+          if (!mainWindow) {
+            createWindow();
+            return;
+          }
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  tray.on('click', () => {
+    if (!mainWindow) {
+      createWindow();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
 }
 
 /*
@@ -1202,9 +1279,12 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
 
 guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
 
-guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
-  workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input)),
-);
+guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
+  const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
+  // ADI-22: keep the `close`-handler mirror in sync with every write, not just the initial hydration.
+  minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
+  return updated;
+});
 
 /** Badge counts for the sidebar: a dedicated read so the shell never has to fetch three lists. */
 guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
@@ -1304,27 +1384,38 @@ if (gotSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
     mainWindow.focus();
   });
 
   app.whenReady().then(() => {
     spawnDaemon();
     createWindow();
+    createTray();
     // Pre-warm only: any failure is reported to the renderer by `vacancy:get-status`, which awaits
     // this same initialization. Swallowed here so an engine problem never becomes an unhandled
     // rejection during startup.
     ensureVacancyEngine().catch(() => {});
     // Same deal for the workspace database: the first `workspace:*` call awaits this very
-    // promise, so a failure here surfaces as that call rejecting with the real reason.
+    // promise, so a failure here surfaces as that call rejecting with the real reason. It also
+    // hydrates the `minimizeToTrayOnClose` mirror the `close` handler reads synchronously.
     ensureWorkspaceDb().catch(() => {});
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else mainWindow?.show();
     });
   });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  // #194: registered before the existing `before-quit` listener below, so `isQuitting` is already
+  // true by the time that listener (and any `close` handler still pending) runs. Without this, the
+  // tray's own "Quit" item would set it too late relative to a `close` event already in flight.
+  app.on('before-quit', () => {
+    isQuitting = true;
   });
 
   // Separate from the daemon shutdown below on purpose: `will-quit` always fires, whereas the

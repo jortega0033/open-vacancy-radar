@@ -37,7 +37,8 @@ describe('electron-builder.yml extraResources vs. runtime path resolution', () =
     expect(toPaths).toEqual(
       expect.arrayContaining([
         'daemon', // resolve-daemon-entry.ts: join(resourcesPath, 'daemon', 'index.js')
-        'assets/app-icons/png/icon-256.png', // resolve-window-icon.ts
+        'assets/app-icons/png/icon-256.png', // resolve-window-icon.ts: resolveWindowIcon()
+        'assets/app-icons/png/icon-32.png', // resolve-window-icon.ts: resolveTrayIcon()
         'vacancy-engine/drizzle', // resolve-vacancy-engine-paths.ts: resolveVacancyEngineMigrationsFolder()
         'vacancy-engine/config', // electron/main.ts: vacancyEngineConfig() joins resourcesPath directly
       ]),

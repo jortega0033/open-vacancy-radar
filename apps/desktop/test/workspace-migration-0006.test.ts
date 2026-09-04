@@ -46,9 +46,34 @@ function seedPre0006MigrationsFolder(root: string): string {
   const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
   const kept = journal.entries.filter((entry) => PRE_0006_TAGS.includes(entry.tag));
   expect(kept.map((entry) => entry.tag)).toEqual(PRE_0006_TAGS);
-  expect(journal.entries.at(-1)?.tag).toBe('0006_old_karen_page');
+  expect(journal.entries[PRE_0006_TAGS.length]?.tag).toBe('0006_old_karen_page');
 
   const folder = join(root, 'drizzle-0005');
+  mkdirSync(join(folder, 'meta'), { recursive: true });
+  for (const entry of kept) {
+    cpSync(join(REAL_MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+  }
+  writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries: kept }, null, 2));
+  return folder;
+}
+
+/**
+ * Copies the real 0000-0006 migrations into `<root>/drizzle-0006` with a journal that stops there.
+ *
+ * Used instead of `createWorkspaceDb` (which always applies the app's full, current migration
+ * chain) for the tests below that verify 0006's own behavior specifically: migration 0007 later
+ * adds an unrelated column on top, so running the full chain would make this file's own
+ * migration-count assertions fail for a reason that has nothing to do with 0006 itself. Migration
+ * history is immutable -- an earlier migration's regression test must keep proving what that
+ * migration did at the time, independent of what a later migration adds on top.
+ */
+function seedThrough0006MigrationsFolder(root: string): string {
+  const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+  const tags = [...PRE_0006_TAGS, '0006_old_karen_page'];
+  const kept = journal.entries.filter((entry) => tags.includes(entry.tag));
+  expect(kept.map((entry) => entry.tag)).toEqual(tags);
+
+  const folder = join(root, 'drizzle-0006');
   mkdirSync(join(folder, 'meta'), { recursive: true });
   for (const entry of kept) {
     cpSync(join(REAL_MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
@@ -135,7 +160,10 @@ describe('migration 0006 drops the curated-pipeline columns', () => {
   it('applies cleanly to a populated database and removes the columns', () => {
     seedPre0006Database();
 
-    createWorkspaceDb(dir).close();
+    const through0006 = seedThrough0006MigrationsFolder(dir);
+    const upgrade = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(upgrade), { migrationsFolder: through0006 });
+    upgrade.close();
 
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
@@ -187,8 +215,13 @@ describe('migration 0006 drops the curated-pipeline columns', () => {
   it('is a no-op the second time: reopening an already-migrated database applies nothing more', () => {
     seedPre0006Database();
 
-    createWorkspaceDb(dir).close();
-    createWorkspaceDb(dir).close();
+    const through0006 = seedThrough0006MigrationsFolder(dir);
+    const firstOpen = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(firstOpen), { migrationsFolder: through0006 });
+    firstOpen.close();
+    const secondOpen = openRaw(join(dir, 'workspace.db'));
+    migrate(drizzle(secondOpen), { migrationsFolder: through0006 });
+    secondOpen.close();
 
     const connection = openRaw(join(dir, 'workspace.db'));
     try {

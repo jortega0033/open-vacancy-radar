@@ -39,6 +39,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   sidebarStart: 'remember_last',
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
+  minimizeToTrayOnClose: false,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
@@ -403,6 +404,17 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
                 checked={settings.launchAtLogin}
                 disabled={disabled}
                 onChange={changeLaunchAtLogin}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Keep running in the background when closed"
+              description="Closing the window minimizes to the system tray instead of quitting. Use Quit from the tray icon to fully exit."
+            >
+              <ToggleSwitch
+                label="Keep running in the background when closed"
+                checked={settings.minimizeToTrayOnClose}
+                disabled={disabled}
+                onChange={(minimizeToTrayOnClose) => changeField({ minimizeToTrayOnClose })}
               />
             </SettingsRow>
             <SettingsRow label="Start page" description="The page shown when the app opens." htmlFor="setting-start-page">

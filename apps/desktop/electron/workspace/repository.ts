@@ -443,6 +443,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     sidebarStart: row.sidebarStart,
     sidebarCollapsed: row.sidebarCollapsed,
     lastOpenedPage: row.lastOpenedPage,
+    minimizeToTrayOnClose: row.minimizeToTrayOnClose,
     defaultLocation: row.defaultLocation,
     defaultCvId: row.defaultCvId,
     defaultLetterType: row.defaultLetterType,
