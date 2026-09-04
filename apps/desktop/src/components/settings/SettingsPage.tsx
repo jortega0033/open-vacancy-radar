@@ -41,8 +41,8 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   lastOpenedPage: 'search',
   defaultMarket: 'worldwide',
   defaultLocation: '',
-  sponsorOnlyDefault: true,
-  indVerificationEnabled: true,
+  sponsorOnlyDefault: false,
+  indVerificationEnabled: false,
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
   defaultLetterTone: 'natural',
@@ -487,7 +487,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             onChangeSponsorOnlyDefault={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
             indVerificationEnabled={settings.indVerificationEnabled}
             onChangeIndVerificationEnabled={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
-            showIndOptions={settings.defaultMarket === 'netherlands'}
+            isNetherlands={settings.defaultMarket === 'netherlands'}
             disabled={disabled}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}

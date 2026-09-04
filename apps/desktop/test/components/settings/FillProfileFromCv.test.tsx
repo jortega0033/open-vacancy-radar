@@ -287,7 +287,7 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
       onChangeSponsorOnlyDefault: vi.fn(),
       indVerificationEnabled: true,
       onChangeIndVerificationEnabled: vi.fn(),
-      showIndOptions: true,
+      isNetherlands: true,
       onSaved: vi.fn(),
       onSaveError: vi.fn(),
       ...overrides,

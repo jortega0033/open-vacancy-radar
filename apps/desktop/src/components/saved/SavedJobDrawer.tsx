@@ -142,8 +142,8 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.market}
               onChange={(e) => set('market', e.target.value as Market)}
             >
-              <option value="netherlands">Netherlands</option>
               <option value="worldwide">Worldwide</option>
+              <option value="netherlands">Netherlands</option>
             </select>
           </label>
 

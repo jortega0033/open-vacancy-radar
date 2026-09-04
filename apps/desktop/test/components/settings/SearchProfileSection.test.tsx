@@ -26,7 +26,7 @@ function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchPr
     onChangeSponsorOnlyDefault: vi.fn(),
     indVerificationEnabled: true,
     onChangeIndVerificationEnabled: vi.fn(),
-    showIndOptions: true,
+    isNetherlands: true,
     onSaved: vi.fn(),
     onSaveError: vi.fn(),
     ...overrides,
@@ -216,17 +216,44 @@ describe('SearchProfileSection', () => {
     expect(onChangeIndVerificationEnabled).toHaveBeenCalledWith(false);
   });
 
-  it('hides the Search behavior toggles entirely when the default search location is not Netherlands', async () => {
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
-    });
+  it('renders nothing at all when the default search location is not Netherlands', async () => {
+    const getSearchProfile = vi.fn().mockResolvedValue(configuredProfile());
+    installVacancyRadarBridge({ getSearchProfile });
 
-    render(<SearchProfileSection {...baseProps({ showIndOptions: false })} />);
+    const { container } = render(<SearchProfileSection {...baseProps({ isNetherlands: false })} />);
 
-    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    // Only the Netherlands (IND sponsor) pipeline scores results against a candidate profile at
+    // all, so a worldwide user has nothing here to configure: not the toggles, not the profile
+    // fields, not even the "Netherlands search profile" heading -- the whole section is absent.
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(screen.queryByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeInTheDocument();
     expect(screen.queryByRole('switch', { name: 'IND recognised sponsor verification' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Search behavior')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Netherlands search profile' })).not.toBeInTheDocument();
+    // It also never fetches the candidate profile it has nothing to show: no wasted IPC round trip.
+    expect(getSearchProfile).not.toHaveBeenCalled();
+  });
+
+  it('clears a stale load error after switching away from Netherlands and back to a successful refetch', async () => {
+    // A real bug this test catches: gating the profile-fetch effect on `isNetherlands` made it
+    // re-run on every flip instead of only once per mount, which exposed a pre-existing gap -- the
+    // success path never cleared a previous failure. Without the fix, the error alert from the
+    // first failed fetch would keep hiding the form even after a later fetch succeeds.
+    const getSearchProfile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('disk read failed'))
+      .mockResolvedValueOnce(configuredProfile());
+    installVacancyRadarBridge({ getSearchProfile });
+
+    const { rerender } = render(<SearchProfileSection {...baseProps({ isNetherlands: true })} />);
+    await waitFor(() => expect(screen.getByText('disk read failed')).toBeInTheDocument());
+
+    // Switch to worldwide (unmounts the section's content), then back to Netherlands.
+    rerender(<SearchProfileSection {...baseProps({ isNetherlands: false })} />);
+    rerender(<SearchProfileSection {...baseProps({ isNetherlands: true })} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.queryByText('disk read failed')).not.toBeInTheDocument();
   });
 
   it('groups the candidate-profile fields under Identity / Role matching / Constraints subheadings', async () => {

@@ -29,7 +29,7 @@ const environmentSchema = z
     USER_AGENT: z
       .string()
       .min(10)
-      .default('INDJobRadar/0.1 (+personal vacancy research; contact: configure-your-email)'),
+      .default('OpenVacancyRadar/0.1 (+personal vacancy research; contact: configure-your-email)'),
     AI_ENABLED: booleanFromEnvironment.default(false),
     AI_BASE_URL: z.string().optional().default(''),
     AI_API_KEY: z.string().optional().default(''),
