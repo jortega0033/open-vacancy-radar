@@ -255,7 +255,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               Cancel
             </button>
             <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
-              {saving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {saving && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
               Save
             </button>
           </div>

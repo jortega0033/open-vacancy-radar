@@ -198,7 +198,7 @@ let latestVacancyReport: GlobalRemoteReport | undefined;
  * Guards the vacancy scan against overlapping with itself. See electron/scan-guard.ts for why the
  * in-process half and the cross-process advisory lock are both needed.
  */
-const runExclusiveScan = createScanGuard(() => vacancyScanLock);
+const { runExclusiveScan, isScanInFlight } = createScanGuard(() => vacancyScanLock);
 
 let workspaceDb: WorkspaceDb | undefined;
 let workspaceInit: Promise<WorkspaceDb> | undefined;
@@ -1179,6 +1179,14 @@ guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; erro
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+
+/**
+ * Lets a (re)mounted Search page notice a scan already in flight -- most often its own, started
+ * before the user navigated to another page and back. The scan itself lives entirely in this
+ * process and is never tied to any renderer window's lifetime, so this is the only way the
+ * renderer can tell "idle" and "already running, just not the one I started" apart.
+ */
+guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
 
 guardedIpc.handle('vacancy:run-scan', async (_event, query: unknown): Promise<GlobalRemoteReport> => {
   const db = await ensureVacancyEngine();

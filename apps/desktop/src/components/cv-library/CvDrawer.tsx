@@ -189,7 +189,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     onClick={handleParseWithAi}
                     disabled={submitting || parseRun.isBusy}
                   >
-                    {parseRun.isBusy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                    {parseRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
                     Parse with AI
                   </button>
                   {parseRun.isBusy && (
@@ -351,7 +351,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {submitting && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
               {isEdit ? 'Save changes' : 'Add CV'}
             </button>
           </div>

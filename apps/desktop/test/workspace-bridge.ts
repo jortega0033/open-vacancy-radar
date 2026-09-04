@@ -113,6 +113,7 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     getStatus: vi.fn().mockResolvedValue({ ready: false, error: 'not configured in this test' }),
     getReport: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),
+    getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
     getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     ...overrides,

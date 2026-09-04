@@ -95,7 +95,7 @@ export function VacancyDetail({
               onClick={onSave}
               disabled={saveState !== 'idle'}
             >
-              {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
               {saveState === 'saved' ? 'Saved' : 'Save job'}
             </button>
             <button className="btn btn-outline btn-sm" type="button" onClick={onGenerateLetter}>
