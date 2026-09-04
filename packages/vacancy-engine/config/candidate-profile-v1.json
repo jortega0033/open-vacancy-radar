@@ -13,7 +13,7 @@
     "professionalLanguage": "English",
     "dutchRequired": false,
     "primaryCountry": "",
-    "allowRemoteEuSupportingNetherlands": true,
+    "allowRemoteEuSupportingNetherlands": false,
     "minimumMonthlyBaseEur": 0
   }
 }

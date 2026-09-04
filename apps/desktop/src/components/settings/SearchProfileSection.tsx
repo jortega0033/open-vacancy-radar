@@ -53,11 +53,11 @@ export interface SearchProfileSectionProps {
    * worldwide" disclaimer. */
   indVerificationEnabled: boolean;
   onChangeIndVerificationEnabled: (next: boolean) => void;
-  /** `settings.defaultMarket === 'netherlands'`: the two toggles above only matter once Netherlands
-   * is genuinely in play, and showing them regardless of the default search location just adds
-   * clutter for a user whose default location default is elsewhere. Netherlands stays fully
-   * reachable from the Search page either way; this only affects what Settings surfaces here. */
-  showIndOptions: boolean;
+  /** `settings.defaultMarket === 'netherlands'`. This whole section -- not just the two toggles --
+   * is Netherlands-only: only the Netherlands (IND sponsor) pipeline scores results against a
+   * candidate profile at all, so a worldwide user has nothing here to configure. Netherlands stays
+   * fully reachable from the Search page either way; this only affects what Settings surfaces. */
+  isNetherlands: boolean;
   disabled?: boolean;
   /** Reports a candidate-profile save result upward so `SettingsPage` can show it through its one
    * toast instance, instead of this section rendering a second, independent one: two autosaving
@@ -81,7 +81,7 @@ export function SearchProfileSection({
   onChangeSponsorOnlyDefault,
   indVerificationEnabled,
   onChangeIndVerificationEnabled,
-  showIndOptions,
+  isNetherlands,
   disabled,
   onSaved,
   onSaveError,
@@ -93,6 +93,10 @@ export function SearchProfileSection({
   const saveSeq = useRef(0);
 
   useEffect(() => {
+    // Nothing below this section is shown for a worldwide user (see the early `return null` after
+    // this hook), so there is nothing to fetch either -- an IPC round trip whose result would only
+    // ever be thrown away.
+    if (!isNetherlands) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -100,6 +104,12 @@ export function SearchProfileSection({
         if (cancelled) return;
         setProfile(loaded);
         setDraft(toDraft(loaded));
+        // Clears a stale failure from a prior run of this same effect: gating it on `isNetherlands`
+        // (issue: no default country bias) made it re-run when the user flips the default search
+        // location back and forth, where before it only ever ran once per mount. Without this, a
+        // failed fetch while on Netherlands would leave the error alert showing forever after a
+        // later switch away and back succeeded -- masking a working form behind a stale message.
+        setLoadError(undefined);
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'could not load the search profile'));
       }
@@ -107,7 +117,7 @@ export function SearchProfileSection({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isNetherlands]);
 
   const commit = useCallback(
     (patch: Parameters<typeof window.vacancyRadar.saveSearchProfile>[0]) => {
@@ -170,10 +180,13 @@ export function SearchProfileSection({
     [profile, commit],
   );
 
-  // Neither row depends on the candidate-profile fetch below (both are `app_settings` fields), so
-  // they render (when shown at all) in every branch rather than waiting on `profile`/`draft` to
-  // resolve. Gated on `showIndOptions`: see that prop's doc comment.
-  const verificationRows = showIndOptions && (
+  // Every hook above must run on every render regardless of market (Rules of Hooks), but nothing
+  // below this line applies to a worldwide user: only the Netherlands (IND sponsor) pipeline scores
+  // results against a candidate profile at all, so there is nothing here for any other market to
+  // configure. See `isNetherlands`'s own doc comment on `SearchProfileSectionProps`.
+  if (!isNetherlands) return null;
+
+  const verificationRows = (
     <>
       <SettingsSubheading>Search behavior</SettingsSubheading>
       <SettingsRow

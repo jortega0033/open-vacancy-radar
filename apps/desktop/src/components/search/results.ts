@@ -399,7 +399,10 @@ export function filterResults(
   filters: SearchFilters,
   now: Date = new Date(),
 ): SearchResult[] {
-  const supported = results.length > 0 ? supportedFilters(results[0]!.market) : supportedFilters('netherlands');
+  // The empty-results branch is inert today (an empty array's `.filter()` never calls the predicate
+  // below that reads `supported`), but 'worldwide' is the neutral fallback regardless: nothing here
+  // should default to Netherlands just because there happened to be no rows to inspect.
+  const supported = results.length > 0 ? supportedFilters(results[0]!.market) : supportedFilters('worldwide');
 
   return results.filter((result) => {
     if (filters.query.trim()) {

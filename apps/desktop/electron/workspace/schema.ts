@@ -124,8 +124,8 @@ export const appSettings = sqliteTable('app_settings', {
   lastOpenedPage: text('last_opened_page').notNull().default('search'),
   defaultMarket: text('default_market', { enum: ['netherlands', 'worldwide'] }).notNull().default('worldwide'),
   defaultLocation: text('default_location').notNull().default(''),
-  sponsorOnlyDefault: integer('sponsor_only_default', { mode: 'boolean' }).notNull().default(true),
-  indVerificationEnabled: integer('ind_verification_enabled', { mode: 'boolean' }).notNull().default(true),
+  sponsorOnlyDefault: integer('sponsor_only_default', { mode: 'boolean' }).notNull().default(false),
+  indVerificationEnabled: integer('ind_verification_enabled', { mode: 'boolean' }).notNull().default(false),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {
     enum: ['motivation_letter', 'cover_letter', 'recruiter_message', 'short_application_message'],

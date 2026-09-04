@@ -44,18 +44,35 @@ const PRE_0004_TAGS = [
 type JournalEntry = { idx: number; version: string; when: number; tag: string; breakpoints: boolean };
 type Journal = { version: string; dialect: string; entries: JournalEntry[] };
 
+function readJournal(): Journal {
+  return JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+}
+
+/**
+ * How many migrations `createWorkspaceDb` records once it has finished with a database. Read from
+ * the real journal rather than written down as a number, because this test seeds a *prefix* of the
+ * history and then opens the database with the shipped migrations folder: everything after the
+ * prefix is pending, which is 0004 today and 0004 plus whatever follows it later (0005 onwards).
+ */
+function migrationCount(): number {
+  return readJournal().entries.length;
+}
+
 /**
  * Copies the real 0000-0003 migrations into `<root>/drizzle-0003` with a journal that stops there.
- * Fails loudly if the real journal ever stops matching `PRE_0004_TAGS`, so a future 0005 (or a
- * squashed history) cannot quietly turn this into a test of the wrong prior version. The real
- * `when` timestamps are copied untouched: the migrator decides what is pending by comparing them
- * against `__drizzle_migrations`, so rewriting them would make this a test of its own fixture.
+ * Fails loudly if the real journal's first four entries ever stop being `PRE_0004_TAGS`, or if
+ * 0004 stops being the entry that immediately follows them, so a rewritten or squashed history
+ * cannot quietly turn this into a test of the wrong prior version.
  */
 function seedPre0004MigrationsFolder(root: string): string {
-  const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+  const journal = readJournal();
   const kept = journal.entries.filter((entry) => PRE_0004_TAGS.includes(entry.tag));
   expect(kept.map((entry) => entry.tag)).toEqual(PRE_0004_TAGS);
-  expect(journal.entries.at(-1)?.tag).toBe('0004_damp_dust');
+  expect(journal.entries.slice(0, kept.length).map((entry) => entry.tag)).toEqual(PRE_0004_TAGS);
+  // The migration under test is the next one after the seeded prefix. It is deliberately not
+  // required to be the *last* entry in the journal: migrations added after it (0005 onwards) are
+  // applied by the same reopen below, and that is the real upgrade an existing install gets.
+  expect(journal.entries[kept.length]?.tag).toBe('0004_damp_dust');
 
   const folder = join(root, 'drizzle-0003');
   mkdirSync(join(folder, 'meta'), { recursive: true });
@@ -204,7 +221,7 @@ describe('migration 0004 is additive', () => {
     expect(sql).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
   });
 
-  it('opens an existing database without throwing and applies exactly the one pending migration', () => {
+  it('opens an existing database without throwing and applies every pending migration', () => {
     seedPre0004Database();
 
     createWorkspaceDb(dir).close();
@@ -212,7 +229,7 @@ describe('migration 0004 is additive', () => {
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0004_TAGS.length + 1);
+      expect(applied.n).toBe(migrationCount());
       expect(columnNames(connection, 'saved_jobs')).toEqual(
         expect.arrayContaining(['gap_analysis', 'gap_analysis_at']),
       );
@@ -300,7 +317,7 @@ describe('migration 0004 is additive', () => {
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0004_TAGS.length + 1);
+      expect(applied.n).toBe(migrationCount()); // every pending migration, applied by the first open
     } finally {
       connection.close();
     }

@@ -117,8 +117,10 @@ describe('SettingsPage', () => {
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
 
+    // `setup()`'s default is worldwide, so the Netherlands-only search-profile section (issue: no
+    // default country bias) renders nothing at all here -- see the dedicated NL-selected case above.
     openTab('Search');
-    expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Netherlands search profile']);
+    expect(headingsNow()).toEqual(['Settings', 'Default search location']);
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
