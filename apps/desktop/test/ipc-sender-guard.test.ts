@@ -114,6 +114,20 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
     expect(offenders, 'register through createGuardedIpc, not ipcMain.handle').toEqual([]);
   });
 
+  it('has no ipcMain.on registration anywhere under electron/ (issue #177)', () => {
+    // The mechanical test above only ever matched `.handle`/`.handleOnce`, so a fire-and-forget
+    // listener registered with `ipcMain.on` would bypass both the sender guard and this test
+    // silently -- `createGuardedIpc`/`GuardedIpcHandle` has no `.on` method at all, so there is no
+    // guarded way to register one today. This repo has never needed one (every channel answers with
+    // a value, hence `handle`), and this pins that as an enforced invariant rather than a fact that
+    // happens to be true: if a future edit adds `ipcMain.on(...)`, this must fail rather than ship
+    // an unguarded listener next to forty-six guarded ones.
+    const offenders = electronSources()
+      .filter((file) => /\bipcMain\s*\.\s*on\s*\(/.test(file.text))
+      .map((file) => file.path);
+    expect(offenders, 'ipcMain.on is not a supported registration surface in this repo').toEqual([]);
+  });
+
   it('makes every handle() call on a receiver that is known to be guarded', () => {
     const seen: { path: string; receiver: string }[] = [];
     for (const file of electronSources()) {
