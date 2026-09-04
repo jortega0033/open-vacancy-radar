@@ -13,8 +13,16 @@ import {
  * `No prompt provided via stdin.` when handed an empty stdin, which is what proves the `-` in the
  * prompt position both parses as the `[PROMPT]` positional and switches the CLI to reading stdin.
  */
-const FRESH_ARGV = ['exec', '-', '--json', '--skip-git-repo-check'] as const;
-const RESUMED_ARGV = ['exec', 'resume', 'thread-1', '-', '--json', '--skip-git-repo-check'] as const;
+const FRESH_ARGV = ['exec', '-', '--json', '--skip-git-repo-check', '--ignore-user-config'] as const;
+const RESUMED_ARGV = [
+  'exec',
+  'resume',
+  'thread-1',
+  '-',
+  '--json',
+  '--skip-git-repo-check',
+  '--ignore-user-config',
+] as const;
 
 describe('buildCodexArgs: prompt transport (ADI-14)', () => {
   it('never includes the prompt anywhere in the returned argv', () => {
@@ -82,8 +90,31 @@ describe('buildCodexArgs: prompt transport (ADI-14)', () => {
 
   it('ignores `hardened`, which Codex has no reviewed restriction profile for', () => {
     // Stated so a future Codex hardening profile has to change a test rather than land silently.
+    // Real capability sandboxing (`--sandbox`) is not used here: `codex-windows-sandbox-setup.exe`
+    // is absent on this repo's primary platform (ADI-08a), so every sandboxed `command/exec` call
+    // fails outright rather than restricting anything -- see `docs/adr-agentdock-v2-provenance.md`.
+    // Shipping `--sandbox` here would be worse than this gap: a restriction that never functions is
+    // indistinguishable from a broken session and never verifiably enforces what it claims to.
     expect(buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: true })).toEqual([
       ...FRESH_ARGV,
     ]);
+  });
+});
+
+describe('buildCodexArgs: does not silently inherit the host config.toml (issue #174)', () => {
+  it('always passes --ignore-user-config, fresh and resumed', () => {
+    expect(buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi' })).toEqual([...FRESH_ARGV]);
+    expect(
+      buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', resumeProviderSessionId: 'thread-1' }),
+    ).toEqual([...RESUMED_ARGV]);
+  });
+
+  it('passes it regardless of `hardened`, since inheriting an arbitrary host config.toml is never desired', () => {
+    expect(buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: false })).toContain(
+      '--ignore-user-config',
+    );
+    expect(buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: true })).toContain(
+      '--ignore-user-config',
+    );
   });
 });

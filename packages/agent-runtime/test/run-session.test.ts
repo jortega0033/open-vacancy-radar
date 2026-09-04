@@ -297,7 +297,7 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
       const { childArgv, receivedPrompt } = await runCodexStdinEcho(prompt);
 
       expect(receivedPrompt).toBe(prompt);
-      expect(childArgv).toEqual(['exec', '-', '--json', '--skip-git-repo-check']);
+      expect(childArgv).toEqual(['exec', '-', '--json', '--skip-git-repo-check', '--ignore-user-config']);
       expect(childArgv.join(' ')).not.toContain(prompt);
     });
 
@@ -308,7 +308,15 @@ describe('runProviderSession (spawns real node child processes via fixtures)', (
       });
 
       expect(receivedPrompt).toBe(prompt);
-      expect(childArgv).toEqual(['exec', 'resume', 'prior-thread-id', '-', '--json', '--skip-git-repo-check']);
+      expect(childArgv).toEqual([
+        'exec',
+        'resume',
+        'prior-thread-id',
+        '-',
+        '--json',
+        '--skip-git-repo-check',
+        '--ignore-user-config',
+      ]);
       expect(childArgv.join(' ')).not.toContain(prompt);
     });
 

@@ -1143,6 +1143,9 @@ Codex's own `No prompt provided via stdin.`, which is positive proof that the `-
 exactly the argv slot the raw prompt used to, so the only difference in the spawned command line is
 which string sits in the prompt position.
 
+(The exact argv shown above predates issue #174, which appended `--ignore-user-config` to both
+branches; see that section for what it closes and why `--sandbox` was deliberately not used instead.)
+
 ### Why this needed no change to the shared machinery
 
 `run-session.ts` already implemented the stdin write generically behind
@@ -1169,14 +1172,41 @@ after the stdin flush; running that same assertion against the pre-ADI-14 config
 the real `buildCodexArgs` and which echoes back both its own argv and everything it read on stdin
 (`test/fixtures/fake-codex-stdin-echo.mjs`). It proves both acceptance criteria in one run: a
 200,000-character prompt -- roughly six times the Windows command-line limit, and the schema's own
-cap -- round-trips byte for byte over stdin while the spawned process's real argv stays four short
-elements with `-` in the prompt position.
+cap -- round-trips byte for byte over stdin while the spawned process's real argv stays a handful of
+short elements with `-` in the prompt position (four at the time of this ticket; issue #174 later
+added a fifth, `--ignore-user-config` -- see below).
 
 ### What ADI-14 deliberately did not touch
 
 Claude's transport (already stdin, unchanged), the 200,000-character prompt cap, `run-session.ts`'s
 stdin-write mechanism, and the daemon's session-creation schema. No consumer outside the adapter
 depended on the old Codex argv shape.
+
+## Issue #174: Codex's argv gets `--ignore-user-config`; `--sandbox` is deliberately not used
+
+A repo-wide security audit found Codex sessions had no analogue of ADI-08b's Claude hardening
+(`#173` extended that to every session, not just v2's), and separately that `CODEX_HOME` is
+allowlisted through `provider-environment.ts`, so a session silently loads whatever
+`$CODEX_HOME/config.toml` exists on the host -- which can set `sandbox_permissions` or
+`shell_environment_policy` to anything.
+
+The obvious-looking fix, adding `-s/--sandbox read-only` to `buildCodexArgs`, was investigated and
+rejected: ADI-08a already found this machine's Codex install is missing
+`codex-windows-sandbox-setup.exe`, so every sandboxed `command/exec` call fails outright rather than
+restricting anything, while `codex doctor` self-reports "ready" throughout. Shipping `--sandbox` here
+would not be hardening -- it would be indistinguishable from a broken session and would never
+verifiably enforce the restriction it claims to. `opts.hardened` stays an intentional no-op for
+Codex, re-evaluate once ADI-08a's missing sandbox helper is resolved.
+
+The fix actually shipped is `--ignore-user-config`, appended unconditionally (fresh and resume, not
+gated behind `opts.hardened`, on the same reasoning #173 applied to Claude: no session should
+inherit an arbitrary host config unannounced). Verified against the real `codex-cli 0.147.0` binary
+with a poisoned `$CODEX_HOME/config.toml`: without the flag the session loaded the bad config and
+failed the turn; with it, the config was ignored and the session completed normally, with
+`CODEX_HOME`-based auth unaffected, exactly as `codex exec --help` documents ("Do not load
+`$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`"). The app ships no Codex `config.toml` of
+its own and depends on nothing in it (no MCP servers, model aliases, or other settings), so nothing
+is lost by ignoring it.
 
 ## ADI-15: a default-deny environment allowlist for spawned provider processes
 
