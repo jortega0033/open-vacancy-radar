@@ -203,6 +203,7 @@ export interface AppSettingsRecord {
   sidebarStart: SidebarStartPreference;
   sidebarCollapsed: boolean;
   lastOpenedPage: string;
+  minimizeToTrayOnClose: boolean;
   defaultLocation: string;
   defaultCvId: string | null;
   defaultLetterType: LetterType;

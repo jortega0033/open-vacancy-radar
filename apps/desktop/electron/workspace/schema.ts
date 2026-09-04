@@ -116,6 +116,11 @@ export const appSettings = sqliteTable('app_settings', {
   sidebarStart: text('sidebar_start', { enum: ['expanded', 'collapsed', 'remember_last'] }).notNull().default('remember_last'),
   sidebarCollapsed: integer('sidebar_collapsed', { mode: 'boolean' }).notNull().default(false),
   lastOpenedPage: text('last_opened_page').notNull().default('search'),
+  /** Whether closing the main window hides it to the system tray instead of quitting the app.
+   * Off by default: silently changing "closing the window quits" to "stays running invisibly"
+   * without explicit opt-in would be a surprising, dark-pattern-adjacent change for a local-first
+   * tool. */
+  minimizeToTrayOnClose: integer('minimize_to_tray_on_close', { mode: 'boolean' }).notNull().default(false),
   defaultLocation: text('default_location').notNull().default(''),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {

@@ -34,6 +34,10 @@ extraResources:
     to: daemon
   - from: assets/app-icons/png/icon-256.png
     to: assets/app-icons/png/icon-256.png
+  # 32px system-tray icon (electron/resolve-window-icon.ts's resolveTrayIcon) -- Windows scales it
+  # for high-DPI displays itself, so no separate 16px asset is needed.
+  - from: assets/app-icons/png/icon-32.png
+    to: assets/app-icons/png/icon-32.png
   # Read-only inputs the vendored vacancy-engine needs at runtime but that live outside its own
   # compiled dist/ (drizzle-orm migrations are plain SQL, not TypeScript, and config/ is JSON):
   # migrateDatabase() and the scan pipeline resolve these from process.resourcesPath once packaged
