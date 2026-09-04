@@ -11,12 +11,7 @@
  *  - Every record is listed field by field rather than inferred from the Drizzle table, so a
  *    column added to the database is not automatically published to the renderer. Widening this
  *    surface has to be a deliberate edit here.
- *
- * `market` is exactly the two pipelines this app can really search. See the header comment in
- * schema.ts for why there is no per-country list.
  */
-
-export type Market = 'netherlands' | 'worldwide';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -60,7 +55,6 @@ export interface SavedJobRecord {
   vacancyKey: string | null;
   role: string;
   company: string;
-  market: Market;
   location: string;
   salary: string | null;
   arrangement: string | null;
@@ -83,7 +77,6 @@ export interface SavedJobRecord {
 export interface SavedJobInput {
   role: string;
   company: string;
-  market: Market;
   location?: string;
   vacancyKey?: string | null;
   salary?: string | null;
@@ -112,7 +105,6 @@ export interface ApplicationRecord {
   role: string;
   company: string;
   location: string;
-  market: Market;
   verification: string | null;
   status: ApplicationStatus;
   /** ISO-8601, or null while the application has not been sent yet. */
@@ -128,7 +120,6 @@ export interface ApplicationRecord {
 export interface ApplicationInput {
   role: string;
   company: string;
-  market: Market;
   location?: string;
   savedJobId?: string | null;
   verification?: string | null;
@@ -212,10 +203,7 @@ export interface AppSettingsRecord {
   sidebarStart: SidebarStartPreference;
   sidebarCollapsed: boolean;
   lastOpenedPage: string;
-  defaultMarket: Market;
   defaultLocation: string;
-  sponsorOnlyDefault: boolean;
-  indVerificationEnabled: boolean;
   defaultCvId: string | null;
   defaultLetterType: LetterType;
   defaultLetterTone: LetterTone;

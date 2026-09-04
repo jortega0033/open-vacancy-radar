@@ -8,6 +8,13 @@
       "when": 1788007522338,
       "tag": "0000_giant_winter_soldier",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788528298509,
+      "tag": "0001_tricky_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

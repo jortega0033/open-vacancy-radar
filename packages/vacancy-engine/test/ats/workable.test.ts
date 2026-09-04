@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { WorkableAdapter } from '../../src/ats/workable.js';
-import { createVacancyAdapter } from '../../src/pipeline/vacancies.js';
+import { createVacancyAdapter } from '../../src/ats/factory.js';
 import { atsFixture, careerSource, FixtureHttpClient } from './helpers.js';
 
 const source = careerSource('workable', 'acme', 'https://apply.workable.com/acme');

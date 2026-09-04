@@ -11,20 +11,15 @@ export interface SearchResultRowProps {
 
 export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
-  // A market with no verification concept at all (worldwide) has the identical tone on every row,
-  // so the badge would carry zero per-row information -- it is already explained once, correctly,
-  // in the detail pane. Only a real per-row outcome (Netherlands) earns a badge here.
+  // Verification has the identical "not available" tone on almost every row (the pipeline has no
+  // per-employer verification step for most vacancies), so the badge would carry zero per-row
+  // information there -- it is already explained once, correctly, in the detail pane. Only a real
+  // per-row outcome (a possible sponsor match) earns a badge here.
   const badges = [
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
-    result.arrangement ? { text: result.arrangement, tone: null } : null,
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
-    result.market === 'worldwide' ? { text: decisionLabel(result.raw.decision), tone: null } : null,
-    // A hint only, and a neutral one: the row stays in the list at its own rank, selectable and
-    // saveable on its own. The detail pane carries the full, hedged explanation.
-    result.market === 'netherlands' && result.raw.duplicateGroup
-      ? { text: 'Possible duplicate', tone: null }
-      : null,
+    { text: decisionLabel(result.raw.decision), tone: null },
   ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (
@@ -128,7 +123,7 @@ export function SearchResultList({
             description={
               totalCount > 0
                 ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
-                : 'The latest report for this market contains no vacancies.'
+                : 'The latest report contains no vacancies.'
             }
           />
         ) : (

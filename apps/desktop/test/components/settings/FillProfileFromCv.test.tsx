@@ -283,11 +283,6 @@ describe('FillProfileFromCv (the Settings entry point)', () => {
 describe('SearchProfileSection: filling from a CV merges into the profile', () => {
   function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchProfileSectionProps {
     return {
-      sponsorOnlyDefault: true,
-      onChangeSponsorOnlyDefault: vi.fn(),
-      indVerificationEnabled: true,
-      onChangeIndVerificationEnabled: vi.fn(),
-      isNetherlands: true,
       onSaved: vi.fn(),
       onSaveError: vi.fn(),
       ...overrides,
@@ -335,7 +330,6 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
     expect(screen.getByLabelText('Target roles')).toHaveValue('Staff Engineer');
     expect(screen.getByLabelText('Considered roles')).toHaveValue('Tech Lead');
     expect(screen.getByLabelText('Excluded role families')).toHaveValue('Sales');
-    expect(screen.getByLabelText('Minimum monthly base (EUR)')).toHaveValue(6000);
     expect(screen.getByLabelText('Name')).toHaveValue('Jane Doe');
     expect(onSaved).toHaveBeenCalled();
   });

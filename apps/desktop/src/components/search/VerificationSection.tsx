@@ -1,6 +1,4 @@
-import { useState } from 'react';
-import type { JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
-import { formatDate, marketLabel, type SearchResult } from './results.js';
+import { formatDate, type SearchResult } from './results.js';
 
 function KeyValue({ items }: { items: { k: string; v: string }[] }) {
   return (
@@ -26,112 +24,19 @@ export function SectionHeading({ children, aside }: { children: string; aside?: 
 
 export interface VerificationSectionProps {
   result: SearchResult;
-  /** The Netherlands report's official register provenance; absent for the worldwide market. */
-  sponsorSource: JobRadarReport['officialSponsorSource'] | null;
-  /** The Netherlands report's run id, quoted in the details panel as the evidence's provenance. */
-  runId: string | null;
 }
 
 /**
- * "Employer verification & sources", branched on the market's *real* capability.
- *
- * Netherlands: the pipeline resolves an employer to an IND recognised-sponsor legal entity, so
- * there is a genuine result to show: including which entity, at what mapping confidence, and
- * whether this vacancy was re-verified in the run that produced the report.
- *
- * Worldwide: the pipeline has no employer-verification step for almost every row, and the panel
- * says that plainly rather than borrowing the Netherlands vocabulary. The one exception is a
- * Netherlands-located row where `worldwideVerification` found a best-effort Wikidata sponsor
- * match (see `results.ts`) -- that row's own `result.verification.label`/`.note` already say so
- * honestly (and far more tentatively than the Netherlands panel above), so they are shown as-is
- * instead of the fixed "not available" copy. Where the same run happened to verify this exact URL
- * against an official employer/ATS source, that separate (vacancy-level, not employer-level)
- * evidence is shown for what it is, regardless of the sponsor-match outcome.
+ * "Employer verification & sources". The pipeline has no employer-verification step for almost
+ * every row, and this panel says so plainly. The one exception is a Netherlands-located row where
+ * `worldwideVerification` found a best-effort Wikidata sponsor match (see `results.ts`) -- that
+ * row's own `result.verification.label`/`.note` already say so honestly (and far more tentatively
+ * than a curated match would), so they are shown as-is instead of the fixed "not available" copy.
+ * Where the same run happened to verify this exact URL against an official employer/ATS source,
+ * that separate (vacancy-level, not employer-level) evidence is shown for what it is, regardless of
+ * the sponsor-match outcome.
  */
-export function VerificationSection({ result, sponsorSource, runId }: VerificationSectionProps) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
-
-  // Netherlands, but the user has turned IND verification off in Settings: the sponsor-entity
-  // panel below would show meaningless "Sponsor entity not resolved" copy (nothing was looked up,
-  // not "looked up and found nothing"), so this gets its own honest panel instead, one step short
-  // of the full detail panel but still distinct from the worldwide pipeline's own copy below (which
-  // references fields, like `result.official`, that only exist on a worldwide result).
-  if (result.market === 'netherlands' && result.verification.level === 'not_available') {
-    return (
-      <section className="mt-6">
-        <SectionHeading>Employer verification &amp; sources</SectionHeading>
-        <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
-          <div className="text-sm font-semibold">IND sponsor verification is turned off.</div>
-          <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
-            You can still compare this vacancy against your CV, save it, generate a letter and
-            track an application.
-          </p>
-        </div>
-      </section>
-    );
-  }
-
-  if (result.market === 'netherlands') {
-    const vacancy = result.raw;
-    const pairs = [
-      { k: 'IND sponsor legal entity', v: vacancy.sponsorLegalNames.join(', ') || 'Not resolved' },
-      { k: 'Mapping confidence', v: vacancy.mappingConfidence },
-      { k: 'Re-verified in this run', v: vacancy.verifiedInRun ? 'Yes' : 'No' },
-      {
-        k: 'Source outcome',
-        v: vacancy.sourceOutcomeStatus ? vacancy.sourceOutcomeStatus.replace(/_/g, ' ') : 'Not recorded',
-      },
-    ];
-
-    const detailPairs = [
-      { k: 'Register', v: sponsorSource?.url ?? 'Not recorded in this report' },
-      { k: 'Register last updated', v: formatDate(sponsorSource?.lastUpdated ?? null) },
-      { k: 'Register retrieved', v: formatDate(sponsorSource?.retrievedAt ?? null) },
-      { k: 'Scan run', v: runId ?? 'Unknown' },
-      { k: 'First seen', v: formatDate(vacancy.firstSeenAt) },
-      { k: 'Last seen', v: formatDate(vacancy.lastSeenAt) },
-      { k: 'Language evidence', v: (vacancy.languageEvidence ?? []).join('; ') || 'None captured' },
-    ];
-
-    return (
-      <section className="mt-6">
-        <SectionHeading>Employer verification &amp; sources</SectionHeading>
-        <KeyValue items={pairs} />
-
-        <button
-          className="btn btn-outline btn-xs mt-3"
-          type="button"
-          onClick={() => setDetailsOpen((open) => !open)}
-          aria-expanded={detailsOpen}
-        >
-          {detailsOpen ? 'Hide verification details' : 'Show verification details'}
-        </button>
-
-        {detailsOpen && (
-          <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
-            <h4 className="mb-2.5 text-xs font-semibold tracking-wide text-base-content/60 uppercase">
-              Verification details
-            </h4>
-            <dl className="text-sm">
-              {detailPairs.map((pair) => (
-                <div key={pair.k} className="flex flex-wrap gap-x-3 gap-y-0.5 py-0.5">
-                  <dt className="w-40 flex-none text-base-content/60">{pair.k}</dt>
-                  <dd className="min-w-0 flex-1 break-words">{pair.v}</dd>
-                </div>
-              ))}
-            </dl>
-            <p className="mt-2.5 text-xs leading-relaxed text-base-content/60">
-              A vacancy&apos;s trading name can differ from the registered legal entity, so anything
-              below a high-confidence mapping needs manual review before you rely on sponsorship.
-              Recognition applies to the employer, never to a specific vacancy or to the terms it
-              offers.
-            </p>
-          </div>
-        )}
-      </section>
-    );
-  }
-
+export function VerificationSection({ result }: VerificationSectionProps) {
   const official = result.official;
 
   return (
@@ -142,7 +47,7 @@ export function VerificationSection({ result, sponsorSource, runId }: Verificati
         <div className="text-sm font-semibold">
           {result.verification.level === 'possible_sponsor_match'
             ? 'A best-effort sponsor match was found -- see the summary card above.'
-            : `Employer verification is not available for ${marketLabel(result.market)}.`}
+            : 'Employer verification is not available for this vacancy.'}
         </div>
         {/* Neither branch repeats `result.verification.note` here: the summary card above
             (VacancyDetail.tsx's "Employer verification" Card) already shows the label and note

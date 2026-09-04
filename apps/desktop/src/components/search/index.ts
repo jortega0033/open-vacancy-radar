@@ -16,29 +16,19 @@ export { SectionHeading, VerificationSection } from './VerificationSection.js';
 export type { VerificationSectionProps } from './VerificationSection.js';
 export {
   DEFAULT_FILTERS,
-  MARKET_OPTIONS,
   WORLDWIDE_VERIFICATION,
+  countryOptions,
   decisionLabel,
   employmentOptions,
   filterResults,
   formatDate,
   formatDiscoverySalary,
+  isStalePosting,
   isWebUrl,
-  marketLabel,
-  netherlandsVerification,
   orNotStated,
   sortResults,
   sourceOptions,
-  supportedFilters,
-  toNetherlandsResults,
   toWorldwideResults,
+  worldwideVerification,
 } from './results.js';
-export type {
-  ArrangementValue,
-  PostedWithin,
-  SearchFilters,
-  SearchMarket,
-  SearchResult,
-  Verification,
-  VerificationLevel,
-} from './results.js';
+export type { PostedWithin, SearchFilters, SearchResult, Verification, VerificationLevel } from './results.js';

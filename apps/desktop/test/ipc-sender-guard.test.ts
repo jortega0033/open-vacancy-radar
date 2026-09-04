@@ -98,10 +98,15 @@ function preloadInvokeChannels(): string[] {
 /**
  * What ADI-16 found: 46 `ipcMain.handle` registrations in main.ts, of which exactly three
  * (`workspace-grant:*`) checked their sender at all, plus five more registered through ADI-07's
- * registrar. Pinned as a floor rather than an equality so that adding channel 47 is not a test
+ * registrar. Pinned as a floor rather than an equality so that adding a channel is not a test
  * failure on its own -- the two exhaustiveness assertions below are what actually enforce coverage.
+ *
+ * Lowered from 46 to 44 when the curated Netherlands pipeline was removed and took
+ * `vacancy:get-nl-report` / `vacancy:run-nl-scan` with it: a floor exists to catch channels
+ * silently falling out of the guarded registrar, not to keep counting channels that were
+ * deliberately deleted along with the feature they served.
  */
-const REGISTRATIONS_AT_ADI_16 = 46;
+const REGISTRATIONS_AT_ADI_16 = 44;
 
 describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', () => {
   it('has no direct registration on ipcMain anywhere under electron/', () => {
@@ -121,7 +126,7 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
     // guarded way to register one today. This repo has never needed one (every channel answers with
     // a value, hence `handle`), and this pins that as an enforced invariant rather than a fact that
     // happens to be true: if a future edit adds `ipcMain.on(...)`, this must fail rather than ship
-    // an unguarded listener next to forty-six guarded ones.
+    // an unguarded listener next to the rest of the guarded ones.
     const offenders = electronSources()
       .filter((file) => /\bipcMain\s*\.\s*on\s*\(/.test(file.text))
       .map((file) => file.path);
@@ -143,7 +148,7 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
     expect(unknown, 'an IPC handler registered on an unrecognised receiver').toEqual([]);
   });
 
-  it('registers at least the 46 channels ADI-16 counted, each exactly once', () => {
+  it('registers at least the current channel floor, each exactly once', () => {
     const channels = guardedChannels();
     expect(channels.length).toBeGreaterThanOrEqual(REGISTRATIONS_AT_ADI_16);
     expect(new Set(channels).size).toBe(channels.length);

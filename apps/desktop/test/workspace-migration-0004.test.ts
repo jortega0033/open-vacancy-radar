@@ -116,6 +116,11 @@ const EXISTING_JOB = {
   status: 'preparing',
 } as const;
 
+/** `market` was dropped by migration 0006, well after 0004 -- present for the raw seed insert
+ * above (the pre-0004 schema still has the column), but never expected back from the repository
+ * reader once the database has been carried all the way to the current migration. */
+const { market: _existingJobMarket, ...EXISTING_JOB_WITHOUT_MARKET } = EXISTING_JOB;
+
 function seedPre0004Rows(connection: Database.Database): void {
   const insert = connection.prepare(
     `INSERT INTO saved_jobs (id, vacancy_key, role, company, market, location, salary, arrangement, verification, match_percent, source_url, notes, status, saved_at)
@@ -250,7 +255,7 @@ describe('migration 0004 is additive', () => {
       // Every field the row was written with, still exactly as written.
       expect(job).toEqual({
         id: JOB_ID,
-        ...EXISTING_JOB,
+        ...EXISTING_JOB_WITHOUT_MARKET,
         savedAt: new Date(SAVED_AT).toISOString(),
         gapAnalysis: null,
         gapAnalysisAt: null,
@@ -287,7 +292,7 @@ describe('migration 0004 is additive', () => {
       expect(updated.gapAnalysis).toBe(analysis);
       expect(updated.gapAnalysisAt).not.toBeNull();
       // Writing the analysis touches nothing else on the row.
-      expect(updated).toMatchObject({ ...EXISTING_JOB, savedAt: new Date(SAVED_AT).toISOString() });
+      expect(updated).toMatchObject({ ...EXISTING_JOB_WITHOUT_MARKET, savedAt: new Date(SAVED_AT).toISOString() });
     } finally {
       first.close();
     }

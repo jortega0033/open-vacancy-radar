@@ -11,7 +11,6 @@ function makeApplication(overrides: Partial<ApplicationRecord> = {}): Applicatio
     role: 'Senior Frontend Engineer',
     company: 'Acme Corp',
     location: 'Amsterdam',
-    market: 'netherlands',
     verification: 'Recognised sponsor',
     status: 'applied',
     appliedAt: '2026-08-20T10:00:00.000Z',

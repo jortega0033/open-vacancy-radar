@@ -26,12 +26,10 @@ import {
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
-  runEndToEndScan,
   runGlobalRemoteScan,
   type CandidateProfile,
   type Database,
   type GlobalRemoteReport,
-  type JobRadarReport,
   type ScanLock,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
@@ -53,7 +51,7 @@ import {
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
-import { createScanGuard, SCAN_BUSY_OTHER_PROCESS } from './scan-guard.js';
+import { createScanGuard } from './scan-guard.js';
 import { confirmWorkspaceGrant } from './workspace-confirm.js';
 import {
   WorkspaceGrantManager,
@@ -180,13 +178,10 @@ let vacancyDb: Database | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
 let vacancyScanLock: ScanLock | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
-let latestNetherlandsReport: JobRadarReport | undefined;
 
 /**
- * One guard for *both* scan kinds, not one per kind: the two pipelines write the same engine
- * database, so running them together is exactly as damaging as running two of either. See
- * electron/scan-guard.ts for why the in-process half and the cross-process advisory lock are both
- * needed.
+ * Guards the vacancy scan against overlapping with itself. See electron/scan-guard.ts for why the
+ * in-process half and the cross-process advisory lock are both needed.
  */
 const runExclusiveScan = createScanGuard(() => vacancyScanLock);
 
@@ -1120,43 +1115,6 @@ guardedIpc.handle('vacancy:run-scan', async (_event, query: unknown): Promise<Gl
       return result.report;
     },
     { takeAdvisoryLock: true },
-  );
-});
-
-/**
- * The Netherlands half of the Search page: the IND recognised-sponsor pipeline, exposed on the
- * same two-channel shape as the global-remote pair above (`get-*` reads whatever the last run
- * produced without triggering network activity; `run-*` performs the scan).
- *
- * `runEndToEndScan` takes the engine's advisory lock itself and answers
- * `{ status: 'skipped', reason: 'already-running' }` rather than throwing when it cannot get it,
- * so that outcome is translated into the same error message `vacancy:run-scan` uses: from the
- * renderer's point of view "another scan is running" is one condition, not two.
- */
-guardedIpc.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
-
-guardedIpc.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
-  const db = await ensureVacancyEngine();
-  const lock = vacancyScanLock;
-  if (!lock) throw new Error('vacancy engine is not initialized');
-
-  return runExclusiveScan(
-    async () => {
-      const config = vacancyEngineConfig();
-      // Two separate databases, read here on every scan rather than cached: the workspace DB
-      // (app_settings) and the vacancy-engine DB (`db` above) are unrelated, and this setting can
-      // change between scans without anything else invalidating a cached copy.
-      const { indVerificationEnabled } = await workspace.getSettings(await ensureWorkspaceDb());
-      const result = await runEndToEndScan(db, config, createLogger(config), lock, {
-        // This is where the engine reads `config/candidate-profile-v1.json` and writes `reports/`.
-        projectRoot: await vacancyEngineDataRoot(),
-        indVerificationEnabled,
-      });
-      if (result.status === 'skipped') throw new Error(SCAN_BUSY_OTHER_PROCESS);
-      latestNetherlandsReport = result.report;
-      return result.report;
-    },
-    { takeAdvisoryLock: false },
   );
 });
 

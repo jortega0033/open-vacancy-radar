@@ -18,7 +18,7 @@ import {
   parseSettingsPatch,
 } from '../electron/workspace/validate.js';
 
-const VALID_SAVED_JOB = { role: 'Frontend Engineer', company: 'Redwood Software', market: 'netherlands' };
+const VALID_SAVED_JOB = { role: 'Frontend Engineer', company: 'Redwood Software' };
 
 describe('workspace input validation: allow-listing', () => {
   it('drops properties the caller was never granted, rather than passing them through to Drizzle', () => {
@@ -37,7 +37,6 @@ describe('workspace input validation: allow-listing', () => {
       [
         'role',
         'company',
-        'market',
         'location',
         'vacancyKey',
         'salary',
@@ -93,18 +92,11 @@ describe('workspace input validation: required fields and enums', () => {
   it('rejects a missing or blank required field', () => {
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '' })).toThrow(/"role" is required/);
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '   ' })).toThrow(/"role" is required/);
-    expect(() => parseSavedJobInput({ company: 'X', market: 'worldwide' })).toThrow(/"role" must be a string/);
+    expect(() => parseSavedJobInput({ company: 'X' })).toThrow(/"role" must be a string/);
   });
 
   it('trims required text so a whitespace-padded value cannot masquerade as content', () => {
     expect(parseSavedJobInput({ ...VALID_SAVED_JOB, role: '  Frontend Engineer  ' }).role).toBe('Frontend Engineer');
-  });
-
-  it('accepts only the two markets the app can actually search', () => {
-    expect(parseSavedJobInput({ ...VALID_SAVED_JOB, market: 'worldwide' }).market).toBe('worldwide');
-    for (const invented of ['germany', 'uk', 'us', 'belgium', 'other', 'Netherlands']) {
-      expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, market: invented })).toThrow(/"market" must be one of/);
-    }
   });
 
   it('rejects an unknown status instead of writing it to a CHECK-constrained column', () => {

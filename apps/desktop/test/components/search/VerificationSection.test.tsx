@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { VerificationSection } from '../../../src/components/search/VerificationSection.js';
 import type { SearchResult } from '../../../src/components/search/results.js';
 
-function worldwideResult(overrides: Partial<Extract<SearchResult, { market: 'worldwide' }>> = {}): SearchResult {
+function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
   return {
-    market: 'worldwide',
     raw: {
       key: 'ww-1',
       provider: 'remotive',
@@ -33,17 +32,15 @@ function worldwideResult(overrides: Partial<Extract<SearchResult, { market: 'wor
     location: 'Worldwide',
     url: 'https://example.invalid/jobs/ww-1',
     provider: 'remotive',
-    arrangement: null,
-    arrangementValue: 'unknown',
     employmentType: 'full_time',
     salary: null,
     postedAt: null,
     description: null,
     verification: {
       level: 'not_available',
-      label: 'Not available for this market',
+      label: 'Not available for this vacancy',
       tone: null,
-      note: 'The worldwide/remote pipeline discovers vacancies from public job feeds and does not check employers against any register. Nothing was verified about this employer: that is an absent check, not a negative result.',
+      note: 'No sponsor register match was found (or attempted, for a non-Netherlands location) for this employer. Nothing was verified: that is an absent check, not a negative result.',
     },
     profileScore: null,
     strongPoints: [],
@@ -51,15 +48,15 @@ function worldwideResult(overrides: Partial<Extract<SearchResult, { market: 'wor
     reasons: [],
     lead: { title: 'Remote Frontend Engineer', company: 'Acme Corp', location: 'Worldwide', url: 'https://example.invalid/jobs/ww-1' },
     ...overrides,
-  };
+  } as SearchResult;
 }
 
 describe('VerificationSection', () => {
   it('does not repeat the "not available" note here -- it is already shown once in the summary card above', () => {
-    render(<VerificationSection result={worldwideResult()} sponsorSource={null} runId="run-1" />);
+    render(<VerificationSection result={worldwideResult()} />);
 
-    expect(screen.queryByText(/Nothing was verified about this employer/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Employer verification is not available for Worldwide / Remote.')).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing was verified: that is an absent check/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Employer verification is not available for this vacancy.')).toBeInTheDocument();
   });
 
   it('points to the summary card for a sponsor match, without repeating its label or note here', () => {
@@ -72,7 +69,7 @@ describe('VerificationSection', () => {
       },
     });
 
-    render(<VerificationSection result={result} sponsorSource={null} runId="run-1" />);
+    render(<VerificationSection result={result} />);
 
     expect(screen.getByText(/best-effort sponsor match was found/i)).toBeInTheDocument();
     // The summary card (VacancyDetail.tsx, not rendered here) already shows the label and note

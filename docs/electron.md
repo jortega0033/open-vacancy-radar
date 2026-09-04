@@ -77,8 +77,8 @@ Vacancy Radar and never touch the daemon at all; the other two (`workspaceGrant`
 reach the daemon directly over loopback, but only from the main process:
 
 - **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
-  `getNetherlandsReport`, `runNetherlandsScan`, `getSearchProfile`, `saveSearchProfile`: reads and
-  triggers scans against the vendored `vacancy-engine` package and its own SQLite database.
+  `getSearchProfile`, `saveSearchProfile`: reads and triggers scans against the vendored
+  `vacancy-engine` package's worldwide/remote pipeline and its own SQLite database.
 - **`window.workspace`** (`WorkspaceBridge`, defined in `electron/workspace/types.ts`) — CRUD over
   the workspace SQLite database's saved jobs, applications, CV documents, and letters (21 methods:
   `getSettings`, `updateSettings`, `getCounts`, `list/create/update/delete` for each of the four

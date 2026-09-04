@@ -9,15 +9,8 @@ export { createLogger } from './logger.js';
 export { createDatabaseClient, migrateDatabase, type Database, type DatabaseClient } from './db/client.js';
 export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/advisory-lock.js';
 
-export {
-  runEndToEndScan,
-  type EndToEndScanCommandResult,
-  type EndToEndScanOptions,
-} from './pipeline/full-scan.js';
 export { runGlobalRemoteScan, type GlobalRemoteScanResult } from './pipeline/global-remote.js';
 export { runSponsorSync } from './pipeline/sponsors.js';
-export { runPersistedDeterministicScoring } from './scoring/index.js';
-export { generateJobRadarReport } from './reporting/repository.js';
 export {
   candidateProfileSchema,
   isCandidateProfileConfigured,
@@ -26,7 +19,6 @@ export {
 } from './candidate/profile.js';
 
 export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit } from './global-remote/models.js';
-export type { JobRadarReport, ReportVacancy } from './reporting/report.js';
 export {
   descriptionShingleSimilarity,
   findCrossCompanyDuplicateGroups,

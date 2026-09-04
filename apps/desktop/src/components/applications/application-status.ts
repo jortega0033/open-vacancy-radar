@@ -1,4 +1,4 @@
-import type { ApplicationFilter, ApplicationInput, ApplicationRecord, ApplicationStatus, Market } from '../../window.js';
+import type { ApplicationFilter, ApplicationInput, ApplicationRecord, ApplicationStatus } from '../../window.js';
 
 /**
  * Canonical status list/labels/styling. `types.ts` (electron/workspace/types.ts) is the source of
@@ -40,13 +40,6 @@ export const APPLICATION_STATUS_SELECT_CLASS: Record<ApplicationStatus, string> 
   withdrawn: 'select select-sm',
 };
 
-export const MARKET_LABEL: Record<Market, string> = {
-  netherlands: 'Netherlands',
-  worldwide: 'Worldwide',
-};
-
-export const MARKET_OPTIONS: readonly Market[] = ['netherlands', 'worldwide'];
-
 export interface ApplicationsFilterTab {
   key: ApplicationFilter;
   label: string;
@@ -85,7 +78,6 @@ export function toApplicationInput(record: ApplicationRecord): ApplicationInput 
   return {
     role: record.role,
     company: record.company,
-    market: record.market,
     location: record.location,
     savedJobId: record.savedJobId,
     verification: record.verification,

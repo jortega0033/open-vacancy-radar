@@ -162,18 +162,10 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the five documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
-      [
-        'getReport',
-        'getStatus',
-        'runScan',
-        'getNetherlandsReport',
-        'runNetherlandsScan',
-        'getSearchProfile',
-        'saveSearchProfile',
-      ].sort(),
+      ['getReport', 'getStatus', 'runScan', 'getSearchProfile', 'saveSearchProfile'].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -209,24 +201,6 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     const api = await loadPreload('vacancyRadar');
     await (api.runScan as (query?: string) => Promise<unknown>)('frontend engineer');
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
-  });
-
-  it('keeps the Netherlands scan on its own two channels, distinct from the global-remote pair', async () => {
-    // The two pipelines are different scans over different sources producing different report
-    // shapes. If either of these ever invoked a `vacancy:*-scan` channel belonging to the other,
-    // the Search page would silently show worldwide results under a Netherlands heading.
-    invoke.mockResolvedValue(null);
-    let api = await loadPreload('vacancyRadar');
-    await (api.getNetherlandsReport as () => Promise<unknown>)();
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('vacancy:get-nl-report');
-
-    invoke.mockReset();
-    invoke.mockResolvedValue({ runId: 'nl-run-1' });
-    api = await loadPreload('vacancyRadar');
-    await (api.runNetherlandsScan as () => Promise<unknown>)();
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('vacancy:run-nl-scan');
   });
 });
 
@@ -452,15 +426,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'setMcpCredential',
     'removeMcpProvider',
   ],
-  vacancyRadar: [
-    'getReport',
-    'getStatus',
-    'runScan',
-    'getNetherlandsReport',
-    'runNetherlandsScan',
-    'getSearchProfile',
-    'saveSearchProfile',
-  ],
+  vacancyRadar: ['getReport', 'getStatus', 'runScan', 'getSearchProfile', 'saveSearchProfile'],
   workspace: [
     'getSettings',
     'updateSettings',

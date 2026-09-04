@@ -48,14 +48,12 @@ describe('createScanGuard', () => {
     await expect(running).resolves.toBe('first');
   });
 
-  it('refuses a second scan of a DIFFERENT kind too: one guard covers both pipelines', async () => {
-    // The global-remote and Netherlands scans write the same engine database. A per-kind flag
-    // would let them interleave, which is the bug this single shared guard exists to prevent.
+  it('refuses a second scan even with a different takeAdvisoryLock option: one guard, one in-flight flag', async () => {
     const guard = createScanGuard(() => grantingLock());
     const globalRemote = deferred<string>();
 
     const running = guard(() => globalRemote.promise, { takeAdvisoryLock: true });
-    await expect(guard(async () => 'nl', { takeAdvisoryLock: false })).rejects.toThrow(SCAN_BUSY_IN_PROCESS);
+    await expect(guard(async () => 'second', { takeAdvisoryLock: false })).rejects.toThrow(SCAN_BUSY_IN_PROCESS);
 
     globalRemote.resolve('worldwide');
     await running;
@@ -93,7 +91,7 @@ describe('createScanGuard', () => {
     expect(lock.releases).toBe(1);
   });
 
-  it('does not touch the advisory lock for a scan that takes it itself (runEndToEndScan)', async () => {
+  it('does not touch the advisory lock for a scan that takes it itself', async () => {
     // Double-acquiring would deadlock against the engine's own acquisition on any platform where
     // the SQLite file lock is per-handle rather than per-process.
     const lock = grantingLock();

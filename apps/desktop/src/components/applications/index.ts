@@ -8,8 +8,6 @@ export {
   APPLICATION_STATUS_ORDER,
   APPLICATION_STATUS_SELECT_CLASS,
   APPLICATIONS_FILTER_TABS,
-  MARKET_LABEL,
-  MARKET_OPTIONS,
   emptyStateTitle,
   sortApplications,
   toApplicationInput,

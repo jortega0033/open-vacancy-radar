@@ -27,7 +27,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const JOB = { role: 'Frontend Engineer', company: 'Redwood Software', market: 'netherlands' } as const;
+const JOB = { role: 'Frontend Engineer', company: 'Redwood Software' } as const;
 
 describe('settings', () => {
   it('creates the single settings row on first read, with the schema defaults', () => {
@@ -35,7 +35,6 @@ describe('settings', () => {
     expect(settings.startPage).toBe('search');
     expect(settings.theme).toBe('system');
     expect(settings.density).toBe('comfortable');
-    expect(settings.defaultMarket).toBe('worldwide');
     expect(settings.sidebarCollapsed).toBe(false);
   });
 

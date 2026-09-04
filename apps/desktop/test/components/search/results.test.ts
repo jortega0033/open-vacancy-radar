@@ -38,30 +38,28 @@ function discoveryVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): Disco
 
 function worldwideResult(overrides: { key: string; location: string | null }): SearchResult {
   return {
-    market: 'worldwide' as const,
-    raw: {} as never,
+    raw: { worldwideSponsorMatch: null } as never,
     official: null,
+    key: overrides.key,
     title: 'Frontend Engineer',
     company: 'Acme',
+    location: overrides.location,
     url: 'https://example.com/job',
     provider: 'jobicy',
-    arrangement: null,
-    arrangementValue: 'unknown',
     employmentType: null,
     salary: null,
     postedAt: null,
     description: null,
-    verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
+    verification: { level: 'not_available', label: 'Not available for this vacancy', tone: null, note: '' },
     profileScore: null,
     strongPoints: [],
     gaps: [],
     reasons: [],
     lead: { title: 'Frontend Engineer', company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
-    ...overrides,
   };
 }
 
-describe('filterResults: country filter (worldwide only)', () => {
+describe('filterResults: country filter', () => {
   it('applies no filter when country is "all", the default', () => {
     const results = [
       worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' }),
@@ -89,33 +87,19 @@ describe('filterResults: country filter (worldwide only)', () => {
     const filtered = filterResults(results, { ...DEFAULT_FILTERS, country: UNSPECIFIED_LOCATION });
     expect(filtered.map((r) => r.key).sort()).toEqual(['1', '2']);
   });
+});
 
-  it('is not applied to Netherlands-market rows, even if a country filter value is set', () => {
-    const nlResult: SearchResult = {
-      market: 'netherlands',
-      raw: {} as never,
-      key: 'nl-1',
-      title: 'Frontend Engineer',
-      company: 'Acme NL',
-      location: 'Remote',
-      url: 'https://example.com/nl-job',
-      provider: 'greenhouse',
-      arrangement: null,
-      arrangementValue: 'unknown',
-      employmentType: null,
-      salary: null,
-      postedAt: null,
-      description: null,
-      verification: { level: 'not_available', label: '', tone: null, note: '' },
-      profileScore: null,
-      strongPoints: [],
-      gaps: [],
-      reasons: [],
-      lead: { title: 'Frontend Engineer', company: 'Acme NL', location: 'Remote', url: 'https://example.com/nl-job' },
-    };
-    // A "United States" filter value would exclude this row if the country predicate applied to
-    // Netherlands rows; supportedFilters(netherlands).country is false, so it must pass through.
-    expect(filterResults([nlResult], { ...DEFAULT_FILTERS, country: 'United States' })).toHaveLength(1);
+describe('filterResults: sponsorOnly', () => {
+  it('keeps only rows with a resolved worldwideSponsorMatch', () => {
+    const matched = worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' });
+    matched.raw = discoveryVacancy({
+      key: '1',
+      worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '01234567' },
+    });
+    const unmatched = worldwideResult({ key: '2', location: 'Amsterdam, Netherlands' });
+
+    const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
+    expect(filtered.map((r) => r.key)).toEqual(['1']);
   });
 });
 
@@ -156,8 +140,7 @@ describe('sortResults', () => {
     title?: string;
   }): SearchResult {
     return {
-      market: 'worldwide' as const,
-      raw: {} as never,
+      raw: discoveryVacancy({ key: overrides.key }),
       official: null,
       key: overrides.key,
       title: overrides.title ?? overrides.key,
@@ -165,13 +148,11 @@ describe('sortResults', () => {
       location: null,
       url: 'https://example.com/job',
       provider: 'jobicy',
-      arrangement: null,
-      arrangementValue: 'unknown',
       employmentType: null,
       salary: null,
       postedAt: overrides.postedAt ?? null,
       description: null,
-      verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
+      verification: { level: 'not_available', label: 'Not available for this vacancy', tone: null, note: '' },
       profileScore: overrides.profileScore ?? null,
       strongPoints: [],
       gaps: [],
@@ -180,7 +161,7 @@ describe('sortResults', () => {
     };
   }
 
-  it('sorts worldwide rows (no profile score) by most recently posted first', () => {
+  it('sorts rows with no profile score by most recently posted first', () => {
     const results = [
       sortableResult({ key: 'old', postedAt: '2026-08-01T00:00:00.000Z' }),
       sortableResult({ key: 'new', postedAt: '2026-08-20T00:00:00.000Z' }),
@@ -208,7 +189,7 @@ describe('sortResults', () => {
     expect(sortResults(results).map((r) => r.key)).toEqual(['a', 'b']);
   });
 
-  it('ranks a higher profile score first (Netherlands), ahead of posting date', () => {
+  it('ranks a higher profile score first, ahead of posting date', () => {
     const results = [
       sortableResult({ key: 'low-score-newer', profileScore: 40, postedAt: '2026-08-20T00:00:00.000Z' }),
       sortableResult({ key: 'high-score-older', profileScore: 90, postedAt: '2026-08-01T00:00:00.000Z' }),

@@ -12,7 +12,7 @@ import {
   type ProviderId,
   type ProviderStatus,
 } from '@agent-dock/shared';
-import type { CandidateProfile, GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
 
@@ -68,15 +68,7 @@ export interface VacancyRadarBridge {
    * default and filtering everything client-side afterward. Omitted or blank keeps that default.
    */
   runScan(query?: string): Promise<GlobalRemoteReport>;
-  /**
-   * Netherlands pipeline: the IND recognised-sponsor scan. A separate pair of methods rather
-   * than a `market` argument on the two above, because the two pipelines return genuinely
-   * different report shapes (`GlobalRemoteReport` vs `JobRadarReport`) and a union-typed return
-   * would push a discriminator check into every caller for no gain.
-   */
-  getNetherlandsReport(): Promise<JobRadarReport | null>;
-  runNetherlandsScan(): Promise<JobRadarReport>;
-  /** The Netherlands pipeline's candidate profile: what deterministic scoring matches against. */
+  /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
 }
@@ -190,12 +182,6 @@ const vacancyApi: VacancyRadarBridge = {
   },
   runScan(query) {
     return ipcRenderer.invoke('vacancy:run-scan', query);
-  },
-  getNetherlandsReport() {
-    return ipcRenderer.invoke('vacancy:get-nl-report');
-  },
-  runNetherlandsScan() {
-    return ipcRenderer.invoke('vacancy:run-nl-scan');
   },
   getSearchProfile() {
     return ipcRenderer.invoke('vacancy:get-search-profile');

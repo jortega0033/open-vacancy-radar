@@ -16,17 +16,8 @@ function configuredProfile(overrides: Partial<CandidateProfile> = {}): Candidate
   };
 }
 
-/** `sponsorOnlyDefault` and `indVerificationEnabled` live in `app_settings`, owned by
- * `SettingsPage`, not this section's own candidate-profile IPC; `onSaved`/`onSaveError` likewise
- * belong to `SettingsPage`'s one shared toast now, not a toast this section renders itself. Every
- * render here supplies all of them (with no-op handlers) explicitly. */
 function baseProps(overrides: Partial<SearchProfileSectionProps> = {}): SearchProfileSectionProps {
   return {
-    sponsorOnlyDefault: true,
-    onChangeSponsorOnlyDefault: vi.fn(),
-    indVerificationEnabled: true,
-    onChangeIndVerificationEnabled: vi.fn(),
-    isNetherlands: true,
     onSaved: vi.fn(),
     onSaveError: vi.fn(),
     ...overrides,
@@ -38,7 +29,7 @@ afterEach(() => {
 });
 
 describe('SearchProfileSection', () => {
-  it('explains the profile only affects the Netherlands pipeline, not worldwide', async () => {
+  it('shows the search profile form', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
     });
@@ -46,8 +37,7 @@ describe('SearchProfileSection', () => {
     render(<SearchProfileSection {...baseProps()} />);
 
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: 'Netherlands search profile' })).toBeInTheDocument();
-    expect(screen.getByText(/worldwide pipeline has no equivalent/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Search profile' })).toBeInTheDocument();
   });
 
   it('shows the unconfigured warning when there are no target roles or strongest skills', async () => {
@@ -126,42 +116,6 @@ describe('SearchProfileSection', () => {
     );
   });
 
-  it('saves a toggle immediately, without waiting for blur', async () => {
-    const saveSearchProfile = vi.fn().mockResolvedValue(configuredProfile({ constraints: { ...DEFAULT_CANDIDATE_PROFILE.constraints, dutchRequired: true } }));
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
-      saveSearchProfile,
-    });
-
-    render(<SearchProfileSection {...baseProps()} />);
-
-    const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
-    fireEvent.click(toggle);
-
-    await waitFor(() =>
-      expect(saveSearchProfile).toHaveBeenCalledWith({ constraints: { dutchRequired: true } }),
-    );
-  });
-
-  it('reverts an optimistically-toggled switch when the save fails, reporting the error upward', async () => {
-    const saveSearchProfile = vi.fn().mockRejectedValue(new Error('disk write failed'));
-    const onSaveError = vi.fn();
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
-      saveSearchProfile,
-    });
-
-    render(<SearchProfileSection {...baseProps({ onSaveError })} />);
-
-    const toggle = await screen.findByRole('switch', { name: 'I can take Dutch-required roles' });
-    expect(toggle).not.toBeChecked();
-    fireEvent.click(toggle);
-
-    expect(toggle).toBeChecked();
-    await waitFor(() => expect(onSaveError).toHaveBeenCalledWith('disk write failed'));
-    expect(toggle).not.toBeChecked();
-  });
-
   it('shows a load error instead of the form when the profile fails to load', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
@@ -173,90 +127,7 @@ describe('SearchProfileSection', () => {
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
   });
 
-  it('shows the sponsor-only-default toggle here (moved from Search defaults, since it is Netherlands-only) even before the profile loads', async () => {
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
-    });
-
-    render(<SearchProfileSection {...baseProps({ sponsorOnlyDefault: false })} />);
-
-    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
-  });
-
-  it('reports a sponsor-only-default toggle through the callback, not the candidate-profile IPC', async () => {
-    const onChangeSponsorOnlyDefault = vi.fn();
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
-    });
-
-    render(<SearchProfileSection {...baseProps({ sponsorOnlyDefault: true, onChangeSponsorOnlyDefault })} />);
-
-    // Wait for the profile-loaded render (not just the toggle's own early appearance in the
-    // loading branch): the toggle row is present in both, but clicking before the swap can hit a
-    // node from the loading branch that React has since replaced.
-    await screen.findByLabelText('Name');
-    const toggle = screen.getByRole('switch', { name: 'Recognised sponsors only by default' });
-    fireEvent.click(toggle);
-
-    expect(onChangeSponsorOnlyDefault).toHaveBeenCalledWith(false);
-  });
-
-  it('shows the IND verification toggle here too (moved from the old Market integrations section) and reports it through its own callback', async () => {
-    const onChangeIndVerificationEnabled = vi.fn();
-    installVacancyRadarBridge({
-      getSearchProfile: vi.fn().mockRejectedValue(new Error('disk read failed')),
-    });
-
-    render(<SearchProfileSection {...baseProps({ indVerificationEnabled: true, onChangeIndVerificationEnabled })} />);
-
-    const toggle = screen.getByRole('switch', { name: 'IND recognised sponsor verification' });
-    expect(toggle).toBeChecked();
-    fireEvent.click(toggle);
-
-    expect(onChangeIndVerificationEnabled).toHaveBeenCalledWith(false);
-  });
-
-  it('renders nothing at all when the default search location is not Netherlands', async () => {
-    const getSearchProfile = vi.fn().mockResolvedValue(configuredProfile());
-    installVacancyRadarBridge({ getSearchProfile });
-
-    const { container } = render(<SearchProfileSection {...baseProps({ isNetherlands: false })} />);
-
-    // Only the Netherlands (IND sponsor) pipeline scores results against a candidate profile at
-    // all, so a worldwide user has nothing here to configure: not the toggles, not the profile
-    // fields, not even the "Netherlands search profile" heading -- the whole section is absent.
-    expect(container).toBeEmptyDOMElement();
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: 'IND recognised sponsor verification' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Netherlands search profile' })).not.toBeInTheDocument();
-    // It also never fetches the candidate profile it has nothing to show: no wasted IPC round trip.
-    expect(getSearchProfile).not.toHaveBeenCalled();
-  });
-
-  it('clears a stale load error after switching away from Netherlands and back to a successful refetch', async () => {
-    // A real bug this test catches: gating the profile-fetch effect on `isNetherlands` made it
-    // re-run on every flip instead of only once per mount, which exposed a pre-existing gap -- the
-    // success path never cleared a previous failure. Without the fix, the error alert from the
-    // first failed fetch would keep hiding the form even after a later fetch succeeds.
-    const getSearchProfile = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('disk read failed'))
-      .mockResolvedValueOnce(configuredProfile());
-    installVacancyRadarBridge({ getSearchProfile });
-
-    const { rerender } = render(<SearchProfileSection {...baseProps({ isNetherlands: true })} />);
-    await waitFor(() => expect(screen.getByText('disk read failed')).toBeInTheDocument());
-
-    // Switch to worldwide (unmounts the section's content), then back to Netherlands.
-    rerender(<SearchProfileSection {...baseProps({ isNetherlands: false })} />);
-    rerender(<SearchProfileSection {...baseProps({ isNetherlands: true })} />);
-
-    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
-    expect(screen.queryByText('disk read failed')).not.toBeInTheDocument();
-  });
-
-  it('groups the candidate-profile fields under Identity / Role matching / Constraints subheadings', async () => {
+  it('groups the candidate-profile fields under Identity / Role matching subheadings', async () => {
     installVacancyRadarBridge({
       getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
     });
@@ -266,6 +137,5 @@ describe('SearchProfileSection', () => {
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
     expect(screen.getByRole('heading', { level: 3, name: 'Identity' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 3, name: 'Role matching' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 3, name: 'Constraints' })).toBeInTheDocument();
   });
 });

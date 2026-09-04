@@ -3,54 +3,42 @@ import { expect, goto, test } from './fixtures.js';
 /**
  * Search e2e coverage is deliberately scoped to UI mechanics that need no real data: this suite
  * never triggers "Search" / "Run the first scan" (the two buttons that can start a scan; there is
- * no longer a separate, merely-filtering action), because both hit real external job-board APIs
+ * no separate, merely-filtering action), because both hit real external job-board APIs
  * (SearchPage.tsx's docstring: "Scanning hits real external feeds and can take a couple of
  * minutes"), which would be slow, flaky, and inappropriate for CI. `window.vacancyRadar.getStatus`/
- * `getNetherlandsReport`/`getReport` are read-only IPC calls to the local engine config, not to any
- * external service, so hydrating a fresh workspace's (always-empty) report is safe to exercise here.
+ * `getReport` are read-only IPC calls to the local engine config, not to any external service, so
+ * hydrating a fresh workspace's (always-empty) report is safe to exercise here.
  */
 test.describe('Search', () => {
-  test('shows the no-report-yet empty state for a fresh workspace, per market', async ({ window }) => {
+  test('shows the no-report-yet empty state for a fresh workspace, with a plain country filter', async ({
+    window,
+  }) => {
     await goto(window, 'Search');
 
-    // Fresh workspace: the persisted default market is 'worldwide' (never Netherlands; see
-    // schema.ts's `defaultMarket` column default), and neither market has ever been scanned, so
-    // SearchPage's hydrate-then-optionally-scan effect resolves to `hasReport === false` and
-    // renders the "No search yet" EmptyState (SearchPage.tsx line ~397), never the results list.
+    // Fresh workspace: nothing has ever been scanned, so SearchPage's hydrate-then-optionally-scan
+    // effect resolves to `hasReport === false` and renders the "No search yet" EmptyState, never
+    // the results list.
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
     await expect(
-      window.getByText(/No Worldwide \/ Remote scan has been run yet, so there is nothing to filter/i),
+      window.getByText(/No scan has been run yet, so there is nothing to filter/i),
     ).toBeVisible();
     await expect(window.getByRole('button', { name: /run the first scan/i })).toBeVisible();
     await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
 
-    // Netherlands-only filter chips must be absent on the default market ...
-    await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toHaveCount(0);
-    // ... and the Country selector is always offered, as a plain filter -- picking "Netherlands"
-    // there narrows the worldwide report, it does not switch pipelines any more.
+    // The best-effort sponsor-match filter and the plain country selector are always offered --
+    // there is no separate pipeline switch any more.
+    await expect(window.getByRole('checkbox', { name: /possible IND sponsor match only/i })).toBeVisible();
     const countrySelect = window.getByRole('combobox', { name: 'Country' });
     await expect(countrySelect).toBeVisible();
     await expect(countrySelect).toHaveValue('all');
 
-    // The only way to reach the Netherlands/IND pipeline is the explicit, separate switch. It must
-    // swap in that pipeline's own empty-state copy (SALARY_NOTE and the EmptyState description are
-    // both keyed by market), not just relabel the selector.
-    await window.getByRole('button', { name: /switch to netherlands/i }).click();
-
+    // Picking a country is a plain, instant filter over whatever is already loaded -- it never
+    // starts a scan or changes the empty-state copy.
+    await countrySelect.selectOption('Netherlands');
+    await expect(countrySelect).toHaveValue('Netherlands');
     await expect(window.getByRole('heading', { name: 'No search yet' })).toBeVisible();
-    await expect(
-      window.getByText(/No Netherlands scan has been run yet, so there is nothing to filter/i),
-    ).toBeVisible();
-    await expect(window.getByRole('button', { name: /run the first scan/i })).toBeVisible();
-    await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toBeVisible();
-    await expect(window.getByText('No salary in the Netherlands report')).toBeVisible();
 
-    // Picking "All countries" switches back to worldwide, restoring its own copy and chips.
-    await window.getByRole('combobox', { name: 'Country' }).selectOption('all');
-    await expect(
-      window.getByText(/No Worldwide \/ Remote scan has been run yet, so there is nothing to filter/i),
-    ).toBeVisible();
-    await expect(window.getByRole('checkbox', { name: /IND-recognised sponsors only/i })).toHaveCount(0);
-    await expect(window.getByText('Salary shown only where advertised')).toBeVisible();
+    await countrySelect.selectOption('all');
+    await expect(countrySelect).toHaveValue('all');
   });
 });

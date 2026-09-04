@@ -1,59 +1,29 @@
-import type {
-  DiscoveryVacancyAudit,
-  GlobalRemoteReport,
-  JobRadarReport,
-  OfficialVacancyAudit,
-  ReportVacancy,
-} from '@open-vacancy-radar/vacancy-engine';
-import type { Market } from '../../window.js';
+import type { DiscoveryVacancyAudit, OfficialVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import type { VacancyLead } from '../cv/types.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 
 /**
- * Normalisation layer between the two *genuinely different* scan pipelines and one search UI.
+ * Normalisation layer between the worldwide/remote scan pipeline and the search UI.
  *
- * `window.vacancyRadar` exposes two report shapes that are not variants of each other:
+ * The app used to run a second, curated Netherlands pipeline (a SQL-backed scan of companies
+ * pre-mapped to the IND recognised-sponsor register, with its own Dutch-language candidate
+ * matching and a higher-confidence `recognised_sponsor` verification tier). It has been removed
+ * entirely: the special-casing it required throughout this UI was exactly the kind of default
+ * country/role bias this app is supposed to never ship, and its higher-confidence sponsor evidence
+ * chain had no equivalent for any other country -- keeping it meant the app could only ever be
+ * fully "IND-verified" for one country's employers.
  *
- * - `JobRadarReport.vacancies: ReportVacancy[]`: the Netherlands pipeline. Carries a deterministic
- *   relevance score with sub-dimensions, matched/missing skills, Dutch-language evidence, a posting
- *   date, a workplace mode, and (the reason this pipeline exists) the IND recognised-sponsor
- *   legal entities matched to the employer plus the confidence of that mapping. It carries no
- *   salary and no employment type.
- * - `GlobalRemoteReport.discoveryAudit: DiscoveryVacancyAudit[]`: the worldwide/remote pipeline.
- *   Carries advertised salary, employment type and a discovery decision. It has no workplace mode
- *   and, for almost every row, no employer-verification concept at all -- the one exception is a
- *   Netherlands-located row where a best-effort Wikidata name search happened to cross-check
- *   cleanly against the IND register (see `worldwideVerification` below); every other row keeps
- *   the plain "not available for this market" claim it always had. It now carries a deterministic
- *   profile score too (technical/role/seniority fit only -- no Dutch-language or
- *   Netherlands-location dimension applies to a worldwide-remote vacancy), computed the same way
- *   the Netherlands pipeline's is.
- *
- * The single most important rule encoded here: the absence of employer verification in the
- * worldwide pipeline is reported as *absent*, never as a negative result. "We did not check" and
- * "we checked and the employer is not a recognised sponsor" are different claims, and only the
- * Netherlands pipeline is capable of making the second one. Likewise "no sponsor entity was
- * matched" is a missing match, not a finding of non-recognition. This applies just as much to the
- * worldwide pipeline's own best-effort check: a match it does find is capped at
- * `possible_sponsor_match`, never the Netherlands pipeline's `recognised_sponsor`.
+ * What survives, unconditionally, for every vacancy regardless of location: a best-effort
+ * Wikidata-based sponsor check (`worldwideVerification` below), always capped at
+ * `possible_sponsor_match`, never the old `recognised_sponsor` label -- that stronger claim rested
+ * on a curated evidence chain this app no longer maintains. The single most important rule encoded
+ * here is unchanged: the absence of employer verification is reported as *absent*, never as a
+ * negative result. "We did not check" and "we checked and found nothing" render identically, by
+ * design (see `resolveWorldwideSponsorMatch`'s own reasoning for treating both as one honest
+ * `null`).
  */
 
-export type SearchMarket = Market;
-
-export const MARKET_OPTIONS: { value: SearchMarket; label: string }[] = [
-  { value: 'netherlands', label: 'Netherlands' },
-  { value: 'worldwide', label: 'Worldwide / Remote' },
-];
-
-export function marketLabel(market: SearchMarket): string {
-  return MARKET_OPTIONS.find((option) => option.value === market)?.label ?? market;
-}
-
-export type VerificationLevel =
-  | 'recognised_sponsor'
-  | 'possible_sponsor_match'
-  | 'sponsor_unresolved'
-  | 'not_available';
+export type VerificationLevel = 'possible_sponsor_match' | 'not_available';
 
 export interface Verification {
   level: VerificationLevel;
@@ -62,21 +32,19 @@ export interface Verification {
   /** The honest explanation of what was and was not checked. */
   note: string;
   /**
-   * State hue for the status dot, or `null` for a market where no check exists. A market with no
-   * verification step must not get a green, amber or red dot, because it has no outcome to colour.
+   * State hue for the status dot, or `null` when there is no outcome to colour (no match found, or
+   * the check was never attempted for this vacancy's location).
    */
   tone: 'success' | 'warning' | null;
 }
 
 export const WORLDWIDE_VERIFICATION: Verification = {
   level: 'not_available',
-  label: 'Not available for this market',
+  label: 'Not available for this vacancy',
   tone: null,
   note:
-    'The worldwide/remote pipeline discovers vacancies from public job feeds and does not check employers against any register. Nothing was verified about this employer: that is an absent check, not a negative result.',
+    'No sponsor register match was found (or attempted, for a non-Netherlands location) for this employer. Nothing was verified: that is an absent check, not a negative result.',
 };
-
-export type ArrangementValue = 'remote' | 'hybrid' | 'onsite' | 'unknown';
 
 interface CommonResult {
   /** Stable identity for selection and for `savedJobs.vacancyKey`. */
@@ -85,24 +53,21 @@ interface CommonResult {
   company: string;
   location: string | null;
   url: string;
-  /** The source that produced this row: an ATS/provider name for NL, a feed id for worldwide. */
+  /** The feed/source id that produced this row. */
   provider: string;
-  /** Present only where the pipeline actually records one (Netherlands). */
-  arrangement: string | null;
-  arrangementValue: ArrangementValue;
   employmentType: string | null;
-  /** Pre-formatted advertised salary, or null where the pipeline carries no salary data. */
+  /** Pre-formatted advertised salary, or null where the source carries no salary data. */
   salary: string | null;
-  /** ISO-8601, or null where the pipeline carries no posting date. */
+  /** ISO-8601, or null where the source carries no posting date. */
   postedAt: string | null;
   /** Null where the source carried no description text at all, never an empty string. */
   description: string | null;
   verification: Verification;
   /**
    * The engine's deterministic relevance score, scored against the configured candidate profile,
-   * **not** against any CV in the CV library, so it must never be labelled "CV match". Both
-   * pipelines can produce one now; each still returns null rather than a real-looking zero when the
-   * candidate profile has no target roles or strongest skills configured for that run.
+   * **not** against any CV in the CV library, so it must never be labelled "CV match". Returns
+   * null rather than a real-looking zero when the candidate profile has no target roles or
+   * strongest skills configured for this run.
    */
   profileScore: number | null;
   /** Deterministic engine findings, where the pipeline produces them. */
@@ -113,24 +78,14 @@ interface CommonResult {
   lead: VacancyLead;
 }
 
-export type SearchResult =
-  | (CommonResult & { market: 'netherlands'; raw: ReportVacancy })
-  | (CommonResult & {
-      market: 'worldwide';
-      raw: DiscoveryVacancyAudit;
-      /**
-       * The official-source audit row for this exact URL, when the same run happened to verify it.
-       * Matched on exact URL only. A fuzzy company/title match would manufacture evidence.
-       */
-      official: OfficialVacancyAudit | null;
-    });
-
-const WORKPLACE_LABEL: Record<ReportVacancy['workplaceMode'], string | null> = {
-  remote: 'Remote',
-  hybrid: 'Hybrid',
-  onsite: 'On-site',
-  unknown: null,
-};
+export interface SearchResult extends CommonResult {
+  raw: DiscoveryVacancyAudit;
+  /**
+   * The official-source audit row for this exact URL, when the same run happened to verify it.
+   * Matched on exact URL only. A fuzzy company/title match would manufacture evidence.
+   */
+  official: OfficialVacancyAudit | null;
+}
 
 /**
  * `null` is "the pipeline did not record this", which is different from an empty string. Kept as a
@@ -140,59 +95,16 @@ export function orNotStated(value: string | null | undefined): string {
   return value && value.trim().length > 0 ? value : 'Not stated';
 }
 
-export const VERIFICATION_DISABLED: Verification = {
-  level: 'not_available',
-  label: 'Verification turned off',
-  tone: null,
-  note:
-    'IND recognised sponsor verification is turned off in Settings, so vacancies here are not filtered by (or checked against) the sponsor register. Nothing was verified about this employer: that is a disabled check, not a negative result.',
-};
-
-export function netherlandsVerification(vacancy: ReportVacancy, indVerificationEnabled: boolean): Verification {
-  if (!indVerificationEnabled) return VERIFICATION_DISABLED;
-
-  const names = vacancy.sponsorLegalNames.filter((name) => name.trim().length > 0);
-
-  if (names.length === 0) {
-    return {
-      level: 'sponsor_unresolved',
-      label: 'Sponsor entity not resolved',
-      tone: 'warning',
-      note:
-        'No IND-recognised legal entity was matched to this employer in this run. That is a missing match, not a finding that the employer is unrecognised: a trading name often differs from the registered legal entity.',
-    };
-  }
-
-  if (vacancy.mappingConfidence === 'high') {
-    return {
-      level: 'recognised_sponsor',
-      label: 'Recognised sponsor',
-      tone: 'success',
-      note: `Matched with high confidence to ${names.join(', ')} on the IND public register. Recognition applies to the employer, not to this individual vacancy.`,
-    };
-  }
-
-  return {
-    level: 'possible_sponsor_match',
-    label: 'Possible sponsor match',
-    tone: 'warning',
-    note: `Matched to ${names.join(', ')} with ${vacancy.mappingConfidence} confidence. Confirm the legal entity on the vacancy itself before relying on sponsorship.`,
-  };
-}
-
 /**
- * Best-effort worldwide counterpart to `netherlandsVerification`, reporting a match from
- * `vacancy.worldwideSponsorMatch` (computed once, engine-side, in `applyWorldwideSponsorMatches` --
- * see `packages/vacancy-engine/src/companies/worldwide-sponsor-match.ts`). Every non-match row --
- * which includes every non-Netherlands-located row, since the engine never even attempts the
- * lookup for those -- falls back to exactly `WORLDWIDE_VERIFICATION` unchanged, so "not the
- * Netherlands" and "checked and found nothing" render identically here too (see
- * `resolveWorldwideSponsorMatch`'s own reasoning for treating both as one honest `null`).
+ * Reports a match from `vacancy.worldwideSponsorMatch` (computed once, engine-side, in
+ * `applyWorldwideSponsorMatches` -- see `packages/vacancy-engine/src/companies/
+ * worldwide-sponsor-match.ts`). Every non-match row -- which includes every non-Netherlands-located
+ * row, since the engine never even attempts the lookup for those -- falls back to exactly
+ * `WORLDWIDE_VERIFICATION` unchanged, so "not the Netherlands" and "checked and found nothing"
+ * render identically here too.
  *
- * A match is capped at `possible_sponsor_match`, the same level (and the same warning tone) the
- * Netherlands pipeline uses for anything short of its own high-confidence mapping -- never
- * `recognised_sponsor`, since a name-keyed Wikidata search carries none of that pipeline's
- * evidence-chain rigor.
+ * A match is capped at `possible_sponsor_match`: a name-keyed Wikidata search carries none of the
+ * evidence-chain rigor a curated, manually-verified company-mapping would.
  */
 export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verification {
   const match = vacancy.worldwideSponsorMatch;
@@ -202,7 +114,7 @@ export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verificat
     level: 'possible_sponsor_match',
     label: 'Possible sponsor match (best effort)',
     tone: 'warning',
-    note: `A best-effort Wikidata name search matched this employer to ${match.legalName} (KVK ${match.kvkNumber}) on the IND public register. This is far less certain than the Netherlands pipeline's own sponsor mapping, which this worldwide pipeline does not otherwise run at all: confirm the legal entity yourself before relying on sponsorship.`,
+    note: `A best-effort Wikidata name search matched this employer to ${match.legalName} (KVK ${match.kvkNumber}) on the IND public register. This is a best-effort, name-keyed match, not a curated verification: confirm the legal entity yourself before relying on sponsorship.`,
   };
 }
 
@@ -227,46 +139,11 @@ export function isWebUrl(value: string): boolean {
   }
 }
 
-export function toNetherlandsResults(report: JobRadarReport): SearchResult[] {
-  return report.vacancies.map((vacancy) => ({
-    market: 'netherlands' as const,
-    raw: vacancy,
-    key: vacancy.id,
-    title: vacancy.title,
-    company: vacancy.company,
-    location: vacancy.location,
-    url: vacancy.url,
-    provider: vacancy.provider,
-    arrangement: WORKPLACE_LABEL[vacancy.workplaceMode],
-    arrangementValue: vacancy.workplaceMode,
-    // The Netherlands report carries neither salary nor employment type. Rather than deriving one
-    // from the title, both stay null and the UI says so.
-    employmentType: null,
-    salary: null,
-    postedAt: vacancy.postedAt,
-    description: vacancy.description,
-    verification: netherlandsVerification(vacancy, report.indVerificationEnabled),
-    // Undefined, not present, when the candidate profile wasn't configured for this run (see
-    // JobRadarReport.profileConfigured) -- deterministic scoring never ran for this vacancy.
-    profileScore: vacancy.score ?? null,
-    strongPoints: vacancy.matchingSkills ?? [],
-    gaps: vacancy.gaps ?? [],
-    reasons: vacancy.reasons ?? [],
-    lead: {
-      title: vacancy.title,
-      company: vacancy.company,
-      location: orNotStated(vacancy.location),
-      url: vacancy.url,
-    },
-  }));
-}
-
 export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
   const officialByUrl = new Map<string, OfficialVacancyAudit>();
   for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
 
   return report.discoveryAudit.map((vacancy) => ({
-    market: 'worldwide' as const,
     raw: vacancy,
     official: officialByUrl.get(vacancy.url) ?? null,
     key: vacancy.key,
@@ -275,11 +152,6 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     location: vacancy.location,
     url: vacancy.url,
     provider: vacancy.provider,
-    // The worldwide profile *searches* for fully-remote work, but a discovery lead is not per-row
-    // evidence that this vacancy is remote. `location_restricted` is one of its decisions. So no
-    // arrangement is claimed for a worldwide row.
-    arrangement: null,
-    arrangementValue: 'unknown' as const,
     employmentType: vacancy.employmentType,
     salary: formatDiscoverySalary(vacancy),
     // Null for most sources, which genuinely carry no posting date; real for the sources that do.
@@ -310,24 +182,16 @@ export interface SearchFilters {
   query: string;
   /** City or region, matched against the row's location. */
   location: string;
-  /** Netherlands only: keep only rows with a resolved IND sponsor legal entity. */
+  /** Keep only rows with a possible IND sponsor match (best-effort; see `worldwideVerification`). */
   sponsorOnly: boolean;
-  /** Netherlands only: the worldwide pipeline records no workplace mode. */
-  arrangement: 'any' | ArrangementValue;
-  /**
-   * Both markets. Most worldwide sources still record no posting date at all -- a row with an
-   * unknown date is dropped rather than kept when this filter is active, never assumed recent.
-   */
+  /** Most sources still record no posting date at all -- a row with an unknown date is dropped
+   * rather than kept when this filter is active, never assumed recent. */
   postedWithin: PostedWithin;
-  /** Both markets: the discovery source / ATS provider. */
+  /** The discovery source / feed id. */
   source: string;
-  /** Worldwide only: the Netherlands pipeline records no employment type. */
   employment: string;
-  /**
-   * Worldwide only: which country a vacancy's own `location` text normalizes to (see
-   * `countries.ts`). `'all'` applies no filter; the Netherlands pipeline is already scoped to one
-   * country and carries no comparable free-text location to normalize against a worldwide list.
-   */
+  /** Which country a vacancy's own `location` text normalizes to (see `countries.ts`). `'all'`
+   * applies no filter. */
   country: string;
 }
 
@@ -335,30 +199,11 @@ export const DEFAULT_FILTERS: SearchFilters = {
   query: '',
   location: '',
   sponsorOnly: false,
-  arrangement: 'any',
   postedWithin: 'any',
   source: 'all',
   employment: 'any',
   country: 'all',
 };
-
-/** The secondary filters that are meaningful for a given market, given what its data carries. */
-export function supportedFilters(market: SearchMarket): {
-  sponsorOnly: boolean;
-  arrangement: boolean;
-  postedWithin: boolean;
-  employment: boolean;
-  country: boolean;
-} {
-  const isNetherlands = market === 'netherlands';
-  return {
-    sponsorOnly: isNetherlands,
-    arrangement: isNetherlands,
-    postedWithin: true,
-    employment: !isNetherlands,
-    country: !isNetherlands,
-  };
-}
 
 /**
  * Every selectable country plus the honest fallback for a vacancy whose location text didn't
@@ -388,22 +233,15 @@ function matches(haystack: string | null, needle: string): boolean {
 }
 
 /**
- * Client-side filtering over an already-fetched report. There is no server-side filtered search.
- * Both pipelines produce a whole report per run, and narrowing it must never trigger a new scan.
- *
- * Every predicate is skipped for a market whose data cannot support it, so switching market can
- * never silently drop rows on a dimension that market does not record.
+ * Client-side filtering over an already-fetched report. There is no server-side filtered search:
+ * the worldwide pipeline produces a whole report per run, and narrowing it must never trigger a
+ * new scan.
  */
 export function filterResults(
   results: SearchResult[],
   filters: SearchFilters,
   now: Date = new Date(),
 ): SearchResult[] {
-  // The empty-results branch is inert today (an empty array's `.filter()` never calls the predicate
-  // below that reads `supported`), but 'worldwide' is the neutral fallback regardless: nothing here
-  // should default to Netherlands just because there happened to be no rows to inspect.
-  const supported = results.length > 0 ? supportedFilters(results[0]!.market) : supportedFilters('worldwide');
-
   return results.filter((result) => {
     if (filters.query.trim()) {
       const needle = filters.query.trim().toLowerCase();
@@ -416,15 +254,9 @@ export function filterResults(
 
     if (filters.source !== 'all' && result.provider !== filters.source) return false;
 
-    if (supported.sponsorOnly && filters.sponsorOnly) {
-      if (result.market !== 'netherlands' || result.raw.sponsorLegalNames.length === 0) return false;
-    }
+    if (filters.sponsorOnly && result.raw.worldwideSponsorMatch === null) return false;
 
-    if (supported.arrangement && filters.arrangement !== 'any') {
-      if (result.arrangementValue !== filters.arrangement) return false;
-    }
-
-    if (supported.postedWithin && filters.postedWithin !== 'any') {
+    if (filters.postedWithin !== 'any') {
       // A row with no known posting date cannot satisfy "posted in the last N days". It is dropped
       // rather than kept, so the narrowed list means exactly what it says; the filter bar states it.
       if (!result.postedAt) return false;
@@ -434,11 +266,9 @@ export function filterResults(
       if (now.getTime() - posted.getTime() > maximumAgeMs) return false;
     }
 
-    if (supported.employment && filters.employment !== 'any') {
-      if (result.employmentType !== filters.employment) return false;
-    }
+    if (filters.employment !== 'any' && result.employmentType !== filters.employment) return false;
 
-    if (supported.country && filters.country !== 'all') {
+    if (filters.country !== 'all') {
       const resolved = normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION;
       if (resolved !== filters.country) return false;
     }
@@ -454,9 +284,8 @@ function postedAtTimestamp(value: string | null): number | null {
 }
 
 /**
- * Highest profile score first, on either market -- then most recently posted first among ties or
- * scoreless rows, then title. A row with no known posting date sorts after every row that has one,
- * never assumed recent.
+ * Highest profile score first, then most recently posted first among ties or scoreless rows, then
+ * title. A row with no known posting date sorts after every row that has one, never assumed recent.
  */
 export function sortResults(results: SearchResult[]): SearchResult[] {
   return [...results].sort((left, right) => {
@@ -487,10 +316,8 @@ export function formatDate(value: string | null): string {
 }
 
 /**
- * Matches the Netherlands pipeline's own `freshnessPolicy.maximumPostingAgeDays` (30): that
- * pipeline enforces it server-side and never reports an older row at all, so a worldwide row past
- * the same age is flagged, not hidden, since nothing here re-checks whether the posting is still
- * live before the user applies to it.
+ * A somewhat arbitrary but stated threshold: nothing here re-checks whether a posting is still
+ * live before the user applies to it, so a row past this age is flagged, not hidden.
  */
 const STALE_POSTING_THRESHOLD_DAYS = 30;
 

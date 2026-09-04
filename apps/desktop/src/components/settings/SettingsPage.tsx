@@ -39,10 +39,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   sidebarStart: 'remember_last',
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
-  defaultMarket: 'worldwide',
   defaultLocation: '',
-  sponsorOnlyDefault: false,
-  indVerificationEnabled: false,
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
   defaultLetterTone: 'natural',
@@ -77,13 +74,8 @@ const SIDEBAR_START_OPTIONS = [
   { value: 'remember_last', label: 'Remember last state' },
 ] as const;
 
-/**
- * The one control for both "which pipeline" and "which country within it" a new search starts on
- * -- mirrors SearchPage.tsx's own unified Country selector exactly, including the same special
- * case: "Netherlands" opens the IND-recognised-sponsor pipeline (not a worldwide search merely
- * filtered to Dutch locations), and every other value (including "All countries") opens the
- * worldwide pipeline, pre-filtered to that country when one is picked.
- */
+/** The country a new search's Country filter starts pre-set to -- mirrors SearchPage.tsx's own
+ * Country selector exactly. "All countries" applies no filter. */
 const DEFAULT_LOCATION_OPTIONS = [
   { value: 'all', label: 'All countries' },
   ...ALL_COUNTRIES.map((country) => ({ value: country, label: country })),
@@ -465,29 +457,20 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <SettingsSection title="Default search location">
             <SettingsRow
               label="Default search location"
-              description="Which pipeline (and, for worldwide, which country) a new search starts on."
+              description="Which country a new search's Country filter starts pre-set to."
               htmlFor="setting-default-location"
             >
               <SettingsSelect
                 id="setting-default-location"
-                value={settings.defaultMarket === 'netherlands' ? 'Netherlands' : settings.defaultLocation || 'all'}
+                value={settings.defaultLocation || 'all'}
                 options={DEFAULT_LOCATION_OPTIONS}
                 disabled={disabled}
-                onChange={(value) =>
-                  value === 'Netherlands'
-                    ? changeField({ defaultMarket: 'netherlands', defaultLocation: '' })
-                    : changeField({ defaultMarket: 'worldwide', defaultLocation: value === 'all' ? '' : value })
-                }
+                onChange={(value) => changeField({ defaultLocation: value === 'all' ? '' : value })}
               />
             </SettingsRow>
           </SettingsSection>
 
           <SearchProfileSection
-            sponsorOnlyDefault={settings.sponsorOnlyDefault}
-            onChangeSponsorOnlyDefault={(sponsorOnlyDefault) => changeField({ sponsorOnlyDefault })}
-            indVerificationEnabled={settings.indVerificationEnabled}
-            onChangeIndVerificationEnabled={(indVerificationEnabled) => changeField({ indVerificationEnabled })}
-            isNetherlands={settings.defaultMarket === 'netherlands'}
             disabled={disabled}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}
