@@ -43,7 +43,7 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <button className="btn btn-outline btn-sm" type="button" onClick={handleSave} disabled={state !== 'idle'}>
-        {state === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+        {state === 'saving' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
         {state === 'saved' ? 'Saved to library' : 'Save to CV library'}
       </button>
       {state === 'saved' && (
