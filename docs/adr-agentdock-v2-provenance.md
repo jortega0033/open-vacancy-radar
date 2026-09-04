@@ -1105,6 +1105,15 @@ own manifest entry would be the thing that lets the fallback gate ever say "allo
 ignores `hardened` (it has nothing reviewed to restrict), and the Codex app-server transport remains
 untouched and blocked per this section's opening.
 
+**Correction (issue #173):** the paragraph above was true at the time and was also the bug. Gating
+`hardened` on `protocolVersion === 2` meant every v1 caller -- which in practice is every shipped
+renderer feature (GapAnalysis, CoverLetter, CvAssistant, TailorCv all create sessions through v1's
+`routes/sessions.ts`, not v2) -- ran unhardened, with Bash/PowerShell/MCP/hooks/slash-commands live
+next to a prompt that embeds untrusted scraped vacancy text. The v1/v2 split was incidental plumbing
+convenience (`protocolVersion` was already the method's discriminator), never a deliberate security
+boundary, so `SessionManager.create()` now sets `hardened: true` unconditionally for every session
+it starts. v1's request schema and argv shape are otherwise still untouched.
+
 ## ADI-14: moving Codex's prompt from argv to stdin
 
 Until this change `providers/codex/build-args.ts` returned `['exec', opts.prompt, ...]`: the user's
