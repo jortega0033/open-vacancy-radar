@@ -5,23 +5,15 @@ import type {
   ApplicationStatus,
   CvDocumentRecord,
   LetterRecord,
-  Market,
   SavedJobRecord,
 } from '../../window.js';
-import {
-  APPLICATION_STATUS_LABEL,
-  APPLICATION_STATUS_ORDER,
-  MARKET_LABEL,
-  MARKET_OPTIONS,
-  toDateInputValue,
-} from './application-status.js';
+import { APPLICATION_STATUS_LABEL, APPLICATION_STATUS_ORDER, toDateInputValue } from './application-status.js';
 
 interface DraftState {
   savedJobId: string;
   role: string;
   company: string;
   location: string;
-  market: Market;
   status: ApplicationStatus;
   appliedAt: string;
   nextStep: string;
@@ -31,14 +23,13 @@ interface DraftState {
   notes: string;
 }
 
-function draftFromRecord(record: ApplicationRecord | null, defaultMarket: Market): DraftState {
+function draftFromRecord(record: ApplicationRecord | null): DraftState {
   if (!record) {
     return {
       savedJobId: '',
       role: '',
       company: '',
       location: '',
-      market: defaultMarket,
       status: 'preparing',
       appliedAt: '',
       nextStep: '',
@@ -53,7 +44,6 @@ function draftFromRecord(record: ApplicationRecord | null, defaultMarket: Market
     role: record.role,
     company: record.company,
     location: record.location,
-    market: record.market,
     status: record.status,
     appliedAt: toDateInputValue(record.appliedAt),
     nextStep: record.nextStep,
@@ -70,7 +60,6 @@ export interface ApplicationDrawerProps {
   savedJobs: readonly SavedJobRecord[];
   cvDocuments: readonly CvDocumentRecord[];
   letters: readonly LetterRecord[];
-  defaultMarket?: Market;
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
   onSubmit: (input: ApplicationInput) => Promise<void>;
@@ -89,11 +78,10 @@ export function ApplicationDrawer({
   savedJobs,
   cvDocuments,
   letters,
-  defaultMarket = 'worldwide',
   onCancel,
   onSubmit,
 }: ApplicationDrawerProps) {
-  const [draft, setDraft] = useState<DraftState>(() => draftFromRecord(record, defaultMarket));
+  const [draft, setDraft] = useState<DraftState>(() => draftFromRecord(record));
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
 
@@ -112,7 +100,6 @@ export function ApplicationDrawer({
     const input: ApplicationInput = {
       role,
       company,
-      market: draft.market,
       location: draft.location,
       savedJobId: draft.savedJobId === '' ? null : draft.savedJobId,
       status: draft.status,
@@ -194,36 +181,17 @@ export function ApplicationDrawer({
             />
           </label>
 
-          <div className="grid grid-cols-2 gap-2.5">
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                Location
-              </span>
-              <input
-                className="input w-full"
-                value={draft.location}
-                onChange={(e) => update('location', e.target.value)}
-                disabled={submitting}
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                Market
-              </span>
-              <select
-                className="select w-full"
-                value={draft.market}
-                onChange={(e) => update('market', e.target.value as Market)}
-                disabled={submitting}
-              >
-                {MARKET_OPTIONS.map((market) => (
-                  <option key={market} value={market}>
-                    {MARKET_LABEL[market]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              Location
+            </span>
+            <input
+              className="input w-full"
+              value={draft.location}
+              onChange={(e) => update('location', e.target.value)}
+              disabled={submitting}
+            />
+          </label>
 
           <div className="grid grid-cols-2 gap-2.5">
             <label className="block">

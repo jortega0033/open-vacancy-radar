@@ -36,7 +36,6 @@ import type {
   LetterStatus,
   LetterTone,
   LetterType,
-  Market,
   SavedJobInput,
   SavedJobPatch,
   SavedJobStatus,
@@ -141,7 +140,6 @@ function patch<T, K extends keyof T & string>(
   target[key] = parse(source[key]) as Partial<T>[K];
 }
 
-export const MARKETS: readonly Market[] = ['netherlands', 'worldwide'];
 export const SAVED_JOB_STATUSES: readonly SavedJobStatus[] = ['considering', 'preparing', 'applied'];
 export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
   'preparing',
@@ -209,7 +207,6 @@ export function parseSavedJobInput(value: unknown): SavedJobInput {
   return {
     role: requiredNonEmpty(input.role, 'role', LIMITS.short),
     company: requiredNonEmpty(input.company, 'company', LIMITS.short),
-    market: oneOf(input.market, 'market', MARKETS),
     location: input.location === undefined ? '' : str(input.location, 'location', LIMITS.short),
     vacancyKey: nullableStr(input.vacancyKey, 'vacancyKey', LIMITS.short),
     salary: nullableStr(input.salary, 'salary', LIMITS.short),
@@ -230,7 +227,6 @@ export function parseSavedJobPatch(value: unknown): SavedJobPatch {
   const out: SavedJobPatch = {};
   patch(input, out, 'role', (v) => requiredNonEmpty(v, 'role', LIMITS.short));
   patch(input, out, 'company', (v) => requiredNonEmpty(v, 'company', LIMITS.short));
-  patch(input, out, 'market', (v) => oneOf(v, 'market', MARKETS));
   patch(input, out, 'location', (v) => str(v, 'location', LIMITS.short));
   patch(input, out, 'vacancyKey', (v) => nullableStr(v, 'vacancyKey', LIMITS.short));
   patch(input, out, 'salary', (v) => nullableStr(v, 'salary', LIMITS.short));
@@ -258,7 +254,6 @@ export function parseApplicationInput(value: unknown): ApplicationInput {
   return {
     role: requiredNonEmpty(input.role, 'role', LIMITS.short),
     company: requiredNonEmpty(input.company, 'company', LIMITS.short),
-    market: oneOf(input.market, 'market', MARKETS),
     location: input.location === undefined ? '' : str(input.location, 'location', LIMITS.short),
     savedJobId: nullableStr(input.savedJobId, 'savedJobId', LIMITS.short),
     verification: nullableStr(input.verification, 'verification', LIMITS.short),
@@ -278,7 +273,6 @@ export function parseApplicationPatch(value: unknown): ApplicationPatch {
   const out: ApplicationPatch = {};
   patch(input, out, 'role', (v) => requiredNonEmpty(v, 'role', LIMITS.short));
   patch(input, out, 'company', (v) => requiredNonEmpty(v, 'company', LIMITS.short));
-  patch(input, out, 'market', (v) => oneOf(v, 'market', MARKETS));
   patch(input, out, 'location', (v) => str(v, 'location', LIMITS.short));
   patch(input, out, 'savedJobId', (v) => nullableStr(v, 'savedJobId', LIMITS.short));
   patch(input, out, 'verification', (v) => nullableStr(v, 'verification', LIMITS.short));
@@ -383,10 +377,7 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'sidebarStart', (v) => oneOf(v, 'sidebarStart', SIDEBAR_STARTS));
   patch(input, out, 'sidebarCollapsed', (v) => bool(v, 'sidebarCollapsed'));
   patch(input, out, 'lastOpenedPage', (v) => oneOf(v, 'lastOpenedPage', NAV_PAGES));
-  patch(input, out, 'defaultMarket', (v) => oneOf(v, 'defaultMarket', MARKETS));
   patch(input, out, 'defaultLocation', (v) => str(v, 'defaultLocation', LIMITS.short));
-  patch(input, out, 'sponsorOnlyDefault', (v) => bool(v, 'sponsorOnlyDefault'));
-  patch(input, out, 'indVerificationEnabled', (v) => bool(v, 'indVerificationEnabled'));
   patch(input, out, 'defaultCvId', (v) => nullableStr(v, 'defaultCvId', LIMITS.short));
   patch(input, out, 'defaultLetterType', (v) => oneOf(v, 'defaultLetterType', LETTER_TYPES));
   patch(input, out, 'defaultLetterTone', (v) => oneOf(v, 'defaultLetterTone', LETTER_TONES));

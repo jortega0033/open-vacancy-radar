@@ -1,10 +1,5 @@
-import {
-  deterministicScoreSchema,
-  type DeterministicScore,
-  type NormalizedVacancy,
-} from '../domain/models.js';
+import { type NormalizedVacancy } from '../domain/models.js';
 import { isCandidateProfileConfigured, type CandidateProfile } from '../candidate/profile.js';
-import { assessNetherlandsSalary } from './compensation.js';
 
 export const DETERMINISTIC_SCORING_VERSION = 'deterministic-relevance-v11';
 export const RELEVANCE_THRESHOLD = 70;
@@ -49,12 +44,6 @@ type PrimaryRoleFamily =
   | 'operations'
   | 'commercial'
   | 'other';
-
-export type DutchRequirementAssessment = {
-  dutchRequired: boolean;
-  dutchPreferred: boolean;
-  evidence: string[];
-};
 
 type RoleAssessment = {
   family: PrimaryRoleFamily;
@@ -114,85 +103,6 @@ const CONTEXT_WEIGHT: Readonly<Record<SegmentContext, number>> = {
   general: 0.6,
   team: 0.2,
 };
-
-const DUTCH_TERM = '(?:dutch|nederlands(?:e|talig)?|nederlandse\\s+taal)';
-const PREFERRED_LANGUAGE_QUALIFIER =
-  '(?:preferred|preferable|preference|a\\s+plus|pluspunt|nice\\s+to\\s+have|optional|bonus|(?:a\\s+)?strong\\s+advantage|advantage|desirable|not\\s+required|not\\s+mandatory|niet\\s+vereist|geen\\s+vereiste|mooi\\s+meegenomen|een\\s+pre|een\\s+plus)';
-
-const DUTCH_REQUIRED_PATTERNS: readonly RegExp[] = [
-  new RegExp(
-    `${DUTCH_TERM}(?:\\s+(?:language|proficiency|speaking|skills?))?(?:\\s+(?:is|are|at|of))?[^.!?]{0,25}(?:required|mandatory|must|essential|needed|prerequisite|fluent|fluency|professional|native|c1|c2|b1|b2|vereist|verplicht|vloeiend|moedertaal)`,
-    'i',
-  ),
-  new RegExp(
-    `(?:fluent|fluency|professional(?:\\s+working)?(?:\\s+proficiency)?|c1|c2|b1|b2|vloeiend|moedertaal|uitstekende\\s+beheersing|goede\\s+beheersing)[^.!?]{0,30}${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(`native(?:-level)?(?:\\s+(?:in|speaker\\s+of))?\\s+${DUTCH_TERM}`, 'i'),
-  new RegExp(
-    `(?:must|need(?:ed)?\\s+to|required\\s+to|mandatory\\s+to)[^.!?]{0,45}(?:speak|communicate|write|read|understand|be\\s+fluent)[^.!?]{0,35}${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(`${DUTCH_TERM}\\s+(?:and|&)\\s+english\\s+(?:is|are)?\\s*(?:required|mandatory)`, 'i'),
-  new RegExp(
-    `(?:spreekt?|schrijft?)(?:\\s+en\\s+(?:spreekt?|schrijft?))?[^.!?]{0,35}${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `(?:uitstekende|effectieve)\\s+communicatieve\\s+vaardigheden\\s+in\\s+(?:het\\s+)?${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `(?:je|jij|u|de\\s+kandidaat)\\b[^.!?]{0,25}\\bbeheers(?:t|en)?\\b[^.!?]{0,25}${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `(?:(?:the\\s+)?(?:role|position|job)|we)\\b[^.!?]{0,20}\\b(?:requires?|needs?)\\b[^.!?]{0,25}${DUTCH_TERM}`,
-    'i',
-  ),
-];
-const DUTCH_CONTEXTUAL_REQUIRED_PATTERNS: readonly RegExp[] = [
-  new RegExp(
-    `(?:(?:excellent|good|strong|professional)\\s+)?command\\s+of\\s+(?:both\\s+)?(?:${DUTCH_TERM}(?:\\s+(?:and|&)\\s+english)?|english\\s+(?:and|&)\\s+${DUTCH_TERM})`,
-    'i',
-  ),
-  new RegExp(
-    `(?:business|professional|working)\\s+proficiency\\s+(?:in|of)\\s+${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `working\\s+languages?\\s*(?::|is|are)?[^.!?]{0,35}${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `(?:goede\\s+(?:mondelinge\\s+en\\s+schriftelijke\\s+)?)?beheersing\\s+(?:van\\s+)?(?:de\\s+)?${DUTCH_TERM}`,
-    'i',
-  ),
-  new RegExp(
-    `(?:kennis\\s+van\\s+(?:de\\s+)?${DUTCH_TERM}(?:\\s+taal)?|(?:goede\\s+)?(?:mondelinge\\s+en\\s+schriftelijke\\s+)?vaardigheden\\s+in\\s+(?:het\\s+)?${DUTCH_TERM})`,
-    'i',
-  ),
-];
-const DUTCH_NON_CANDIDATE_SUBJECT_PATTERN = new RegExp(
-  `(?:^(?:(?:our|the|their|these|those)\\s+)?(?:(?:customer|product|engineering|support|sales|local|global)\\s+){0,3}(?:customers?|clients?|users?|partners?|teams?|colleagues?|employees?|workforce)\\b[^.!?]{0,25}\\b(?:has|have|uses?|speaks?)\\b|\\b(?:customers?|clients?|users?|partners?|teams?|colleagues?|employees?)\\s+whose\\b)`,
-  'i',
-);
-const DUTCH_PREFERRED_PATTERN = new RegExp(
-  `(?:${DUTCH_TERM}[^.!?]{0,70}${PREFERRED_LANGUAGE_QUALIFIER}|${PREFERRED_LANGUAGE_QUALIFIER}[^.!?]{0,70}${DUTCH_TERM})`,
-  'i',
-);
-const DUTCH_DIRECT_PREFERRED_PATTERN = new RegExp(
-  `(?:${DUTCH_TERM}(?:\\s+(?:language|fluency|proficiency|skills?))?\\s+(?:(?:is|are|would\\s+be)\\s+)?${PREFERRED_LANGUAGE_QUALIFIER}|(?:knowledge|fluency|proficiency)\\s+(?:of|in)\\s+${DUTCH_TERM}\\s+(?:(?:is|would\\s+be)\\s+)?${PREFERRED_LANGUAGE_QUALIFIER}|(?:fluency|proficiency)\\s+in\\s+${DUTCH_TERM}\\s+or\\s+[a-z-]+\\s+(?:is\\s+)?(?:a\\s+)?strong\\s+advantage|${PREFERRED_LANGUAGE_QUALIFIER}\\s+(?:for\\s+)?${DUTCH_TERM})`,
-  'i',
-);
-const DUTCH_NEGATED_PATTERN = new RegExp(
-  `(?:no|not|niet|geen|without|zonder|do\\s+not\\s+need)[^.!?]{0,35}${DUTCH_TERM}|${DUTCH_TERM}[^.!?]{0,35}(?:not\\s+required|not\\s+mandatory|not\\s+essential|not\\s+needed|not\\s+a\\s+prerequisite|niet\\s+vereist|geen\\s+vereiste|optional)`,
-  'i',
-);
-const DUTCH_LANGUAGE_CAPABILITY_PATTERN = new RegExp(
-  `(?:^${DUTCH_TERM}$|${DUTCH_TERM}[^.!?]{0,25}(?:language|proficiency|speaking|verbal|written|communication|skills?)|(?:speak|speaking|communicate|communication|written|verbal)[^.!?]{0,25}${DUTCH_TERM})`,
-  'i',
-);
 
 const ROLE_EXCLUSION_ALIASES: Readonly<Record<PrimaryRoleFamily, readonly string[]>> = {
   frontend: [],
@@ -694,112 +604,6 @@ function assessSeniority(
   return { score: 90, reason: 'No material seniority mismatch is stated.' };
 }
 
-export function detectDutchRequirement(vacancy: NormalizedVacancy): DutchRequirementAssessment {
-  const normalizedTitle = normalizeForMatching(vacancy.title);
-  if (
-    new RegExp(
-      `(?:${DUTCH_TERM}[^|/]{0,20}(?:speaker|speaking)|(?:speaker|speaking)[^|/]{0,20}${DUTCH_TERM}|\\bnederlandstalig(?:e)?\\b)`,
-      'i',
-    ).test(normalizedTitle)
-  ) {
-    return { dutchRequired: true, dutchPreferred: false, evidence: [vacancy.title] };
-  }
-  const segments = createSegments(vacancy.description);
-  const preferredEvidence: string[] = [];
-  const requiredEvidence: string[] = [];
-
-  for (const segment of segments) {
-    if (!new RegExp(DUTCH_TERM, 'i').test(segment.normalized)) continue;
-    const negated = DUTCH_NEGATED_PATTERN.test(segment.normalized);
-    const directlyPreferred = DUTCH_DIRECT_PREFERRED_PATTERN.test(segment.normalized);
-    const nonCandidateSubject = DUTCH_NON_CANDIDATE_SUBJECT_PATTERN.test(segment.normalized);
-    const required =
-      !nonCandidateSubject &&
-      (DUTCH_REQUIRED_PATTERNS.some((pattern) => pattern.test(segment.normalized)) ||
-        (segment.context === 'requirement' &&
-          (DUTCH_CONTEXTUAL_REQUIRED_PATTERNS.some((pattern) =>
-            pattern.test(segment.normalized),
-          ) ||
-            DUTCH_LANGUAGE_CAPABILITY_PATTERN.test(segment.normalized))));
-    if (negated) {
-      preferredEvidence.push(segment.original);
-    } else if (required && !directlyPreferred) {
-      requiredEvidence.push(segment.original);
-    } else if (directlyPreferred || DUTCH_PREFERRED_PATTERN.test(segment.normalized)) {
-      preferredEvidence.push(segment.original);
-    }
-  }
-
-  const uniqueRequired = [...new Set(requiredEvidence)];
-  const uniquePreferred = [...new Set(preferredEvidence)];
-  return {
-    dutchRequired: uniqueRequired.length > 0,
-    dutchPreferred: uniqueRequired.length === 0 && uniquePreferred.length > 0,
-    evidence: uniqueRequired.length > 0 ? uniqueRequired : uniquePreferred,
-  };
-}
-
-function assessLanguage(
-  assessment: DutchRequirementAssessment,
-  profile: CandidateProfile,
-): DimensionAssessment {
-  if (assessment.dutchRequired) {
-    if (profile.constraints.dutchRequired) {
-      return { score: 100, reason: 'Dutch is mandatory and the profile explicitly permits Dutch-required roles.' };
-    }
-    return { score: 0, reason: `Dutch is explicitly mandatory: ${assessment.evidence.join(' | ')}` };
-  }
-  if (assessment.dutchPreferred) {
-    return { score: 90, reason: `Dutch is preferred or optional, not mandatory: ${assessment.evidence.join(' | ')}` };
-  }
-  return { score: 100, reason: 'No explicit mandatory Dutch-language requirement was found.' };
-}
-
-function assessLocation(vacancy: NormalizedVacancy, profile: CandidateProfile): DimensionAssessment {
-  const location = normalizeForMatching(vacancy.location ?? '');
-  const description = normalizeForMatching(plainText(vacancy.description));
-  const remote = vacancy.remote === true || /\bremote\b/.test(location);
-  const netherlandsEmploymentExcluded = [
-    /\b(?:cannot|can not|can't|unable to|do not|don't|does not|doesn't)\s+(?:currently\s+)?(?:hire|employ|offer\s+employment\s+to|support\s+employment\s+for)\s+(?:candidates?\s+)?(?:based\s+)?in\s+(?:the\s+)?(?:netherlands|nederland)\b/,
-    /\b(?:netherlands|nederland)(?:-based)?\s+(?:employment|hiring|candidates?|workers?)\b[^.!?]{0,30}\b(?:is|are)\s+(?:currently\s+)?not\s+(?:supported|available|eligible|permitted)\b/,
-    /\b(?:employment|hiring)\s+in\s+(?:the\s+)?(?:netherlands|nederland)\b[^.!?]{0,20}\b(?:is|are)\s+(?:currently\s+)?not\s+(?:supported|available|eligible|permitted)\b/,
-    /\b(?:excluding|except(?:\s+for)?|not\s+(?:available|supported|offered)\s+in)\s+(?:the\s+)?(?:netherlands|nederland)\b/,
-  ].some((pattern) => pattern.test(description));
-  const dutchLocation =
-    /\b(?:netherlands|nederland|amsterdam|rotterdam|utrecht|eindhoven|den haag|the hague|delft|leiden|groningen|tilburg|breda|arnhem|nijmegen|hoofddorp|schiphol|hilversum|zwolle|enschede)\b/.test(
-      location,
-    ) || /\bnl\b/.test(location);
-
-  if (netherlandsEmploymentExcluded) {
-    return {
-      score: 0,
-      reason: 'The vacancy explicitly excludes hiring or employment in the Netherlands.',
-    };
-  }
-
-  if (dutchLocation) {
-    return { score: 100, reason: remote ? 'The role supports remote work in the Netherlands.' : 'The role is based in the Netherlands.' };
-  }
-
-  const euLocation = /\b(?:eu|europe|european union|emea|european economic area|eea)\b/.test(location);
-  if (remote && euLocation && profile.constraints.allowRemoteEuSupportingNetherlands) {
-    return { score: 85, reason: 'The role is remote within Europe; Netherlands employment support still needs confirmation.' };
-  }
-  if (remote && location.length === 0 && profile.constraints.allowRemoteEuSupportingNetherlands) {
-    return { score: 75, reason: 'The role is remote, but Netherlands or EU employment eligibility is not explicit.' };
-  }
-  if (remote && /\b(?:worldwide|global|anywhere)\b/.test(location)) {
-    return { score: 75, reason: 'The role is globally remote; Netherlands employment support needs confirmation.' };
-  }
-  if (location.length === 0) {
-    return { score: 55, reason: 'No location was supplied, so Netherlands eligibility is unknown.' };
-  }
-  if (remote) {
-    return { score: 45, reason: `Remote work is stated for “${vacancy.location ?? 'unknown'}”, but Netherlands eligibility is unclear.` };
-  }
-  return { score: 20, reason: `The stated location “${vacancy.location ?? 'unknown'}” is not in the Netherlands.` };
-}
-
 function isExcludedPrimaryFamily(family: PrimaryRoleFamily, profile: CandidateProfile): boolean {
   const configured = profile.excludedRoleFamilies.map((value) =>
     normalizeForMatching(value).replace(/[^a-z0-9]+/g, ' ').trim(),
@@ -809,99 +613,8 @@ function isExcludedPrimaryFamily(family: PrimaryRoleFamily, profile: CandidatePr
   );
 }
 
-export function isDeterministicallyRelevant(
-  score: Pick<DeterministicScore, 'deterministicScore'> | number,
-  threshold = RELEVANCE_THRESHOLD,
-): boolean {
-  const numericScore = typeof score === 'number' ? score : score.deterministicScore;
-  return numericScore >= threshold;
-}
-
-export function scoreVacancy(
-  vacancy: NormalizedVacancy,
-  profile: CandidateProfile,
-): DeterministicScore {
-  const segments = createSegments(vacancy.description);
-  const conceptEvidence = collectConceptEvidence(vacancy.title, segments);
-  const matchingSkills = findMatchingSkills(vacancy, profile);
-  const role = classifyPrimaryRole(vacancy, conceptEvidence, segments);
-  const technical = assessTechnicalFit(role, conceptEvidence, matchingSkills);
-  const seniority = assessSeniority(vacancy, profile);
-  const languageDetection = detectDutchRequirement(vacancy);
-  const language = assessLanguage(languageDetection, profile);
-  const location = assessLocation(vacancy, profile);
-  const salary = assessNetherlandsSalary(
-    `${vacancy.title}\n${vacancy.description}`,
-    profile.constraints.minimumMonthlyBaseEur,
-  );
-  const excludedPrimaryFamily = isExcludedPrimaryFamily(role.family, profile);
-
-  const weightedScore = Math.round(
-    technical.score * 0.35 +
-      role.score * 0.3 +
-      seniority.score * 0.1 +
-      language.score * 0.15 +
-      location.score * 0.1,
-  );
-  let deterministicScore = weightedScore;
-  if (excludedPrimaryFamily) deterministicScore = Math.min(deterministicScore, 45);
-  if (languageDetection.dutchRequired && !profile.constraints.dutchRequired) {
-    deterministicScore = Math.min(deterministicScore, 49);
-  }
-  if (location.score < 50) deterministicScore = Math.min(deterministicScore, 69);
-  if (salary.decision === 'below') deterministicScore = Math.min(deterministicScore, 69);
-
-  const gaps: string[] = [];
-  if (matchingSkills.length === 0) gaps.push('No explicit candidate skill match found');
-  if (seniority.score < 80) gaps.push('Advertised seniority is below the candidate’s experience');
-  if (languageDetection.dutchRequired && !profile.constraints.dutchRequired) {
-    gaps.push('Mandatory Dutch-language requirement');
-  }
-  if (location.score < 70) gaps.push('Netherlands employment location is not established');
-  if (excludedPrimaryFamily) gaps.push(`Excluded primary role family: ${role.primaryFit}`);
-  if (salary.decision === 'unverified') gaps.push('Minimum EUR base salary is not advertised');
-  if (salary.decision === 'below') gaps.push('Advertised EUR base salary is below the configured minimum');
-
-  const reasons = [
-    `Technical fit (${technical.score}): ${technical.reason}`,
-    `Role fit (${role.score}): ${role.reason}`,
-    `Seniority fit (${seniority.score}): ${seniority.reason}`,
-    `Language fit (${language.score}): ${language.reason}`,
-    `Location fit (${location.score}): ${location.reason}`,
-    `Salary gate: ${salary.reason}`,
-  ];
-  if (excludedPrimaryFamily) {
-    reasons.push(`Hard cap applied because “${role.primaryFit}” matches a configured excluded role family.`);
-  }
-  if (languageDetection.dutchRequired && !profile.constraints.dutchRequired) {
-    reasons.push('Hard cap applied because the vacancy explicitly requires Dutch.');
-  }
-  if (location.score < 50) {
-    reasons.push('Eligibility cap applied because the stated work location does not establish Netherlands employment.');
-  }
-  if (salary.decision === 'below') {
-    reasons.push('Eligibility cap applied because the advertised Netherlands salary is below the configured minimum.');
-  }
-  if (salary.decision === 'unverified') {
-    reasons.push('No salary eligibility cap applied because vacancies with undisclosed salary remain reviewable.');
-  }
-
-  return deterministicScoreSchema.parse({
-    relevant: isDeterministicallyRelevant(deterministicScore),
-    deterministicScore,
-    technicalFit: technical.score,
-    roleFit: role.score,
-    seniorityFit: seniority.score,
-    languageFit: language.score,
-    locationFit: location.score,
-    dutchRequired: languageDetection.dutchRequired,
-    dutchPreferred: languageDetection.dutchPreferred,
-    languageEvidence: languageDetection.evidence,
-    primaryFit: role.primaryFit,
-    matchingSkills,
-    gaps,
-    reasons,
-  });
+export function isDeterministicallyRelevant(score: number, threshold = RELEVANCE_THRESHOLD): boolean {
+  return score >= threshold;
 }
 
 export type WorldwideDeterministicScore = {
@@ -925,16 +638,18 @@ export type WorldwideScorableVacancy = {
 };
 
 /**
- * The worldwide-pipeline counterpart to `scoreVacancy`. Reuses only the sub-assessors that never
- * encoded a Netherlands assumption -- technical fit, role classification, and seniority fit -- plus
- * the excluded-role-family hard cap, which is candidate-profile data, not NL-specific. Dutch
- * language fit and Netherlands location fit are dropped entirely rather than stubbed to a neutral
- * value: there is nothing honest to assess on either dimension for a worldwide-remote vacancy. Their
- * combined 0.25 weight (0.15 language + 0.10 location) is dropped, and the three remaining
- * dimensions are re-weighted so the composite still sums to 100 while keeping their original
- * relative order (technical > role > seniority): technical 0.45, role 0.40, seniority 0.15. This is
- * not a proportional scaling of the original 0.35/0.30/0.10 ratio -- it's a deliberate new weighting
- * for a scorer with three dimensions instead of five.
+ * The sole deterministic scorer left in this package: the curated Netherlands pipeline's own
+ * `scoreVacancy` (five dimensions -- technical, role, seniority, Dutch-language, Netherlands
+ * location -- weighted 0.35/0.30/0.10/0.15/0.10) was removed with the rest of that pipeline. This
+ * function reuses only the sub-assessors that never encoded a Netherlands assumption -- technical
+ * fit, role classification, and seniority fit -- plus the excluded-role-family hard cap, which is
+ * candidate-profile data, not NL-specific. Dutch language fit and Netherlands location fit have no
+ * honest replacement for a worldwide-remote vacancy, so they are dropped entirely rather than
+ * stubbed to a neutral value. Their combined 0.25 weight (0.15 language + 0.10 location) is
+ * dropped, and the three remaining dimensions are re-weighted so the composite still sums to 100
+ * while keeping their original relative order (technical > role > seniority): technical 0.45, role
+ * 0.40, seniority 0.15. This is not a proportional scaling of the deleted scorer's 0.35/0.30/0.10
+ * ratio -- it's a deliberate new weighting for a scorer with three dimensions instead of five.
  *
  * The salary gate is the worldwide pipeline's own USD/annual floor
  * (`GlobalRemoteConfig.criteria.minimumAnnualBaseUsd`, passed in as `minimumAnnualBaseUsd`), never

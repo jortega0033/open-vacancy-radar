@@ -1,35 +1,36 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { SearchResultList } from '../../../src/components/search/SearchResultList.js';
 import type { SearchResult } from '../../../src/components/search/results.js';
 
-function worldwideResult(
-  key: string,
-  title: string,
-  overrides: Partial<Extract<SearchResult, { market: 'worldwide' }>> = {},
-): SearchResult {
+function discoveryVacancy(key: string, overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
   return {
-    market: 'worldwide',
-    raw: {
-      key,
-      provider: 'jobicy',
-      company: 'Acme',
-      title,
-      url: 'https://example.invalid/job',
-      location: 'Worldwide',
-      employmentType: null,
-      currency: null,
-      salaryPeriod: null,
-      advertisedMinimum: null,
-      annualizedMinimumUsd: null,
-      decision: 'official_review_candidate',
-      reasons: [],
-      contentHash: `hash-${key}`,
-      description: null,
-      postedAt: null,
-      profileScore: null,
-      worldwideSponsorMatch: null,
-    },
+    key,
+    provider: 'jobicy',
+    company: 'Acme',
+    title: 'Frontend Engineer',
+    url: 'https://example.invalid/job',
+    location: 'Worldwide',
+    employmentType: null,
+    currency: null,
+    salaryPeriod: null,
+    advertisedMinimum: null,
+    annualizedMinimumUsd: null,
+    decision: 'official_review_candidate',
+    reasons: [],
+    contentHash: `hash-${key}`,
+    description: null,
+    postedAt: null,
+    profileScore: null,
+    worldwideSponsorMatch: null,
+    ...overrides,
+  };
+}
+
+function worldwideResult(key: string, title: string, overrides: Partial<SearchResult> = {}): SearchResult {
+  return {
+    raw: discoveryVacancy(key, { title, postedAt: overrides.postedAt }),
     official: null,
     key,
     title,
@@ -37,13 +38,11 @@ function worldwideResult(
     location: null,
     url: 'https://example.invalid/job',
     provider: 'jobicy',
-    arrangement: null,
-    arrangementValue: 'unknown',
     employmentType: null,
     salary: null,
     postedAt: null,
     description: null,
-    verification: { level: 'not_available', label: 'Not available for this market', tone: null, note: '' },
+    verification: { level: 'not_available', label: 'Not available for this vacancy', tone: null, note: '' },
     profileScore: null,
     strongPoints: [],
     gaps: [],
@@ -53,62 +52,8 @@ function worldwideResult(
   };
 }
 
-function netherlandsRaw(): Extract<SearchResult, { market: 'netherlands' }>['raw'] {
-  return {
-    id: 'nl-1',
-    title: 'Frontend Engineer',
-    description: 'Build things.',
-    company: 'Redwood',
-    location: 'Amsterdam',
-    remote: false,
-    workplaceMode: 'hybrid',
-    provider: 'greenhouse',
-    url: 'https://example.invalid/nl-job',
-    sponsorLegalNames: ['Redwood B.V.'],
-    mappingConfidence: 'high',
-    firstSeenAt: '2026-08-01T00:00:00.000Z',
-    lastSeenAt: '2026-08-28T00:00:00.000Z',
-    postedAt: '2026-08-20T00:00:00.000Z',
-    verifiedInRun: true,
-    sourceOutcomeStatus: 'succeeded',
-  };
-}
-
-function netherlandsResult(
-  overrides: Partial<Extract<SearchResult, { market: 'netherlands' }>> = {},
-): SearchResult {
-  return {
-    market: 'netherlands',
-    raw: netherlandsRaw(),
-    key: 'nl-1',
-    title: 'Frontend Engineer',
-    company: 'Redwood',
-    location: 'Amsterdam',
-    url: 'https://example.invalid/nl-job',
-    provider: 'greenhouse',
-    arrangement: 'Hybrid',
-    arrangementValue: 'hybrid',
-    employmentType: null,
-    salary: null,
-    postedAt: '2026-08-20T00:00:00.000Z',
-    description: 'Build things.',
-    verification: {
-      level: 'recognised_sponsor',
-      label: 'Recognised sponsor',
-      tone: 'success',
-      note: 'Matched with high confidence.',
-    },
-    profileScore: 90,
-    strongPoints: [],
-    gaps: [],
-    reasons: [],
-    lead: { title: 'Frontend Engineer', company: 'Redwood', location: 'Amsterdam', url: 'https://example.invalid/nl-job' },
-    ...overrides,
-  };
-}
-
 describe('SearchResultList', () => {
-  it('shows no verification badge for a worldwide row -- the pipeline has no per-row outcome to report', () => {
+  it('shows no verification badge for a row with no sponsor match', () => {
     render(
       <SearchResultList
         results={[worldwideResult('1', 'Frontend Engineer')]}
@@ -123,13 +68,25 @@ describe('SearchResultList', () => {
       />,
     );
 
-    expect(screen.queryByText('Not available for this market')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not available for this vacancy')).not.toBeInTheDocument();
   });
 
-  it('shows a verification badge for a Netherlands row, since that pipeline has a real per-row outcome', () => {
+  it('shows a possible-sponsor-match badge for a matched row', () => {
+    const matched = worldwideResult('1', 'Frontend Engineer', {
+      raw: discoveryVacancy('1', {
+        worldwideSponsorMatch: { legalName: 'Acme B.V.', kvkNumber: '01234567' },
+      }),
+      verification: {
+        level: 'possible_sponsor_match',
+        label: 'Possible sponsor match (best effort)',
+        tone: 'warning',
+        note: 'A best-effort match.',
+      },
+    });
+
     render(
       <SearchResultList
-        results={[netherlandsResult()]}
+        results={[matched]}
         totalCount={1}
         selectedKey={null}
         onSelect={vi.fn()}
@@ -141,7 +98,7 @@ describe('SearchResultList', () => {
       />,
     );
 
-    expect(screen.getByText('Recognised sponsor')).toBeInTheDocument();
+    expect(screen.getByText('Possible sponsor match (best effort)')).toBeInTheDocument();
   });
 
   it('flags a posting over 30 days old instead of showing its date as if it were fresh', () => {
@@ -161,6 +118,7 @@ describe('SearchResultList', () => {
 
     expect(screen.getByText(/over a month old/i)).toBeInTheDocument();
   });
+
   it('uses the no-results illustration without changing the loaded-report explanation', () => {
     render(
       <SearchResultList
@@ -243,32 +201,10 @@ describe('SearchResultList', () => {
     expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
   });
 
-  it('keeps both rows of a cross-company duplicate group visible and separately selectable', () => {
-    // The grouping is a label, never a merge: two rows in, two rows out, each with its own key and
-    // its own click target, and only a neutral hint badge to say they may be the same listing.
+  it('selects the row that was clicked', () => {
     const onSelect = vi.fn();
-    const baseRaw = netherlandsRaw();
-    const first = netherlandsResult({
-      key: 'nl-1',
-      raw: {
-        ...baseRaw,
-        duplicateGroup: {
-          groupId: 'group-1',
-          otherVacancyIds: ['nl-2'],
-          otherCompanies: ['Redwood Netherlands B.V.'],
-        },
-      },
-    });
-    const second = netherlandsResult({
-      key: 'nl-2',
-      company: 'Redwood Netherlands B.V.',
-      raw: {
-        ...baseRaw,
-        id: 'nl-2',
-        company: 'Redwood Netherlands B.V.',
-        duplicateGroup: { groupId: 'group-1', otherVacancyIds: ['nl-1'], otherCompanies: ['Redwood'] },
-      },
-    });
+    const first = worldwideResult('1', 'Frontend Engineer');
+    const second = worldwideResult('2', 'Backend Engineer');
 
     render(
       <SearchResultList
@@ -284,29 +220,10 @@ describe('SearchResultList', () => {
       />,
     );
 
-    expect(screen.getAllByText('Possible duplicate')).toHaveLength(2);
     const rows = screen.getAllByRole('button');
     expect(rows).toHaveLength(2);
 
     fireEvent.click(rows[1]!);
     expect(onSelect).toHaveBeenCalledWith(second);
-  });
-
-  it('shows no duplicate badge for a row with no group', () => {
-    render(
-      <SearchResultList
-        results={[netherlandsResult()]}
-        totalCount={1}
-        selectedKey={null}
-        onSelect={vi.fn()}
-        savedKeys={new Set()}
-        summary="1 vacancy"
-        page={0}
-        pageCount={1}
-        onPageChange={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText('Possible duplicate')).not.toBeInTheDocument();
   });
 });

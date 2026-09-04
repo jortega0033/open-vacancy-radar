@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { Market, SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 
 export interface SavedJobDrawerProps {
@@ -16,7 +16,6 @@ export interface SavedJobDrawerProps {
 interface FormState {
   role: string;
   company: string;
-  market: Market;
   location: string;
   salary: string;
   arrangement: string;
@@ -30,7 +29,6 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   return {
     role: job?.role ?? '',
     company: job?.company ?? '',
-    market: job?.market ?? 'worldwide',
     location: job?.location ?? '',
     salary: job?.salary ?? '',
     arrangement: job?.arrangement ?? '',
@@ -82,7 +80,6 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
     onSave({
       role: form.role.trim(),
       company: form.company.trim(),
-      market: form.market,
       location: form.location.trim(),
       salary: blankToNull(form.salary),
       arrangement: blankToNull(form.arrangement),
@@ -133,18 +130,6 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.company}
               onChange={(e) => set('company', e.target.value)}
             />
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Market</span>
-            <select
-              className="select w-full"
-              value={form.market}
-              onChange={(e) => set('market', e.target.value as Market)}
-            >
-              <option value="worldwide">Worldwide</option>
-              <option value="netherlands">Netherlands</option>
-            </select>
           </label>
 
           <label className="block">

@@ -38,7 +38,6 @@ const SAVED_JOB: SavedJobRecord = {
   vacancyKey: 'nl:redwood-software:senior-frontend-engineer',
   role: 'Senior Frontend Engineer',
   company: 'Redwood Software',
-  market: 'netherlands',
   location: 'Amsterdam, Netherlands',
   salary: null,
   arrangement: 'Hybrid',

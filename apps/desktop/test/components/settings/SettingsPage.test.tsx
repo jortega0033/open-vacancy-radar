@@ -64,7 +64,6 @@ describe('SettingsPage', () => {
         ...DEFAULT_SETTINGS,
         startPage: 'applications',
         theme: 'dark',
-        defaultMarket: 'worldwide',
         defaultLocation: 'Germany',
         launchAtLogin: true,
       } satisfies AppSettingsRecord),
@@ -78,32 +77,9 @@ describe('SettingsPage', () => {
 
     openTab('Search');
     expect(screen.getByLabelText('Default search location')).toHaveValue('Germany');
-    // Worldwide default: the Netherlands-only IND toggles would just be clutter for a user whose
-    // default search location isn't Netherlands.
-    expect(screen.queryByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: 'IND recognised sponsor verification' })).not.toBeInTheDocument();
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
-  });
-
-  it('shows the IND-sponsor toggles only when the default search location is Netherlands', async () => {
-    setup({
-      getSettings: vi.fn().mockResolvedValue({
-        ...DEFAULT_SETTINGS,
-        defaultMarket: 'netherlands',
-        sponsorOnlyDefault: false,
-        indVerificationEnabled: true,
-      } satisfies AppSettingsRecord),
-    });
-
-    render(<SettingsPage />);
-    await screen.findByLabelText('Start page');
-    openTab('Search');
-
-    expect(screen.getByLabelText('Default search location')).toHaveValue('Netherlands');
-    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
-    expect(screen.getByRole('switch', { name: 'IND recognised sponsor verification' })).toBeChecked();
   });
 
   it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
@@ -117,10 +93,8 @@ describe('SettingsPage', () => {
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
 
-    // `setup()`'s default is worldwide, so the Netherlands-only search-profile section (issue: no
-    // default country bias) renders nothing at all here -- see the dedicated NL-selected case above.
     openTab('Search');
-    expect(headingsNow()).toEqual(['Settings', 'Default search location']);
+    await waitFor(() => expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Search profile']));
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
@@ -241,30 +215,22 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
 
-  it('saves the default search location immediately on change, resolving pipeline vs. country filter correctly', async () => {
+  it('saves the default search location immediately on change', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
     await screen.findByLabelText('Start page');
     openTab('Search');
     const select = await screen.findByLabelText('Default search location');
 
-    // A specific country: worldwide, pre-filtered to it.
     fireEvent.change(select, { target: { value: 'Germany' } });
-    await waitFor(() =>
-      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'worldwide', defaultLocation: 'Germany' }),
-    );
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Germany' }));
 
-    // Netherlands: the IND pipeline, not a worldwide search filtered to Dutch locations.
     fireEvent.change(select, { target: { value: 'Netherlands' } });
-    await waitFor(() =>
-      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'netherlands', defaultLocation: '' }),
-    );
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Netherlands' }));
 
-    // Back to no preference: worldwide, unfiltered.
+    // Back to no preference.
     fireEvent.change(select, { target: { value: 'all' } });
-    await waitFor(() =>
-      expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultMarket: 'worldwide', defaultLocation: '' }),
-    );
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: '' }));
   });
 
   it('lists the CV library in the default-CV select and saves the chosen id', async () => {
@@ -321,7 +287,6 @@ describe('SettingsPage', () => {
           startPage: 'search',
           theme: 'system',
           density: 'comfortable',
-          defaultMarket: 'worldwide',
           defaultCvId: null,
           confirmApplicationDelete: true,
         }),

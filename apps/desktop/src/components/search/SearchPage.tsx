@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
@@ -14,13 +14,10 @@ import {
   employmentOptions,
   filterResults,
   isWebUrl,
-  marketLabel,
   sortResults,
   sourceOptions,
-  toNetherlandsResults,
   toWorldwideResults,
   type SearchFilters,
-  type SearchMarket,
   type SearchResult,
 } from './results.js';
 
@@ -31,26 +28,14 @@ type EngineState = 'checking' | 'ready' | 'unavailable';
  * pagination is both a real DOM-size performance problem and a "where did the rest go" UX gap. */
 const PAGE_SIZE = 25;
 
-/**
- * One line per market about the money its report actually carries. Shown in the filter bar so the
- * absence of a salary on a Netherlands row reads as "this pipeline has no salary field", not as
- * "this employer pays nothing worth mentioning".
- */
-const SALARY_NOTE: Record<SearchMarket, string> = {
-  netherlands: 'No salary in the Netherlands report',
-  worldwide: 'Salary shown only where advertised',
-};
+const SALARY_NOTE = 'Salary shown only where advertised';
 
 /**
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
  *
- * The normalisation in `results.ts` already assembles this per market, because only it knows which
- * fields each pipeline genuinely carries. The Netherlands report contributes title/company/
- * location/url and nothing more, while a worldwide discovery row can also contribute employment
- * type and the advertised salary triple. Re-deriving that here would mean guessing at fields the
- * selected market may not have, so this function is a named seam over that decision rather than a
- * second, competing mapping. `description`/`requirements` stay absent for both markets: neither
- * pipeline stores the posting text, and the prompt builders say so to the model explicitly.
+ * The normalisation in `results.ts` already assembles this, because only it knows which fields the
+ * report genuinely carries. `description`/`requirements` stay absent: the pipeline stores no
+ * posting text, and the prompt builders say so to the model explicitly.
  */
 export function toVacancyLead(result: SearchResult): VacancyLead {
   return result.lead;
@@ -71,45 +56,25 @@ export function selectedVacancyFor(result: SearchResult): SelectedVacancy {
 /**
  * `SearchResult` → the `savedJobs` row input.
  *
- * `verification` stores the label the search page itself showed, so an unmatched worldwide row is
- * saved as "Not available for this market" (or, for a Netherlands-located row with a best-effort
- * sponsor match, that match's own label) rather than as an empty (and later re-readable as
- * "unverified") cell. `matchPercent` takes the Netherlands pipeline's deterministic relevance score (a real
- * 0-100 figure against the engine's configured candidate profile) and stays null for worldwide,
- * which computes no score. It is not a comparison against any CV in the library; the only real CV
- * comparison in this app is the on-demand gap analysis.
+ * `verification` stores the label the search page itself showed, so an unmatched row is saved as
+ * "Not available for this vacancy" (or, for a best-effort sponsor match, that match's own label)
+ * rather than as an empty (and later re-readable as "unverified") cell. `matchPercent` takes the
+ * deterministic relevance score (a real 0-100 figure against the engine's configured candidate
+ * profile) and stays null when scoring didn't run for this vacancy. It is not a comparison against
+ * any CV in the library; the only real CV comparison in this app is the on-demand gap analysis.
  */
 export function savedJobInputFor(result: SearchResult): SavedJobInput {
   return {
     role: result.title,
     company: result.company,
-    market: result.market,
     location: result.location ?? '',
     vacancyKey: result.key,
     salary: result.salary,
-    arrangement: result.arrangement,
     verification: result.verification.label,
     matchPercent: result.profileScore,
     // The renderer refuses to link a non-http(s) URL, so it must not persist one either.
     sourceUrl: isWebUrl(result.url) ? result.url : null,
     status: 'considering',
-  };
-}
-
-/**
- * Switching market keeps what the user typed and drops everything else: the source list, the
- * employment types and the market-only chips are all derived from one pipeline's data, so carrying
- * them across would silently filter the new market's results on a value it never produces.
- */
-function keepTypedFilters(filters: SearchFilters, nextMarket: SearchMarket): SearchFilters {
-  return {
-    ...DEFAULT_FILTERS,
-    query: filters.query,
-    // "City or region" free text is Netherlands-only now (see SearchFilterBar.tsx -- worldwide
-    // uses the structured Country filter instead, and showing both was two controls doing the
-    // same job). Carrying it into worldwide would leave an invisible filter active with no
-    // control left on screen to see or clear it.
-    location: nextMarket === 'netherlands' ? filters.location : '',
   };
 }
 
@@ -150,13 +115,12 @@ function SearchLoadingSkeleton() {
 }
 
 /**
- * Top-level Search screen: one market selector over two genuinely different scan pipelines, a
- * client-side filter bar, a results list and a detail pane.
+ * Top-level Search screen: a client-side filter bar over the worldwide/remote scan pipeline, a
+ * results list and a detail pane.
  *
- * The lifecycle rule is hydrate-then-optionally-scan, as on the Vacancy Leads panel it replaces:
- * opening the page (or switching market) reads whatever report that pipeline last produced and
- * never starts a network scan on its own. Scanning hits real external feeds and can take a couple
- * of minutes, so it is always something the user asked for.
+ * The lifecycle rule is hydrate-then-optionally-scan: opening the page reads whatever report the
+ * pipeline last produced and never starts a network scan on its own. Scanning hits real external
+ * feeds and can take a couple of minutes, so it is always something the user asked for.
  *
  * Filtering (role/keyword, location, chips) is entirely client-side over the loaded report, but
  * deliberately does not apply as those fields change: the form fields are a draft (`filters`)
@@ -182,20 +146,15 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
-  const [market, setMarket] = useState<SearchMarket>('worldwide');
-  const [netherlandsReport, setNetherlandsReport] = useState<JobRadarReport | null>(null);
   const [worldwideReport, setWorldwideReport] = useState<GlobalRemoteReport | null>(null);
-  // Markets whose stored report has already been read once. A pipeline that has never been run
+  // Whether the stored report has already been read once. A pipeline that has never been run
   // legitimately answers `null`, so "did we ask?" cannot be inferred from the report state itself.
-  const hydratedMarkets = useRef<Set<SearchMarket>>(new Set());
-  // Settings hydration is async, so the user can already have switched tabs by the time it lands.
-  // Restoring the persisted default at that point would yank them off the tab they deliberately
-  // picked, so hydration only ever sets the market if the user hasn't touched the tabs yet.
-  const hasSwitchedMarketRef = useRef(false);
-  // `market` starts at a placeholder ('worldwide') until the persisted default loads; the report
-  // hydration effect below must not read against that placeholder; otherwise a netherlands-default
-  // user would briefly, needlessly hit the worldwide report read before flipping to the real one.
-  const [marketResolved, setMarketResolved] = useState(false);
+  const hasHydrated = useRef(false);
+  // Settings hydration (the persisted default country) is async, so the user can already have
+  // changed the country filter by the time it lands. Restoring the persisted default at that point
+  // would clobber a selection the user already made, so hydration only ever writes the filter if
+  // the user hasn't touched it yet.
+  const hasEditedLocationRef = useRef(false);
 
   // `filters` is the draft the form fields are bound to; `appliedFilters` is what actually drives
   // `visible` below. They only sync on an explicit Search (or Clear) -- see the class doc comment.
@@ -207,22 +166,18 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (cancelled || hasSwitchedMarketRef.current) return;
-        setMarket(settings.defaultMarket);
-        // Mirrors Settings' own unified "Default search location" selector: for worldwide, a
-        // persisted country pre-fills the same country filter this page's own selector writes to,
-        // so opening the page for the first time already reflects that choice.
-        if (settings.defaultMarket === 'worldwide' && settings.defaultLocation) {
+        if (cancelled || hasEditedLocationRef.current) return;
+        // Mirrors Settings' own "Default search location" selector: a persisted country pre-fills
+        // the same country filter this page's own selector writes to, so opening the page for the
+        // first time already reflects that choice.
+        if (settings.defaultLocation) {
           const withCountry = { ...DEFAULT_FILTERS, country: settings.defaultLocation };
           setFilters(withCountry);
           setAppliedFilters(withCountry);
         }
       })
       .catch(() => {
-        // default market ('worldwide', set above) already applies
-      })
-      .finally(() => {
-        if (!cancelled) setMarketResolved(true);
+        // default filters (already applied) stand
       });
     return () => {
       cancelled = true;
@@ -276,18 +231,15 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
 
   const retryEngineCheck = useCallback(() => setEngineCheckTick((tick) => tick + 1), []);
 
-  // Bumped by `retryLoad` to force the hydration effect below to re-run even though `market` and
-  // `marketResolved` haven't changed: deleting from the `hydratedMarkets` ref alone doesn't, since
-  // ref mutations don't trigger re-renders or re-run effects.
+  // Bumped by `retryLoad` to force the hydration effect below to re-run even though nothing else
+  // changed: clearing `hasHydrated.current` alone doesn't, since ref mutations don't trigger
+  // re-renders or re-run effects.
   const [reloadTick, setReloadTick] = useState(0);
 
-  // Hydrate the market's last report. Both branches are `getReport`-style reads of stored output;
-  // neither runs a scan, so opening the page costs nothing and shows what is already known. Waits
-  // for `marketResolved` so it never reads against the placeholder market from before settings load.
+  // Hydrate the last report. This is a `getReport`-style read of stored output; it never runs a
+  // scan, so opening the page costs nothing and shows what is already known.
   useEffect(() => {
-    if (!marketResolved) return;
-
-    if (hydratedMarkets.current.has(market)) {
+    if (hasHydrated.current) {
       setHydrating(false);
       return;
     }
@@ -298,19 +250,13 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
 
     void (async () => {
       try {
-        if (market === 'netherlands') {
-          const report = await window.vacancyRadar.getNetherlandsReport();
-          if (cancelled) return;
-          setNetherlandsReport(report);
-        } else {
-          const report = await window.vacancyRadar.getReport();
-          if (cancelled) return;
-          setWorldwideReport(report);
-        }
-        hydratedMarkets.current.add(market);
+        const report = await window.vacancyRadar.getReport();
+        if (cancelled) return;
+        setWorldwideReport(report);
+        hasHydrated.current = true;
       } catch (error) {
         if (cancelled) return;
-        setLoadError(describeError(error, `could not load the ${marketLabel(market)} report`));
+        setLoadError(describeError(error, 'could not load the report'));
       } finally {
         if (!cancelled) setHydrating(false);
       }
@@ -319,12 +265,12 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [market, marketResolved, reloadTick]);
+  }, [reloadTick]);
 
   const retryLoad = useCallback(() => {
-    hydratedMarkets.current.delete(market);
+    hasHydrated.current = false;
     setReloadTick((tick) => tick + 1);
-  }, [market]);
+  }, []);
 
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
@@ -362,12 +308,10 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     };
   }, []);
 
-  const results = useMemo<SearchResult[]>(() => {
-    if (market === 'netherlands') {
-      return netherlandsReport ? sortResults(toNetherlandsResults(netherlandsReport)) : [];
-    }
-    return worldwideReport ? sortResults(toWorldwideResults(worldwideReport)) : [];
-  }, [market, netherlandsReport, worldwideReport]);
+  const results = useMemo<SearchResult[]>(
+    () => (worldwideReport ? sortResults(toWorldwideResults(worldwideReport)) : []),
+    [worldwideReport],
+  );
 
   const visible = useMemo(() => filterResults(results, appliedFilters), [results, appliedFilters]);
 
@@ -380,9 +324,8 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const sources = useMemo(() => sourceOptions(results), [results]);
   const employmentTypes = useMemo(() => employmentOptions(results), [results]);
 
-  // A new filtered set (a fresh search, a rescan, or a market switch) always starts back on page
-  // one: a page index left over from a longer previous list could point past the end of a shorter
-  // new one.
+  // A new filtered set (a fresh search or a rescan) always starts back on page one: a page index
+  // left over from a longer previous list could point past the end of a shorter new one.
   useEffect(() => {
     setPage(0);
   }, [visible]);
@@ -404,15 +347,9 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     [visible, selectedKey],
   );
 
-  const report = market === 'netherlands' ? netherlandsReport : worldwideReport;
-  // Only the Netherlands pipeline scores against a candidate profile; the worldwide pipeline has
-  // no such concept, so this is never true for it regardless of GlobalRemoteReport's own shape.
-  const profileNotConfigured = market === 'netherlands' && netherlandsReport !== null && !netherlandsReport.profileConfigured;
-  const sourceWarnings =
-    market === 'worldwide'
-      ? (worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [])
-      : [];
-  const hasReport = report !== null;
+  const profileNotConfigured = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
+  const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
+  const hasReport = worldwideReport !== null;
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async () => {
@@ -420,18 +357,14 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     setScanError(undefined);
     setLoadError(undefined);
     try {
-      if (market === 'netherlands') {
-        setNetherlandsReport(await window.vacancyRadar.runNetherlandsScan());
-      } else {
-        setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
-      }
-      hydratedMarkets.current.add(market);
+      setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
+      hasHydrated.current = true;
     } catch (error) {
       setScanError(describeError(error, 'scan failed'));
     } finally {
       setScanning(false);
     }
-  }, [market, filters.query]);
+  }, [filters.query]);
 
   // "Search" commits the draft filters (so the list reflects exactly what the form currently
   // shows) and goes to get fresh data, whether or not a report already exists -- there is
@@ -443,62 +376,17 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     void runScan();
   }, [filters, runScan]);
 
-  /** `countryOverride`: set when a market switch is itself triggered by picking a specific
-   * country out of `handleLocationChange` below (e.g. going straight from Netherlands to "United
-   * States"), so that country lands as the new market's active filter instead of being reset to
-   * "all" by `keepTypedFilters`. */
-  const handleMarketChange = useCallback(
-    (next: SearchMarket, countryOverride?: string) => {
-      hasSwitchedMarketRef.current = true;
-      setMarketResolved(true);
-      setMarket(next);
-      const carried = keepTypedFilters(filters, next);
-      const withCountry = countryOverride === undefined ? carried : { ...carried, country: countryOverride };
-      setFilters(withCountry);
-      setAppliedFilters(withCountry);
-      setSelectedKey(null);
-      setAssistantForKey(null);
-      setScanError(undefined);
-    },
-    [filters],
-  );
-
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
   }, []);
 
-  /**
-   * The filter bar's country selector: always a plain, instant, client-side filter over whatever
-   * is already loaded -- including "Netherlands", which used to hijack this control into switching
-   * the whole pipeline. Leaving the Netherlands *pipeline* for a specific country still has to
-   * switch to worldwide (that pipeline has no non-Dutch data at all), but arriving at "Netherlands"
-   * from worldwide no longer does the reverse; see `handleSwitchToNetherlandsPipeline` for the
-   * explicit, separate way to reach the IND-recognised-sponsor pipeline.
-   */
-  const handleLocationChange = useCallback(
-    (value: string) => {
-      // Marked here too, not only inside handleMarketChange below: staying on worldwide and just
-      // changing which country is still a deliberate choice made through this control, and without
-      // this the not-yet-resolved settings-hydration effect could still later overwrite it with the
-      // persisted default market, clobbering a selection the user already made.
-      hasSwitchedMarketRef.current = true;
-      setMarketResolved(true);
-      if (market === 'netherlands') {
-        if (value === 'Netherlands') return;
-        handleMarketChange('worldwide', value);
-        return;
-      }
-      setFilters((current) => ({ ...current, country: value }));
-      setAppliedFilters((current) => ({ ...current, country: value }));
-    },
-    [market, handleMarketChange],
-  );
-
-  /** The one remaining, explicit way to reach the IND-recognised-sponsor pipeline: a deliberate
-   * action distinct from the Country filter, not a side effect of picking "Netherlands" there. */
-  const handleSwitchToNetherlandsPipeline = useCallback(() => {
-    handleMarketChange('netherlands');
-  }, [handleMarketChange]);
+  /** The filter bar's country selector: a plain, instant, client-side filter over whatever is
+   * already loaded. */
+  const handleLocationChange = useCallback((value: string) => {
+    hasEditedLocationRef.current = true;
+    setFilters((current) => ({ ...current, country: value }));
+    setAppliedFilters((current) => ({ ...current, country: value }));
+  }, []);
 
   // The one filter action that applies immediately, with no separate Search click: an explicit
   // reset is already a deliberate commitment, not a still-being-typed draft.
@@ -544,15 +432,13 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
   // rather than useful context.
   const summary = hasReport
-    ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'} · ${marketLabel(market)}`
-    : `No ${marketLabel(market)} report loaded`;
+    ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}`
+    : 'No report loaded';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <SearchFilterBar
-        market={market}
         onLocationChange={handleLocationChange}
-        onSwitchToNetherlandsPipeline={handleSwitchToNetherlandsPipeline}
         filters={filters}
         onFiltersChange={handleFiltersChange}
         onSearch={handleSearch}
@@ -560,7 +446,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         sources={sources}
         employmentTypes={employmentTypes}
         busy={busy}
-        salaryNote={SALARY_NOTE[market]}
+        salaryNote={SALARY_NOTE}
       />
 
       <div className="flex-none">
@@ -584,8 +470,8 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         {scanning && (
           <div className="alert alert-info alert-soft mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            Scanning live {marketLabel(market)} sources: this hits real external APIs and feeds, and
-            can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.
+            Scanning live sources: this hits real external APIs and feeds, and can take anywhere
+            from about ten seconds up to a couple of minutes. The app is not frozen.
           </div>
         )}
         {scanError && (
@@ -620,7 +506,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         <>
           <div className="alert alert-info alert-soft mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            Loading the latest {marketLabel(market)} report…
+            Loading the latest report…
           </div>
           <SearchLoadingSkeleton />
         </>
@@ -630,7 +516,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         <EmptyState
           illustration={emptySearchIllustration}
           title="No search yet"
-          description={`No ${marketLabel(market)} scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from this market's sources.`}
+          description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={() => void runScan()} disabled={busy}>
               Run the first scan
@@ -670,10 +556,6 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           {selected ? (
             <VacancyDetail
               result={selected}
-              sponsorSource={
-                selected.market === 'netherlands' ? (netherlandsReport?.officialSponsorSource ?? null) : null
-              }
-              runId={report?.runId ?? null}
               defaultCvName={defaultCvName}
               saveState={saveState}
               {...(saveError ? { saveError } : {})}
@@ -699,7 +581,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits
           outside the scrollable results/detail area above), for diagnostic/provenance metadata
           that's useful on demand but not worth greeting every visit with above the results. */}
-      {(sourceWarnings.length > 0 || report) && (
+      {(sourceWarnings.length > 0 || worldwideReport) && (
         <div className="flex-none border-t border-base-300 px-1 pt-2">
           {sourceWarnings.length > 0 && (
             <>
@@ -725,9 +607,9 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
               )}
             </>
           )}
-          {report && (
+          {worldwideReport && (
             <p className="px-2 pb-1.5 text-xs text-base-content/60">
-              Run {report.runId} · generated {new Date(report.generatedAt).toLocaleString()}
+              Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
             </p>
           )}
         </div>

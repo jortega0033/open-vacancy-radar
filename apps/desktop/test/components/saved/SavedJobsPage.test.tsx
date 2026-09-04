@@ -10,7 +10,6 @@ function makeJob(overrides: Partial<SavedJobRecord> = {}): SavedJobRecord {
     vacancyKey: null,
     role: 'Senior Frontend Engineer',
     company: 'Acme Corp',
-    market: 'netherlands',
     location: 'Amsterdam',
     salary: 'EUR 6,500/month',
     arrangement: 'Hybrid',

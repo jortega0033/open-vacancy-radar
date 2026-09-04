@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AtsHttpResponse } from '../../src/ats/http.js';
 import { PersonioAdapter } from '../../src/ats/personio.js';
-import { createVacancyAdapter } from '../../src/pipeline/vacancies.js';
+import { createVacancyAdapter } from '../../src/ats/factory.js';
 import { atsFixture, careerSource, FixtureHttpClient } from './helpers.js';
 
 const feedUrl = 'https://acme.jobs.personio.de/xml?language=en';

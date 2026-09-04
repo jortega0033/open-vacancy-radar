@@ -1,52 +1,37 @@
 import type { KeyboardEvent } from 'react';
-import { countryOptions, supportedFilters, type SearchFilters, type SearchMarket } from './results.js';
+import { countryOptions, type SearchFilters } from './results.js';
 
 export interface SearchFilterBarProps {
-  market: SearchMarket;
   filters: SearchFilters;
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
-  /**
-   * The worldwide pipeline's country filter: always a plain, instant, client-side narrowing of
-   * whatever is already loaded, exactly like every other country in `countries.ts`'s
-   * `ALL_COUNTRIES` -- picking "Netherlands" here does not switch pipelines. Only meaningful while
-   * on the worldwide pipeline; while on Netherlands, picking a *different* country still has to
-   * leave that pipeline (it carries no non-Dutch data at all), which this same callback also
-   * handles.
-   */
+  /** The country filter: a plain, instant, client-side narrowing of whatever is already loaded. */
   onLocationChange: (value: string) => void;
-  /** The one explicit way to reach the IND-recognised-sponsor pipeline: a deliberate action, not a
-   * side effect of the country filter above. Only shown while on the worldwide pipeline. */
-  onSwitchToNetherlandsPipeline: () => void;
-  /** Always runs a fresh scan of this market's sources, whether or not one is already loaded --
-   * there is no separate "just filter" action, since typing in a filter field already re-filters
-   * the loaded report live (see the `onChange` handlers below), with no button needed for that. */
+  /** Always runs a fresh scan, whether or not one is already loaded -- there is no separate "just
+   * filter" action, since typing in a filter field already re-filters the loaded report live (see
+   * the `onChange` handlers below), with no button needed for that. */
   onSearch: () => void;
   onClear: () => void;
   /** Provider ids present in the loaded report: never a hardcoded list. */
   sources: string[];
-  /** Employment types present in the loaded report (worldwide only). */
+  /** Employment types present in the loaded report. */
   employmentTypes: string[];
   busy: boolean;
-  /** One honest line about the money the current market's report actually carries. */
+  /** One honest line about the money the report actually carries. */
   salaryNote: string;
 }
 
 /**
- * The search header: role/keyword, the country filter (plus the separate, explicit switch to the
- * Netherlands pipeline), the search action, and (for Netherlands only) the IND sponsor filter,
- * plus the secondary client-side filter chips.
+ * The search header: role/keyword, the country filter, the search action, the best-effort IND
+ * sponsor filter, plus the secondary client-side filter chips.
  *
- * Which secondary filters appear is driven by `supportedFilters(market)`, i.e. by what the
- * selected pipeline's data actually carries. The prototype's "experience level" chip is
- * deliberately absent: neither report has a seniority field, and inferring one from the job title
- * would be a filter dimension the data cannot honestly support.
+ * The prototype's "experience level" chip is deliberately absent: the report has no seniority
+ * field, and inferring one from the job title would be a filter dimension the data cannot honestly
+ * support.
  */
 export function SearchFilterBar({
-  market,
   filters,
   onFiltersChange,
   onLocationChange,
-  onSwitchToNetherlandsPipeline,
   onSearch,
   onClear,
   sources,
@@ -54,8 +39,6 @@ export function SearchFilterBar({
   busy,
   salaryNote,
 }: SearchFilterBarProps) {
-  const supported = supportedFilters(market);
-
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter') onSearch();
   }
@@ -78,7 +61,7 @@ export function SearchFilterBar({
         <select
           className="select select-sm w-48"
           aria-label="Country"
-          value={market === 'netherlands' ? 'Netherlands' : filters.country}
+          value={filters.country}
           onChange={(event) => onLocationChange(event.target.value)}
           disabled={busy}
         >
@@ -90,85 +73,37 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        {market === 'worldwide' && (
-          <button
-            className="btn btn-ghost btn-sm text-xs"
-            type="button"
-            onClick={onSwitchToNetherlandsPipeline}
-            disabled={busy}
-          >
-            Switch to Netherlands (IND-verified) →
-          </button>
-        )}
-
-        {/* Netherlands only: the unified Country selector above is already scoped to one country
-            there, so it can't answer "which city", unlike worldwide where a specific-country
-            selection already narrows that far and a second free-text box would just duplicate it. */}
-        {!supported.country && (
-          <input
-            className="input input-sm w-40"
-            type="text"
-            aria-label="City or region"
-            placeholder="City or region"
-            value={filters.location}
-            onChange={(event) => onFiltersChange({ location: event.target.value })}
-            onKeyDown={handleKeyDown}
-            disabled={busy}
-          />
-        )}
-
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
           {busy && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
           Search
         </button>
 
-        {supported.sponsorOnly && (
-          <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
-            <input
-              className="checkbox checkbox-sm"
-              type="checkbox"
-              checked={filters.sponsorOnly}
-              onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
-              disabled={busy}
-            />
-            IND-recognised sponsors only
-          </label>
-        )}
+        <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70">
+          <input
+            className="checkbox checkbox-sm"
+            type="checkbox"
+            checked={filters.sponsorOnly}
+            onChange={(event) => onFiltersChange({ sponsorOnly: event.target.checked })}
+            disabled={busy}
+          />
+          Possible IND sponsor match only
+        </label>
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {supported.arrangement && (
-          <select
-            className="select select-xs w-36"
-            aria-label="Arrangement"
-            value={filters.arrangement}
-            onChange={(event) =>
-              onFiltersChange({ arrangement: event.target.value as SearchFilters['arrangement'] })
-            }
-          >
-            <option value="any">Any arrangement</option>
-            <option value="remote">Remote</option>
-            <option value="hybrid">Hybrid</option>
-            <option value="onsite">On-site</option>
-            <option value="unknown">Not stated</option>
-          </select>
-        )}
-
-        {supported.postedWithin && (
-          <select
-            className="select select-xs w-36"
-            aria-label="Posted within"
-            value={filters.postedWithin}
-            onChange={(event) =>
-              onFiltersChange({ postedWithin: event.target.value as SearchFilters['postedWithin'] })
-            }
-          >
-            <option value="any">Posted: any time</option>
-            <option value="1">Last 24 hours</option>
-            <option value="7">Last 7 days</option>
-            <option value="30">Last 30 days</option>
-          </select>
-        )}
+        <select
+          className="select select-xs w-36"
+          aria-label="Posted within"
+          value={filters.postedWithin}
+          onChange={(event) =>
+            onFiltersChange({ postedWithin: event.target.value as SearchFilters['postedWithin'] })
+          }
+        >
+          <option value="any">Posted: any time</option>
+          <option value="1">Last 24 hours</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
 
         <select
           className="select select-xs w-36"
@@ -184,7 +119,7 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        {supported.employment && employmentTypes.length > 0 && (
+        {employmentTypes.length > 0 && (
           <select
             className="select select-xs w-36"
             aria-label="Employment type"
@@ -211,7 +146,7 @@ export function SearchFilterBar({
         </button>
       </div>
 
-      {supported.postedWithin && filters.postedWithin !== 'any' && (
+      {filters.postedWithin !== 'any' && (
         <p className="mt-2 text-xs text-base-content/60">
           Vacancies with no known posting date are excluded while this filter is narrowed, so the
           list means exactly what it says.

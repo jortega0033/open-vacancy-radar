@@ -2,15 +2,17 @@ import { z } from 'zod';
 
 import type { AtsHttpClient } from '../ats/http.js';
 import { requireSuccessfulResponse } from '../ats/http.js';
-import { compareWebsite, normalizeKvk, normalizeWebsiteUrl } from './wikidata-domain-source.js';
+import { compareWebsite, normalizeKvk, normalizeWebsiteUrl } from './wikidata-shared.js';
 
 /**
- * Best-effort, name-keyed counterpart to `wikidata-domain-source.ts`'s exact-KVK SPARQL lookup
- * (see issue #117). Every structured domain source in this package (`wikidata-domain-source.ts`,
- * `ted-domain-source.ts`, `tenderned-domain-source.ts`) is keyed on a KVK number the caller already
- * knows from `indSponsors`; this module exists for the opposite case -- a worldwide vacancy's
- * free-text company name, with no KVK and nothing pre-known -- so it has none of that discipline's
- * certainty going in. Two hard consequences follow throughout this file:
+ * Best-effort, name-keyed Wikidata lookup for the worldwide sponsor-match check (see issue #117).
+ * The curated Netherlands pipeline's own KVK-keyed structured domain sources (which this module
+ * was originally written alongside) have since been deleted along with the rest of that pipeline;
+ * `wikidata-shared.ts` carries the small set of URL/KVK normalization helpers this module still
+ * needs, extracted from that deleted code since they have no pipeline-specific logic of their own.
+ * This module exists for the case those sources never covered -- a worldwide vacancy's free-text
+ * company name, with no KVK and nothing pre-known -- so it has none of that discipline's certainty
+ * going in. Two hard consequences follow throughout this file:
  *
  * 1. It reports at most a candidate for the caller to cross-check against `indSponsors` (see
  *    `worldwide-sponsor-match.ts`), never a resolved sponsor by itself.

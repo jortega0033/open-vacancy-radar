@@ -11,7 +11,6 @@ export function toSavedJobInput(job: SavedJobRecord): SavedJobInput {
   return {
     role: job.role,
     company: job.company,
-    market: job.market,
     location: job.location,
     vacancyKey: job.vacancyKey,
     salary: job.salary,

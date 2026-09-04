@@ -3,7 +3,6 @@ import {
   APPLICATION_STATUS_LABEL,
   APPLICATION_STATUS_ORDER,
   APPLICATION_STATUS_SELECT_CLASS,
-  MARKET_LABEL,
 } from './application-status.js';
 
 export interface ApplicationsTableProps {
@@ -22,9 +21,8 @@ function formatAppliedDate(iso: string | null): string {
 }
 
 /**
- * Pipeline table. Columns follow the task spec exactly: role, company, location, market,
- * verification, status (inline `<select>`, no drawer round-trip needed just to move a card),
- * applied date, next step, contact, actions.
+ * Pipeline table. Columns: role, company, location, verification, status (inline `<select>`, no
+ * drawer round-trip needed just to move a card), applied date, next step, contact, actions.
  */
 export function ApplicationsTable({
   applications,
@@ -41,7 +39,6 @@ export function ApplicationsTable({
             <th>Role</th>
             <th>Company</th>
             <th>Location</th>
-            <th>Market</th>
             <th>Verification</th>
             <th>Status</th>
             <th>Applied</th>
@@ -56,7 +53,6 @@ export function ApplicationsTable({
               <td className="font-semibold">{application.role}</td>
               <td>{application.company}</td>
               <td>{application.location || '—'}</td>
-              <td>{MARKET_LABEL[application.market]}</td>
               <td>{application.verification || '—'}</td>
               <td>
                 <select

@@ -8,10 +8,6 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
  * locks, content-hash reuse); this is plain per-user CRUD the desktop app owns outright. Keeping
  * them apart means neither schema's migration history constrains the other.
  *
- * `market` is deliberately just the two tracks this app can actually search: 'netherlands' (the
- * IND-sponsor pipeline) and 'worldwide' (the global-remote pipeline), not an invented per-country
- * list. There is no real backend for a UK/DE/US/etc. structured search today; adding fake markets
- * here would be a UI promise the app can't keep.
  */
 
 export const savedJobs = sqliteTable('saved_jobs', {
@@ -21,7 +17,6 @@ export const savedJobs = sqliteTable('saved_jobs', {
   vacancyKey: text('vacancy_key'),
   role: text('role').notNull(),
   company: text('company').notNull(),
-  market: text('market', { enum: ['netherlands', 'worldwide'] }).notNull(),
   location: text('location').notNull(),
   salary: text('salary'),
   arrangement: text('arrangement'),
@@ -96,7 +91,6 @@ export const applications = sqliteTable('applications', {
   role: text('role').notNull(),
   company: text('company').notNull(),
   location: text('location').notNull().default(''),
-  market: text('market', { enum: ['netherlands', 'worldwide'] }).notNull(),
   verification: text('verification'),
   status: text('status', {
     enum: ['preparing', 'applied', 'recruiter_screen', 'interview', 'offer', 'rejected', 'withdrawn'],
@@ -122,10 +116,7 @@ export const appSettings = sqliteTable('app_settings', {
   sidebarStart: text('sidebar_start', { enum: ['expanded', 'collapsed', 'remember_last'] }).notNull().default('remember_last'),
   sidebarCollapsed: integer('sidebar_collapsed', { mode: 'boolean' }).notNull().default(false),
   lastOpenedPage: text('last_opened_page').notNull().default('search'),
-  defaultMarket: text('default_market', { enum: ['netherlands', 'worldwide'] }).notNull().default('worldwide'),
   defaultLocation: text('default_location').notNull().default(''),
-  sponsorOnlyDefault: integer('sponsor_only_default', { mode: 'boolean' }).notNull().default(false),
-  indVerificationEnabled: integer('ind_verification_enabled', { mode: 'boolean' }).notNull().default(false),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {
     enum: ['motivation_letter', 'cover_letter', 'recruiter_message', 'short_application_message'],

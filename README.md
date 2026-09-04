@@ -16,16 +16,17 @@ this repository, not the bundled prototype used to prepare the image._
 
 ## What this is
 
-A personal job-search workspace built around two real, verified discovery pipelines. There is no
-third "generic country" pipeline: every match is either Netherlands-sponsor-verified or
-worldwide-remote-verified, never a placeholder.
+A personal job-search workspace built around one worldwide/remote discovery pipeline: frontend-only
+roles from ~50 researched public sources (ATS APIs, RSS feeds, keyed job-board APIs), filtered for
+genuinely remote, non-US-only eligibility, with no default country, role, or salary bias baked in.
 
-- **Netherlands:** frontend vacancies cross-checked against the IND's official recognised-sponsor
-  register, so a match means the employer is a verified sponsor, not just a keyword hit.
-- **Worldwide / remote:** frontend-only roles from ~50 researched public sources (ATS APIs, RSS
-  feeds, keyed job-board APIs), filtered for genuinely remote, non-US-only eligibility.
+For any vacancy that normalizes to a Netherlands location, a best-effort check additionally looks
+up the employer by name against the IND's official recognised-sponsor register. This is a
+name-keyed, unverified lookup, not a curated evidence chain, so a match is always reported as a
+"possible sponsor match" rather than a confirmed one -- confirm the legal entity yourself before
+relying on sponsorship.
 
-Both pipelines are deterministic-first: official ATS APIs and structured feeds before plain HTTP,
+The pipeline is deterministic-first: official ATS APIs and structured feeds before plain HTTP,
 before JSON-LD, before HTML parsing, with a narrowly-scoped headless-browser fallback only where
 nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for the engine itself,
 vendored from the standalone `ind-job-radar` CLI project and ported from PostgreSQL to an embedded
@@ -39,7 +40,7 @@ partner boundaries, and technical access controls stop ingestion. See
 
 On top of that, the desktop app is a full personal tracker:
 
-- **Search:** run either pipeline on demand, save leads, or open the CV assistant on any result.
+- **Search:** run the pipeline on demand, save leads, or open the CV assistant on any result.
 - **Saved Jobs** / **Applications:** track status end to end, with confirm-before-delete and a
   short undo window on every delete.
 - **CV Library:** upload or hand-enter multiple CVs, one marked default, each usable for AI
@@ -106,7 +107,7 @@ apps/
                        electron/workspace/  : the personal-data SQLite schema, IPC, repository
   daemon/           Standalone local Node.js service (Fastify), runnable without Electron
 packages/
-  vacancy-engine/   The discovery/scoring engine (NL sponsor pipeline + worldwide remote pipeline),
+  vacancy-engine/   The worldwide/remote discovery engine (plus a best-effort IND sponsor check),
                      vendored from the standalone `ind-job-radar` CLI and ported to embedded SQLite
   agent-runtime/    Provider-neutral runtime: process management, adapters, normalized events
   client/           @agent-dock/client: typed daemon SDK (HTTP+SSE, auth, protocol version check)

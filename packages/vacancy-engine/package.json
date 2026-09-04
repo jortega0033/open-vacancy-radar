@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic vacancy-discovery engine (IND sponsor matching + global-remote frontend search), vendored from ind-job-radar and ported to an embedded SQLite store for standalone desktop distribution.",
+  "description": "Deterministic vacancy-discovery engine for the worldwide job-board/official-source pipeline, with a best-effort Netherlands IND sponsor check, backed by an embedded SQLite store for standalone desktop distribution.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "engines": {

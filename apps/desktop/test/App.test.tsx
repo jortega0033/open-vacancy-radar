@@ -10,8 +10,7 @@ import type { WorkspaceCounts } from '../src/window.js';
 /**
  * One worldwide vacancy, enough to drive the "Generate Letter" handoff tests below. Matches
  * `test/components/search/SearchPage.test.tsx`'s own fixtures, trimmed to the one row these tests
- * need; the default persisted market (see `DEFAULT_SETTINGS` in `workspace-bridge.ts`) is already
- * 'worldwide', so this is what Search hydrates with no market switch required.
+ * need.
  */
 function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
   return {
@@ -31,7 +30,7 @@ function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): D
     contentHash: 'hash-ww-1',
     description: 'Join our fully-remote engineering team building the next generation of tooling.',
     postedAt: null,
-    profileScore: null,
+    profileScore: 75,
     worldwideSponsorMatch: null,
     ...overrides,
   };
@@ -180,10 +179,7 @@ describe('App', () => {
         sidebarStart: 'remember_last',
         sidebarCollapsed: false,
         lastOpenedPage: 'search',
-        defaultMarket: 'worldwide',
         defaultLocation: '',
-        sponsorOnlyDefault: false,
-        indVerificationEnabled: false,
         defaultCvId: null,
         defaultLetterType: 'motivation_letter',
         defaultLetterTone: 'natural',

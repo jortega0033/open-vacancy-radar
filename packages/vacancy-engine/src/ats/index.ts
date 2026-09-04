@@ -2,6 +2,7 @@ export * from './ashby.js';
 export * from './capabilities.js';
 export * from './company-site.js';
 export * from './detection.js';
+export * from './factory.js';
 export * from './greenhouse.js';
 export * from './http.js';
 export * from './json-ld.js';

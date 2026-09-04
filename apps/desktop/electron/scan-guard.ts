@@ -4,26 +4,17 @@ export const SCAN_BUSY_IN_PROCESS = 'a vacancy scan is already running';
 export const SCAN_BUSY_OTHER_PROCESS = 'a vacancy scan is already running in another process';
 
 export interface ExclusiveScanOptions {
-  /**
-   * Whether this guard should take the engine's cross-process advisory lock itself.
-   *
-   * `false` for `runEndToEndScan`, which takes that lock as part of its own contract and reports
-   * `{ status: 'skipped' }` rather than throwing when it cannot get it. Taking it here as well
-   * would deadlock against that acquisition on a platform where the lock is per-handle.
-   */
+  /** Whether this guard should take the engine's cross-process advisory lock itself. */
   takeAdvisoryLock: boolean;
 }
 
 /**
  * Mutual exclusion for vacancy scans, in two layers.
  *
- * **In-process (always).** One flag shared by *every* scan kind, not one per kind: the
- * global-remote and Netherlands pipelines write the same engine database and the same
- * scan-run/content-hash tables, so running them together is exactly as damaging as running two of
- * either. This layer is also the only one that works reliably inside a single process: POSIX
- * `fcntl` locks (what SQLite uses on Linux/macOS) are per-process, so a second connection opened
- * by *this* process is not blocked by the first. The advisory lock alone would therefore be a
- * no-op for precisely the case the renderer can cause: two IPC calls in flight at once.
+ * **In-process (always).** One flag shared across every scan: POSIX `fcntl` locks (what SQLite
+ * uses on Linux/macOS) are per-process, so a second connection opened by *this* process is not
+ * blocked by the first. The advisory lock alone would therefore be a no-op for precisely the case
+ * the renderer can cause: two IPC calls in flight at once.
  *
  * **Cross-process (opt-in).** The engine's `createScanLock` sidecar file lock, which is the only
  * thing that stops a scan started by another process (`pnpm vacancies:scan` pointed at the same

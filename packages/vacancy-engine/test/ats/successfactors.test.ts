@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SuccessFactorsAdapter } from '../../src/ats/successfactors.js';
 import type { AtsHttpResponse } from '../../src/ats/http.js';
-import { createVacancyAdapter } from '../../src/pipeline/vacancies.js';
+import { createVacancyAdapter } from '../../src/ats/factory.js';
 import { atsFixture, careerSource, FixtureHttpClient } from './helpers.js';
 
 const origin = 'https://jobs.tetrapak.com';
