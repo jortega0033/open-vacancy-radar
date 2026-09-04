@@ -4,9 +4,13 @@ import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate
 
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
 
+/**
+ * `cwd` is deliberately absent (issue #175): the main process always pins every v1 session to its
+ * own app-owned scratch directory and never reads a renderer-supplied one, the same "the renderer
+ * never names a folder" rule the workspace-grant types already enforce.
+ */
 export interface CreateSessionInput {
   provider: ProviderId;
-  cwd: string;
   prompt: string;
   model?: string;
 }

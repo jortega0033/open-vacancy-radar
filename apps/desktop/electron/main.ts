@@ -858,8 +858,16 @@ guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
   // validates again before it ever builds a request, but that's a different concern (protecting
   // the client's own contract), not a substitute for validating what crossed the privileged
   // boundary from the renderer in the first place.
-  const parsed = createSessionRequestSchema.parse(input);
-  const session = await client.sessions.create(parsed);
+  //
+  // `cwd` is parsed away and never read from `input` (issue #175): a renderer that attaches one
+  // has it dropped here, the same rule the workspace-grant channels already apply to `path`/`cwd`.
+  // main always substitutes the app-owned AI-workspace scratch dir itself, so this channel can no
+  // more be pointed at an arbitrary directory than those are -- the daemon's own `cwd` validation
+  // (`existsSync`/`isDirectory` in `routes/sessions.ts`) is intentionally left permissive, since it
+  // is reached only by this now-pinned call, never directly by the renderer.
+  const parsed = createSessionRequestSchema.omit({ cwd: true }).parse(input);
+  const cwd = await ensureAiWorkspaceDir();
+  const session = await client.sessions.create({ ...parsed, cwd });
   // `activeSessionId = session.id` used to sit here. It was write-only state (see `v1EventForwards`
   // above): nothing ever read it, and tracking "the one session" is the shape ADI-07 removes.
   forwardSessionEvents(session.id);
@@ -986,19 +994,15 @@ guardedIpc.handle('dialog:select-directory', async () => {
 });
 
 /**
- * A scratch directory the CV/AI features hand to `createSession` as its `cwd`. The daemon requires
- * an existing directory, but these two features are one-shot text generation: the CLI is never
- * asked to touch a file. Pointing it at a dedicated, empty, app-owned folder (rather than the
- * user's repo, their home directory, or `os.tmpdir()` which other processes share) means an agent
- * that decided to look around on its own finds nothing of the user's in reach. The renderer only
- * ever learns this one path; it still cannot read or write it.
- *
- * Be precise about what this is and isn't: it is a good *default*, not an enforced sandbox.
- * `daemon:create-session` accepts whatever `cwd` the renderer sends (the Run panel in App.tsx
- * exists to let the user pick an arbitrary one), so "the CV features run in an empty directory" is
- * a convention the renderer follows, not a boundary the main process imposes. Enforcing it would
- * mean main choosing the `cwd` itself for these sessions: worth doing if the generic
- * arbitrary-`cwd` Run panel is ever removed, but pointless while it is still there.
+ * A scratch directory `daemon:create-session` pins as every v1 session's `cwd` (issue #175). The
+ * daemon requires an existing directory, but the CV/AI features this channel serves are one-shot
+ * text generation: the CLI is never asked to touch a file. Pointing it at a dedicated, empty,
+ * app-owned folder (rather than the user's repo, their home directory, or `os.tmpdir()` which
+ * other processes share) means an agent that decided to look around on its own finds nothing of
+ * the user's in reach. The renderer only ever learns this one path; it still cannot read or write
+ * it, and as of #175 it can no longer name a different one either -- `daemon:create-session` never
+ * reads a `cwd` field from the renderer at all, so this is an enforced boundary, not merely a
+ * convention the caller happens to follow.
  */
 async function ensureAiWorkspaceDir(): Promise<string> {
   const dir = join(app.getPath('userData'), 'ai-workspace');
