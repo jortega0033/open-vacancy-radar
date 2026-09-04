@@ -18,7 +18,7 @@ export interface AppSidebarProps {
   onNavigate(page: NavPage): void;
   collapsed: boolean;
   onToggleCollapsed(): void;
-  counts: WorkspaceCounts;
+  counts: WorkspaceCounts | undefined;
   /** e.g. "Claude Code": the provider the AI features would use right now. */
   runtimeLabel: string;
   /** The one place this now shows: distinguishes an unreachable daemon from a daemon that's fine
@@ -116,7 +116,7 @@ interface NavGroupProps {
   active: NavPage;
   onNavigate(page: NavPage): void;
   collapsed: boolean;
-  counts: WorkspaceCounts;
+  counts: WorkspaceCounts | undefined;
 }
 
 function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProps) {

@@ -12,7 +12,6 @@ export { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 export type { OpenVacancyRadarMarkProps } from '../brand/OpenVacancyRadarMark.js';
 export { NavIcon } from './NavIcon.js';
 export {
-  EMPTY_COUNTS,
   NAV_PAGES,
   PRIMARY_NAV,
   SECONDARY_NAV,

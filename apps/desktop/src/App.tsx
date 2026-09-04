@@ -12,7 +12,6 @@ import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import {
   AppSidebar,
-  EMPTY_COUNTS,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -28,7 +27,9 @@ const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [counts, setCounts] = useState<WorkspaceCounts>(EMPTY_COUNTS);
+  // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
+  // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
+  const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
 
   // The one piece of cross-page state this shell carries: a vacancy handed off from the Search
   // page's "Generate Letter" action, waiting to be picked up by the Letters page. Cleared as soon
@@ -93,7 +94,9 @@ export function App() {
       const fresh = await window.workspace.getCounts();
       setCounts(fresh);
     } catch {
-      // badges stay at zero; not worth an error banner over the whole app
+      // Leaves `counts` exactly as it was (undefined if never loaded, otherwise the last successful
+      // fetch) rather than resetting to a fabricated zero -- not worth an error banner over the
+      // whole app, but also not worth lying about a count that just hasn't refreshed.
     }
   }, []);
 
