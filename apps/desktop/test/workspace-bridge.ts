@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
   minimizeToTrayOnClose: false,
+  autoScanEnabled: false,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',

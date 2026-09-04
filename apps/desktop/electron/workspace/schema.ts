@@ -121,6 +121,10 @@ export const appSettings = sqliteTable('app_settings', {
    * without explicit opt-in would be a surprising, dark-pattern-adjacent change for a local-first
    * tool. */
   minimizeToTrayOnClose: integer('minimize_to_tray_on_close', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the app periodically re-scans for vacancies on its own while minimized to the tray
+   * (#195). Off by default -- and a no-op in practice unless `minimizeToTrayOnClose` is also on,
+   * since nothing else keeps the process alive to run the timer. */
+  autoScanEnabled: integer('auto_scan_enabled', { mode: 'boolean' }).notNull().default(false),
   defaultLocation: text('default_location').notNull().default(''),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {

@@ -40,6 +40,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
   minimizeToTrayOnClose: false,
+  autoScanEnabled: false,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
@@ -415,6 +416,17 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
                 checked={settings.minimizeToTrayOnClose}
                 disabled={disabled}
                 onChange={(minimizeToTrayOnClose) => changeField({ minimizeToTrayOnClose })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label="Automatically check for new vacancies while running in the background"
+              description="Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Has no effect unless Keep running in the background when closed is also on."
+            >
+              <ToggleSwitch
+                label="Automatically check for new vacancies while running in the background"
+                checked={settings.autoScanEnabled}
+                disabled={disabled}
+                onChange={(autoScanEnabled) => changeField({ autoScanEnabled })}
               />
             </SettingsRow>
             <SettingsRow label="Start page" description="The page shown when the app opens." htmlFor="setting-start-page">

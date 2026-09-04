@@ -169,6 +169,32 @@ describe('SearchPage', () => {
     expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
   }, 15_000);
 
+  it('reflects a background scan that finished while the window was hidden, once it becomes visible again', async () => {
+    // #195: a scan can run and finish entirely while the window is hidden (minimized to tray).
+    // The mount-time reattachment effect only reattaches to a scan that is *still* running, so it
+    // does nothing here -- this is a genuinely separate code path (a `visibilitychange` listener)
+    // that must unconditionally re-fetch the report, not just re-check whether a scan is ongoing.
+    const getScanStatus = vi.fn().mockResolvedValue({ scanning: false });
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      getScanStatus,
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    // A background scan completed while hidden: the stored report now has a different result.
+    vi.mocked(bridge.getReport).mockResolvedValue(
+      makeWorldwideReport([makeWorldwideVacancy({ title: 'Freshly Scanned Role' })]),
+    );
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => expect(screen.getAllByText('Freshly Scanned Role').length).toBeGreaterThan(0));
+    // No scan was triggered to get here -- purely a re-fetch of the already-finished report.
+    expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
   it('shows a distinct empty state when the candidate profile has no targets configured', async () => {
     installAllBridges({
       getReport: vi

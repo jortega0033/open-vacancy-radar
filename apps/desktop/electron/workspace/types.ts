@@ -204,6 +204,7 @@ export interface AppSettingsRecord {
   sidebarCollapsed: boolean;
   lastOpenedPage: string;
   minimizeToTrayOnClose: boolean;
+  autoScanEnabled: boolean;
   defaultLocation: string;
   defaultCvId: string | null;
   defaultLetterType: LetterType;

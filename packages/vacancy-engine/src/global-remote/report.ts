@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type {
@@ -175,4 +175,23 @@ export async function writeGlobalRemoteReport(
     await Promise.all(files.map(([, temporary]) => rm(temporary, { force: true })));
   }
   return { latestHtml, latestJson, latestAudit, timestampedHtml, timestampedJson, timestampedAudit };
+}
+
+/**
+ * Reads back the `latest.json` `writeGlobalRemoteReport` above writes -- so a report from a
+ * previous process lifetime (including one from before #195 existed) is available immediately on
+ * startup, rather than staying invisible until the next scan actually runs in this process (#195).
+ *
+ * Returns `undefined` rather than throwing for every failure mode (no report has ever been
+ * written yet, the file was deleted, the JSON is truncated or corrupt): all three are "there is no
+ * usable report" from the caller's point of view, and a first-run desktop app hitting this path is
+ * an expected, not exceptional, case.
+ */
+export async function readGlobalRemoteReport(projectRoot = process.cwd()): Promise<GlobalRemoteReport | undefined> {
+  try {
+    const latestJson = path.join(safeOutputDirectory(projectRoot), 'latest.json');
+    return JSON.parse(await readFile(latestJson, 'utf8')) as GlobalRemoteReport;
+  } catch {
+    return undefined;
+  }
 }

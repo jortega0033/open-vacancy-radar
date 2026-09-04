@@ -26,6 +26,7 @@ import {
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
+  readGlobalRemoteReport,
   runGlobalRemoteScan,
   type CandidateProfile,
   type Database,
@@ -51,7 +52,8 @@ import {
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
-import { createScanGuard } from './scan-guard.js';
+import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
+import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { confirmWorkspaceGrant } from './workspace-confirm.js';
 import {
   WorkspaceGrantManager,
@@ -130,6 +132,13 @@ let minimizeToTrayOnClose = false;
  * quitting" (let the window close for real) -- both fire the same `close` event.
  */
 let isQuitting = false;
+/**
+ * Mirrors the `autoScanEnabled` workspace setting for the background-scan timer below (#195),
+ * hydrated and kept in sync the same way and for the same reason as `minimizeToTrayOnClose`: the
+ * timer tick is synchronous plumbing around an async scan call, and reading a live setting on
+ * every 5-minute tick is needless DB traffic when this mirror is already kept current.
+ */
+let autoScanEnabled = false;
 /**
  * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
  * this file will answer (ADI-16).
@@ -259,6 +268,23 @@ async function vacancyEngineDataRoot(): Promise<string> {
 }
 
 /**
+ * Hydrates `latestVacancyReport` from the `latest.json` a previous process lifetime's scan wrote
+ * to disk (#195) -- without this, a scan that finished before this launch (including one from
+ * before this feature existed) stays invisible to `vacancy:get-report` until the next scan Electron
+ * itself runs in the current process. Pre-warm only, exactly like `ensureVacancyEngine`/
+ * `ensureWorkspaceDb` below: `vacancyEngineDataRoot()` can itself throw in packaged mode (it awaits
+ * a first-run config seed copy), so this is wrapped failure-tolerant -- on any error,
+ * `latestVacancyReport` is simply left `undefined`, exactly like today, never a new startup failure.
+ */
+async function hydrateLatestVacancyReport(): Promise<void> {
+  try {
+    latestVacancyReport = await readGlobalRemoteReport(await vacancyEngineDataRoot());
+  } catch {
+    // Tolerated -- see doc comment above.
+  }
+}
+
+/**
  * The database itself lives under the OS-provided per-user app data directory, never inside the
  * (potentially read-only, once packaged) install location. The whole point of this engine being
  * embedded is that an end user never touches a file path or a database server.
@@ -312,9 +338,12 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     const { db, close } = createWorkspaceDb(app.getPath('userData'));
     workspaceDb = db;
     closeWorkspaceDb = close;
-    // ADI-22: hydrate the `close`-handler mirror once, here, since `close` itself can't await a
-    // fresh read. Kept in sync afterward by the `workspace:settings:update` handler.
-    minimizeToTrayOnClose = workspace.getSettings(db).minimizeToTrayOnClose;
+    // ADI-22: hydrate the `close`-handler and background-scan-timer mirrors once, here, since
+    // neither can await a fresh read at the moment they need the answer. Kept in sync afterward
+    // by the `workspace:settings:update` handler.
+    const settings = workspace.getSettings(db);
+    minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
+    autoScanEnabled = settings.autoScanEnabled;
     return db;
   })();
 
@@ -1188,20 +1217,59 @@ guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestV
  */
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
 
-guardedIpc.handle('vacancy:run-scan', async (_event, query: unknown): Promise<GlobalRemoteReport> => {
+/**
+ * Shared by the `vacancy:run-scan` IPC handler and the background-scan timer (#195): a
+ * `setInterval` callback has no IPC sender, so it cannot go through `guardedIpc` -- this is the
+ * body the guard used to wrap directly, factored out so both callers run the identical scan path
+ * (same lock, same report bookkeeping) rather than risking two copies drifting apart.
+ */
+async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
-        query: typeof query === 'string' ? query : undefined,
+        query,
       });
       latestVacancyReport = result.report;
       return result.report;
     },
     { takeAdvisoryLock: true },
   );
-});
+}
+
+guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>
+  runVacancyScan(typeof query === 'string' ? query : undefined),
+);
+
+// #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker
+// UI is future scope, not this one.
+const BACKGROUND_SCAN_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+// Cheap on its own (one timestamp comparison); only the scan `shouldRunScheduledScan` may trigger
+// is expensive. A short tick avoids a raw long-period `setInterval`, which drifts and can fire an
+// accumulated backlog after system sleep -- this instead re-derives "is it time yet" from the
+// real last-scan timestamp on every tick.
+const BACKGROUND_SCAN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime. `createScanGuard`
+ * throws plain `Error`s, not a distinguishable subclass or code, so "another scan already owns
+ * the lock" is recognized by comparing `error.message` against the guard's own exported
+ * constants -- both are real, expected outcomes (a manual "Search" click won, or a `pnpm
+ * vacancies:scan` in another process did) and are swallowed silently. Any other error is logged
+ * (so a genuinely broken background scan doesn't fail forever in total silence) but never allowed
+ * to escape as an unhandled rejection inside the timer callback, which would crash the process.
+ */
+function scheduleBackgroundScanTick(): void {
+  setInterval(() => {
+    if (!autoScanEnabled) return;
+    if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
+    void runVacancyScan().catch((error: unknown) => {
+      if (isExpectedScanBusyError(error)) return;
+      console.error('[background-scan] scheduled scan failed', error);
+    });
+  }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
+}
 
 async function candidateProfilePath(): Promise<string> {
   return join(await vacancyEngineDataRoot(), 'config', 'candidate-profile-v1.json');
@@ -1289,8 +1357,9 @@ guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(aw
 
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
   const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
-  // ADI-22: keep the `close`-handler mirror in sync with every write, not just the initial hydration.
+  // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
   minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
+  autoScanEnabled = updated.autoScanEnabled;
   return updated;
 });
 
@@ -1406,8 +1475,12 @@ if (gotSingleInstanceLock) {
     ensureVacancyEngine().catch(() => {});
     // Same deal for the workspace database: the first `workspace:*` call awaits this very
     // promise, so a failure here surfaces as that call rejecting with the real reason. It also
-    // hydrates the `minimizeToTrayOnClose` mirror the `close` handler reads synchronously.
+    // hydrates the `minimizeToTrayOnClose`/`autoScanEnabled` mirrors the `close` handler and the
+    // background-scan timer read synchronously.
     ensureWorkspaceDb().catch(() => {});
+    // #195: pick up a report a previous process lifetime's scan already wrote to disk.
+    void hydrateLatestVacancyReport();
+    scheduleBackgroundScanTick();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

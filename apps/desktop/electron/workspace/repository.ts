@@ -444,6 +444,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     sidebarCollapsed: row.sidebarCollapsed,
     lastOpenedPage: row.lastOpenedPage,
     minimizeToTrayOnClose: row.minimizeToTrayOnClose,
+    autoScanEnabled: row.autoScanEnabled,
     defaultLocation: row.defaultLocation,
     defaultCvId: row.defaultCvId,
     defaultLetterType: row.defaultLetterType,

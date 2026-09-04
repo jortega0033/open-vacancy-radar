@@ -378,6 +378,7 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'sidebarCollapsed', (v) => bool(v, 'sidebarCollapsed'));
   patch(input, out, 'lastOpenedPage', (v) => oneOf(v, 'lastOpenedPage', NAV_PAGES));
   patch(input, out, 'minimizeToTrayOnClose', (v) => bool(v, 'minimizeToTrayOnClose'));
+  patch(input, out, 'autoScanEnabled', (v) => bool(v, 'autoScanEnabled'));
   patch(input, out, 'defaultLocation', (v) => str(v, 'defaultLocation', LIMITS.short));
   patch(input, out, 'defaultCvId', (v) => nullableStr(v, 'defaultCvId', LIMITS.short));
   patch(input, out, 'defaultLetterType', (v) => oneOf(v, 'defaultLetterType', LETTER_TYPES));
