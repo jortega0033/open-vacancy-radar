@@ -1,3 +1,5 @@
+import { CREDENTIAL_SHAPED_ENV_DENY_PATTERNS } from '@agent-dock/shared';
+
 /**
  * ADI-21. Removes vacancy-source and other credential-shaped variables from the environment
  * Electron's main process hands the spawned daemon child.
@@ -21,32 +23,20 @@
  * deny list on purpose -- those are the daemon's and Electron's own internals, not secrets, and
  * `spawnDaemon` sets the `AGENT_DOCK_*` overrides explicitly after this filter runs regardless.
  *
- * Kept as a hand-duplicated pattern list rather than importing ADI-15's, since `apps/desktop` does
- * not depend on `packages/agent-runtime` (a daemon-internal package) and pulling in that dependency
- * for a dozen regexes would be the wrong direction. Keep the two lists in sync by hand if either
- * changes.
+ * Issue #176: the credential-shaped group below is `@agent-dock/shared`'s
+ * `CREDENTIAL_SHAPED_ENV_DENY_PATTERNS`, the same array ADI-15's `provider-environment.ts` (a
+ * `packages/agent-runtime`-internal module `apps/desktop` still does not, and should not, depend
+ * on) uses for its own, differently-scoped deny list. `apps/desktop` already depends on
+ * `@agent-dock/shared` for its schemas, so sharing just this subset -- rather than the whole
+ * hand-duplicated pattern list this comment used to describe -- makes the two boundaries agreeing
+ * on it structural instead of a "keep them in sync by hand" reminder. The vacancy-source additions
+ * below stay local: they are deliberately not part of the shared array, since they are specific to
+ * this product's own credential names, not a universal secret shape.
  */
 export const DAEMON_ENVIRONMENT_DENY_PATTERNS: readonly RegExp[] = [
-  // Credential-shaped by convention.
-  /SECRET/i,
-  /TOKEN/i,
-  /PASSWORD/i,
-  /PASSWD/i,
-  /CREDENTIAL/i,
-  /PRIVATE_KEY/i,
-  /API_?KEY/i,
-  /_KEY$/i,
-  /^AWS_/i,
-  /^AZURE_/i,
-  /^GCP_/i,
-  /^GOOGLE_APPLICATION_/i,
-  /^GH_/i,
-  /^GITHUB_/i,
-  /^NPM_/i,
-  /^OPENAI_/i,
-  /^ANTHROPIC_/i,
-  /^SSH_/i,
-  /^VAULT_/i,
+  // Credential-shaped by convention. Shared with provider-environment.ts -- see this constant's
+  // own doc comment above and credential-env-patterns.ts.
+  ...CREDENTIAL_SHAPED_ENV_DENY_PATTERNS,
   // This product's own vacancy-source credential names (packages/vacancy-engine/src/config.ts).
   /^AI_/i,
   /^BRAVE_SEARCH_/i,

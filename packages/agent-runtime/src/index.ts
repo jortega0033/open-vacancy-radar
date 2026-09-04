@@ -23,6 +23,10 @@ export type {
 export { ACCEPTED_WORK_RANK, AcceptedWorkLatch } from './providers/common/accepted-work.js';
 export type { FrozenLaunchScope } from './providers/common/launch-scope.js';
 export { freezeLaunchScope, launchScopesEqual } from './providers/common/launch-scope.js';
+// Issue #176: apps/daemon genuinely needs this now, for workspace-identity.ts's git spawn, per the
+// same "trimmed to what apps/daemon genuinely needs" principle the AD-09 note above states.
+export type { ProviderEnvironment } from './providers/common/provider-environment.js';
+export { buildProviderEnvironment } from './providers/common/provider-environment.js';
 export type {
   FallbackAuthorizeInput,
   FallbackDecision,

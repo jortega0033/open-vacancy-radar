@@ -7,6 +7,7 @@ import {
   MAX_WORKSPACE_BRANCH_LENGTH,
   MAX_WORKSPACE_DISPLAY_NAME_LENGTH,
 } from '@agent-dock/shared';
+import { buildProviderEnvironment } from '@agent-dock/agent-runtime';
 
 /**
  * Workspace **object identity**: the answer to "is this the same directory the user confirmed?".
@@ -14,9 +15,10 @@ import {
  * Ported from upstream AgentDock's `resolveWorkspaceIdentity`/`revalidateWorkspaceIdentity`
  * (`a275b9e`, refined by `5bc0b67` which added branch resolution), keeping upstream's mechanics:
  * double resolution with a stability comparison, binding to *both* the Git worktree root and the
- * Git common directory, scrubbing every `GIT_*` variable before invoking Git, argv-only
- * `execFile` with `shell: false` and a timeout, output byte caps, control-character rejection on
- * the branch label, and the fail-closed non-reusable-incarnation idiom.
+ * Git common directory, ensuring no `GIT_*` variable reaches the invoked Git (see `gitSafeEnv`'s own
+ * doc comment for D8, a deliberate divergence in *how* that is achieved, not in the outcome),
+ * argv-only `execFile` with `shell: false` and a timeout, output byte caps, control-character
+ * rejection on the branch label, and the fail-closed non-reusable-incarnation idiom.
  *
  * ## D1: keyed on `dev`+`ino`, not on the canonical path string
  *
@@ -198,20 +200,29 @@ export function defaultWorkspaceIdentityDeps(): WorkspaceIdentityDeps {
 }
 
 /**
- * Environment for a Git invocation, with **every** `GIT_*` variable removed.
+ * Environment for a Git invocation (issue #176, D8 in `docs/adr-agentdock-v2-provenance.md`).
  *
- * Not a denylist of the dangerous ones: the set of Git variables that can redirect a command
- * (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CONFIG`, `GIT_CONFIG_GLOBAL`, `GIT_ALTERNATE_*`,
- * `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND`, ...) is long and grows between Git releases, so the only
- * durable rule is to drop the whole namespace. `GIT_TERMINAL_PROMPT=0` is then added back so a repo
- * needing credentials fails fast instead of blocking on a prompt until the timeout.
+ * Built on ADI-15's `buildProviderEnvironment`: a positive allowlist of platform and
+ * provider-config variables, plus the always-enforced credential-shaped deny list. This is a
+ * deliberate divergence from upstream's own mechanic (scrubbing every `GIT_*` variable and
+ * forwarding everything else), for two reasons:
+ *
+ * - Upstream's denylist targets exactly the Git variables that can redirect a command (`GIT_DIR`,
+ *   `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CONFIG`, `GIT_CONFIG_GLOBAL`, `GIT_ALTERNATE_*`,
+ *   `GIT_EXTERNAL_DIFF`, `GIT_SSH_COMMAND`, ...) but that set is long and grows between Git
+ *   releases -- an allowlist closes the same problem structurally, since no `GIT_*` name is on it,
+ *   with nothing to track release to release.
+ * - Forwarding "everything else" also forwarded every secret in the daemon's own environment
+ *   straight to `git`: `AI_API_KEY`, `ANTHROPIC_API_KEY`, and everything else ADI-15/ADI-21
+ *   withdraw from provider CLIs and the daemon's spawned children. `runGit`'s only callers today
+ *   (`isWorkspaceDirty`, branch resolution) are read-only, local, `git`-only operations that need no
+ *   secret and no network/proxy/SSH access, so nothing here needs that breadth.
+ *
+ * `GIT_TERMINAL_PROMPT=0` is then set, unchanged from upstream's reasoning: a repo needing
+ * credentials fails fast instead of blocking on a prompt until the timeout.
  */
 export function gitSafeEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (key.toUpperCase().startsWith('GIT_')) continue;
-    env[key] = value;
-  }
+  const env = buildProviderEnvironment(source).env;
   env.GIT_TERMINAL_PROMPT = '0';
   return env;
 }

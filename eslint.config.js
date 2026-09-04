@@ -34,14 +34,29 @@ export default tseslint.config(
     },
   },
   {
-    // ADI-15: `process/spawn-process.ts` is the single point where the default-deny provider
-    // environment allowlist is applied, immediately above the only `spawn()` call in the package.
-    // That "structural, not per-call-site" guarantee rested purely on convention — a future
-    // `execFile`/`spawnSync` import anywhere else in this package would have silently bypassed the
-    // whole policy with nothing to catch it. Enforced here instead. Tests are not covered: they
-    // legitimately spawn processes directly, including as negative controls.
-    files: ['packages/agent-runtime/src/**/*.ts'],
-    ignores: ['packages/agent-runtime/src/process/spawn-process.ts'],
+    // ADI-15, widened by issue #176: `process/spawn-process.ts` is the single point where the
+    // default-deny provider environment allowlist is applied, immediately above the only `spawn()`
+    // call in packages/agent-runtime. That "structural, not per-call-site" guarantee rested purely
+    // on convention within this one package — a future `execFile`/`spawnSync` import in
+    // apps/daemon or apps/desktop/electron (both of which spawn processes of their own: `git` for
+    // workspace identity, the daemon sidecar) would have silently bypassed it with nothing to
+    // catch it. Enforced across all three now, each with its own single named exception below.
+    // Tests are not covered: they legitimately spawn processes directly, including as negative
+    // controls.
+    files: [
+      'packages/agent-runtime/src/**/*.ts',
+      'apps/daemon/src/**/*.ts',
+      'apps/desktop/electron/**/*.ts',
+    ],
+    ignores: [
+      'packages/agent-runtime/src/process/spawn-process.ts',
+      // The one legitimate git spawn (workspace identity, D8/issue #176): env is built through
+      // `buildProviderEnvironment` via `gitSafeEnv`, not passed through unchecked.
+      'apps/daemon/src/workspace-identity.ts',
+      // The one legitimate spawn: the daemon sidecar itself, launched with a filtered environment
+      // (`daemon-environment.ts`, ADI-21), not a provider or user-directed child.
+      'apps/desktop/electron/main.ts',
+    ],
     rules: {
       'no-restricted-imports': [
         'error',

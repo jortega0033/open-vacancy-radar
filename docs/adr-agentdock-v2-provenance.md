@@ -752,6 +752,37 @@ byte-identical. The workspace-grant surface is a **sixth** preload namespace rat
 extension of `agentDock`, and `preload.test.ts` asserts all five pre-existing namespaces are
 key-for-key unchanged against literal key lists recorded before this ticket.
 
+**Correction (issue #175):** "v1's still-unvalidated `cwd` passthrough" above was true at the time
+and was also a real gap -- a renderer could name an arbitrary existing directory on
+`daemon:create-session` with no grant at all, contradicting this section's own "the renderer never
+names a folder" framing. `main.ts`'s handler now omits `cwd` from the parsed input and substitutes
+its own app-owned scratch directory unconditionally; `CreateSessionInput` no longer has a `cwd`
+field. v1's HTTP route and schema are otherwise still exactly as this section describes -- the fix
+lives entirely at the Electron IPC layer, since the daemon's own route is not reachable by anything
+except that layer (127.0.0.1 + the per-launch bearer token).
+
+### D8: environment for `workspace-identity.ts`'s Git invocations
+
+Upstream's mechanic (see this module's own header) is scrubbing every `GIT_*` variable before
+invoking Git and forwarding everything else -- a denylist of the one namespace that can redirect a
+Git command (`GIT_DIR`, `GIT_CONFIG`, `GIT_SSH_COMMAND`, and others that grow between Git releases).
+Issue #176 found that leaves the daemon's entire non-`GIT_*` environment reaching the `git` child,
+secrets included: `AI_API_KEY`, `ANTHROPIC_API_KEY`, and everything else ADI-15/ADI-21 already
+withdraw from provider CLIs and the daemon's own children.
+
+`gitSafeEnv()` now builds on ADI-15's `buildProviderEnvironment` (exported from
+`@agent-dock/agent-runtime`'s barrel specifically for this, per that file's own "trimmed to what
+apps/daemon genuinely needs" principle) instead of a `GIT_*`-prefix denylist: a positive allowlist
+of platform and provider-config variables, plus the always-enforced credential-shaped deny list.
+This closes the original scrubbing goal as a side effect rather than a special case -- no `GIT_*`
+name is on the allowlist, so every redirect-capable variable is already absent, with no need to
+track which ones Git adds release to release -- while also closing the secret-leak gap the original
+mechanic never addressed. `GIT_TERMINAL_PROMPT=0` is set after, unchanged from upstream's reasoning.
+This is a deliberate divergence from upstream for the same class of reason D1 and D6 are: a real gap
+upstream's mechanic did not need to consider for its own threat model, closed here without changing
+what `runGit`'s callers observe (`isWorkspaceDirty` and branch resolution are read-only, local,
+`git`-only operations that need no secret and no proxy/SSH access).
+
 ## ADI-13: `POST /v2/sessions`, the grant-to-session handoff, and the asymmetric schema bump
 
 ADI-13 (issue #140) is the ticket that gives ADI-06's dormant machinery a caller. ADI-06 built the

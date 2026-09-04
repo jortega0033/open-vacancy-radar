@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CREDENTIAL_SHAPED_ENV_DENY_PATTERNS } from '@agent-dock/shared';
 import {
   buildProviderEnvironment,
   isDeniedProviderEnvironmentName,
   providerEnvironmentAllowlist,
   PROVIDER_CONFIG_VARIABLES,
+  PROVIDER_ENVIRONMENT_DENY_PATTERNS,
   WINDOWS_RUNTIME_INJECTED_VARIABLES,
 } from '../src/providers/common/provider-environment.js';
 import { spawnProcess } from '../src/process/spawn-process.js';
@@ -86,6 +88,19 @@ const DAEMON_INTERNAL: Record<string, string> = {
 };
 
 const ALL_PLANTED = { ...POISON, ...DAEMON_INTERNAL };
+
+describe('PROVIDER_ENVIRONMENT_DENY_PATTERNS (issue #176)', () => {
+  it('carries every pattern in the shared credential-shaped list, by construction not duplication', () => {
+    // Regexes are objects, so this asserts on source/flags rather than reference identity -- the
+    // real property under test is that PROVIDER_ENVIRONMENT_DENY_PATTERNS was built by spreading
+    // CREDENTIAL_SHAPED_ENV_DENY_PATTERNS in (see provider-environment.ts), not by hand-copying it,
+    // the same structural guarantee apps/desktop's daemon-environment.test.ts asserts on its side.
+    const providerSources = PROVIDER_ENVIRONMENT_DENY_PATTERNS.map((p) => `${p.source}/${p.flags}`);
+    for (const shared of CREDENTIAL_SHAPED_ENV_DENY_PATTERNS) {
+      expect(providerSources).toContain(`${shared.source}/${shared.flags}`);
+    }
+  });
+});
 
 describe('buildProviderEnvironment (policy, no subprocess)', () => {
   it('grants only allowlisted names and reports the rest as dropped', () => {

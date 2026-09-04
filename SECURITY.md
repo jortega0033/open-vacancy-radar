@@ -352,9 +352,24 @@ toolchain-heavy workspace, and it fails in ways that will not look like an envir
 
 `packages/agent-runtime/src/process/spawn-process.ts` holds the only `spawn()` call in the package,
 with the filter applied on the line above it. That the guarantee is *structural* rather than
-conventional is enforced by an ESLint `no-restricted-imports` rule on `node:child_process` across
-`packages/agent-runtime/src/**`, exempting only that file: without it, a future `execFile` import
-elsewhere in the package would bypass the entire policy silently and no test would notice.
+conventional is enforced by an ESLint `no-restricted-imports` rule on `node:child_process` (and the
+equivalent bare `child_process` specifier) across `packages/agent-runtime/src/**`, `apps/daemon/
+src/**`, and `apps/desktop/electron/**` (issue #176): without it, a future `execFile` import in any
+of the three would bypass the relevant environment filter silently and no test would notice. Each
+covered directory has exactly one named exception -- `spawn-process.ts` here, `workspace-identity.ts`
+(the `git` spawn, filtered via the same allowlist -- see "A related choke point" below) and `main.ts`
+(the daemon sidecar spawn, filtered by `daemon-environment.ts`, ADI-21) in the other two.
+
+### A related choke point: Git spawns in `workspace-identity.ts`
+
+`apps/daemon/src/workspace-identity.ts`'s `runGit` is a second, narrower choke point: the only place
+this repo invokes `git` on a user's workspace directory. Its environment is built by `gitSafeEnv`,
+which as of issue #176 applies this same allowlist (via `buildProviderEnvironment`) rather than its
+original upstream-derived mechanic of scrubbing only the `GIT_*` namespace and forwarding everything
+else -- that older approach left every secret in the daemon's own environment reaching `git`
+verbatim. The allowlist closes both problems structurally: no `GIT_*` name is on it (so every
+redirect-capable Git variable is already absent, with nothing to track release to release), and
+every credential-shaped name is denied the same way it is for a provider CLI child.
 
 ### Two honest limits
 

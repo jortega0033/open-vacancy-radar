@@ -503,7 +503,12 @@ describe('the fail-closed non-reusable incarnation', () => {
 });
 
 describe('Git invocation hardening', () => {
-  it('scrubs every GIT_* variable, not a denylist of the dangerous ones', () => {
+  it('scrubs every GIT_* variable via an allowlist, not a denylist of the dangerous ones (issue #176)', () => {
+    // PATH is on every platform's allowlist; HOME (POSIX) / USERPROFILE (Windows) is the one
+    // platform-specific identity variable checked here, since `gitSafeEnv` now builds on
+    // `buildProviderEnvironment`, which allowlists per `process.platform` rather than granting
+    // every non-`GIT_*` name unconditionally the way the pre-#176 implementation did.
+    const identityVar = isWindows ? 'USERPROFILE' : 'HOME';
     const env = gitSafeEnv({
       PATH: '/usr/bin',
       GIT_DIR: '/evil/.git',
@@ -511,16 +516,31 @@ describe('Git invocation hardening', () => {
       GIT_CONFIG_GLOBAL: '/evil/config',
       GIT_SSH_COMMAND: 'curl evil.example',
       git_lowercase_variant: '/evil',
-      HOME: '/home/someone',
+      [identityVar]: '/home/someone',
     });
     expect(env.PATH).toBe('/usr/bin');
-    expect(env.HOME).toBe('/home/someone');
+    expect(env[identityVar]).toBe('/home/someone');
     for (const key of Object.keys(env)) {
       if (key === 'GIT_TERMINAL_PROMPT') continue;
       expect(key.toUpperCase().startsWith('GIT_')).toBe(false);
     }
     // Added back deliberately: a repo needing credentials must fail fast, not block on a prompt.
     expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
+  it('drops secrets from the daemon environment, closing the gap the GIT_*-only scrub left (issue #176)', () => {
+    const env = gitSafeEnv({
+      PATH: '/usr/bin',
+      AI_API_KEY: 'sk-fake',
+      ANTHROPIC_API_KEY: 'sk-ant-fake',
+      AWS_SECRET_ACCESS_KEY: 'fake',
+      SOME_SECRET: 'x',
+    });
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.AI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.SOME_SECRET).toBeUndefined();
   });
 
   it('rejects a branch label carrying control characters, and bounds its length', () => {
