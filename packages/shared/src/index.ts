@@ -28,6 +28,7 @@
  * `apps/desktop/test/preload-node-builtins.test.ts` walks preload's real import graph and fails if
  * a Node built-in ever reappears in it, whichever route it takes.
  */
+export * from './credential-env-patterns.js';
 export * from './provider.js';
 export * from './events.js';
 export * from './session.js';

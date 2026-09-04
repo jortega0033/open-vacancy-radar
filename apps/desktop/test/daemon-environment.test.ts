@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { buildDaemonEnvironment, isDeniedDaemonEnvironmentName } from '../electron/daemon-environment.js';
+import { CREDENTIAL_SHAPED_ENV_DENY_PATTERNS } from '@agent-dock/shared';
+import {
+  buildDaemonEnvironment,
+  DAEMON_ENVIRONMENT_DENY_PATTERNS,
+  isDeniedDaemonEnvironmentName,
+} from '../electron/daemon-environment.js';
+
+describe('DAEMON_ENVIRONMENT_DENY_PATTERNS (issue #176)', () => {
+  it('carries every pattern in the shared credential-shaped list, by construction not duplication', () => {
+    // Regexes are objects, so this asserts on source/flags rather than reference identity -- the
+    // real property under test is that DAEMON_ENVIRONMENT_DENY_PATTERNS was built by spreading
+    // CREDENTIAL_SHAPED_ENV_DENY_PATTERNS in (see daemon-environment.ts), not by hand-copying it, so
+    // a future edit to the shared list is inherited here automatically instead of silently drifting.
+    const daemonSources = DAEMON_ENVIRONMENT_DENY_PATTERNS.map((p) => `${p.source}/${p.flags}`);
+    for (const shared of CREDENTIAL_SHAPED_ENV_DENY_PATTERNS) {
+      expect(daemonSources).toContain(`${shared.source}/${shared.flags}`);
+    }
+  });
+});
 
 describe('buildDaemonEnvironment', () => {
   it('drops the vacancy-source credential names read by packages/vacancy-engine/src/config.ts', () => {

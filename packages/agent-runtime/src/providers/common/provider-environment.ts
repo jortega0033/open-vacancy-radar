@@ -51,6 +51,8 @@
  * was never granted.)
  */
 
+import { CREDENTIAL_SHAPED_ENV_DENY_PATTERNS } from '@agent-dock/shared';
+
 /** The result of applying the two-list policy to a parent environment. */
 export interface ProviderEnvironment {
   /** The environment to hand the child. Null-prototype, so a variable literally named `__proto__`
@@ -261,7 +263,11 @@ export const WINDOWS_RUNTIME_INJECTED_VARIABLES = [
  * - **Credential-shaped**, by convention rather than by any registry: the substrings and vendor
  *   prefixes that real-world tooling overwhelmingly uses for secrets. This is a backstop, not the
  *   primary control -- the allowlist is what actually bounds the environment. A pattern list alone
- *   would be a denylist, and a denylist is exactly the thing this module is not.
+ *   would be a denylist, and a denylist is exactly the thing this module is not. Issue #176: this
+ *   group is `@agent-dock/shared`'s `CREDENTIAL_SHAPED_ENV_DENY_PATTERNS`, the same array
+ *   `apps/desktop/electron/daemon-environment.ts` (ADI-21) uses for its own, differently-scoped
+ *   deny list -- sharing one array makes the two boundaries agreeing on this subset structural
+ *   rather than a "keep them in sync by hand" comment.
  * - **This product's own internals**: `AGENT_DOCK_*` (`AGENT_DOCK_STATE_DIR`, `AGENT_DOCK_APP_ID`,
  *   `AGENT_DOCK_PORT`, `AGENT_DOCK_LOG_LEVEL`), Electron's own injections, and the vacancy-source
  *   credential names from `packages/vacancy-engine/src/config.ts`. None of these would pass the
@@ -296,26 +302,9 @@ export const WINDOWS_RUNTIME_INJECTED_VARIABLES = [
  * `AGENT_DOCK_*` is denied on its own merits, not as a proxy for the token.
  */
 export const PROVIDER_ENVIRONMENT_DENY_PATTERNS: readonly RegExp[] = [
-  // Credential-shaped by convention.
-  /SECRET/i,
-  /TOKEN/i,
-  /PASSWORD/i,
-  /PASSWD/i,
-  /CREDENTIAL/i,
-  /PRIVATE_KEY/i,
-  /API_?KEY/i,
-  /_KEY$/i,
-  /^AWS_/i,
-  /^AZURE_/i,
-  /^GCP_/i,
-  /^GOOGLE_APPLICATION_/i,
-  /^GH_/i,
-  /^GITHUB_/i,
-  /^NPM_/i,
-  /^OPENAI_/i,
-  /^ANTHROPIC_/i,
-  /^SSH_/i,
-  /^VAULT_/i,
+  // Credential-shaped by convention. Shared with daemon-environment.ts -- see this constant's own
+  // doc comment above and credential-env-patterns.ts.
+  ...CREDENTIAL_SHAPED_ENV_DENY_PATTERNS,
   // This daemon's and this product's own internals.
   /^AGENT_DOCK_/i,
   /^ELECTRON_/i,
