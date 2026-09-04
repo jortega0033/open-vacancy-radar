@@ -46,6 +46,21 @@ export const CODEX_STDIN_PROMPT_PLACEHOLDER = '-';
  * the position the raw prompt used to, so the only difference in the spawned command line is which
  * string sits in the prompt slot.
  */
+/**
+ * Issue #174. Codex has no analogue of Claude's `CLAUDE_HARDENED_TOOLS`/`CLAUDE_HARDENING_ARGS`
+ * (`opts.hardened` is read nowhere in this file, and stays that way -- see the doc comment on
+ * `buildCodexArgs` below for why). This flag closes the one concrete, verifiable gap that exists
+ * regardless: without it, a session silently loads `$CODEX_HOME/config.toml`, which can set
+ * `sandbox_permissions`/`shell_environment_policy` to anything, including full disk/network
+ * access -- an arbitrary, host-specific configuration a session should not inherit unannounced.
+ * `codex exec --help` on the pinned 0.147.0 build: "Do not load `$CODEX_HOME/config.toml`; auth
+ * still uses `CODEX_HOME`", so this does not disturb the allowlisted `CODEX_HOME`-based auth in
+ * `provider-environment.ts`. Unconditional, not gated behind `opts.hardened`, on the same
+ * reasoning #173 applied to Claude: there is no session for which inheriting an arbitrary host
+ * config is the desired behavior.
+ */
+const CODEX_IGNORE_USER_CONFIG_ARG = '--ignore-user-config';
+
 export function buildCodexArgs(opts: StartSessionOptions): string[] {
   if (opts.resumeProviderSessionId) {
     return [
@@ -55,7 +70,14 @@ export function buildCodexArgs(opts: StartSessionOptions): string[] {
       CODEX_STDIN_PROMPT_PLACEHOLDER,
       '--json',
       '--skip-git-repo-check',
+      CODEX_IGNORE_USER_CONFIG_ARG,
     ];
   }
-  return ['exec', CODEX_STDIN_PROMPT_PLACEHOLDER, '--json', '--skip-git-repo-check'];
+  return [
+    'exec',
+    CODEX_STDIN_PROMPT_PLACEHOLDER,
+    '--json',
+    '--skip-git-repo-check',
+    CODEX_IGNORE_USER_CONFIG_ARG,
+  ];
 }

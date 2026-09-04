@@ -173,11 +173,14 @@ Claude's response and token usage came back as normalized events, and the sessio
   line (`"Logged in using ChatGPT"`, `"Logged in using API key"`, or a not-logged-in variant)
   rather than JSON. The parser matches conservatively and falls back to `'unknown'` rather than
   guessing when the text doesn't clearly say one way or the other.
-- **Execution**: `codex exec - --json --skip-git-repo-check`, or
-  `codex exec resume <providerSessionId> - --json --skip-git-repo-check` to continue a
-  prior thread (argv construction is in `build-args.ts`). `--skip-git-repo-check` is required
-  because a session's working directory is whatever the user picked, not necessarily a git
-  repository. Resuming is reachable end to end via `POST /sessions`'s `resumeProviderSessionId` field.
+- **Execution**: `codex exec - --json --skip-git-repo-check --ignore-user-config`, or
+  `codex exec resume <providerSessionId> - --json --skip-git-repo-check --ignore-user-config` to
+  continue a prior thread (argv construction is in `build-args.ts`). `--skip-git-repo-check` is
+  required because a session's working directory is whatever the user picked, not necessarily a git
+  repository. `--ignore-user-config` (issue #174) stops a session from silently loading
+  `$CODEX_HOME/config.toml`, which could otherwise set `sandbox_permissions` or
+  `shell_environment_policy` to anything; `CODEX_HOME`-based auth is unaffected. Resuming is
+  reachable end to end via `POST /sessions`'s `resumeProviderSessionId` field.
   **The prompt itself is not an argv element** (ADI-14): the `-` above is the placeholder Codex
   documents for its `[PROMPT]` positional (*"If not provided as an argument (or if `-` is used),
   instructions are read from stdin"*, `codex exec --help` on the pinned 0.147.0 build; `codex exec
