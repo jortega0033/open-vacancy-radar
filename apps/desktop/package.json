@@ -23,6 +23,7 @@
     "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
+    "@agent-dock/application-executor": "workspace:*",
     "@agent-dock/client": "workspace:*",
     "@agent-dock/shared": "workspace:*",
     "@electron/rebuild": "^3.7.1",

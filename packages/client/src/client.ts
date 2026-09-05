@@ -44,6 +44,11 @@ import { parseSseStream } from './sse.js';
  * flags on unbounded input — a plain backward scan is O(n) with no backtracking possible at all,
  * so this closes the finding structurally rather than arguing the input happens to be trusted today.
  */
+/** Input to `sessions.createFieldMapGeneration`: `CreateSessionRequest` minus `resumeProviderSessionId`,
+ * which the daemon's `POST /sessions/application-field-map` route drops even if sent (see
+ * `apps/daemon/src/routes/application-generation.ts`) -- this session type never resumes a thread. */
+export type FieldMapGenerationRequest = Omit<CreateSessionRequest, 'resumeProviderSessionId'>;
+
 function stripTrailingSlashes(url: string): string {
   let end = url.length;
   while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) end--;
@@ -114,6 +119,16 @@ export class AgentDockClient {
 
   readonly sessions = {
     create: (input: CreateSessionRequest): Promise<AgentSession> => this.createSession(input),
+    /**
+     * Creates the application executor's Domain A field-map generation session (#196 §2, issue
+     * #201): a text-only, fresh-every-call session hardened to the `'no-network'` profile server
+     * side, via the daemon's dedicated `POST /sessions/application-field-map` route rather than
+     * `POST /sessions`. `resumeProviderSessionId` is not part of this input type at all -- this
+     * session type is always a fresh call against the current form snapshot generation, never a
+     * resumed thread.
+     */
+    createFieldMapGeneration: (input: FieldMapGenerationRequest): Promise<AgentSession> =>
+      this.createFieldMapGenerationSession(input),
     get: (id: string): Promise<AgentSession> => this.getSession(id),
     events: (id: string, options?: SessionEventsOptions): AsyncGenerator<AgentEventEnvelope, void, void> =>
       this.streamSessionEvents(id, options),
@@ -316,6 +331,16 @@ export class AgentDockClient {
   private async createSession(input: CreateSessionRequest): Promise<AgentSession> {
     createSessionRequestSchema.parse(input); // fail fast client-side before ever making the request
     const raw = await this.request<unknown>('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return validate(agentSessionSchema, raw, 'session');
+  }
+
+  private async createFieldMapGenerationSession(input: FieldMapGenerationRequest): Promise<AgentSession> {
+    createSessionRequestSchema.omit({ resumeProviderSessionId: true }).parse(input);
+    const raw = await this.request<unknown>('/sessions/application-field-map', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),

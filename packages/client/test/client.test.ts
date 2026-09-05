@@ -237,6 +237,23 @@ describe('AgentDockClient: sessions', () => {
     expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions'))).toBe(false);
   });
 
+  it('creates a field-map generation session against its own dedicated route (#201)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      if (url.endsWith('/sessions/application-field-map')) return jsonResponse(201, session);
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = makeClient(fetchImpl);
+    await expect(
+      client.sessions.createFieldMapGeneration({ provider: 'claude', cwd: '/tmp', prompt: 'map these fields' }),
+    ).resolves.toEqual(session);
+    // Never the plain /sessions route -- that would get the "hardened: true" profile, not
+    // "no-network" (see apps/daemon/src/routes/application-generation.ts).
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions') && !String(url).includes('application-field-map'))).toBe(
+      false,
+    );
+  });
+
   it('throws SessionNotFoundError for a 404 on sessions.get', async () => {
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/health')) return healthOk();

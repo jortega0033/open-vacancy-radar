@@ -28,7 +28,9 @@ export function buildClaudeArgs(opts: StartSessionOptions): string[] {
   if (opts.model) {
     args.push('--model', opts.model);
   }
-  if (opts.hardened) {
+  if (opts.hardened === 'no-network') {
+    args.push(...CLAUDE_HARDENING_ARGS_NO_NETWORK);
+  } else if (opts.hardened) {
     args.push(...CLAUDE_HARDENING_ARGS);
   }
   return args;
@@ -89,6 +91,18 @@ export const CLAUDE_HARDENED_TOOLS = [
 
 /** Shell tools, denied explicitly and independently of the `--tools` allowlist. */
 export const CLAUDE_HARDENED_DISALLOWED_TOOLS = ['Bash', 'PowerShell'] as const;
+
+/**
+ * `CLAUDE_HARDENED_TOOLS` minus `WebFetch`/`WebSearch` (issue #201, #196 Domain A).
+ *
+ * The field-map generation session that drives the application executor's Domain A (#196 §2)
+ * reasons only over a closed value table (CV/profile/user-answer strings already resolved by the
+ * caller) and a structured form snapshot -- it has no legitimate reason to fetch a URL, and every
+ * one of its prompts embeds attacker-influenced text (a scraped job description). Removing the
+ * one egress channel `CLAUDE_HARDENING_ARGS`'s own doc comment names as "a real, named residual
+ * risk" closes exactly the injection path that comment describes, for this one session type.
+ */
+export const CLAUDE_HARDENED_TOOLS_NO_NETWORK = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit'] as const;
 
 /**
  * The frozen argv suffix a hardened Claude session appends (ADI-08b, issue #126).
@@ -172,6 +186,25 @@ export const CLAUDE_HARDENING_ARGS: readonly string[] = Object.freeze([
   // argv that might later be appended after this suffix.
   '--tools',
   CLAUDE_HARDENED_TOOLS.join(','),
+  '--disallowed-tools',
+  CLAUDE_HARDENED_DISALLOWED_TOOLS.join(','),
+]);
+
+/**
+ * `CLAUDE_HARDENING_ARGS`, but with `--tools` restricted to `CLAUDE_HARDENED_TOOLS_NO_NETWORK`
+ * (no `WebFetch`/`WebSearch`). Selected via `opts.hardened === 'no-network'`, a value only the
+ * daemon's own field-map-generation route ever passes -- see that constant's doc comment and
+ * `StartSessionOptions.hardened` for why this is a closed, non-caller-suppliable discriminant
+ * rather than a request-schema field.
+ */
+export const CLAUDE_HARDENING_ARGS_NO_NETWORK: readonly string[] = Object.freeze([
+  '--safe-mode',
+  '--strict-mcp-config',
+  '--setting-sources',
+  '',
+  '--disable-slash-commands',
+  '--tools',
+  CLAUDE_HARDENED_TOOLS_NO_NETWORK.join(','),
   '--disallowed-tools',
   CLAUDE_HARDENED_DISALLOWED_TOOLS.join(','),
 ]);
