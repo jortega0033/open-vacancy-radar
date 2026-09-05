@@ -78,6 +78,13 @@
       "when": 1788640967459,
       "tag": "0010_smart_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788648009623,
+      "tag": "0011_mixed_darkstar",
+      "breakpoints": true
     }
   ]
 }

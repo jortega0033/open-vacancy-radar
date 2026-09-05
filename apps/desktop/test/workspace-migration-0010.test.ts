@@ -157,7 +157,11 @@ describe('migration 0010 adds automation_grants and two application_attempts col
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0010_TAGS.length + 1);
+      // Against the real migrations folder (not the pre-0010 seeded subset above), so this counts
+      // every migration that exists today, not just up through 0010 -- self-computed so a later
+      // migration landing doesn't silently make this assertion stale again.
+      const realMigrationCount = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')).entries.length as number;
+      expect(applied.n).toBe(realMigrationCount);
     } finally {
       connection.close();
     }

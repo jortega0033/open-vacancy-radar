@@ -473,6 +473,7 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     submittedAt: row.submittedAt ? iso(row.submittedAt) : null,
     formStructureHash: row.formStructureHash,
     scheduledAutomaticSubmitAt: row.scheduledAutomaticSubmitAt ? iso(row.scheduledAutomaticSubmitAt) : null,
+    submissionMode: row.submissionMode,
   };
 }
 

@@ -192,6 +192,11 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * confirmation, with nothing further to wait out.
    */
   scheduledAutomaticSubmitAt: integer('scheduled_automatic_submit_at', { mode: 'timestamp_ms' }),
+  /** Set alongside `submittedAt`, recording which path actually sent it: #203's rate limits are
+   * scoped to automatic submissions specifically ("a minimum delay between automatic submissions"),
+   * so counting a manually-reviewed submission against that cap would be wrong -- a person's own
+   * review pace is already the rate limit #202 relies on for the manual path. Null until submitted. */
+  submissionMode: text('submission_mode', { enum: ['manual', 'automatic'] }),
 });
 
 /**

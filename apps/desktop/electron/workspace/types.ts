@@ -255,6 +255,8 @@ export interface ApplicationAttemptRecord {
   /** ISO-8601. Set only while an automatic-mode submit (#203) is queued for this attempt's
    * cancel/undo window; null otherwise, including for every manually-reviewed attempt. */
   scheduledAutomaticSubmitAt: string | null;
+  /** Which path actually sent this attempt, set alongside `submittedAt`. Null until submitted. */
+  submissionMode: 'manual' | 'automatic' | null;
 }
 
 export interface ApplicationAttemptInput {
@@ -289,7 +291,12 @@ export type ApplicationAttemptPatch = Partial<
     ApplicationAttemptInput,
     'applicationId' | 'jdComplete' | 'checkpoint' | 'checkpointDetail'
   >
-> & { submittedAt?: string | null; formStructureHash?: string | null; scheduledAutomaticSubmitAt?: string | null };
+> & {
+  submittedAt?: string | null;
+  formStructureHash?: string | null;
+  scheduledAutomaticSubmitAt?: string | null;
+  submissionMode?: 'manual' | 'automatic' | null;
+};
 
 export type ApplicationArtifactKind = 'cv_pdf' | 'cover_letter_pdf' | 'combined_pdf' | 'other';
 

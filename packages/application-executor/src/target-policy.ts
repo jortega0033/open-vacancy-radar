@@ -51,6 +51,19 @@ export interface ApplicationTargetPolicy {
    * submit-capable only by a reviewed code change to its own policy entry, never configuration.
    */
   killSwitches: { navigate: boolean; fill: boolean; upload: boolean; submit: boolean };
+  /**
+   * Issue #203 scope item 6: automatic (unattended) submission may run only against a target whose
+   * own register entry (`termsRegisterEntry`) reaches a clean, unconditional `eligible_for_review`
+   * in #197's register, WITH no live caveat left unresolved (a documented CAPTCHA/bot-scoring risk,
+   * an unresolved terms-scope question) -- the register's status column is not by itself a safe
+   * allow-list token, per that register's own findings. This field is the one place that whole
+   * judgment call is recorded: `true` only when a human reviewer has confirmed, for this exact
+   * policy entry, that no caveat remains. No default -- every policy, including the fixture, must
+   * set this explicitly rather than inherit a value that could silently authorize automation.
+   * Deliberately has no bearing on manual (#202) submission, which every target already requires
+   * regardless of this flag.
+   */
+  termsEligibleForAutomation: boolean;
   maxSteps: number;
   timeoutMs: number;
   maximumSnapshotBytes: number;
