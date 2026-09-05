@@ -19,6 +19,11 @@
 
 import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from './cv-profile-schema.js';
 import type {
+  ApplicationArtifactInput,
+  ApplicationArtifactKind,
+  ApplicationAttemptCheckpoint,
+  ApplicationAttemptInput,
+  ApplicationAttemptPatch,
   ApplicationFilter,
   ApplicationInput,
   ApplicationPatch,
@@ -60,7 +65,23 @@ export const LIMITS = {
    * a hostile caller rather than a long analysis.
    */
   gapAnalysis: 200_000,
+  /** A full job description snapshot (#198) -- generous enough for a genuinely long real posting,
+   * finite against a hostile or malformed source page. */
+  jdSnapshot: 200_000,
+  /** A short free-text checkpoint detail (#198): "waiting on a CAPTCHA", not a document. */
+  checkpointDetail: 2_000,
 } as const;
+
+/** A lowercase SHA-256 hex digest: exactly what `contentHash`/`jdSnapshotHash`/
+ * `sourceCvContentHash` hold everywhere in the application-attempt tables (#198). Fixed length and
+ * charset, so a caller cannot pass an arbitrary string where a real digest is expected. */
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+
+function sha256Hex(value: unknown, field: string): string {
+  const text = str(value, field, 64);
+  if (!SHA256_HEX_PATTERN.test(text)) fail(`"${field}" must be a lowercase SHA-256 hex digest`);
+  return text;
+}
 
 export class WorkspaceInputError extends Error {
   constructor(message: string) {
@@ -363,6 +384,85 @@ export function parseLetterPatch(value: unknown): LetterPatch {
   patch(input, out, 'cvId', (v) => nullableStr(v, 'cvId', LIMITS.short));
   patch(input, out, 'body', (v) => str(v, 'body', LIMITS.letterBody));
   return out;
+}
+
+// ------------------------------------------------------------- application attempts (#198)
+
+export const APPLICATION_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
+  'queued',
+  'reading_jd',
+  'tailoring',
+  'rendering',
+  'filling',
+  'ready',
+  'submitting',
+  'submitted',
+  'needs_user',
+  'skipped',
+  'failed',
+  'submission_unknown',
+];
+
+export function parseApplicationAttemptInput(value: unknown): ApplicationAttemptInput {
+  const input = asRecord(value, 'application attempt');
+  return {
+    applicationId: nullableStr(input.applicationId, 'applicationId', LIMITS.short),
+    vacancyKey: nullableStr(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    canonicalUrl: input.canonicalUrl === undefined ? '' : str(input.canonicalUrl, 'canonicalUrl', LIMITS.short),
+    company: requiredNonEmpty(input.company, 'company', LIMITS.short),
+    role: requiredNonEmpty(input.role, 'role', LIMITS.short),
+    sourceCvId: nullableStr(input.sourceCvId, 'sourceCvId', LIMITS.short),
+    sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
+    jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
+    jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
+    jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    workflowVersion: input.workflowVersion === undefined ? '' : str(input.workflowVersion, 'workflowVersion', LIMITS.short),
+    checkpoint:
+      input.checkpoint === undefined ? 'queued' : oneOf(input.checkpoint, 'checkpoint', APPLICATION_ATTEMPT_CHECKPOINTS),
+    checkpointDetail:
+      input.checkpointDetail === undefined ? '' : str(input.checkpointDetail, 'checkpointDetail', LIMITS.checkpointDetail),
+    force: input.force === undefined ? false : bool(input.force, 'force'),
+  };
+}
+
+export function parseApplicationAttemptPatch(value: unknown): ApplicationAttemptPatch {
+  const input = asRecord(value, '"patch"');
+  const out: ApplicationAttemptPatch = {};
+  patch(input, out, 'applicationId', (v) => nullableStr(v, 'applicationId', LIMITS.short));
+  patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'checkpoint', (v) => oneOf(v, 'checkpoint', APPLICATION_ATTEMPT_CHECKPOINTS));
+  patch(input, out, 'checkpointDetail', (v) => str(v, 'checkpointDetail', LIMITS.checkpointDetail));
+  patch(input, out, 'submittedAt', (v) => nullableIsoDate(v, 'submittedAt'));
+  return out;
+}
+
+export const APPLICATION_ARTIFACT_KINDS: readonly ApplicationArtifactKind[] = [
+  'cv_pdf',
+  'cover_letter_pdf',
+  'combined_pdf',
+  'other',
+];
+
+/** Generous but finite: real generated documents (a tailored CV/cover-letter PDF) are realistically
+ * well under this; a hostile or malformed value should fail loudly rather than wedge storage. */
+const MAX_ARTIFACT_BYTES = 50_000_000;
+
+export function parseApplicationArtifactInput(value: unknown): ApplicationArtifactInput {
+  const input = asRecord(value, 'application artifact');
+  const byteSize = input.byteSize;
+  if (typeof byteSize !== 'number' || !Number.isInteger(byteSize) || byteSize < 0) {
+    fail('"byteSize" must be a non-negative integer');
+  }
+  if (byteSize > MAX_ARTIFACT_BYTES) fail(`"byteSize" must be at most ${MAX_ARTIFACT_BYTES} bytes`);
+  return {
+    attemptId: requiredNonEmpty(input.attemptId, 'attemptId', LIMITS.short),
+    kind: oneOf(input.kind, 'kind', APPLICATION_ARTIFACT_KINDS),
+    fileName: input.fileName === undefined ? '' : str(input.fileName, 'fileName', LIMITS.short),
+    mimeType: requiredNonEmpty(input.mimeType, 'mimeType', LIMITS.short),
+    byteSize,
+    contentHash: sha256Hex(input.contentHash, 'contentHash'),
+    storagePath: input.storagePath === undefined ? '' : str(input.storagePath, 'storagePath', LIMITS.short),
+  };
 }
 
 // ------------------------------------------------------------------------------ settings

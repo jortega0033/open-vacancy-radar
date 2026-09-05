@@ -10,28 +10,34 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
-import { asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
-import { appSettings, applications, cvDocuments, letters, savedJobs } from './schema.js';
-import type {
-  ApplicationFilter,
-  ApplicationInput,
-  ApplicationPatch,
-  ApplicationRecord,
-  AppSettingsPatch,
-  AppSettingsRecord,
-  CvDocumentInput,
-  CvDocumentPatch,
-  CvDocumentRecord,
-  CvProfile,
-  DeleteResult,
-  LetterInput,
-  LetterPatch,
-  LetterRecord,
-  SavedJobInput,
-  SavedJobPatch,
-  SavedJobRecord,
-  WorkspaceCounts,
+import { appSettings, applicationArtifacts, applicationAttempts, applications, cvDocuments, letters, savedJobs } from './schema.js';
+import {
+  NON_TERMINAL_ATTEMPT_CHECKPOINTS,
+  type ApplicationArtifactInput,
+  type ApplicationArtifactRecord,
+  type ApplicationAttemptInput,
+  type ApplicationAttemptPatch,
+  type ApplicationAttemptRecord,
+  type ApplicationFilter,
+  type ApplicationInput,
+  type ApplicationPatch,
+  type ApplicationRecord,
+  type AppSettingsPatch,
+  type AppSettingsRecord,
+  type CvDocumentInput,
+  type CvDocumentPatch,
+  type CvDocumentRecord,
+  type CvProfile,
+  type DeleteResult,
+  type LetterInput,
+  type LetterPatch,
+  type LetterRecord,
+  type SavedJobInput,
+  type SavedJobPatch,
+  type SavedJobRecord,
+  type WorkspaceCounts,
 } from './types.js';
 
 /** The one fixed row in `app_settings`. */
@@ -41,6 +47,16 @@ export class WorkspaceNotFoundError extends Error {
   constructor(entity: string, id: string) {
     super(`no ${entity} with id "${id}"`);
     this.name = 'WorkspaceNotFoundError';
+  }
+}
+
+/** #198's dedup rule: refuses a second concurrent attempt at the same vacancy. Distinguishable by
+ * name/class (mirroring `WorkspaceNotFoundError`), not just message text, so a caller can recover
+ * from this specific case (e.g. offer "start a new attempt anyway?") without string-matching. */
+export class ApplicationAttemptDuplicateError extends Error {
+  constructor(public readonly existingAttemptId: string) {
+    super(`an attempt for this vacancy is already in progress (attempt "${existingAttemptId}")`);
+    this.name = 'ApplicationAttemptDuplicateError';
   }
 }
 
@@ -428,6 +444,235 @@ export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {
     cvId: source.cvId,
     body: source.body,
   });
+}
+
+// ------------------------------------------------------------- application attempts (#198)
+
+type ApplicationAttemptRow = typeof applicationAttempts.$inferSelect;
+
+function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRecord {
+  return {
+    id: row.id,
+    applicationId: row.applicationId,
+    vacancyKey: row.vacancyKey,
+    canonicalUrl: row.canonicalUrl,
+    company: row.company,
+    role: row.role,
+    sourceCvId: row.sourceCvId,
+    sourceCvContentHash: row.sourceCvContentHash,
+    jdSnapshot: row.jdSnapshot,
+    jdSnapshotHash: row.jdSnapshotHash,
+    jdComplete: row.jdComplete,
+    workflowVersion: row.workflowVersion,
+    checkpoint: row.checkpoint,
+    checkpointDetail: row.checkpointDetail,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+    submittedAt: row.submittedAt ? iso(row.submittedAt) : null,
+  };
+}
+
+export function listApplicationAttempts(db: WorkspaceDb): ApplicationAttemptRecord[] {
+  return db.select().from(applicationAttempts).orderBy(desc(applicationAttempts.createdAt)).all().map(toApplicationAttempt);
+}
+
+export function getApplicationAttempt(db: WorkspaceDb, id: string): ApplicationAttemptRecord {
+  const row = db.select().from(applicationAttempts).where(eq(applicationAttempts.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+  return toApplicationAttempt(row);
+}
+
+/**
+ * Creates a new attempt, enforcing #198's dedup rule first: refuses a second concurrent attempt
+ * for the same vacancy while an existing one is still in a non-terminal checkpoint (see
+ * `NON_TERMINAL_ATTEMPT_CHECKPOINTS`), unless `input.force` is set. "Same vacancy" is `vacancyKey`
+ * when the attempt has one (the normal case, a real discovery-report row); `canonicalUrl` is the
+ * fallback for a manually-entered target with no report key.
+ *
+ * Deliberately a plain existence check, not a database unique constraint: a vacancy can
+ * legitimately have more than one *historical* (terminal) attempt -- a failed attempt retried, or
+ * the user genuinely reapplying later -- so the row shape itself must allow duplicates; only the
+ * business rule about *concurrent* ones lives here.
+ */
+export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAttemptInput): ApplicationAttemptRecord {
+  return db.transaction((tx) => {
+    if (!input.force) {
+      const identity =
+        input.vacancyKey !== null && input.vacancyKey !== undefined
+          ? eq(applicationAttempts.vacancyKey, input.vacancyKey)
+          : input.canonicalUrl
+            ? eq(applicationAttempts.canonicalUrl, input.canonicalUrl)
+            : undefined;
+      if (identity) {
+        const existing = tx
+          .select({ id: applicationAttempts.id })
+          .from(applicationAttempts)
+          .where(and(identity, inArray(applicationAttempts.checkpoint, NON_TERMINAL_ATTEMPT_CHECKPOINTS)))
+          .get();
+        if (existing) throw new ApplicationAttemptDuplicateError(existing.id);
+      }
+    }
+
+    const [row] = tx
+      .insert(applicationAttempts)
+      .values({
+        applicationId: input.applicationId ?? null,
+        vacancyKey: input.vacancyKey ?? null,
+        canonicalUrl: input.canonicalUrl ?? '',
+        company: input.company,
+        role: input.role,
+        sourceCvId: input.sourceCvId ?? null,
+        sourceCvContentHash: input.sourceCvContentHash,
+        jdSnapshot: input.jdSnapshot ?? '',
+        jdSnapshotHash: input.jdSnapshotHash,
+        jdComplete: input.jdComplete ?? true,
+        workflowVersion: input.workflowVersion ?? '',
+        checkpoint: input.checkpoint ?? 'queued',
+        checkpointDetail: input.checkpointDetail ?? '',
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application attempt');
+    return toApplicationAttempt(row);
+  });
+}
+
+export function updateApplicationAttempt(
+  db: WorkspaceDb,
+  id: string,
+  values: ApplicationAttemptPatch,
+): ApplicationAttemptRecord {
+  const { submittedAt, ...rest } = values;
+  const set: Partial<ApplicationAttemptRow> = { ...rest, updatedAt: new Date() };
+  if ('submittedAt' in values) set.submittedAt = submittedAt ? new Date(submittedAt) : null;
+
+  const [row] = db.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
+  if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+  return toApplicationAttempt(row);
+}
+
+/** Cascades to the attempt's artifacts via the schema's `on delete cascade`. */
+export function deleteApplicationAttempt(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db
+    .delete(applicationAttempts)
+    .where(eq(applicationAttempts.id, id))
+    .returning({ id: applicationAttempts.id })
+    .all();
+  return { deleted: removed.length > 0 };
+}
+
+// ------------------------------------------------------------ application artifacts (#198)
+
+type ApplicationArtifactRow = typeof applicationArtifacts.$inferSelect;
+
+/** A quota, not a product limit anyone should ever meet: bounds a hostile or malformed caller,
+ * the same reasoning as `AGENT_WORKSPACE_PREF_LIMITS` in validate.ts. */
+export const APPLICATION_ARTIFACT_QUOTA = {
+  maxPerAttempt: 10,
+  maxTotalBytesPerAttempt: 100_000_000,
+} as const;
+
+export class ApplicationArtifactQuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApplicationArtifactQuotaError';
+  }
+}
+
+function toApplicationArtifact(row: ApplicationArtifactRow): ApplicationArtifactRecord {
+  return {
+    id: row.id,
+    attemptId: row.attemptId,
+    kind: row.kind,
+    fileName: row.fileName,
+    mimeType: row.mimeType,
+    byteSize: row.byteSize,
+    contentHash: row.contentHash,
+    storagePath: row.storagePath,
+    createdAt: iso(row.createdAt),
+  };
+}
+
+export function listApplicationArtifacts(db: WorkspaceDb, attemptId: string): ApplicationArtifactRecord[] {
+  return db
+    .select()
+    .from(applicationArtifacts)
+    .where(eq(applicationArtifacts.attemptId, attemptId))
+    .orderBy(asc(applicationArtifacts.createdAt))
+    .all()
+    .map(toApplicationArtifact);
+}
+
+export function createApplicationArtifact(db: WorkspaceDb, input: ApplicationArtifactInput): ApplicationArtifactRecord {
+  return db.transaction((tx) => {
+    const attempt = tx.select({ id: applicationAttempts.id }).from(applicationAttempts).where(eq(applicationAttempts.id, input.attemptId)).get();
+    if (!attempt) throw new WorkspaceNotFoundError('application attempt', input.attemptId);
+
+    const existing = tx
+      .select({ byteSize: applicationArtifacts.byteSize })
+      .from(applicationArtifacts)
+      .where(eq(applicationArtifacts.attemptId, input.attemptId))
+      .all();
+    if (existing.length + 1 > APPLICATION_ARTIFACT_QUOTA.maxPerAttempt) {
+      throw new ApplicationArtifactQuotaError(
+        `an attempt may have at most ${APPLICATION_ARTIFACT_QUOTA.maxPerAttempt} artifacts`,
+      );
+    }
+    const totalBytes = existing.reduce((sum, row) => sum + row.byteSize, input.byteSize);
+    if (totalBytes > APPLICATION_ARTIFACT_QUOTA.maxTotalBytesPerAttempt) {
+      throw new ApplicationArtifactQuotaError(
+        `an attempt's artifacts may total at most ${APPLICATION_ARTIFACT_QUOTA.maxTotalBytesPerAttempt} bytes`,
+      );
+    }
+
+    const [row] = tx
+      .insert(applicationArtifacts)
+      .values({
+        attemptId: input.attemptId,
+        kind: input.kind,
+        fileName: input.fileName ?? '',
+        mimeType: input.mimeType,
+        byteSize: input.byteSize,
+        contentHash: input.contentHash,
+        storagePath: input.storagePath ?? '',
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application artifact');
+    return toApplicationArtifact(row);
+  });
+}
+
+export function deleteApplicationArtifact(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db
+    .delete(applicationArtifacts)
+    .where(eq(applicationArtifacts.id, id))
+    .returning({ id: applicationArtifacts.id })
+    .all();
+  return { deleted: removed.length > 0 };
+}
+
+/**
+ * Startup reconciliation between the artifact manifest and whatever's actually on disk (#198's
+ * scope item). Read-only and reporting-only in this slice: it identifies artifacts whose
+ * `storagePath` no longer resolves to a real file, but does not delete or otherwise act on them --
+ * deciding what an orphaned manifest row *means* (retry staging? mark the attempt failed?) belongs
+ * to whichever later slice actually owns file staging (#199).
+ *
+ * `fileExists` is injected rather than imported from `node:fs` so this stays testable without a
+ * real filesystem, the same pattern `resolve-window-icon.ts` uses for the same reason.
+ */
+export function reconcileApplicationArtifacts(
+  db: WorkspaceDb,
+  fileExists: (storagePath: string) => boolean,
+): ApplicationArtifactRecord[] {
+  return db
+    .select()
+    .from(applicationArtifacts)
+    .where(ne(applicationArtifacts.storagePath, ''))
+    .all()
+    .map(toApplicationArtifact)
+    .filter((artifact) => !fileExists(artifact.storagePath));
 }
 
 // ------------------------------------------------------------------------------ settings

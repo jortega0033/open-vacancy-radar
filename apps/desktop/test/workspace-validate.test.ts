@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { CV_PROFILE_LIMITS } from '../electron/workspace/cv-profile-schema.js';
 import {
   LIMITS,
+  parseApplicationArtifactInput,
+  parseApplicationAttemptInput,
+  parseApplicationAttemptPatch,
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
@@ -240,5 +243,119 @@ describe('workspace letter/CV patches', () => {
   it('requires an explicit CV kind: there is no sensible default between uploaded and manual', () => {
     expect(() => parseCvDocumentInput({ name: 'CV' })).toThrow(/"kind" must be one of/);
     expect(parseCvDocumentInput({ name: 'CV', kind: 'uploaded' }).kind).toBe('uploaded');
+  });
+});
+
+const HASH = 'a'.repeat(64);
+
+describe('workspace application attempts (#198)', () => {
+  it('accepts a minimal valid attempt with sensible defaults', () => {
+    const parsed = parseApplicationAttemptInput({
+      company: 'Acme',
+      role: 'Engineer',
+      sourceCvContentHash: HASH,
+      jdSnapshotHash: HASH,
+    });
+    expect(parsed).toMatchObject({
+      company: 'Acme',
+      role: 'Engineer',
+      canonicalUrl: '',
+      jdSnapshot: '',
+      jdComplete: true,
+      workflowVersion: '',
+      checkpoint: 'queued',
+      checkpointDetail: '',
+      force: false,
+    });
+  });
+
+  it('rejects a hash that is not a 64-char lowercase hex digest', () => {
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: 'not-a-hash',
+        jdSnapshotHash: HASH,
+      }),
+    ).toThrow(/"sourceCvContentHash" must be a lowercase SHA-256 hex digest/);
+    // Uppercase hex is rejected too -- the stored form is always lowercase.
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH.toUpperCase(),
+        jdSnapshotHash: HASH,
+      }),
+    ).toThrow(/must be a lowercase SHA-256 hex digest/);
+  });
+
+  it('rejects an unrecognized checkpoint', () => {
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH,
+        jdSnapshotHash: HASH,
+        checkpoint: 'sent_carrier_pigeon',
+      }),
+    ).toThrow(/"checkpoint" must be one of/);
+  });
+
+  it('drops fields the patch verb does not own -- provenance is not patchable', () => {
+    expect(
+      parseApplicationAttemptPatch({
+        checkpoint: 'ready',
+        company: 'Attacker Corp',
+        sourceCvContentHash: 'x'.repeat(64),
+        jdSnapshotHash: 'y'.repeat(64),
+      }),
+    ).toEqual({ checkpoint: 'ready' });
+  });
+
+  it('accepts an explicit null to clear submittedAt', () => {
+    expect(parseApplicationAttemptPatch({ submittedAt: null })).toEqual({ submittedAt: null });
+  });
+});
+
+describe('workspace application artifacts (#198)', () => {
+  const VALID_ARTIFACT = {
+    attemptId: 'attempt-1',
+    kind: 'cv_pdf',
+    mimeType: 'application/pdf',
+    byteSize: 1024,
+    contentHash: HASH,
+  };
+
+  it('accepts a minimal valid artifact', () => {
+    expect(parseApplicationArtifactInput(VALID_ARTIFACT)).toEqual({
+      attemptId: 'attempt-1',
+      kind: 'cv_pdf',
+      fileName: '',
+      mimeType: 'application/pdf',
+      byteSize: 1024,
+      contentHash: HASH,
+      storagePath: '',
+    });
+  });
+
+  it('rejects a negative or non-integer byteSize', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: -1 })).toThrow(
+      /"byteSize" must be a non-negative integer/,
+    );
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: 1.5 })).toThrow(
+      /"byteSize" must be a non-negative integer/,
+    );
+  });
+
+  it('rejects a byteSize past the hard cap', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: 50_000_001 })).toThrow(
+      /"byteSize" must be at most 50000000 bytes/,
+    );
+  });
+
+  it('rejects an unrecognized artifact kind', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, kind: 'video' })).toThrow(
+      /"kind" must be one of/,
+    );
   });
 });
