@@ -1024,7 +1024,14 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const generation = snapshotSource?.generation;
   const capturedAt = snapshotSource ? optionalString(snapshotSource, 'capturedAt') : undefined;
   const rawFields = snapshotSource?.fields;
-  if (typeof generation !== 'number' || !capturedAt || !Array.isArray(rawFields) || !screenshotBase64) {
+  const challengeDetected = snapshotSource?.challengeDetected;
+  if (
+    typeof generation !== 'number' ||
+    !capturedAt ||
+    !Array.isArray(rawFields) ||
+    typeof challengeDetected !== 'boolean' ||
+    !screenshotBase64
+  ) {
     throw new Error('the application executor returned an unexpected response');
   }
 
@@ -1066,7 +1073,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     };
   });
 
-  return { snapshot: { generation, fields, capturedAt }, screenshotBase64 };
+  return { snapshot: { generation, fields, capturedAt, challengeDetected }, screenshotBase64 };
 }
 
 function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
