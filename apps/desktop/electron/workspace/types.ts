@@ -195,6 +195,121 @@ export interface LetterInput {
 
 export type LetterPatch = Partial<LetterInput>;
 
+export type ApplicationAttemptCheckpoint =
+  | 'queued'
+  | 'reading_jd'
+  | 'tailoring'
+  | 'rendering'
+  | 'filling'
+  | 'ready'
+  | 'submitting'
+  | 'submitted'
+  | 'needs_user'
+  | 'skipped'
+  | 'failed'
+  | 'submission_unknown';
+
+/** Checkpoints for which a dedup check refuses a second concurrent attempt at the same vacancy.
+ * `submission_unknown` is deliberately included even though it is not really "still in progress":
+ * it means a real submit action may or may not have gone through, and starting a fresh unforced
+ * attempt at that exact vacancy risks a second real submission on top of one that already
+ * succeeded. Per #198's own framing, the realistic way to resolve that is asking the user --
+ * which here means the user has to pass `force: true`, the same escape hatch as any other
+ * deliberate re-attempt, not that this checkpoint is silently treated as safely closed out. */
+export const NON_TERMINAL_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
+  'queued',
+  'reading_jd',
+  'tailoring',
+  'rendering',
+  'filling',
+  'ready',
+  'submitting',
+  'needs_user',
+  'submission_unknown',
+];
+
+export interface ApplicationAttemptRecord {
+  id: string;
+  applicationId: string | null;
+  vacancyKey: string | null;
+  canonicalUrl: string;
+  company: string;
+  role: string;
+  sourceCvId: string | null;
+  sourceCvContentHash: string;
+  jdSnapshot: string;
+  jdSnapshotHash: string;
+  jdComplete: boolean;
+  workflowVersion: string;
+  checkpoint: ApplicationAttemptCheckpoint;
+  checkpointDetail: string;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601 */
+  updatedAt: string;
+  /** ISO-8601, or null before a submit was ever attempted. */
+  submittedAt: string | null;
+}
+
+export interface ApplicationAttemptInput {
+  applicationId?: string | null;
+  vacancyKey?: string | null;
+  canonicalUrl?: string;
+  company: string;
+  role: string;
+  sourceCvId?: string | null;
+  sourceCvContentHash: string;
+  jdSnapshot?: string;
+  jdSnapshotHash: string;
+  jdComplete?: boolean;
+  workflowVersion?: string;
+  checkpoint?: ApplicationAttemptCheckpoint;
+  checkpointDetail?: string;
+  /**
+   * Bypasses the dedup refusal (an existing non-terminal attempt for the same `vacancyKey`) for
+   * the one case #198 calls out explicitly: the user asking for a genuinely new attempt at a
+   * vacancy they already tried. Defaults to false; a caller has to opt in.
+   */
+  force?: boolean;
+}
+
+/** Every field patchable except the identity/provenance fields (`vacancyKey`, `canonicalUrl`,
+ * `company`, `role`, `sourceCvId`, `sourceCvContentHash`, `jdSnapshot`, `jdSnapshotHash`,
+ * `workflowVersion`) -- an attempt's own record of what it was generated from must not silently
+ * change after creation; only its progress (checkpoint, detail, linkage, completeness, submit
+ * time) does. */
+export type ApplicationAttemptPatch = Partial<
+  Pick<
+    ApplicationAttemptInput,
+    'applicationId' | 'jdComplete' | 'checkpoint' | 'checkpointDetail'
+  >
+> & { submittedAt?: string | null };
+
+export type ApplicationArtifactKind = 'cv_pdf' | 'cover_letter_pdf' | 'combined_pdf' | 'other';
+
+export interface ApplicationArtifactRecord {
+  id: string;
+  attemptId: string;
+  kind: ApplicationArtifactKind;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  contentHash: string;
+  storagePath: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+export interface ApplicationArtifactInput {
+  attemptId: string;
+  kind: ApplicationArtifactKind;
+  fileName?: string;
+  mimeType: string;
+  byteSize: number;
+  contentHash: string;
+  storagePath?: string;
+}
+
 export interface AppSettingsRecord {
   launchAtLogin: boolean;
   startPage: StartPage;

@@ -250,6 +250,259 @@ describe('counts', () => {
   });
 });
 
+// A stand-in SHA-256 hex digest: the repository only checks shape at the validate.ts boundary,
+// never here, so any 64-char hex string exercises these functions correctly.
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+const HASH_C = 'c'.repeat(64);
+
+const ATTEMPT = {
+  company: 'Redwood Software',
+  role: 'Frontend Engineer',
+  sourceCvContentHash: HASH_A,
+  jdSnapshotHash: HASH_B,
+} as const;
+
+describe('application attempts (#198)', () => {
+  it('creates and reads back an attempt with the queued default', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(created.checkpoint).toBe('queued');
+    expect(created.jdComplete).toBe(true);
+
+    const fetched = workspace.getApplicationAttempt(db, created.id);
+    expect(fetched).toEqual(created);
+  });
+
+  it('refuses a second concurrent attempt at the same vacancy (dedup by vacancyKey)', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAttemptDuplicateError,
+    );
+    // The refusal names which attempt is already in progress, not just that one exists.
+    try {
+      workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    } catch (error) {
+      expect(error).toBeInstanceOf(workspace.ApplicationAttemptDuplicateError);
+      expect((error as InstanceType<typeof workspace.ApplicationAttemptDuplicateError>).existingAttemptId).toBe(
+        first.id,
+      );
+    }
+  });
+
+  it('dedups by canonicalUrl when there is no vacancyKey', () => {
+    workspace.createApplicationAttempt(db, { ...ATTEMPT, canonicalUrl: 'https://example.invalid/jobs/1' });
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...ATTEMPT, canonicalUrl: 'https://example.invalid/jobs/1' }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+  });
+
+  it('allows an explicit force:true to bypass the dedup refusal', () => {
+    workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const second = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1', force: true });
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+    expect(second.checkpoint).toBe('queued');
+  });
+
+  it('does not refuse a new attempt once the prior one reached a terminal checkpoint', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submitted' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).not.toThrow();
+  });
+
+  it('still refuses while the prior attempt is submission_unknown -- a real submission may already have gone through', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submission_unknown' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAttemptDuplicateError,
+    );
+  });
+
+  it('updates the checkpoint and bumps updatedAt, leaving provenance fields untouched', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const updated = workspace.updateApplicationAttempt(db, created.id, {
+      checkpoint: 'needs_user',
+      checkpointDetail: 'CAPTCHA on the application form',
+    });
+    expect(updated.checkpoint).toBe('needs_user');
+    expect(updated.checkpointDetail).toBe('CAPTCHA on the application form');
+    expect(updated.sourceCvContentHash).toBe(ATTEMPT.sourceCvContentHash);
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(created.updatedAt).getTime());
+  });
+
+  it('records submittedAt only when the patch sets it, and clears it back to null on an explicit null', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(created.submittedAt).toBeNull();
+
+    const submitted = workspace.updateApplicationAttempt(db, created.id, {
+      checkpoint: 'submitted',
+      submittedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+    });
+    expect(submitted.submittedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    const cleared = workspace.updateApplicationAttempt(db, submitted.id, { submittedAt: null });
+    expect(cleared.submittedAt).toBeNull();
+  });
+
+  it('throws WorkspaceNotFoundError for an unknown id', () => {
+    expect(() => workspace.getApplicationAttempt(db, 'nope')).toThrow(WorkspaceNotFoundError);
+    expect(() => workspace.updateApplicationAttempt(db, 'nope', { checkpoint: 'failed' })).toThrow(
+      WorkspaceNotFoundError,
+    );
+  });
+
+  it('survives a real close-and-reopen mid-checkpoint (crash recovery)', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, created.id, { checkpoint: 'filling' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: created.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 2048,
+      contentHash: HASH_C,
+    });
+    close();
+
+    const reopened = createWorkspaceDb(dir);
+    try {
+      const attempt = workspace.getApplicationAttempt(reopened.db, created.id);
+      expect(attempt.checkpoint).toBe('filling');
+      expect(workspace.listApplicationArtifacts(reopened.db, created.id)).toHaveLength(1);
+    } finally {
+      reopened.close();
+    }
+    close = () => {};
+  });
+});
+
+describe('application artifacts (#198)', () => {
+  it('creates and lists artifacts for an attempt, oldest first', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cover_letter_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_B,
+    });
+
+    const artifacts = workspace.listApplicationArtifacts(db, attempt.id);
+    expect(artifacts.map((a) => a.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
+  });
+
+  it('refuses an artifact for a nonexistent attempt', () => {
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: 'nope',
+        kind: 'cv_pdf',
+        mimeType: 'application/pdf',
+        byteSize: 1000,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(WorkspaceNotFoundError);
+  });
+
+  it('enforces the per-attempt artifact count quota', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    for (let i = 0; i < workspace.APPLICATION_ARTIFACT_QUOTA.maxPerAttempt; i++) {
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: 1,
+        contentHash: HASH_A,
+      });
+    }
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: 1,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(workspace.ApplicationArtifactQuotaError);
+  });
+
+  it('enforces the per-attempt total byte-size quota', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: workspace.APPLICATION_ARTIFACT_QUOTA.maxTotalBytesPerAttempt + 1,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(workspace.ApplicationArtifactQuotaError);
+  });
+
+  it('deletes an artifact independently of its attempt', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const artifact = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    expect(workspace.deleteApplicationArtifact(db, artifact.id)).toEqual({ deleted: true });
+    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(0);
+  });
+
+  it('cascades: deleting the attempt deletes its artifacts', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    workspace.deleteApplicationAttempt(db, attempt.id);
+    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(0);
+  });
+
+  it('reconciles the manifest against disk, reporting only artifacts whose file is actually missing', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    // Never staged: empty storagePath, correctly excluded (there is nothing to check on disk yet).
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    // Staged and present.
+    const present = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cover_letter_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_B,
+      storagePath: '/staged/present.pdf',
+    });
+    // Staged but missing -- the case reconciliation exists to catch.
+    const missing = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'other',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_C,
+      storagePath: '/staged/missing.pdf',
+    });
+
+    const orphaned = workspace.reconcileApplicationArtifacts(db, (path) => path === present.storagePath);
+    expect(orphaned.map((a) => a.id)).toEqual([missing.id]);
+  });
+});
+
 describe('persistence across connections', () => {
   it('reopens the same database file and finds the data still there', () => {
     workspace.createSavedJob(db, JOB);

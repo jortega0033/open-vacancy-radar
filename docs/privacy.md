@@ -22,6 +22,17 @@ Everything the app stores lives in Electron's per-user application-data director
   personal data.
 - **`agentdock-state/`**: the runtime's durable record of AI CLI *sessions* — see the next section
   for exactly what it does and does not contain.
+- **Application attempts and artifacts** (`workspace.db`, `application_attempts` /
+  `application_artifacts` tables — #198): as the eventual auto-apply feature is built out in
+  stages, this durable record tracks each attempt at applying to a vacancy — the full job
+  description text read for that attempt, a hash of the CV content it was generated from, which
+  stage the attempt has reached, and (once later stages add real file generation) records of the
+  tailored CV/cover-letter files staged for it. This is the same category of personal/third-party
+  data `workspace.db` already holds (your CV content, in this case a full third-party job posting's
+  text), stored so a crash or a closed window can never silently duplicate or lose an in-progress
+  application. Nothing in this table causes an application to be sent — as of this stage of the
+  feature, nothing reads a browser, fills a form, or submits anything at all; see the auto-apply
+  tracking issues for what each later stage adds and when.
 
 ### `agentdock-state/`: session history without session content
 
@@ -112,6 +123,15 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   click that button; running an analysis and navigating away keeps nothing. This is storage only:
   the prompt behind it already left your machine when the analysis ran (see "What leaves your
   computer" above), and keeping the answer sends nothing anywhere.
+- **Application attempts and artifacts**: not pruned automatically, deliberately — an attempt
+  record (including a `failed` or `submission_unknown` one) is the honest history of what was
+  actually done, and quietly discarding it would undermine the very durability #198 exists to
+  provide. Deleting the `applications` row an attempt is linked to does not delete the attempt
+  itself (`on delete set null`); deleting `workspace.db` removes both, same as every other table
+  documented here. Generated artifacts (once a later stage actually writes files) are bounded per
+  attempt by a fixed count/size quota, and orphaned records — an artifact whose staged file no
+  longer exists on disk — are surfaced by a reconciliation check the app runs, rather than silently
+  ignored.
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.
