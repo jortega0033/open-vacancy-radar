@@ -1254,14 +1254,15 @@ const SNAPSHOT_RESULT = {
         options: [{ optionRef: 'o0000000000000001', label: 'Yes' }],
       },
     ],
+    submitControls: [{ controlRef: 'c0000000000000001', label: 'Submit Application' }],
   },
   screenshotBase64: 'ZmFrZQ==',
 };
 
 describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
-  it('exposes exactly the three documented capability functions and nothing else', async () => {
+  it('exposes exactly the five documented capability functions and nothing else', async () => {
     const api = await loadPreload('applicationExecutor');
-    expect(Object.keys(api).sort()).toEqual(['openReview', 'applyFieldMap', 'closeReview'].sort());
+    expect(Object.keys(api).sort()).toEqual(['openReview', 'applyFieldMap', 'submitReview', 'closeReview', 'resolveTargetPolicyId'].sort());
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
@@ -1291,7 +1292,13 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
 
   it('openReview rejects a field with an unrecognized control type rather than passing it through', async () => {
     invoke.mockResolvedValue({
-      snapshot: { generation: 1, capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false, fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }] },
+      snapshot: {
+        generation: 1,
+        capturedAt: '2026-01-01T00:00:00.000Z',
+        challengeDetected: false,
+        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }],
+        submitControls: [],
+      },
       screenshotBase64: 'ZmFrZQ==',
     });
     const api = await loadPreload('applicationExecutor');
@@ -1320,10 +1327,46 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     await expect((api.applyFieldMap as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unexpected response/);
   });
 
+  it('submitReview invokes the hard-coded submit-review channel and passes a successful result through', async () => {
+    invoke.mockResolvedValue({ ok: true });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.submitReview as (id: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:submit-review', 'attempt-1');
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('submitReview surfaces a refusal reason/detail without fabricating success', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'company_not_found_in_documents', detail: '"Acme" does not appear in the rendered documents' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.submitReview as (id: string) => Promise<unknown>)('attempt-1');
+    expect(result).toEqual({ ok: false, reason: 'company_not_found_in_documents', detail: '"Acme" does not appear in the rendered documents' });
+  });
+
+  it('submitReview throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.submitReview as (id: string) => Promise<unknown>)('attempt-1')).rejects.toThrow(/unexpected response/);
+  });
+
   it('closeReview invokes the hard-coded close-review channel with the attemptId', async () => {
     invoke.mockResolvedValue(undefined);
     const api = await loadPreload('applicationExecutor');
     await (api.closeReview as (id: string) => Promise<void>)('attempt-1');
     expect(invoke).toHaveBeenCalledWith('application-executor:close-review', 'attempt-1');
+  });
+
+  it('resolveTargetPolicyId invokes the hard-coded resolve-target-policy channel and passes a real id through', async () => {
+    invoke.mockResolvedValue('ashby-fixture-test-only');
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.resolveTargetPolicyId as (url: string) => Promise<string | null>)('file:///fixture.html');
+    expect(invoke).toHaveBeenCalledWith('application-executor:resolve-target-policy', 'file:///fixture.html');
+    expect(result).toBe('ashby-fixture-test-only');
+  });
+
+  it('resolveTargetPolicyId returns null rather than fabricating an id when main finds no matching policy', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.resolveTargetPolicyId as (url: string) => Promise<string | null>)('https://example.com/careers/apply');
+    expect(result).toBeNull();
   });
 });

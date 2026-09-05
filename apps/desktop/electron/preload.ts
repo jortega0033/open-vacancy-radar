@@ -26,6 +26,7 @@ import type {
   ApplicationExecutorBridge,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewResult,
+  SubmitApplicationReviewResult,
 } from './application-executor-types.js';
 
 /**
@@ -1024,16 +1025,28 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const generation = snapshotSource?.generation;
   const capturedAt = snapshotSource ? optionalString(snapshotSource, 'capturedAt') : undefined;
   const rawFields = snapshotSource?.fields;
+  const rawSubmitControls = snapshotSource?.submitControls;
   const challengeDetected = snapshotSource?.challengeDetected;
   if (
     typeof generation !== 'number' ||
     !capturedAt ||
     !Array.isArray(rawFields) ||
+    !Array.isArray(rawSubmitControls) ||
     typeof challengeDetected !== 'boolean' ||
     !screenshotBase64
   ) {
     throw new Error('the application executor returned an unexpected response');
   }
+
+  const submitControls = rawSubmitControls.map((rawControl, index) => {
+    const controlSource = asRecord(rawControl);
+    const controlRef = controlSource ? optionalString(controlSource, 'controlRef') : undefined;
+    const label = controlSource ? optionalString(controlSource, 'label') : undefined;
+    if (!controlRef || label === undefined) {
+      throw new Error(`the application executor returned an unexpected submit control shape at index ${index}`);
+    }
+    return { controlRef, label };
+  });
 
   const fields = rawFields.map((rawField, index) => {
     const fieldSource = asRecord(rawField);
@@ -1073,7 +1086,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     };
   });
 
-  return { snapshot: { generation, fields, capturedAt, challengeDetected }, screenshotBase64 };
+  return { snapshot: { generation, fields, submitControls, capturedAt, challengeDetected }, screenshotBase64 };
 }
 
 function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
@@ -1093,6 +1106,21 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   };
 }
 
+function toSubmitApplicationReviewResult(value: unknown): SubmitApplicationReviewResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<SubmitApplicationReviewResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+  };
+}
+
 const applicationExecutorApi: ApplicationExecutorBridge = {
   async openReview(input) {
     const result = await ipcRenderer.invoke('application-executor:open-review', input);
@@ -1104,8 +1132,18 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
     return toApplyApplicationFieldMapResult(result);
   },
 
+  async submitReview(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:submit-review', attemptId);
+    return toSubmitApplicationReviewResult(result);
+  },
+
   async closeReview(attemptId) {
     await ipcRenderer.invoke('application-executor:close-review', attemptId);
+  },
+
+  async resolveTargetPolicyId(canonicalUrl) {
+    const result = await ipcRenderer.invoke('application-executor:resolve-target-policy', canonicalUrl);
+    return typeof result === 'string' ? result : null;
   },
 };
 

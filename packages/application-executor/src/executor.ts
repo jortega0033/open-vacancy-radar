@@ -1,6 +1,7 @@
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
 import { extractSnapshotFields, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
 import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
+import { resolveSubmitControl } from './submit-control.js';
 import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
 
 const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
@@ -11,10 +12,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * The deterministic executor (#196 §1.1, §2): the seven implemented actions
- * (`openTarget`/`snapshot`/`fill`/`select`/`attach`/`capture`/`handoff`) plus the eighth,
- * `submit`, which does not exist in this slice's code at all -- see `target-policy.ts`'s own
- * comment on `ExecutorAction`.
+ * The deterministic executor (#196 §1.1, §2): `openTarget`/`snapshot`/`fill`/`select`/`attach`/
+ * `capture`/`handoff`, plus `submit` -- see `target-policy.ts`'s own comment on `ExecutorAction`
+ * for what changed in #202 and, just as importantly, what this class still does *not* guarantee
+ * about `submit` on its own (the per-instance human confirmation is the caller's responsibility,
+ * not something this package can see or enforce).
  *
  * Every method that ultimately calls the transport goes through `assertAllowedCdpMethod` first
  * (`cdp-allowlist.ts`), so a method outside the frozen allowlist throws before it ever reaches a
@@ -100,6 +102,19 @@ export class ApplicationExecutor {
     return findSnapshotField(this.#currentSnapshot, fieldRef);
   }
 
+  /** A real mouse click at a node's own box-model center -- the one click primitive both a
+   * checkbox toggle (`fill()`) and a real submit (`submit()`) need, since neither has an allowed
+   * CDP method that fires the page's own handlers without a real dispatched click. Kept as one
+   * method so a future fix to how the click itself is dispatched (a delay between press/release, a
+   * different pointerType, a retry) only has one call site to change -- previously duplicated
+   * verbatim in both places, the easiest way for exactly one of the two to silently miss a fix. */
+  private async clickAt(backendNodeId: number): Promise<void> {
+    const box = (await this.send('DOM.getBoxModel', { backendNodeId })) as { model: BoxModel };
+    const { x, y } = boxCenter(box.model);
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+  }
+
   /** Navigates to `url`, refusing anything outside the policy's compiled allowlist -- a
    * `handoff('off_policy_navigation')` is the caller's job when this throws, per #196 §1.1's "any
    * navigation to an unlisted origin produces a handoff, never a followed redirect" rule. This is
@@ -127,13 +142,18 @@ export class ApplicationExecutor {
    * Bumps the generation counter, so a field map produced against the previous snapshot is
    * structurally stale afterward (Domain B's rule 2).
    *
-   * Retries a genuinely empty read a few times before minting a zero-field snapshot: `Page.navigate`
+   * Retries a genuinely empty read a few times before minting an empty snapshot: `Page.navigate`
    * resolves once navigation is dispatched, not once the document is parsed, so a `snapshot()` called
    * immediately after `openTarget()` can race ahead of the real page and see an empty/interim
    * document -- confirmed against a real Electron `WebContentsView` (`e2e/application-executor.spec.ts`),
-   * where every fake-transport unit test's fixed, always-non-empty tree never triggers this path. Only
-   * a read that finds zero fields retries; a real form that legitimately has none is indistinguishable
-   * from that race and simply pays the (bounded) retry cost once. */
+   * where every fake-transport unit test's fixed, always-non-empty tree never triggers this path.
+   * Checks both `fields` and `submitControls` (not just `fields`, a gap once `submit` became a real
+   * action): a field-less "review and submit" final step is legitimately actionable with zero
+   * fields, so retrying only on an empty `fields` array would burn the whole budget waiting for
+   * fields that will never come; conversely, stopping as soon as `fields` is non-empty without also
+   * checking `submitControls` would return prematurely on a page whose inputs render before its
+   * submit button does. A read that finds neither retries; a real page that legitimately has
+   * neither is indistinguishable from that race and simply pays the (bounded) retry cost once. */
   async snapshot(): Promise<FormSnapshot> {
     this.requireAction('snapshot');
     let extracted = await this.readDom();
@@ -142,7 +162,10 @@ export class ApplicationExecutor {
     // still parsing.
     for (
       let attempt = 0;
-      extracted.fields.length === 0 && !extracted.challengeDetected && attempt < EMPTY_SNAPSHOT_RETRY_LIMIT;
+      extracted.fields.length === 0 &&
+      extracted.submitControls.length === 0 &&
+      !extracted.challengeDetected &&
+      attempt < EMPTY_SNAPSHOT_RETRY_LIMIT;
       attempt++
     ) {
       await sleep(EMPTY_SNAPSHOT_RETRY_DELAY_MS);
@@ -153,6 +176,7 @@ export class ApplicationExecutor {
     const result: FormSnapshot = {
       generation: this.#generation,
       fields: extracted.fields,
+      submitControls: extracted.submitControls,
       capturedAt: new Date().toISOString(),
       challengeDetected: extracted.challengeDetected,
     };
@@ -183,10 +207,7 @@ export class ApplicationExecutor {
       // toggled by an unnecessary click.
       const desiredChecked = value === 'true';
       if (desiredChecked === (field.checked ?? false)) return; // already in the desired state
-      const box = (await this.send('DOM.getBoxModel', { backendNodeId })) as { model: BoxModel };
-      const { x, y } = boxCenter(box.model);
-      await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-      await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      await this.clickAt(backendNodeId);
       return;
     }
 
@@ -258,6 +279,45 @@ export class ApplicationExecutor {
     this.requireAction('capture');
     const result = (await this.send('Page.captureScreenshot', {})) as { data: string };
     return result.data;
+  }
+
+  /**
+   * Clicks the identified submit control for real, via the same box-model-center mouse click
+   * `fill()` already uses for a checkbox (`clickAt`) -- there is no allowed CDP method that
+   * submits a form directly (and none should exist: a real click is what a real applicant does,
+   * and is what the page's own submit-handler, validation, and any fraud/bot scoring actually
+   * observe).
+   *
+   * `controlRef` must name the *same* control `submit-control.ts`'s `resolveSubmitControl` would
+   * itself pick out of the current snapshot's `submitControls` -- this method re-derives that
+   * resolution and refuses if `controlRef` names anything else, rather than trusting the caller to
+   * have called `resolveSubmitControl` correctly (an earlier version of this method took that on
+   * faith; a caller bug, or any future code path that hands `submit()` a raw ref from the
+   * unfiltered `submitControls` list, would have had no structural check stopping it from clicking
+   * a "Cancel" or "Save as draft" button that happened to share the snapshot with a genuine one).
+   * It also refuses outright when the current snapshot reports `challengeDetected` -- the one
+   * `handoff('captcha')` signal this package can check for itself, on the one action here with no
+   * undo, even though `fill`/`select`/`attach` don't perform the same check (their effects are
+   * reversible; this one isn't).
+   *
+   * None of this is a substitute for the orchestrator's own responsibility: the pre-submit content
+   * gate, and above all a specific human's per-instance confirmation that this exact filled
+   * application should be sent. By the time `submit()` is called, that decision must already have
+   * been made -- this method only guards against clicking the *wrong* control once that decision
+   * has been made, not whether the decision to submit at all was a sound one.
+   */
+  async submit(controlRef: string): Promise<void> {
+    this.requireAction('submit');
+    if (!this.#currentSnapshot) throw new ExecutorPolicyError('submit', 'no current snapshot to submit from');
+    if (this.#currentSnapshot.challengeDetected) {
+      throw new ExecutorPolicyError('submit', 'refusing to submit: the current snapshot has an active CAPTCHA/bot-detection challenge');
+    }
+    const resolved = resolveSubmitControl(this.#currentSnapshot.submitControls);
+    if (!resolved || resolved.controlRef !== controlRef) {
+      throw new ExecutorPolicyError('submit', `controlRef ${controlRef} is not the sole resolved submit control for the current snapshot`);
+    }
+    const backendNodeId = this.nodeIdFor('submit', controlRef);
+    await this.clickAt(backendNodeId);
   }
 
   /** A pure state transition -- no CDP call. Surfaces the live view to the user and stops the

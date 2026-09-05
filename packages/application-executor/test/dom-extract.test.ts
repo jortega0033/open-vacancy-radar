@@ -224,3 +224,164 @@ describe('extractSnapshotFields: challenge detection', () => {
     expect(extractSnapshotFields(root).challengeDetected).toBe(false);
   });
 });
+
+describe('extractSnapshotFields: submit control detection', () => {
+  it('detects a plain <button> as submit-shaped by default (no explicit type)', () => {
+    const root = node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] });
+    const { submitControls } = extractSnapshotFields(root);
+    expect(submitControls).toHaveLength(1);
+    expect(submitControls[0]!.label).toBe('Submit Application');
+  });
+
+  it('detects an <input type="submit"> and reads its label from value', () => {
+    const root = node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'submit', value: 'Apply Now' }) });
+    const { submitControls } = extractSnapshotFields(root);
+    expect(submitControls).toHaveLength(1);
+    expect(submitControls[0]!.label).toBe('Apply Now');
+  });
+
+  it('falls back to "Submit" when an <input type="submit"> has no value attribute', () => {
+    const root = node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'submit' }) });
+    expect(extractSnapshotFields(root).submitControls[0]!.label).toBe('Submit');
+  });
+
+  it('does not treat a <button type="button"> or <button type="reset"> as submit-shaped', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'BUTTON', attributes: attrsFrom({ type: 'button' }), children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Back', backendNodeId: 0 }] }),
+        node({ nodeName: 'BUTTON', attributes: attrsFrom({ type: 'reset' }), children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Clear', backendNodeId: 0 }] }),
+      ],
+    });
+    expect(extractSnapshotFields(root).submitControls).toHaveLength(0);
+  });
+
+  it('never surfaces an <input type="submit"> as a fillable field', () => {
+    const root = node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'submit', value: 'Submit' }) });
+    const { fields, submitControls } = extractSnapshotFields(root);
+    expect(fields).toHaveLength(0);
+    expect(submitControls).toHaveLength(1);
+  });
+
+  it('skips a disabled or hidden submit button entirely', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'BUTTON', attributes: attrsFrom({ disabled: '' }), children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit', backendNodeId: 0 }] }),
+        node({ nodeName: 'BUTTON', attributes: attrsFrom({ hidden: '' }), children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit', backendNodeId: 0 }] }),
+      ],
+    });
+    expect(extractSnapshotFields(root).submitControls).toHaveLength(0);
+  });
+
+  it('gives each submit control a distinct controlRef mapped to its own backendNodeId', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'submit', value: 'Submit' }) }),
+        node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Apply', backendNodeId: 0 }] }),
+      ],
+    });
+    const { submitControls, nodeIds } = extractSnapshotFields(root);
+    expect(submitControls).toHaveLength(2);
+    expect(submitControls[0]!.controlRef).not.toBe(submitControls[1]!.controlRef);
+    expect(nodeIds.get(submitControls[0]!.controlRef)).not.toBe(nodeIds.get(submitControls[1]!.controlRef));
+  });
+});
+
+describe('extractSnapshotFields: submit-control scoping (never a candidate from an unrelated form/frame)', () => {
+  it('excludes a submit button inside a different <form> than the one the real fields are in', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({
+          nodeName: 'FORM',
+          children: [
+            node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) }),
+            node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] }),
+          ],
+        }),
+        node({
+          // A newsletter-signup mini-form elsewhere on the same page -- a real, unrelated <form>.
+          nodeName: 'FORM',
+          children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'submit', value: 'Subscribe' }) })],
+        }),
+      ],
+    });
+    const { fields, submitControls } = extractSnapshotFields(root);
+    expect(fields).toHaveLength(1);
+    expect(submitControls).toHaveLength(1);
+    expect(submitControls[0]!.label).toBe('Submit Application');
+  });
+
+  it('excludes a submit-shaped button outside any <form> when the real fields are inside one', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({
+          nodeName: 'FORM',
+          children: [
+            node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) }),
+            node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] }),
+          ],
+        }),
+        // A header search box's own submit-shaped button, outside the application <form> entirely.
+        node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Send', backendNodeId: 0 }] }),
+      ],
+    });
+    const { submitControls } = extractSnapshotFields(root);
+    expect(submitControls).toHaveLength(1);
+    expect(submitControls[0]!.label).toBe('Submit Application');
+  });
+
+  it('excludes a submit control found in a different iframe than the one the real fields are in', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          contentDocument: node({
+            nodeName: '#document',
+            children: [
+              node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) }),
+              node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] }),
+            ],
+          }),
+        }),
+        // A chat-widget iframe elsewhere on the page, unrelated to the application form.
+        node({
+          nodeName: 'IFRAME',
+          contentDocument: node({
+            nodeName: '#document',
+            children: [node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Send', backendNodeId: 0 }] })],
+          }),
+        }),
+      ],
+    });
+    const { fields, submitControls } = extractSnapshotFields(root);
+    expect(fields).toHaveLength(1);
+    expect(submitControls).toHaveLength(1);
+    expect(submitControls[0]!.label).toBe('Submit Application');
+  });
+
+  it('does not descend into an IFRAME with no contentDocument (pierce not requested, or not yet loaded)', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) }),
+        node({ nodeName: 'IFRAME', attributes: attrsFrom({ src: 'https://example.invalid/widget' }) }),
+      ],
+    });
+    const { fields, submitControls } = extractSnapshotFields(root);
+    expect(fields).toHaveLength(1);
+    expect(submitControls).toHaveLength(0);
+  });
+
+  it('falls back to the top-level frame/no-form scope when there are no fields to derive a dominant scope from', () => {
+    // A field-less "review and submit" final step: nothing to compare a candidate's scope
+    // against, so the top document's own submit button must still be a candidate.
+    const root = node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] });
+    const { submitControls } = extractSnapshotFields(root);
+    expect(submitControls).toHaveLength(1);
+  });
+});

@@ -267,7 +267,10 @@ describe('ApplicationsPage', () => {
     });
 
     it('opens a read-only detail drawer with the checkpoint, JD snapshot, and documents; has no edit affordance', async () => {
+      // Any non-'ready' checkpoint: 'ready' is the one state that opens the review-and-submit
+      // session instead (see the dedicated test for that below), not this read-only drawer.
       const attempt = makeAttempt({
+        checkpoint: 'needs_user',
         checkpointDetail: 'Waiting for you to review the tailored CV.',
         jdSnapshot: 'Full job description text here.',
       });
@@ -297,6 +300,174 @@ describe('ApplicationsPage', () => {
       const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
       fireEvent.click(closeButtons[closeButtons.length - 1]!);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('opens the review-and-submit session, not the read-only drawer, for a `ready` attempt (issue #202)', async () => {
+      const attempt = makeAttempt(); // default checkpoint: 'ready'
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      const resolveTargetPolicyId = vi.fn().mockResolvedValue(null); // simplest case: no eligible policy
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId,
+        openReview: vi.fn(),
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/review & submit/i)).toBeInTheDocument();
+      await waitFor(() => expect(resolveTargetPolicyId).toHaveBeenCalledWith(attempt.canonicalUrl));
+      await waitFor(() => expect(within(dialog).getByText(/isn.t one of the platforms reviewed/i)).toBeInTheDocument());
+    });
+
+    it('disables the close button and backdrop while a decision is in flight, so closing mid-submit cannot tear down the view under it', async () => {
+      // Real gap found during #202's own review: destroying the view mid-click could turn a clean
+      // submit into a forced submission_unknown purely because the close affordance wasn't
+      // disabled at the one moment it most needed to be.
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      let resolveSubmit!: (value: { ok: boolean }) => void;
+      const submitReview = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { resolveSubmit = resolve; }));
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue({
+          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
+          screenshotBase64: 'ZmFrZQ==',
+        }),
+        applyFieldMap: vi.fn(),
+        submitReview,
+        closeReview: vi.fn().mockResolvedValue(undefined),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+
+      await waitFor(() => expect(submitReview).toHaveBeenCalled());
+      // The header "✕" button and the modal-backdrop button share the accessible name "Close".
+      const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
+      expect(closeButtons).toHaveLength(2);
+      for (const button of closeButtons) expect(button).toBeDisabled();
+
+      resolveSubmit({ ok: true });
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('approving the swipe card submits the attempt for real and returns to the list', async () => {
+      const attempt = makeAttempt();
+      const updateApplicationAttempt = vi.fn().mockResolvedValue(attempt);
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        updateApplicationAttempt,
+      });
+      const closeReview = vi.fn().mockResolvedValue(undefined);
+      const submitReview = vi.fn().mockResolvedValue({ ok: true });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue({
+          snapshot: { generation: 1, fields: [{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true }], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
+          screenshotBase64: 'ZmFrZQ==',
+        }),
+        applyFieldMap: vi.fn(),
+        submitReview,
+        closeReview,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+
+      await waitFor(() => expect(submitReview).toHaveBeenCalledWith(attempt.id));
+      await waitFor(() => expect(closeReview).toHaveBeenCalledWith(attempt.id));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('skipping the swipe card closes the review and marks the attempt skipped, without ever calling submitReview', async () => {
+      const attempt = makeAttempt();
+      const updateApplicationAttempt = vi.fn().mockResolvedValue(attempt);
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        updateApplicationAttempt,
+      });
+      const closeReview = vi.fn().mockResolvedValue(undefined);
+      const submitReview = vi.fn();
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue({
+          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
+          screenshotBase64: 'ZmFrZQ==',
+        }),
+        applyFieldMap: vi.fn(),
+        submitReview,
+        closeReview,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /^skip$/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /^skip$/i }));
+
+      await waitFor(() => expect(closeReview).toHaveBeenCalledWith(attempt.id));
+      await waitFor(() => expect(updateApplicationAttempt).toHaveBeenCalledWith(attempt.id, { checkpoint: 'skipped' }));
+      expect(submitReview).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('a refused submission surfaces the reason and leaves the list unclosed rather than pretending success', async () => {
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue({
+          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
+          screenshotBase64: 'ZmFrZQ==',
+        }),
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn().mockResolvedValue({ ok: false, reason: 'company_not_found_in_documents', detail: '"Acme Corp" does not appear in the rendered documents' }),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /submit application/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
+
+      await waitFor(() => expect(within(dialog).getByText(/does not appear in the rendered documents/i)).toBeInTheDocument());
     });
 
     it('surfaces an attempts load error without crashing', async () => {

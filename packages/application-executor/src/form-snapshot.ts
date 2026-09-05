@@ -23,6 +23,16 @@ export interface SnapshotOption {
   label: string;
 }
 
+/** A `<button>` (default-submit or explicit `type="submit"`) or `<input type="submit">` found
+ * anywhere on the page at snapshot time. Deliberately not a `SnapshotField`: it is never a target
+ * for `fill`/`select`/`attach`, and a field map (`field-map.ts`) never assigns anything to it --
+ * the only action that ever targets a `controlRef` is `submit()` itself, chosen by
+ * `submit-control.ts`'s `resolveSubmitControl`, never by the LLM generation session. */
+export interface SnapshotSubmitControl {
+  controlRef: string;
+  label: string;
+}
+
 export interface SnapshotField {
   fieldRef: string;
   label: string;
@@ -42,6 +52,10 @@ export interface SnapshotField {
 export interface FormSnapshot {
   generation: number;
   fields: readonly SnapshotField[];
+  /** Every submit-shaped button/input found on the page, unfiltered -- `submit-control.ts`'s
+   * `resolveSubmitControl` is what narrows this to the one real "submit this application" control,
+   * or refuses when the page has none or more than one plausible candidate. */
+  submitControls: readonly SnapshotSubmitControl[];
   /** ISO-8601 */
   capturedAt: string;
   /** Whether a known CAPTCHA/bot-detection widget was found anywhere on the page at snapshot time.
@@ -50,7 +64,7 @@ export interface FormSnapshot {
   challengeDetected: boolean;
 }
 
-function mintRef(prefix: 'f' | 'o'): string {
+function mintRef(prefix: 'f' | 'o' | 'c'): string {
   return `${prefix}${randomBytes(8).toString('hex')}`;
 }
 
@@ -62,6 +76,10 @@ export function mintOptionRef(): string {
   return mintRef('o');
 }
 
+export function mintSubmitControlRef(): string {
+  return mintRef('c');
+}
+
 /** Looks up one field by ref within a snapshot. Returns `undefined` for a ref from a different
  * snapshot generation or a different attempt entirely -- the caller (`validate.ts`) is what turns
  * that into a refusal, not this lookup. */
@@ -71,4 +89,8 @@ export function findSnapshotField(snapshot: FormSnapshot, fieldRef: string): Sna
 
 export function findSnapshotOption(field: SnapshotField, optionRef: string): SnapshotOption | undefined {
   return field.options?.find((option) => option.optionRef === optionRef);
+}
+
+export function findSnapshotSubmitControl(snapshot: FormSnapshot, controlRef: string): SnapshotSubmitControl | undefined {
+  return snapshot.submitControls.find((control) => control.controlRef === controlRef);
 }
