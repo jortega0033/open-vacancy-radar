@@ -1106,3 +1106,99 @@ describe('electron/preload.ts: ADI-07 left the six earlier namespaces alone', ()
     }
   });
 });
+
+const ENTRY = { attemptId: 'attempt-1', state: 'queued', queuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+
+describe('electron/preload.ts: applicationQueue bridge (#200)', () => {
+  it('exposes exactly the six documented capability functions and nothing else', async () => {
+    const api = await loadPreload('applicationQueue');
+    expect(Object.keys(api).sort()).toEqual(
+      ['enqueue', 'pause', 'resume', 'skip', 'cancel', 'getStatus', 'onActivity'].sort(),
+    );
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('exposes no generic IPC passthrough', async () => {
+    const api = await loadPreload('applicationQueue');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+  });
+
+  it('maps every verb to exactly one hard-coded application-queue: channel, passing the id straight through', async () => {
+    const cases: [name: string, channel: string][] = [
+      ['enqueue', 'application-queue:enqueue'],
+      ['pause', 'application-queue:pause'],
+      ['resume', 'application-queue:resume'],
+      ['skip', 'application-queue:skip'],
+      ['cancel', 'application-queue:cancel'],
+    ];
+    for (const [name, channel] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValue(ENTRY);
+      const api = await loadPreload('applicationQueue');
+      await (api[name] as (id: string) => Promise<unknown>)('attempt-1');
+      expect(invoke, name).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(channel, 'attempt-1');
+    }
+  });
+
+  it('throws rather than returning a fabricated entry when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationQueue');
+    await expect((api.enqueue as (id: string) => Promise<unknown>)('attempt-1')).rejects.toThrow(
+      /unexpected response/,
+    );
+  });
+
+  it('getStatus rebuilds entries and lease independently, dropping an unrecognized entry rather than the whole list', async () => {
+    invoke.mockResolvedValue({
+      entries: [ENTRY, { attemptId: 'bad' /* missing state/queuedAt/updatedAt */ }],
+      lease: { leaseId: 'lease-1', attemptId: 'attempt-1', acquiredAt: '2026-01-01T00:00:00.000Z' },
+    });
+    const api = await loadPreload('applicationQueue');
+    const status = await (api.getStatus as () => Promise<{ entries: unknown[]; lease: unknown }>)();
+    expect(status.entries).toEqual([ENTRY]);
+    expect(status.lease).toEqual({ leaseId: 'lease-1', attemptId: 'attempt-1', acquiredAt: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('getStatus reports lease: null for both an absent and a malformed lease', async () => {
+    invoke.mockResolvedValueOnce({ entries: [], lease: null });
+    const api = await loadPreload('applicationQueue');
+    expect((await (api.getStatus as () => Promise<{ lease: unknown }>)()).lease).toBeNull();
+
+    invoke.mockResolvedValueOnce({ entries: [], lease: { leaseId: 'only-one-field' } });
+    const api2 = await loadPreload('applicationQueue');
+    expect((await (api2.getStatus as () => Promise<{ lease: unknown }>)()).lease).toBeNull();
+  });
+
+  it('onActivity delivers a well-formed event and can be unsubscribed', async () => {
+    const api = await loadPreload('applicationQueue');
+    const received: unknown[] = [];
+    const unsubscribe = (api.onActivity as (cb: (e: unknown) => void) => () => void)((event) => received.push(event));
+
+    expect(on).toHaveBeenCalledWith('application-queue:activity', expect.any(Function));
+    const listener = on.mock.calls[0]?.[1] as (event: unknown, payload: unknown) => void;
+    listener({}, { seq: 3, at: '2026-01-01T00:00:00.000Z', type: 'lease_acquired', attemptId: 'attempt-1' });
+
+    expect(received).toEqual([{ seq: 3, at: '2026-01-01T00:00:00.000Z', type: 'lease_acquired', attemptId: 'attempt-1' }]);
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('application-queue:activity', listener);
+  });
+
+  it('onActivity drops a malformed payload rather than delivering a fabricated event', async () => {
+    const api = await loadPreload('applicationQueue');
+    const received: unknown[] = [];
+    (api.onActivity as (cb: (e: unknown) => void) => () => void)((event) => received.push(event));
+    const listener = on.mock.calls[0]?.[1] as (event: unknown, payload: unknown) => void;
+
+    listener({}, { seq: 'not-a-number', at: 'x', type: 'lease_acquired', attemptId: 'a' });
+    listener({}, { seq: 1, at: 'x', type: 'not-a-real-type', attemptId: 'a' });
+    listener({}, null);
+
+    expect(received).toEqual([]);
+  });
+});

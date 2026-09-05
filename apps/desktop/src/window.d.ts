@@ -168,6 +168,18 @@ export type {
   StartSessionDenialReason,
 } from '../electron/agent-workspace-types.js';
 
+/** #200. Short and content-free enough that a hand-written mirror is cheap, same reasoning as the
+ * three bridges above -- the import is type-only and erased at compile time. */
+export type {
+  ApplicationQueueBridge,
+  ApplicationQueueEntry,
+  ApplicationQueueEntryState,
+  ApplicationQueueEvent,
+  ApplicationQueueEventType,
+  ApplicationQueueLease,
+  ApplicationQueueStatus,
+} from '../electron/application-queue-types.js';
+
 /**
  * The workspace record/input types are *imported* from the Electron side rather than re-declared
  * here, unlike the three bridges above. Those are short enough that a hand-written mirror is
@@ -220,6 +232,9 @@ declare global {
     workspaceGrant: WorkspaceGrantBridge;
     /** ADI-07. The seventh namespace: read v2 sessions, and stream sanitized live activity. */
     agentWorkspace: import('../electron/agent-workspace-types.js').AgentWorkspaceBridge;
+    /** #200. The eighth namespace: the daemon-owned application queue -- enqueue/pause/resume/
+     * skip/cancel an attempt by opaque id, and stream its (content-free) live activity. */
+    applicationQueue: import('../electron/application-queue-types.js').ApplicationQueueBridge;
   }
 }
 
