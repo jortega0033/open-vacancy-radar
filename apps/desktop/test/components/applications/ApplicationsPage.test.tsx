@@ -1,8 +1,31 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApplicationsPage } from '../../../src/components/applications/index.js';
-import type { ApplicationRecord } from '../../../src/window.js';
+import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
+
+function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): ApplicationAttemptRecord {
+  return {
+    id: overrides.id ?? 'attempt-1',
+    applicationId: null,
+    vacancyKey: null,
+    canonicalUrl: 'https://jobs.example.com/apply/123',
+    company: 'Acme Corp',
+    role: 'Senior Frontend Engineer',
+    sourceCvId: null,
+    sourceCvContentHash: 'hash-1',
+    jdSnapshot: 'We are looking for a Senior Frontend Engineer to join our team.',
+    jdSnapshotHash: 'jd-hash-1',
+    jdComplete: true,
+    workflowVersion: 'v1',
+    checkpoint: 'ready',
+    checkpointDetail: '',
+    createdAt: '2026-08-20T10:00:00.000Z',
+    updatedAt: '2026-08-20T10:00:00.000Z',
+    submittedAt: null,
+    ...overrides,
+  };
+}
 
 function makeApplication(overrides: Partial<ApplicationRecord> = {}): ApplicationRecord {
   return {
@@ -195,5 +218,111 @@ describe('ApplicationsPage', () => {
     render(<ApplicationsPage />);
 
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
+  });
+
+  describe('In progress tab (issue #202)', () => {
+    it('loads attempts only when the tab is opened, never alongside the applications tabs', async () => {
+      const listApplications = vi.fn().mockResolvedValue([]);
+      const listApplicationAttempts = vi.fn().mockResolvedValue([]);
+      installWorkspaceBridge({ listApplications, listApplicationAttempts });
+
+      render(<ApplicationsPage />);
+      await waitFor(() => expect(listApplications).toHaveBeenCalledWith('active'));
+      expect(listApplicationAttempts).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(listApplicationAttempts).toHaveBeenCalledTimes(1));
+    });
+
+    it('shows an empty state when there are no in-progress attempts', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([]),
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+
+      await waitFor(() => expect(screen.getByText('Nothing in progress')).toBeInTheDocument());
+    });
+
+    it('renders attempts sorted by most recently updated, with a readable checkpoint label', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([
+          makeAttempt({ id: 'older', role: 'Older Attempt', updatedAt: '2026-01-01T00:00:00.000Z', checkpoint: 'needs_user' }),
+          makeAttempt({ id: 'newer', role: 'Newer Attempt', updatedAt: '2026-08-01T00:00:00.000Z', checkpoint: 'tailoring' }),
+        ]),
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+
+      await waitFor(() => expect(screen.getByText('Newer Attempt')).toBeInTheDocument());
+      const [firstRow, secondRow] = screen.getAllByRole('row').slice(1);
+      expect(within(firstRow!).getByText('Newer Attempt')).toBeInTheDocument();
+      expect(within(firstRow!).getByText('Tailoring CV')).toBeInTheDocument();
+      expect(within(secondRow!).getByText('Older Attempt')).toBeInTheDocument();
+      expect(within(secondRow!).getByText('Needs your input')).toBeInTheDocument();
+    });
+
+    it('opens a read-only detail drawer with the checkpoint, JD snapshot, and documents; has no edit affordance', async () => {
+      const attempt = makeAttempt({
+        checkpointDetail: 'Waiting for you to review the tailored CV.',
+        jdSnapshot: 'Full job description text here.',
+      });
+      const listApplicationArtifacts = vi.fn().mockResolvedValue([
+        { id: 'art-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'cv.pdf', mimeType: 'application/pdf', byteSize: 51200, contentHash: 'h', storagePath: '', createdAt: '2026-08-20T10:00:00.000Z' },
+      ]);
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts,
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Waiting for you to review the tailored CV.')).toBeInTheDocument();
+      expect(listApplicationArtifacts).toHaveBeenCalledWith(attempt.id);
+      await waitFor(() => expect(within(dialog).getByText('Tailored CV')).toBeInTheDocument());
+      expect(within(dialog).queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+
+      // Two buttons share the accessible name "Close" here (the header's icon button and the
+      // footer's text button); the footer one is the second in document order.
+      const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
+      fireEvent.click(closeButtons[closeButtons.length - 1]!);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('surfaces an attempts load error without crashing', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockRejectedValue(new Error('workspace unreachable')),
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+
+      await waitFor(() => expect(screen.getByText(/workspace unreachable/i)).toBeInTheDocument());
+    });
+
+    it('hides the "Add application" button while on the In progress tab', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([]),
+      });
+
+      render(<ApplicationsPage />);
+      expect(screen.getByRole('button', { name: /^add application$/i })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Nothing in progress')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /^add application$/i })).not.toBeInTheDocument();
+    });
   });
 });

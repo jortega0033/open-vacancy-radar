@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
+  ApplicationAttemptRecord,
   ApplicationFilter,
   ApplicationInput,
   ApplicationRecord,
@@ -10,11 +11,15 @@ import type {
 } from '../../window.js';
 import emptyApplicationsIllustration from '../../../assets/illustrations/empty-applications.svg?no-inline';
 import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
+import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
+import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
+import { sortAttempts } from './attempt-status.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
+type PageTab = ApplicationFilter | 'in_progress';
 
 interface PendingUndo {
   message: string;
@@ -38,9 +43,13 @@ function describeError(err: unknown, fallback: string): string {
  * the shell's router can pick it up once every page agent's work has landed.
  */
 export function ApplicationsPage() {
-  const [filter, setFilter] = useState<ApplicationFilter>('active');
+  const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
+
+  const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
+  const [attemptsError, setAttemptsError] = useState<string>();
+  const [openAttempt, setOpenAttempt] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedJobs, setSavedJobs] = useState<readonly SavedJobRecord[]>([]);
   const [cvDocuments, setCvDocuments] = useState<readonly CvDocumentRecord[]>([]);
@@ -79,11 +88,12 @@ export function ApplicationsPage() {
   }, []);
 
   useEffect(() => {
+    if (activeTab === 'in_progress') return;
     let cancelled = false;
     setLoadError(undefined);
     async function load() {
       try {
-        const rows = await window.workspace.listApplications(filter);
+        const rows = await window.workspace.listApplications(activeTab as ApplicationFilter);
         if (!cancelled) setApplications(rows);
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'could not load applications'));
@@ -93,9 +103,30 @@ export function ApplicationsPage() {
     return () => {
       cancelled = true;
     };
-  }, [filter]);
+  }, [activeTab]);
+
+  // In-progress attempts are read-only and unrelated to the active/archived/all filter above, so
+  // they load once when that tab is first opened rather than re-fetching on every tab switch.
+  useEffect(() => {
+    if (activeTab !== 'in_progress' || attempts !== null) return;
+    let cancelled = false;
+    setAttemptsError(undefined);
+    async function load() {
+      try {
+        const rows = await window.workspace.listApplicationAttempts();
+        if (!cancelled) setAttempts(rows);
+      } catch (err) {
+        if (!cancelled) setAttemptsError(describeError(err, 'could not load in-progress applications'));
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, attempts]);
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
+  const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
 
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
@@ -138,7 +169,7 @@ export function ApplicationsPage() {
           // The active/archived tabs are server-filtered by `listApplications({ filter })`; if
           // this toggle moved the row out of the tab currently on screen, drop it locally rather
           // than leaving a stale row visible until the next reload.
-          const belongsToCurrentTab = filter === 'all' || updated.archived === (filter === 'archived');
+          const belongsToCurrentTab = activeTab === 'all' || updated.archived === (activeTab === 'archived');
           if (!belongsToCurrentTab) return rows.filter((row) => row.id !== updated.id);
           return rows.map((row) => (row.id === updated.id ? updated : row));
         });
@@ -146,7 +177,7 @@ export function ApplicationsPage() {
         setActionError(describeError(err, 'could not update this application'));
       }
     },
-    [filter],
+    [activeTab],
   );
 
   const requestDelete = useCallback((record: ApplicationRecord) => {
@@ -189,16 +220,21 @@ export function ApplicationsPage() {
     }
   }, [pendingUndo]);
 
+  const isInProgressTab = activeTab === 'in_progress';
   const isLoading = applications === null;
   const isEmpty = !isLoading && sortedApplications.length === 0;
+  const isAttemptsLoading = attempts === null;
+  const isAttemptsEmpty = !isAttemptsLoading && sortedAttempts.length === 0;
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Applications</h2>
-        <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
-          Add application
-        </button>
+        {!isInProgressTab && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
+            Add application
+          </button>
+        )}
       </div>
 
       <div role="tablist" className="tabs tabs-border mt-4">
@@ -207,54 +243,94 @@ export function ApplicationsPage() {
             key={tab.key}
             type="button"
             role="tab"
-            aria-selected={filter === tab.key}
-            className={`tab ${filter === tab.key ? 'tab-active' : ''}`}
-            onClick={() => setFilter(tab.key)}
+            aria-selected={activeTab === tab.key}
+            className={`tab ${activeTab === tab.key ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
           >
             {tab.label}
           </button>
         ))}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isInProgressTab}
+          className={`tab ${isInProgressTab ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('in_progress')}
+        >
+          In progress
+        </button>
       </div>
 
-      {loadError && (
-        <div className="alert alert-error mt-4" role="alert">
-          {loadError}
-        </div>
-      )}
-      {actionError && (
-        <div className="alert alert-error mt-4" role="alert">
-          {actionError}
-        </div>
+      {!isInProgressTab && (
+        <>
+          {loadError && (
+            <div className="alert alert-error mt-4" role="alert">
+              {loadError}
+            </div>
+          )}
+          {actionError && (
+            <div className="alert alert-error mt-4" role="alert">
+              {actionError}
+            </div>
+          )}
+
+          {isLoading && !loadError && <div className="alert alert-info mt-4">Loading applications…</div>}
+
+          {isEmpty && (
+            <EmptyState
+              illustration={emptyApplicationsIllustration}
+              title={emptyStateTitle(activeTab)}
+              description="Track roles you're preparing for, applying to, or already hearing back from."
+              action={
+                activeTab !== 'archived' ? (
+                  <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
+                    Add your first application
+                  </button>
+                ) : undefined
+              }
+            />
+          )}
+
+          {!isLoading && sortedApplications.length > 0 && (
+            <div className="mt-4">
+              <ApplicationsTable
+                applications={sortedApplications}
+                onStatusChange={handleStatusChange}
+                onEdit={openEditDrawer}
+                onToggleArchive={handleToggleArchive}
+                onDelete={requestDelete}
+              />
+            </div>
+          )}
+        </>
       )}
 
-      {isLoading && !loadError && <div className="alert alert-info mt-4">Loading applications…</div>}
+      {isInProgressTab && (
+        <>
+          {attemptsError && (
+            <div className="alert alert-error mt-4" role="alert">
+              {attemptsError}
+            </div>
+          )}
 
-      {isEmpty && (
-        <EmptyState
-          illustration={emptyApplicationsIllustration}
-          title={emptyStateTitle(filter)}
-          description="Track roles you're preparing for, applying to, or already hearing back from."
-          action={
-            filter !== 'archived' ? (
-              <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
-                Add your first application
-              </button>
-            ) : undefined
-          }
-        />
+          {isAttemptsLoading && !attemptsError && <div className="alert alert-info mt-4">Loading…</div>}
+
+          {isAttemptsEmpty && (
+            <EmptyState
+              title="Nothing in progress"
+              description="Applications the assistant is preparing, filling in, or waiting on you for will show up here."
+            />
+          )}
+
+          {!isAttemptsLoading && sortedAttempts.length > 0 && (
+            <div className="mt-4">
+              <ApplicationAttemptsTable attempts={sortedAttempts} onOpen={setOpenAttempt} />
+            </div>
+          )}
+        </>
       )}
 
-      {!isLoading && sortedApplications.length > 0 && (
-        <div className="mt-4">
-          <ApplicationsTable
-            applications={sortedApplications}
-            onStatusChange={handleStatusChange}
-            onEdit={openEditDrawer}
-            onToggleArchive={handleToggleArchive}
-            onDelete={requestDelete}
-          />
-        </div>
-      )}
+      {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
 
       {drawerState && (
         <ApplicationDrawer
