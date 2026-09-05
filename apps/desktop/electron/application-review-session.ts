@@ -1,12 +1,19 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap } from '@agent-dock/application-executor';
+import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
 import { createApplicationView, type ApplicationView } from './application-view.js';
-import { resolveApplicationTargetPolicy } from './application-target-policies.js';
+import { resolveApplicationTargetPolicy, resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { runPreSubmitGate, type PreSubmitGateRefusalReason } from './application-submit-gate.js';
+import {
+  checkAutomaticEligibility,
+  checkRateLimits,
+  type AutomaticEligibilityRefusalReason,
+  type RateLimitRefusalReason,
+} from './automatic-submission-guardrails.js';
 import { extractPdfText } from './cv-text.js';
 import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
+import type { ApplicationAttemptRecord } from './workspace/types.js';
 import type {
   ApplyApplicationFieldMapInput,
   ApplyApplicationFieldMapResult,
@@ -131,6 +138,18 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
+/** A deterministic fingerprint of a snapshot's own field structure -- label, control type, and
+ * required-ness, sorted so field order (which can shift between snapshots of the same real page)
+ * never changes the result. Never a value: this exists to detect when the *page itself* changed
+ * since a human last reviewed it (#203 scope item 1), not to compare what was typed into it. */
+function computeFormStructureHash(snapshot: FormSnapshot): string {
+  const structure = snapshot.fields
+    .map((field) => `${field.label}|${field.controlType}|${field.required}`)
+    .sort()
+    .join('||');
+  return sha256(structure);
+}
+
 /**
  * The one function in this app that can produce a real, irreversible side effect (#202): runs the
  * pre-submit validation gate (`application-submit-gate.ts`) against freshly recomputed state, then
@@ -161,7 +180,11 @@ function sha256(text: string): string {
  * attempted) is genuinely ambiguous and lands on `submission_unknown`, per #202's own acceptance
  * criteria: "never silently retries or silently drops."
  */
-export async function submitApplicationReview(db: WorkspaceDb, attemptId: string): Promise<SubmitApplicationReviewResult> {
+export async function submitApplicationReview(
+  db: WorkspaceDb,
+  attemptId: string,
+  mode: 'manual' | 'automatic' = 'manual',
+): Promise<SubmitApplicationReviewResult> {
   const active = activeReviews.get(attemptId);
   if (!active) return { ok: false, reason: 'no_open_review', detail: `no open review for attempt ${attemptId}` };
   const snapshot = active.executor.currentSnapshot;
@@ -226,8 +249,146 @@ export async function submitApplicationReview(db: WorkspaceDb, attemptId: string
     return { ok: false, reason: 'submission_unknown', detail };
   }
 
-  workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submitted', submittedAt: new Date().toISOString() });
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: 'submitted',
+    submittedAt: new Date().toISOString(),
+    submissionMode: mode,
+    formStructureHash: computeFormStructureHash(snapshot),
+  });
   return { ok: true };
+}
+
+/** Real time between an attempt being cleared for automatic submission and the submit action
+ * actually firing -- #203 scope item 4's cancel/undo window, the closest approximation to
+ * reversibility this feature can offer. A person can cancel any time before it elapses. */
+export const AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS = 3 * 60 * 1000;
+
+export type AutomaticSubmissionRefusalReason =
+  | 'no_open_review'
+  | 'no_snapshot'
+  | 'unresolved_policy'
+  | 'not_eligible_for_automation'
+  | 'no_active_grant'
+  | RateLimitRefusalReason
+  | AutomaticEligibilityRefusalReason;
+
+export interface AutomaticSubmissionCheckResult {
+  ok: boolean;
+  reason?: AutomaticSubmissionRefusalReason;
+  detail?: string;
+}
+
+function attemptsForPolicy(db: WorkspaceDb, policyId: string): ApplicationAttemptRecord[] {
+  return workspace.listApplicationAttempts(db).filter((attempt) => resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) === policyId);
+}
+
+/**
+ * Every guardrail #203 requires before an automatic submit may fire, evaluated fresh -- no
+ * guardrail's result is ever cached or trusted from an earlier call, since this same check runs
+ * once to *schedule* an automatic submit and again, independently, right before it actually fires
+ * (state can change in the cancel window between the two: the grant could be revoked, a rate limit
+ * could be hit by another attempt, an employer's form could change). Order matters only in that it
+ * checks structurally-cheaper things first; every check is otherwise independent.
+ */
+function checkAutomaticSubmissionEligibility(db: WorkspaceDb, attemptId: string, now: string): AutomaticSubmissionCheckResult {
+  const active = activeReviews.get(attemptId);
+  if (!active) return { ok: false, reason: 'no_open_review' };
+  const snapshot = active.executor.currentSnapshot;
+  if (!snapshot) return { ok: false, reason: 'no_snapshot' };
+
+  const attempt = workspace.getApplicationAttempt(db, attemptId);
+  const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
+  if (!policyId) return { ok: false, reason: 'unresolved_policy' };
+  const policy = resolveApplicationTargetPolicy(policyId);
+  if (!policy || !policy.termsEligibleForAutomation) return { ok: false, reason: 'not_eligible_for_automation' };
+
+  if (!workspace.findActiveAutomationGrant(db, policyId)) return { ok: false, reason: 'no_active_grant' };
+
+  const attemptsForThisPolicy = attemptsForPolicy(db, policyId);
+
+  const recentAutomaticSubmissions = attemptsForThisPolicy
+    .filter((a): a is ApplicationAttemptRecord & { submittedAt: string } => a.submissionMode === 'automatic' && a.submittedAt !== null)
+    .map((a) => ({ company: a.company, submittedAt: a.submittedAt }));
+  const rateLimitResult = checkRateLimits({ rateLimits: policy.rateLimits, company: attempt.company, now, recentAutomaticSubmissions });
+  if (!rateLimitResult.ok) return { ok: false, reason: rateLimitResult.reason, detail: rateLimitResult.detail };
+
+  const priorSubmittedAttempts = attemptsForThisPolicy
+    .filter((a): a is ApplicationAttemptRecord & { submittedAt: string } => a.checkpoint === 'submitted' && a.submittedAt !== null)
+    .map((a) => ({ company: a.company, formStructureHash: a.formStructureHash, submittedAt: a.submittedAt }));
+  const eligibilityResult = checkAutomaticEligibility({
+    company: attempt.company,
+    currentFormStructureHash: computeFormStructureHash(snapshot),
+    priorSubmittedAttempts,
+  });
+  if (!eligibilityResult.ok) return { ok: false, reason: eligibilityResult.reason, detail: eligibilityResult.detail };
+
+  return { ok: true };
+}
+
+export interface ScheduleAutomaticSubmissionResult extends AutomaticSubmissionCheckResult {
+  /** ISO-8601. Present only when `ok` is true. */
+  scheduledAutomaticSubmitAt?: string;
+}
+
+/** Runs every #203 guardrail and, only if all pass, queues the attempt for an automatic submit
+ * `AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS` from `now` -- never submits immediately, even when eligible. */
+export function evaluateAndScheduleAutomaticSubmission(
+  db: WorkspaceDb,
+  attemptId: string,
+  now: string = new Date().toISOString(),
+): ScheduleAutomaticSubmissionResult {
+  const check = checkAutomaticSubmissionEligibility(db, attemptId, now);
+  if (!check.ok) return check;
+
+  const scheduledAutomaticSubmitAt = new Date(Date.parse(now) + AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS).toISOString();
+  workspace.updateApplicationAttempt(db, attemptId, { scheduledAutomaticSubmitAt });
+  return { ok: true, scheduledAutomaticSubmitAt };
+}
+
+/** The one and only way to stop a scheduled automatic submit before it fires. Safe to call for an
+ * attempt that was never scheduled at all (a plain, redundant no-op). */
+export function cancelScheduledAutomaticSubmission(db: WorkspaceDb, attemptId: string): void {
+  workspace.updateApplicationAttempt(db, attemptId, { scheduledAutomaticSubmitAt: null });
+}
+
+export interface FiredAutomaticSubmission {
+  attemptId: string;
+  /** Either an automatic-submission guardrail refused (re-validated at fire time, so this can
+   * differ from whatever passed at scheduling time), or it passed every guardrail and the result
+   * is whatever `submitApplicationReview` itself returned. */
+  result: { ok: boolean; reason?: AutomaticSubmissionRefusalReason | SubmitApplicationReviewRefusalReason; detail?: string };
+}
+
+/**
+ * Finds every attempt whose cancel window has elapsed and, for each, re-validates every guardrail
+ * from scratch before actually submitting -- never trusting the check that scheduled it, since real
+ * time has passed and any of those guardrails could now refuse where they didn't before.
+ * `scheduledAutomaticSubmitAt` is cleared unconditionally up front for each one: whatever happens
+ * next -- a fresh refusal, or a real submit attempt -- this attempt is no longer "scheduled",
+ * falling back to manual review rather than staying silently queued forever.
+ *
+ * Intended to be called on a periodic timer from `main.ts` (or driven directly by a test); this
+ * function itself has no timer of its own; it only answers "what's due right now."
+ */
+export async function fireDueAutomaticSubmissions(db: WorkspaceDb, now: string = new Date().toISOString()): Promise<FiredAutomaticSubmission[]> {
+  const due = workspace
+    .listApplicationAttempts(db)
+    .filter((attempt) => attempt.scheduledAutomaticSubmitAt !== null && Date.parse(attempt.scheduledAutomaticSubmitAt) <= Date.parse(now));
+
+  const fired: FiredAutomaticSubmission[] = [];
+  for (const attempt of due) {
+    workspace.updateApplicationAttempt(db, attempt.id, { scheduledAutomaticSubmitAt: null });
+
+    const revalidated = checkAutomaticSubmissionEligibility(db, attempt.id, now);
+    if (!revalidated.ok) {
+      fired.push({ attemptId: attempt.id, result: { ok: false, reason: revalidated.reason, detail: revalidated.detail } });
+      continue;
+    }
+
+    const result = await submitApplicationReview(db, attempt.id, 'automatic');
+    fired.push({ attemptId: attempt.id, result });
+  }
+  return fired;
 }
 
 export async function closeApplicationReview(attemptId: string): Promise<void> {

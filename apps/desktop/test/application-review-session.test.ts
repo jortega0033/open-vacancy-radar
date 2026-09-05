@@ -342,7 +342,12 @@ describe('application-review-session', () => {
 
       expect(result).toEqual({ ok: true });
       expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(1, FAKE_DB, ATTEMPT_ID, { checkpoint: 'submitting' });
-      expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, { checkpoint: 'submitted', submittedAt: expect.any(String) });
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, {
+        checkpoint: 'submitted',
+        submittedAt: expect.any(String),
+        submissionMode: 'manual',
+        formStructureHash: expect.any(String),
+      });
       const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
       expect(calledMethods).toContain('Input.dispatchMouseEvent'); // the real submit click
     });
