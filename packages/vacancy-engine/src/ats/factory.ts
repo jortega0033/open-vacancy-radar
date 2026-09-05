@@ -5,6 +5,7 @@ import { GreenhouseAdapter } from './greenhouse.js';
 import { LeverAdapter } from './lever.js';
 import { PersonioAdapter } from './personio.js';
 import { RecruiteeAdapter } from './recruitee.js';
+import { RipplingAdapter } from './rippling.js';
 import { SmartRecruitersAdapter } from './smartrecruiters.js';
 import { SuccessFactorsAdapter } from './successfactors.js';
 import { TeamtailorAdapter } from './teamtailor.js';
@@ -34,6 +35,8 @@ export function createVacancyAdapter(provider: string, http: AtsHttpClient): Vac
       return new TeamtailorAdapter(http);
     case 'recruitee':
       return new RecruiteeAdapter(http);
+    case 'rippling':
+      return new RipplingAdapter(http);
     case 'smartrecruiters':
       return new SmartRecruitersAdapter(http);
     case 'successfactors':

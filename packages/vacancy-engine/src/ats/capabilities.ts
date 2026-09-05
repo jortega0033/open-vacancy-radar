@@ -92,6 +92,14 @@ export const ATS_CAPABILITIES: readonly AtsCapability[] = [
     note: 'Sequential pagination is capped at 100 pages and detail hydration at 500 jobs; cap hits remain incomplete.',
   },
   {
+    provider: 'rippling',
+    status: 'supported',
+    productionAdapter: true,
+    ingestionMode: 'linked_index',
+    retrieval: 'undocumented public board listing and detail JSON endpoints',
+    note: 'Endpoint shapes were confirmed live, not vendor-documented, so parsing is strict and detail fan-out is bounded like SmartRecruiters and Workday. List rows are grouped by uuid so a posting open in multiple locations still normalizes to one vacancy.',
+  },
+  {
     provider: 'successfactors',
     status: 'supported',
     productionAdapter: true,
