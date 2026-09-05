@@ -300,6 +300,12 @@ const workspaceApi: WorkspaceBridge = {
   listApplicationArtifacts(attemptId) {
     return ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
   },
+  listAutomationGrants() {
+    return ipcRenderer.invoke('workspace:automation-grants:list');
+  },
+  revokeAutomationGrant(id) {
+    return ipcRenderer.invoke('workspace:automation-grants:revoke', { id });
+  },
 };
 
 contextBridge.exposeInMainWorld('workspace', workspaceApi);

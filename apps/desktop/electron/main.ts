@@ -1704,6 +1704,18 @@ guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: 
   return workspace.listApplicationArtifacts(await ensureWorkspaceDb(), parseId(source.attemptId, 'attemptId'));
 });
 
+/**
+ * Read/revoke-only (issue #203) -- see `WorkspaceBridge`'s own comment on why creating a grant is
+ * deliberately NOT here: that requires a real native confirmation dialog, wired separately as
+ * `application-executor:request-automation-grant` below, not a plain IPC call any renderer code
+ * could reach.
+ */
+guardedIpc.handle('workspace:automation-grants:list', async () => workspace.listAutomationGrants(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:automation-grants:revoke', async (_event, input: unknown) =>
+  workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
 /*
  * ---------------------------------------------------------------------------------------------
  * System integration for the Settings page. One narrow verb: mirror the persisted

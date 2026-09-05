@@ -240,9 +240,11 @@ describe('electron/preload.ts: workspace bridge', () => {
     'getApplicationAttempt',
     'updateApplicationAttempt',
     'listApplicationArtifacts',
+    'listAutomationGrants',
+    'revokeAutomationGrant',
   ];
 
-  it('exposes exactly the twenty-five documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -494,6 +496,11 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getApplicationAttempt',
     'updateApplicationAttempt',
     'listApplicationArtifacts',
+    // Added by issue #203, same reasoning: read/revoke-only automation-grant access legitimately
+    // belongs on this namespace (creating a grant is deliberately NOT here -- see
+    // WorkspaceBridge's own comment on why that needs a native dialog instead).
+    'listAutomationGrants',
+    'revokeAutomationGrant',
   ],
   cv: ['getWorkspaceDir', 'selectAndRead'],
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],

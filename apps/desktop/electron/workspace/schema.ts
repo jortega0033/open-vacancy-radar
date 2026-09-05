@@ -174,6 +174,48 @@ export const applicationAttempts = sqliteTable('application_attempts', {
   /** Set only on a transition into `submitted` or `submission_unknown` -- the two checkpoints
    * that mean a real, possibly-irreversible submit action was actually attempted. */
   submittedAt: integer('submitted_at', { mode: 'timestamp_ms' }),
+  /** A deterministic fingerprint of the filled form's own structure (each field's control type,
+   * label, and required-ness -- never a value), recorded only once this attempt reaches
+   * `submitted`. Issue #203's "an automatic attempt against an already-reviewed employer must use
+   * the same template, same structured fields, no new free-text the user hasn't seen" rule compares
+   * a new attempt's live structure hash against the most recent submitted attempt's stored one for
+   * the same employer -- a mismatch means the page changed since a human last looked at it, which
+   * forces that attempt back to manual review regardless of any active automation grant. Null until
+   * a first submission exists for this attempt (and stays null forever for one that never submits). */
+  formStructureHash: text('form_structure_hash'),
+  /**
+   * Set only while an automatic-mode submit (#203) is queued for this attempt: the real, timed
+   * cancel/undo window between scheduling and the submit action actually firing. A person can
+   * cancel by clearing this (see `ApplicationAttemptPatch`); once real time passes this timestamp
+   * with it still set, the daemon/main-process scheduler is clear to submit. Never set by manual
+   * review (#202) at all -- that path has no window because the human's own click *is* the
+   * confirmation, with nothing further to wait out.
+   */
+  scheduledAutomaticSubmitAt: integer('scheduled_automatic_submit_at', { mode: 'timestamp_ms' }),
+});
+
+/**
+ * An explicit grant of automatic-submission authority for one compiled target policy (#203).
+ * Deliberately scoped per-policy, not per-posting: automation's whole point is covering postings
+ * the user hasn't individually looked at yet, so "which postings" cannot be the grant's own scope
+ * the way it would be for a one-off manual authorization. `expiresAt` and `revokedAt` are both
+ * re-checked immediately before every automatic send (issue #203 scope item 2), not only at grant
+ * creation -- a grant that has quietly expired or been revoked since its last use must never let an
+ * automatic submit through on the strength of having once been valid.
+ */
+export const automationGrants = sqliteTable('automation_grants', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `ApplicationTargetPolicy.id` this grant authorizes -- never an origin, selector, or anything
+   * else renderer-suppliable; validated against the compiled policy table at creation time. */
+  policyId: text('policy_id').notNull(),
+  /** ISO-8601, main-process clock, at creation -- when the native confirmation dialog (#203 scope
+   * item 5's auth-boundary hardening) was actually accepted. */
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Null while active. Grants are never deleted -- a revoked grant stays as a durable record of
+   * "automation was authorized for this policy, then explicitly turned off," which the reconciler
+   * and any future audit need to be able to see. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
 });
 
 /**

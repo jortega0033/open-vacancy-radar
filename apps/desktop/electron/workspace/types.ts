@@ -249,6 +249,12 @@ export interface ApplicationAttemptRecord {
   updatedAt: string;
   /** ISO-8601, or null before a submit was ever attempted. */
   submittedAt: string | null;
+  /** Set once this attempt reaches `submitted` (#203) -- see `schema.ts`'s own comment on the
+   * column for what it fingerprints and why. Null for every attempt that hasn't submitted yet. */
+  formStructureHash: string | null;
+  /** ISO-8601. Set only while an automatic-mode submit (#203) is queued for this attempt's
+   * cancel/undo window; null otherwise, including for every manually-reviewed attempt. */
+  scheduledAutomaticSubmitAt: string | null;
 }
 
 export interface ApplicationAttemptInput {
@@ -283,7 +289,7 @@ export type ApplicationAttemptPatch = Partial<
     ApplicationAttemptInput,
     'applicationId' | 'jdComplete' | 'checkpoint' | 'checkpointDetail'
   >
-> & { submittedAt?: string | null };
+> & { submittedAt?: string | null; formStructureHash?: string | null; scheduledAutomaticSubmitAt?: string | null };
 
 export type ApplicationArtifactKind = 'cv_pdf' | 'cover_letter_pdf' | 'combined_pdf' | 'other';
 
@@ -308,6 +314,27 @@ export interface ApplicationArtifactInput {
   byteSize: number;
   contentHash: string;
   storagePath?: string;
+}
+
+/** An explicit grant of automatic-submission authority for one compiled target policy (#203). See
+ * `schema.ts`'s own comment on `automationGrants` for why this is scoped per-policy, not per-posting,
+ * and why `expiresAt`/`revokedAt` are re-checked at every use rather than only at creation. */
+export interface AutomationGrantRecord {
+  id: string;
+  policyId: string;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601 */
+  expiresAt: string;
+  /** ISO-8601, or null while active. */
+  revokedAt: string | null;
+}
+
+export interface AutomationGrantInput {
+  policyId: string;
+  /** ISO-8601. The caller (main-process code behind a native confirmation dialog -- #203 scope
+   * item 5) decides how far out this is; there is no default here to accidentally inherit. */
+  expiresAt: string;
 }
 
 export interface AppSettingsRecord {
@@ -402,4 +429,16 @@ export interface WorkspaceBridge {
   getApplicationAttempt(id: string): Promise<ApplicationAttemptRecord>;
   updateApplicationAttempt(id: string, patch: ApplicationAttemptPatch): Promise<ApplicationAttemptRecord>;
   listApplicationArtifacts(attemptId: string): Promise<ApplicationArtifactRecord[]>;
+
+  /**
+   * Read/revoke-only (issue #203): the renderer can see which policies currently have an active
+   * automatic-submission grant and turn one off, but can never CREATE one through this bridge --
+   * granting requires a real native OS confirmation dialog, which lives behind
+   * `window.applicationExecutor.requestAutomationGrant` instead, precisely so that a plain IPC
+   * call (the same boundary that is adequate for read/patch access here) is never the sole gate on
+   * authorizing unattended submission. Revoking carries no such risk in the other direction --
+   * turning automation off is always safe to do immediately -- so it stays a plain bridge method.
+   */
+  listAutomationGrants(): Promise<AutomationGrantRecord[]>;
+  revokeAutomationGrant(id: string): Promise<AutomationGrantRecord>;
 }

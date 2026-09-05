@@ -12,7 +12,7 @@
 
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
-import { appSettings, applicationArtifacts, applicationAttempts, applications, cvDocuments, letters, savedJobs } from './schema.js';
+import { appSettings, applicationArtifacts, applicationAttempts, applications, automationGrants, cvDocuments, letters, savedJobs } from './schema.js';
 import {
   NON_TERMINAL_ATTEMPT_CHECKPOINTS,
   type ApplicationArtifactInput,
@@ -26,6 +26,8 @@ import {
   type ApplicationRecord,
   type AppSettingsPatch,
   type AppSettingsRecord,
+  type AutomationGrantInput,
+  type AutomationGrantRecord,
   type CvDocumentInput,
   type CvDocumentPatch,
   type CvDocumentRecord,
@@ -469,6 +471,8 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
     submittedAt: row.submittedAt ? iso(row.submittedAt) : null,
+    formStructureHash: row.formStructureHash,
+    scheduledAutomaticSubmitAt: row.scheduledAutomaticSubmitAt ? iso(row.scheduledAutomaticSubmitAt) : null,
   };
 }
 
@@ -542,9 +546,12 @@ export function updateApplicationAttempt(
   id: string,
   values: ApplicationAttemptPatch,
 ): ApplicationAttemptRecord {
-  const { submittedAt, ...rest } = values;
+  const { submittedAt, scheduledAutomaticSubmitAt, ...rest } = values;
   const set: Partial<ApplicationAttemptRow> = { ...rest, updatedAt: new Date() };
   if ('submittedAt' in values) set.submittedAt = submittedAt ? new Date(submittedAt) : null;
+  if ('scheduledAutomaticSubmitAt' in values) {
+    set.scheduledAutomaticSubmitAt = scheduledAutomaticSubmitAt ? new Date(scheduledAutomaticSubmitAt) : null;
+  }
 
   const [row] = db.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
   if (!row) throw new WorkspaceNotFoundError('application attempt', id);
@@ -673,6 +680,62 @@ export function reconcileApplicationArtifacts(
     .all()
     .map(toApplicationArtifact)
     .filter((artifact) => !fileExists(artifact.storagePath));
+}
+
+// ------------------------------------------------------------------------------ automation grants (#203)
+
+type AutomationGrantRow = typeof automationGrants.$inferSelect;
+
+function toAutomationGrant(row: AutomationGrantRow): AutomationGrantRecord {
+  return {
+    id: row.id,
+    policyId: row.policyId,
+    createdAt: iso(row.createdAt),
+    expiresAt: iso(row.expiresAt),
+    revokedAt: row.revokedAt ? iso(row.revokedAt) : null,
+  };
+}
+
+export function listAutomationGrants(db: WorkspaceDb): AutomationGrantRecord[] {
+  return db.select().from(automationGrants).orderBy(desc(automationGrants.createdAt)).all().map(toAutomationGrant);
+}
+
+/** Deliberately not exposed on `WorkspaceBridge` -- see that interface's own comment on why
+ * creating a grant requires a real native confirmation dialog (`applicationExecutor.requestAutomationGrant`)
+ * rather than being reachable as a plain IPC call the way every other create/update here is. */
+export function createAutomationGrant(db: WorkspaceDb, input: AutomationGrantInput): AutomationGrantRecord {
+  const [row] = db
+    .insert(automationGrants)
+    .values({ policyId: input.policyId, expiresAt: new Date(input.expiresAt) })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to insert automation grant');
+  return toAutomationGrant(row);
+}
+
+export function revokeAutomationGrant(db: WorkspaceDb, id: string): AutomationGrantRecord {
+  const [row] = db
+    .update(automationGrants)
+    .set({ revokedAt: new Date() })
+    .where(eq(automationGrants.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('automation grant', id);
+  return toAutomationGrant(row);
+}
+
+/**
+ * The one automation-grant read the submit orchestration itself needs (#203 scope item 2):
+ * whether `policyId` has a grant that is both unexpired and unrevoked *right now* -- re-checked
+ * immediately before every automatic send, never cached from an earlier check. Returns the grant
+ * so the caller can log which one authorized a given automatic submission, or `undefined` when
+ * none applies (including when the only grants that exist for this policy have expired or been
+ * revoked -- this is not a "no grants ever existed" signal, just "none currently authorize this").
+ */
+export function findActiveAutomationGrant(db: WorkspaceDb, policyId: string): AutomationGrantRecord | undefined {
+  const rows = db.select().from(automationGrants).where(eq(automationGrants.policyId, policyId)).all().map(toAutomationGrant);
+  const now = Date.now();
+  return rows.find((grant) => grant.revokedAt === null && Date.parse(grant.expiresAt) > now);
 }
 
 // ------------------------------------------------------------------------------ settings

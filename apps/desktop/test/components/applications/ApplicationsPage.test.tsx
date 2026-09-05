@@ -23,6 +23,8 @@ function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): Applica
     createdAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
     submittedAt: null,
+    formStructureHash: null,
+    scheduledAutomaticSubmitAt: null,
     ...overrides,
   };
 }
