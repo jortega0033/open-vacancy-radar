@@ -107,17 +107,42 @@ function extractOptions(selectNode: CdpDomNode): SnapshotOption[] {
 
 const FILLABLE_TAGS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
 
+/**
+ * Marks of a bot-detection challenge widget (reCAPTCHA, hCaptcha, Cloudflare Turnstile) that could
+ * plausibly appear on a real application form -- checked against an `<iframe>`'s `src` (the
+ * reliable signal, since these widgets are always framed) and, as a fallback for a challenge that
+ * hasn't finished loading its iframe yet at snapshot time, well-known container class names. This
+ * is deliberately a fixed, named list rather than a heuristic: #196's own design treats
+ * circumventing a bot/CAPTCHA challenge as a hard stop regardless of terms (`docs/job-source-policy.md`),
+ * so detecting one must fail closed (a widget this list doesn't recognize is simply not caught, but
+ * nothing here is allowed to reduce a real match to a false negative on a technicality).
+ */
+const CHALLENGE_IFRAME_SRC_PATTERN = /google\.com\/recaptcha|hcaptcha\.com|challenges\.cloudflare\.com/i;
+const CHALLENGE_CLASS_PATTERN = /(^|\s)(g-recaptcha|h-captcha|cf-turnstile)(\s|$)/i;
+
 export interface ExtractedSnapshot {
   fields: SnapshotField[];
   /** `fieldRef -> backendNodeId`, for `executor.ts`'s own internal use only. */
   nodeIds: FieldNodeMap;
+  /** Whether a known bot-detection challenge widget (reCAPTCHA/hCaptcha/Turnstile) was found
+   * anywhere in the tree, checked in the same pass as field extraction. `executor.ts`'s `snapshot()`
+   * surfaces this on `FormSnapshot` so a caller can `handoff('captcha')` immediately rather than
+   * acting on fields that may sit behind an active challenge -- #196's design and
+   * `docs/job-source-policy.md` both treat circumventing a bot/CAPTCHA challenge as a hard stop
+   * regardless of terms, so detecting one here must fail closed. */
+  challengeDetected: boolean;
 }
 
 /**
  * Walks a CDP DOM tree and mints a `SnapshotField` for every fillable element (`input`, `select`,
- * `textarea`). Three kinds of element are skipped, none of them something a real applicant could
- * fill: `<input type="hidden">` (a value carrier, not a control); anything `disabled`; and anything
- * carrying the generic HTML `hidden` boolean attribute (confirmed against a real Electron
+ * `textarea`), and, in the same pass, checks every node for a known CAPTCHA/bot-detection widget
+ * (reCAPTCHA, hCaptcha, Cloudflare Turnstile) -- checked against an `<iframe>`'s `src` (the
+ * reliable signal, since these widgets are always framed) and, as a fallback for a challenge that
+ * hasn't finished loading its iframe yet at snapshot time, well-known container class names.
+ *
+ * Three kinds of fillable-looking element are skipped, none of them something a real applicant
+ * could fill: `<input type="hidden">` (a value carrier, not a control); anything `disabled`; and
+ * anything carrying the generic HTML `hidden` boolean attribute (confirmed against a real Electron
  * `WebContentsView` in `e2e/application-executor.spec.ts` -- a field the page marks `hidden` for
  * CSS-invisibility reasons, distinct from `type="hidden"`, was originally surfaced as fillable
  * because only the latter was checked). Hiding via a stylesheet rule (`display: none` in CSS,
@@ -127,8 +152,18 @@ export interface ExtractedSnapshot {
 export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   const fields: SnapshotField[] = [];
   const nodeIds = new Map<string, number>();
+  let challengeDetected = false;
 
   function walk(node: CdpDomNode): void {
+    if (
+      node.nodeName === 'IFRAME' &&
+      CHALLENGE_IFRAME_SRC_PATTERN.test(attr(node, 'src') ?? '')
+    ) {
+      challengeDetected = true;
+    } else if (CHALLENGE_CLASS_PATTERN.test(attr(node, 'class') ?? '')) {
+      challengeDetected = true;
+    }
+
     if (FILLABLE_TAGS.has(node.nodeName)) {
       const inputType = (attr(node, 'type') ?? 'text').toLowerCase();
       if (inputType !== 'hidden' && !hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
@@ -156,5 +191,5 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   }
 
   walk(root);
-  return { fields, nodeIds };
+  return { fields, nodeIds, challengeDetected };
 }

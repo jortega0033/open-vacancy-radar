@@ -137,13 +137,25 @@ export class ApplicationExecutor {
   async snapshot(): Promise<FormSnapshot> {
     this.requireAction('snapshot');
     let extracted = await this.readDom();
-    for (let attempt = 0; extracted.fields.length === 0 && attempt < EMPTY_SNAPSHOT_RETRY_LIMIT; attempt++) {
+    // A real challenge widget is a terminal signal, not a loading race: retrying an empty read
+    // burns the whole budget for no reason when the page is showing a CAPTCHA on purpose, not
+    // still parsing.
+    for (
+      let attempt = 0;
+      extracted.fields.length === 0 && !extracted.challengeDetected && attempt < EMPTY_SNAPSHOT_RETRY_LIMIT;
+      attempt++
+    ) {
       await sleep(EMPTY_SNAPSHOT_RETRY_DELAY_MS);
       extracted = await this.readDom();
     }
     this.#generation += 1;
     this.#nodeIds = extracted.nodeIds;
-    const result: FormSnapshot = { generation: this.#generation, fields: extracted.fields, capturedAt: new Date().toISOString() };
+    const result: FormSnapshot = {
+      generation: this.#generation,
+      fields: extracted.fields,
+      capturedAt: new Date().toISOString(),
+      challengeDetected: extracted.challengeDetected,
+    };
     this.#currentSnapshot = result;
     return result;
   }

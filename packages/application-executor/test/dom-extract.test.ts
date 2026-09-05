@@ -168,3 +168,59 @@ describe('extractSnapshotFields', () => {
     expect(fields[0]!.checked).toBeUndefined();
   });
 });
+
+describe('extractSnapshotFields: challenge detection', () => {
+  it('flags a reCAPTCHA iframe by its src', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'IFRAME', attributes: attrsFrom({ src: 'https://www.google.com/recaptcha/api2/anchor' }) }),
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'real-field' }) }),
+      ],
+    });
+    const { challengeDetected } = extractSnapshotFields(root);
+    expect(challengeDetected).toBe(true);
+  });
+
+  it('flags an hCaptcha iframe by its src', () => {
+    const root = node({ nodeName: 'IFRAME', attributes: attrsFrom({ src: 'https://newassets.hcaptcha.com/captcha/v1/frame' }) });
+    expect(extractSnapshotFields(root).challengeDetected).toBe(true);
+  });
+
+  it('flags a Cloudflare Turnstile iframe by its src', () => {
+    const root = node({ nodeName: 'IFRAME', attributes: attrsFrom({ src: 'https://challenges.cloudflare.com/turnstile/v0/api.js' }) });
+    expect(extractSnapshotFields(root).challengeDetected).toBe(true);
+  });
+
+  it('flags a challenge container by class name, as a fallback for an iframe not yet loaded', () => {
+    const root = node({
+      nodeName: 'DIV',
+      attributes: attrsFrom({ class: 'form-row g-recaptcha' }),
+    });
+    expect(extractSnapshotFields(root).challengeDetected).toBe(true);
+  });
+
+  it('flags an h-captcha or cf-turnstile class the same way', () => {
+    expect(extractSnapshotFields(node({ nodeName: 'DIV', attributes: attrsFrom({ class: 'h-captcha' }) })).challengeDetected).toBe(true);
+    expect(extractSnapshotFields(node({ nodeName: 'DIV', attributes: attrsFrom({ class: 'cf-turnstile' }) })).challengeDetected).toBe(true);
+  });
+
+  it('does not flag an unrelated iframe or class name', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'IFRAME', attributes: attrsFrom({ src: 'https://player.vimeo.com/video/123' }) }),
+        node({ nodeName: 'DIV', attributes: attrsFrom({ class: 'form-row highlighted' }) }),
+      ],
+    });
+    expect(extractSnapshotFields(root).challengeDetected).toBe(false);
+  });
+
+  it('leaves challengeDetected false on an ordinary form with no widget', () => {
+    const root = node({
+      nodeName: 'DIV',
+      children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'a' }) })],
+    });
+    expect(extractSnapshotFields(root).challengeDetected).toBe(false);
+  });
+});

@@ -191,6 +191,39 @@ describe('ApplicationExecutor: snapshot', () => {
     await executor.snapshot();
     expect(calls.filter((c) => c.method === 'DOM.getDocument')).toHaveLength(1);
   });
+
+  const CHALLENGE_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [{ nodeName: 'IFRAME', nodeType: 1, backendNodeId: 2, attributes: ['src', 'https://www.google.com/recaptcha/api2/anchor'] }],
+    },
+  };
+
+  it('surfaces challengeDetected on the returned snapshot', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': CHALLENGE_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(snapshot.challengeDetected).toBe(true);
+  });
+
+  it('stops the empty-snapshot retry loop as soon as a challenge is detected, even with zero fields', async () => {
+    // A CAPTCHA page often has no fillable fields at all -- without this, snapshot() would burn
+    // through the full retry budget waiting for fields that will never appear behind a challenge.
+    let calls = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getDocument') calls += 1;
+        return CHALLENGE_TREE;
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(calls).toBe(1);
+    expect(snapshot.fields).toEqual([]);
+    expect(snapshot.challengeDetected).toBe(true);
+  });
 });
 
 describe('ApplicationExecutor: fill', () => {

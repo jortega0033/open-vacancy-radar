@@ -26,6 +26,7 @@ const UNKNOWN_VALUE = 'v0000000000000003';
 const SNAPSHOT: FormSnapshot = {
   generation: 5,
   capturedAt: '2026-01-01T00:00:00.000Z',
+  challengeDetected: false,
   fields: [
     { fieldRef: NAME_FIELD, label: 'Name', controlType: 'text', required: true },
     { fieldRef: RESUME_FIELD, label: 'Resume', controlType: 'file', required: true },
