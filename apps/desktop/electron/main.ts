@@ -73,11 +73,13 @@ import {
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
 import {
+  parseApplicationAttemptPatch,
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseId,
   parseIdAndPatch,
   parseIdEnvelope,
   parseLetterInput,
@@ -1663,6 +1665,30 @@ guardedIpc.handle('workspace:letters:delete', async (_event, input: unknown) =>
 guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
   workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
+
+/**
+ * Read/patch-only application attempt access for the review UI (issue #202). No `create` or
+ * `delete` channel exists here: an attempt's existence is owned by the main-process generation
+ * pipeline, never initiated by the renderer. `parseApplicationAttemptPatch` (workspace/validate.ts)
+ * already restricts a patch to `applicationId`/`jdComplete`/`checkpoint`/`checkpointDetail`/
+ * `submittedAt` -- the identity/provenance fields an attempt was created with cannot be changed
+ * through this or any channel.
+ */
+guardedIpc.handle('workspace:application-attempts:list', async () => workspace.listApplicationAttempts(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:application-attempts:get', async (_event, input: unknown) =>
+  workspace.getApplicationAttempt(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:application-attempts:update', async (_event, input: unknown) => {
+  const { id, patch } = parseIdAndPatch(input);
+  return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+});
+
+guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return workspace.listApplicationArtifacts(await ensureWorkspaceDb(), parseId(source.attemptId, 'attemptId'));
+});
 
 /*
  * ---------------------------------------------------------------------------------------------

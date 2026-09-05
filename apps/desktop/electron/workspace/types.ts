@@ -391,4 +391,15 @@ export interface WorkspaceBridge {
   updateLetter(id: string, patch: LetterPatch): Promise<LetterRecord>;
   deleteLetter(id: string): Promise<DeleteResult>;
   duplicateLetter(id: string): Promise<LetterRecord>;
+
+  /**
+   * Read/patch-only (issue #202): the renderer can list, inspect, and update the checkpoint/detail
+   * of an application attempt for review, but never creates or deletes one directly -- an attempt's
+   * existence and its identity fields (company, role, source CV, JD snapshot) are owned entirely by
+   * the main-process generation pipeline (#198-#201), not by anything the renderer initiates.
+   */
+  listApplicationAttempts(): Promise<ApplicationAttemptRecord[]>;
+  getApplicationAttempt(id: string): Promise<ApplicationAttemptRecord>;
+  updateApplicationAttempt(id: string, patch: ApplicationAttemptPatch): Promise<ApplicationAttemptRecord>;
+  listApplicationArtifacts(attemptId: string): Promise<ApplicationArtifactRecord[]>;
 }

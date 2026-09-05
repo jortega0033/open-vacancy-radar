@@ -91,6 +91,11 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     updateLetter: vi.fn(),
     deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
     duplicateLetter: vi.fn(),
+
+    listApplicationAttempts: vi.fn().mockResolvedValue([]),
+    getApplicationAttempt: vi.fn(),
+    updateApplicationAttempt: vi.fn(),
+    listApplicationArtifacts: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
   (window as unknown as { workspace: WorkspaceBridge }).workspace = bridge;

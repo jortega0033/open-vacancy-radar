@@ -286,6 +286,19 @@ const workspaceApi: WorkspaceBridge = {
   duplicateLetter(id) {
     return ipcRenderer.invoke('workspace:letters:duplicate', { id });
   },
+
+  listApplicationAttempts() {
+    return ipcRenderer.invoke('workspace:application-attempts:list');
+  },
+  getApplicationAttempt(id) {
+    return ipcRenderer.invoke('workspace:application-attempts:get', { id });
+  },
+  updateApplicationAttempt(id, patch) {
+    return ipcRenderer.invoke('workspace:application-attempts:update', { id, patch });
+  },
+  listApplicationArtifacts(attemptId) {
+    return ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+  },
 };
 
 contextBridge.exposeInMainWorld('workspace', workspaceApi);
