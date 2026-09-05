@@ -44,6 +44,10 @@ export interface FormSnapshot {
   fields: readonly SnapshotField[];
   /** ISO-8601 */
   capturedAt: string;
+  /** Whether a known CAPTCHA/bot-detection widget was found anywhere on the page at snapshot time.
+   * A caller must treat this as an immediate `handoff('captcha')` signal -- see
+   * `dom-extract.ts`'s `extractSnapshotFields` for what is and isn't detected. */
+  challengeDetected: boolean;
 }
 
 function mintRef(prefix: 'f' | 'o'): string {
