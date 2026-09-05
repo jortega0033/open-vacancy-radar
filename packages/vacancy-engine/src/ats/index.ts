@@ -9,6 +9,7 @@ export * from './json-ld.js';
 export * from './lever.js';
 export * from './personio.js';
 export * from './recruitee.js';
+export * from './rippling.js';
 export * from './smartrecruiters.js';
 export * from './successfactors.js';
 export * from './teamtailor.js';

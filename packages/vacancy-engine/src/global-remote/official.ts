@@ -7,6 +7,7 @@ import {
   LeverAdapter,
   PersonioAdapter,
   RecruiteeAdapter,
+  RipplingAdapter,
   SmartRecruitersAdapter,
   SuccessFactorsAdapter,
   TeamtailorAdapter,
@@ -53,6 +54,8 @@ function adapterFor(source: GlobalRemoteSource, http: AtsHttpClient): VacancyAda
       return new PersonioAdapter(http);
     case 'recruitee':
       return new RecruiteeAdapter(http);
+    case 'rippling':
+      return new RipplingAdapter(http);
     case 'smartrecruiters':
       return new SmartRecruitersAdapter(http);
     case 'successfactors':
