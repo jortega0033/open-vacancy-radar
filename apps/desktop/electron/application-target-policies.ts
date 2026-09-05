@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { ApplicationTargetPolicy } from '@agent-dock/application-executor';
+import { isNavigationAllowed, type ApplicationTargetPolicy } from '@agent-dock/application-executor';
 
 /**
  * The compiled `ApplicationTargetPolicy` table (#196 §6.1, issue #201). Per that interface's own
@@ -43,10 +43,16 @@ export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
   termsRegisterEntry: 'ashby',
   termsVersion: 'n/a (local fixture, not a live target)',
   termsReviewedAt: '2026-01-01',
-  allowedActions: ['openTarget', 'snapshot', 'fill', 'select', 'attach', 'capture', 'handoff'],
+  // 'submit' is enabled here deliberately, unlike a real policy would be by default (#196 SS9):
+  // this policy can never resolve to a real employer page regardless of allowedActions/killSwitches
+  // (exactFileUrls-only, origins empty -- see this file's own header comment), so there is no real
+  // submission this enables. It exists so issue #202's orchestration (application-review-session.ts's
+  // submitApplicationReview) has a genuine end-to-end fixture path to test the whole
+  // fill -> review -> confirm -> submit flow against, per that issue's own acceptance criteria.
+  allowedActions: ['openTarget', 'snapshot', 'fill', 'select', 'attach', 'capture', 'handoff', 'submit'],
   uploadConstraints: { maxBytes: 10 * 1024 * 1024, mimeTypes: ['application/pdf'] },
   rateLimits: { perDay: 1000, perEmployerPerDay: 1000, minIntervalMs: 0 },
-  killSwitches: { navigate: false, fill: false, upload: false, submit: true },
+  killSwitches: { navigate: false, fill: false, upload: false, submit: false },
   maxSteps: 100,
   timeoutMs: 60_000,
   maximumSnapshotBytes: 2 * 1024 * 1024,
@@ -56,4 +62,18 @@ const APPLICATION_TARGET_POLICIES: readonly ApplicationTargetPolicy[] = [FIXTURE
 
 export function resolveApplicationTargetPolicy(policyId: string): ApplicationTargetPolicy | undefined {
   return APPLICATION_TARGET_POLICIES.find((policy) => policy.id === policyId);
+}
+
+/**
+ * Which compiled policy (if any) governs `url`, found the same way `isNavigationAllowed` itself
+ * checks -- so this can never claim a policy applies to a URL that policy would then refuse to
+ * navigate to. An `ApplicationAttemptRecord` carries a `canonicalUrl` but no `policyId` field of
+ * its own (#198's schema predates any real target existing to reference); this is how a caller
+ * that only has the URL -- the review UI, primarily -- finds the right policy to open a review
+ * with, without this app needing a whole separate URL-to-policy mapping table for what is, today,
+ * a single fixture entry. Returns `undefined` for any URL no compiled policy covers, which is
+ * every real (non-fixture) URL today -- see this file's own header comment on why.
+ */
+export function resolvePolicyIdForCanonicalUrl(url: string): string | undefined {
+  return APPLICATION_TARGET_POLICIES.find((policy) => isNavigationAllowed(policy, url))?.id;
 }

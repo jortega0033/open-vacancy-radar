@@ -31,12 +31,8 @@ export async function validateRenderedResumePdf(
 
   let text: string;
   try {
-    // Imported lazily, matching `cv-text.ts`'s own reasoning: the pdf.js build this pulls in is
-    // only paid for when a PDF actually needs validating, and importing this module in a test
-    // that never calls this function never pulls pdf.js in.
-    const { extractText } = await import('unpdf');
-    const result = await extractText(pdfBytes, { mergePages: true });
-    text = result.text;
+    const { extractPdfText } = await import('./cv-text.js');
+    text = await extractPdfText(pdfBytes);
   } catch {
     return { ok: false, reasons: ['the rendered PDF text could not be read back at all -- it may have rendered as an image, not real text'] };
   }

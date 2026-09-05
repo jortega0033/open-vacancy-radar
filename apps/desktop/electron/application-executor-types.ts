@@ -1,4 +1,5 @@
 import type { FieldMapRefusalReason, FormSnapshot, ValueProvenance } from '@agent-dock/application-executor';
+import type { SubmitApplicationReviewRefusalReason } from './application-review-session.js';
 
 /**
  * The `window.applicationExecutor` wire contract (issue #201), mirroring
@@ -42,6 +43,12 @@ export interface ApplyApplicationFieldMapResult {
   appliedCount?: number;
 }
 
+export interface SubmitApplicationReviewResult {
+  ok: boolean;
+  reason?: SubmitApplicationReviewRefusalReason;
+  detail?: string;
+}
+
 export interface ApplicationExecutorBridge {
   /** Opens an isolated browser view for `attemptId`, navigates it to `targetUrl` (refused unless
    * `targetUrl`'s origin is in the resolved policy's allowlist), and returns a fresh snapshot plus
@@ -56,6 +63,23 @@ export interface ApplicationExecutorBridge {
    * never silently skipped.
    */
   applyFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult>;
+  /**
+   * The one real, irreversible action in this bridge (#202): runs the pre-submit validation gate
+   * against freshly re-read state, resolves the one real submit control on the page, and clicks it
+   * for real. Never call this before the user has explicitly reviewed and confirmed this specific
+   * attempt -- there is no confirmation step inside this call itself, by design (per #196's
+   * trust-domain split, confirmation is a product/UI decision, not something this bridge enforces
+   * on the caller's behalf). See `application-review-session.ts`'s `submitApplicationReview` for
+   * the full list of refusal reasons and what each one means.
+   */
+  submitReview(attemptId: string): Promise<SubmitApplicationReviewResult>;
   /** Destroys the isolated view for `attemptId`. Safe to call for an attempt with no open review. */
   closeReview(attemptId: string): Promise<void>;
+  /**
+   * Which compiled policy (if any) governs `canonicalUrl`, so a caller that only has an attempt's
+   * URL (the review UI) can find the `policyId` `openReview` needs, without this app exposing a
+   * whole policy object -- or any origin/selector detail -- to the renderer. `null` when no
+   * compiled policy covers the URL, which is every real (non-fixture) URL today.
+   */
+  resolveTargetPolicyId(canonicalUrl: string): Promise<string | null>;
 }

@@ -42,7 +42,8 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
-import { applyApplicationFieldMap, closeAllApplicationReviews, closeApplicationReview, openApplicationReview } from './application-review-session.js';
+import { applyApplicationFieldMap, closeAllApplicationReviews, closeApplicationReview, openApplicationReview, submitApplicationReview } from './application-review-session.js';
+import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
@@ -1236,16 +1237,18 @@ guardedIpc.handle('application-queue:get-status', async () => {
 
 /*
  * ---------------------------------------------------------------------------------------------
- * Application executor IPC (issue #201). Three channels over `application-review-session.ts`'s
- * per-attempt registry: `open-review` creates an isolated browser view and returns a snapshot,
- * `apply-field-map` validates and applies a field map against it, `close-review` tears it down.
- * `policyId` is the only policy-related value that ever crosses this boundary -- the renderer
- * cannot supply origins, upload constraints, or kill switches; those are resolved main-process
- * side from the compiled table in `application-target-policies.ts`. There is still no `submit`
- * channel here: `packages/application-executor`'s `ApplicationExecutor.submit()` is real as of
- * issue #202, but no compiled policy in `application-target-policies.ts` allows it yet
- * (`killSwitches.submit` stays on), and no orchestration exists in this file to call it -- wiring
- * an actual submit channel is a deliberate, separately-reviewed change, not this one.
+ * Application executor IPC (issues #201, #202). Four channels over
+ * `application-review-session.ts`'s per-attempt registry: `open-review` creates an isolated
+ * browser view and returns a snapshot, `apply-field-map` validates and applies a field map against
+ * it, `submit-review` runs the pre-submit gate and clicks the real submit control, `close-review`
+ * tears the view down. `policyId` is the only policy-related value that ever crosses this boundary
+ * -- the renderer cannot supply origins, upload constraints, or kill switches; those are resolved
+ * main-process side from the compiled table in `application-target-policies.ts`, and today that
+ * table's one entry is fixture-only (`killSwitches.submit` on for every other target that might
+ * ever be added -- see that file's own comment). `submit-review` itself performs no confirmation
+ * step: the renderer must not call it before the user has explicitly reviewed and confirmed this
+ * specific attempt, per #196's trust-domain split -- confirmation is the caller's job, not this
+ * channel's.
  * ---------------------------------------------------------------------------------------------
  */
 
@@ -1314,6 +1317,14 @@ guardedIpc.handle('application-executor:open-review', async (_event, input: unkn
 
 guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
   return applyApplicationFieldMap(parseApplyFieldMapInput(input));
+});
+
+guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {
+  return submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input));
+});
+
+guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: unknown) => {
+  return resolvePolicyIdForCanonicalUrl(parseTargetUrl(input)) ?? null;
 });
 
 guardedIpc.handle('application-executor:close-review', async (_event, input: unknown) => {

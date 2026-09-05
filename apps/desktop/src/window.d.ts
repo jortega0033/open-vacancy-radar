@@ -250,9 +250,10 @@ declare global {
     /** #200. The eighth namespace: the daemon-owned application queue -- enqueue/pause/resume/
      * skip/cancel an attempt by opaque id, and stream its (content-free) live activity. */
     applicationQueue: import('../electron/application-queue-types.js').ApplicationQueueBridge;
-    /** #201. The ninth namespace: review-mode browser executor control -- open an isolated review
-     * for an attempt, apply a validated field map to it, close it. No submit channel exists yet --
-     * `ApplicationExecutor.submit()` is real (#202), but nothing here exposes it to the renderer. */
+    /** #201/#202. The ninth namespace: review-mode browser executor control -- open an isolated
+     * review for an attempt, apply a validated field map to it, submit it for real once the user
+     * has confirmed, close it. `submitReview` performs no confirmation step itself: the caller must
+     * not invoke it before the user has explicitly reviewed and confirmed this specific attempt. */
     applicationExecutor: import('../electron/application-executor-types.js').ApplicationExecutorBridge;
   }
 }

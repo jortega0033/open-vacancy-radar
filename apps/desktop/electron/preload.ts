@@ -26,6 +26,7 @@ import type {
   ApplicationExecutorBridge,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewResult,
+  SubmitApplicationReviewResult,
 } from './application-executor-types.js';
 
 /**
@@ -1105,6 +1106,21 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   };
 }
 
+function toSubmitApplicationReviewResult(value: unknown): SubmitApplicationReviewResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<SubmitApplicationReviewResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+  };
+}
+
 const applicationExecutorApi: ApplicationExecutorBridge = {
   async openReview(input) {
     const result = await ipcRenderer.invoke('application-executor:open-review', input);
@@ -1116,8 +1132,18 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
     return toApplyApplicationFieldMapResult(result);
   },
 
+  async submitReview(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:submit-review', attemptId);
+    return toSubmitApplicationReviewResult(result);
+  },
+
   async closeReview(attemptId) {
     await ipcRenderer.invoke('application-executor:close-review', attemptId);
+  },
+
+  async resolveTargetPolicyId(canonicalUrl) {
+    const result = await ipcRenderer.invoke('application-executor:resolve-target-policy', canonicalUrl);
+    return typeof result === 'string' ? result : null;
   },
 };
 

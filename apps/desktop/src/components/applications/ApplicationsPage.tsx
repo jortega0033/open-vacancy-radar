@@ -13,6 +13,7 @@ import emptyApplicationsIllustration from '../../../assets/illustrations/empty-a
 import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
 import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
 import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
+import { ApplicationReviewSession } from './ApplicationReviewSession.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
@@ -50,6 +51,7 @@ export function ApplicationsPage() {
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<string>();
   const [openAttempt, setOpenAttempt] = useState<ApplicationAttemptRecord | null>(null);
+  const [reviewingAttempt, setReviewingAttempt] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedJobs, setSavedJobs] = useState<readonly SavedJobRecord[]>([]);
   const [cvDocuments, setCvDocuments] = useState<readonly CvDocumentRecord[]>([]);
@@ -127,6 +129,19 @@ export function ApplicationsPage() {
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
   const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
+
+  // A `ready` attempt opens straight into the review-and-submit flow (issue #202) rather than the
+  // plain read-only drawer -- that's the one checkpoint where there's actually a decision for a
+  // person to make; every other checkpoint is still just informational.
+  const openAttemptRow = useCallback((attempt: ApplicationAttemptRecord) => {
+    if (attempt.checkpoint === 'ready') setReviewingAttempt(attempt);
+    else setOpenAttempt(attempt);
+  }, []);
+
+  const closeReviewSession = useCallback(() => {
+    setReviewingAttempt(null);
+    setAttempts(null); // re-triggers the load-once effect so a changed checkpoint is reflected
+  }, []);
 
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
@@ -324,13 +339,15 @@ export function ApplicationsPage() {
 
           {!isAttemptsLoading && sortedAttempts.length > 0 && (
             <div className="mt-4">
-              <ApplicationAttemptsTable attempts={sortedAttempts} onOpen={setOpenAttempt} />
+              <ApplicationAttemptsTable attempts={sortedAttempts} onOpen={openAttemptRow} />
             </div>
           )}
         </>
       )}
 
       {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
+
+      {reviewingAttempt && <ApplicationReviewSession attempt={reviewingAttempt} onClose={closeReviewSession} />}
 
       {drawerState && (
         <ApplicationDrawer

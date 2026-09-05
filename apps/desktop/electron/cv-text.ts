@@ -46,9 +46,12 @@ function normalizeText(raw: string): string {
     .trim();
 }
 
-async function extractPdfText(bytes: Uint8Array): Promise<string> {
-  // Imported lazily so the (comparatively large) pdf.js build is only paid for when the user
-  // actually picks a PDF, and so importing this module in a test never pulls pdf.js in.
+/** Raw (unnormalized) pdf.js text extraction, shared by every caller that needs a PDF's text back
+ * in this app: this module's own upload path, `resume-pdf-validation.ts`'s rendered-output check,
+ * and `application-review-session.ts`'s pre-submit gate (#202). Imported lazily so the
+ * (comparatively large) pdf.js build is only paid for when a PDF actually needs reading, and so
+ * importing any of those modules in a test that never touches a PDF never pulls pdf.js in. */
+export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   const { extractText } = await import('unpdf');
   const { text } = await extractText(bytes, { mergePages: true });
   return text;
