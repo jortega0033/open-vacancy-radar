@@ -199,6 +199,11 @@ export type {
  * renderer bundle. It is erased at compile time.
  */
 export type {
+  ApplicationArtifactKind,
+  ApplicationArtifactRecord,
+  ApplicationAttemptCheckpoint,
+  ApplicationAttemptPatch,
+  ApplicationAttemptRecord,
   ApplicationFilter,
   ApplicationInput,
   ApplicationPatch,

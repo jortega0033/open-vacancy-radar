@@ -236,9 +236,13 @@ describe('electron/preload.ts: workspace bridge', () => {
     'updateLetter',
     'deleteLetter',
     'duplicateLetter',
+    'listApplicationAttempts',
+    'getApplicationAttempt',
+    'updateApplicationAttempt',
+    'listApplicationArtifacts',
   ];
 
-  it('exposes exactly the twenty-one documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-five documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -265,6 +269,7 @@ describe('electron/preload.ts: workspace bridge', () => {
       ['listSavedJobs', 'workspace:saved-jobs:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listCvDocuments', 'workspace:cv-documents:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listLetters', 'workspace:letters:list', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['listApplicationAttempts', 'workspace:application-attempts:list', (fn: never) => (fn as () => Promise<unknown>)()],
     ];
 
     for (const [name, channel, call] of cases) {
@@ -302,6 +307,30 @@ describe('electron/preload.ts: workspace bridge', () => {
     const api = await loadPreload('workspace');
     await (api.listApplications as (filter?: string) => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledWith('workspace:applications:list', { filter: 'all' });
+  });
+
+  it('application attempt/artifact capabilities (#202): id, id+patch, and attemptId envelopes', async () => {
+    invoke.mockResolvedValue({ id: 'attempt-1' });
+    let api = await loadPreload('workspace');
+    await (api.getApplicationAttempt as (id: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('workspace:application-attempts:get', { id: 'attempt-1' });
+
+    invoke.mockReset();
+    invoke.mockResolvedValue({ id: 'attempt-1', checkpoint: 'needs_user' });
+    api = await loadPreload('workspace');
+    await (api.updateApplicationAttempt as (id: string, patch: unknown) => Promise<unknown>)('attempt-1', {
+      checkpoint: 'needs_user',
+    });
+    expect(invoke).toHaveBeenCalledWith('workspace:application-attempts:update', {
+      id: 'attempt-1',
+      patch: { checkpoint: 'needs_user' },
+    });
+
+    invoke.mockReset();
+    invoke.mockResolvedValue([]);
+    api = await loadPreload('workspace');
+    await (api.listApplicationArtifacts as (attemptId: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('workspace:application-artifacts:list', { attemptId: 'attempt-1' });
   });
 });
 
@@ -458,6 +487,13 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'updateLetter',
     'deleteLetter',
     'duplicateLetter',
+    // Added by issue #202, unrelated to ADI-06/07's own scope-boundary concern (whether *those*
+    // tickets leaked capability into the wrong namespace) -- `workspace` legitimately grows here,
+    // so the literal below is updated rather than left blocking real growth.
+    'listApplicationAttempts',
+    'getApplicationAttempt',
+    'updateApplicationAttempt',
+    'listApplicationArtifacts',
   ],
   cv: ['getWorkspaceDir', 'selectAndRead'],
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
