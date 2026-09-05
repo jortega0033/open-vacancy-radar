@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ApplicationTargetPolicy } from '@agent-dock/application-executor';
 
 /**
@@ -13,14 +15,30 @@ import type { ApplicationTargetPolicy } from '@agent-dock/application-executor';
  * specifically is `insufficient_evidence`. The one entry below is therefore NOT a real, live
  * target: it is the local, file://-only fixture form (e2e/fixtures/ashby-application-form.html)
  * that exercises this executor for real over a genuine CDP connection, without this app ever
- * pointing the executor at an actual employer-hosted page. `origins: ['null']` is not a typo --
- * every `file://` URL's origin serializes to the literal string `"null"` (WHATWG URL spec), which
- * is also why this policy can never match a real `https://` target by accident.
+ * pointing the executor at an actual employer-hosted page.
+ *
+ * `exactFileUrls`, not `origins`, is what scopes this to that one file: every `file://` URL's
+ * origin serializes to the same literal string `"null"` (WHATWG URL spec), so an `origins: ['null']`
+ * entry -- this policy's original shape, confirmed as a real gap during #201's review against a
+ * live Electron process -- would match ANY local file, not just the fixture. `exactFileUrls` checks
+ * the full URL instead, and is computed relative to this file's own location so it can never
+ * resolve to a path outside this repo's `e2e/fixtures/` folder.
  */
+function fixtureUrl(fileName: string): string {
+  return pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'e2e', 'fixtures', fileName)).href;
+}
+
+const FIXTURE_FORM_URL = fixtureUrl('ashby-application-form.html');
+/** Deliberately allowlisted despite immediately trying to redirect itself off-policy -- it exists
+ * to prove the runtime navigation guard, not to be a real target. See its own file header comment
+ * and `not-a-target.html`, its (deliberately unlisted) redirect destination. */
+const REDIRECT_ATTEMPT_URL = fixtureUrl('redirect-attempt.html');
+
 export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
   id: 'ashby-fixture-test-only',
   displayName: 'Local fixture form (test-only, not a real target)',
-  origins: ['null'],
+  origins: [],
+  exactFileUrls: [FIXTURE_FORM_URL, REDIRECT_ATTEMPT_URL],
   adapter: 'generic-html-form',
   termsRegisterEntry: 'ashby',
   termsVersion: 'n/a (local fixture, not a live target)',

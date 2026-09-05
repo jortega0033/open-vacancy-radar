@@ -143,6 +143,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
           controlType,
           required: hasAttr(node, 'required'),
           ...(controlType === 'select' ? { options: extractOptions(node) } : {}),
+          ...(controlType === 'checkbox' ? { checked: hasAttr(node, 'checked') } : {}),
           ...(classification ? { classification } : {}),
         });
       }

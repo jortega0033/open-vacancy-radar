@@ -145,4 +145,26 @@ describe('extractSnapshotFields', () => {
     const { fields } = extractSnapshotFields(root);
     expect(fields.map((f) => f.controlType)).toEqual(['file', 'radio', 'textarea']);
   });
+
+  it('reads a checkbox\'s real starting checked state from the checked attribute', () => {
+    // Real gap found during #201's review: `fill()` used to assume every checkbox starts
+    // unchecked. This is what makes the fix possible -- the extracted snapshot must actually carry
+    // the control's real starting state for `fill()` to compare against.
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'checkbox', name: 'unchecked-one' }) }),
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'checkbox', name: 'checked-one', checked: '' }) }),
+      ],
+    });
+    const { fields } = extractSnapshotFields(root);
+    expect(fields[0]!.checked).toBe(false);
+    expect(fields[1]!.checked).toBe(true);
+  });
+
+  it('never sets `checked` on a non-checkbox control', () => {
+    const root = node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'x' }) });
+    const { fields } = extractSnapshotFields(root);
+    expect(fields[0]!.checked).toBeUndefined();
+  });
 });

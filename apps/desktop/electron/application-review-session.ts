@@ -1,4 +1,4 @@
-import { ApplicationExecutor, validateFieldMap } from '@agent-dock/application-executor';
+import { ApplicationExecutor, isNavigationAllowed, validateFieldMap } from '@agent-dock/application-executor';
 import { createApplicationView, type ApplicationView } from './application-view.js';
 import { resolveApplicationTargetPolicy } from './application-target-policies.js';
 import type {
@@ -36,7 +36,13 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     throw new Error(`unknown application target policy: ${input.policyId}`);
   }
 
-  const view = createApplicationView(input.attemptId);
+  // The runtime half of #196 §1.1's "never a followed redirect" rule -- see `application-view.ts`'s
+  // own doc comment on `createApplicationView` for why this can't live inside the executor package.
+  const view = createApplicationView(
+    input.attemptId,
+    (url) => isNavigationAllowed(policy, url),
+    (url) => console.warn('[application-executor] blocked an off-policy navigation', { attemptId: input.attemptId, policyId: policy.id, url }),
+  );
   const executor = new ApplicationExecutor(view.transport, policy);
   activeReviews.set(input.attemptId, { view, executor });
 

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: script-driven off-policy redirect attempt</title>
+<!--
+  Test-only fixture (issue #201's review fix for the "no runtime redirect guard" finding). Proves
+  that a same-tab, script-driven navigation away from this page -- the kind a compromised or
+  malicious job posting could trigger via `location.href`, indistinguishable at the CDP layer from
+  a real HTTP redirect -- is actually blocked by application-view.ts's `will-navigate` handler, not
+  merely refused once before the initial `Page.navigate` call.
+
+  Navigates to `not-a-target.html`, deliberately NOT in `FIXTURE_REVIEW_POLICY.exactFileUrls`, so
+  the navigation attempt is genuinely off-policy. Both files are local, so the test outcome is
+  deterministic and network-free either way: if the guard fails, the browser actually lands on
+  `not-a-target.html`; if it holds, this page's own field remains the only one a snapshot ever sees.
+-->
+</head>
+<body>
+  <input type="text" name="onRedirectAttemptPage" />
+  <script>
+    // Fires as soon as this page finishes parsing -- no user interaction required, matching how a
+    // real injected/malicious redirect would behave.
+    location.href = new URL('./not-a-target.html', location.href).href;
+  </script>
+</body>
+</html>

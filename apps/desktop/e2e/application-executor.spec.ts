@@ -119,7 +119,7 @@ test.describe('applicationExecutor (#201)', () => {
           self.applicationExecutor.openReview({ attemptId, policyId, targetUrl: 'https://not-the-fixture.example/apply' }),
         { attemptId, policyId: POLICY_ID },
       ),
-    ).rejects.toThrow(/not in policy/);
+    ).rejects.toThrow(/not allowed by policy/);
   });
 
   test('refuses an unknown policy id before ever opening a browser view', async ({ window }) => {
@@ -131,5 +131,41 @@ test.describe('applicationExecutor (#201)', () => {
         { attemptId, targetUrl: FIXTURE_URL },
       ),
     ).rejects.toThrow(/unknown application target policy/);
+  });
+
+  test('refuses an arbitrary local file:// URL even under a policy that allows a different local file', async ({ window }) => {
+    // Regression test for a real gap found in #201's review: every file:// URL's origin serializes
+    // to the same literal string "null" (WHATWG URL spec), so an origin-only allowlist check would
+    // let ANY local file through once one file:// target was permitted. `exactFileUrls` checks the
+    // full URL instead -- this proves it against a real Electron process, not just a unit test.
+    const OTHER_LOCAL_FILE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'not-a-target.html')).href;
+    const attemptId = randomUUID();
+    await expect(
+      window.evaluate(
+        async ({ attemptId, policyId, targetUrl }) => self.applicationExecutor.openReview({ attemptId, policyId, targetUrl }),
+        { attemptId, policyId: POLICY_ID, targetUrl: OTHER_LOCAL_FILE_URL },
+      ),
+    ).rejects.toThrow(/not allowed by policy/);
+  });
+
+  test('blocks a real same-tab, script-driven navigation to an off-policy local file', async ({ window }) => {
+    // Regression test for the other real gap #201's review found: openTarget only checks the URL
+    // once, before its own Page.navigate call -- nothing re-validated a same-tab redirect or a
+    // page-driven navigation afterward. This fixture's own script fires `location.href` to an
+    // unlisted local file as soon as it loads; if application-view.ts's `will-navigate` guard
+    // didn't block it, the browser would actually leave this page.
+    const REDIRECT_ATTEMPT_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'redirect-attempt.html')).href;
+    const attemptId = randomUUID();
+
+    const opened = await window.evaluate(
+      async ({ attemptId, policyId, targetUrl }) => self.applicationExecutor.openReview({ attemptId, policyId, targetUrl }),
+      { attemptId, policyId: POLICY_ID, targetUrl: REDIRECT_ATTEMPT_URL },
+    );
+
+    const fieldLabels = opened.snapshot.fields.map((f) => f.label);
+    expect(fieldLabels).toContain('onRedirectAttemptPage');
+    expect(fieldLabels).not.toContain('onNotATargetPage');
+
+    await window.evaluate(async (attemptId) => self.applicationExecutor.closeReview(attemptId), attemptId);
   });
 });

@@ -19,8 +19,15 @@ export interface ApplicationTargetPolicy {
   id: string;
   displayName: string;
   /** Exact origins only. No wildcard, no suffix matching -- the same rule `will-navigate` already
-   * applies elsewhere in this app by comparing real origins, never `startsWith`. */
+   * applies elsewhere in this app by comparing real origins, never `startsWith`. Meaningless for a
+   * `file://` target: every `file://` URL's origin serializes to the same literal string `"null"`
+   * (WHATWG URL spec), so `origins` alone cannot scope such a target to one specific file -- use
+   * `exactFileUrls` for that case instead. A real http(s) policy leaves `exactFileUrls` empty. */
   origins: readonly string[];
+  /** Exact `file://` URLs this policy allows, checked instead of `origins` when the target URL's
+   * scheme is `file:`. Local/fixture-testing only (issue #201's own fixture policy is the only
+   * real user of this today) -- a real employer target is never `file://`. */
+  exactFileUrls?: readonly string[];
   adapter: string;
   termsRegisterEntry: string;
   termsVersion: string;
@@ -40,11 +47,25 @@ export interface ApplicationTargetPolicy {
   maximumSnapshotBytes: number;
 }
 
-/** Whether `origin` is one of `policy.origins`, by exact match. No normalization beyond what
- * `URL` itself does (trailing slash, case) -- a policy author writes the origin exactly as the
- * target actually serves it. */
-export function isOriginAllowed(policy: ApplicationTargetPolicy, origin: string): boolean {
-  return policy.origins.includes(origin);
+/**
+ * Whether `url` is allowed to navigate to under `policy` -- the real check `openTarget` (and, at
+ * the Electron layer, every subsequent same-tab navigation/redirect) must pass. For a `file:` URL
+ * this checks the *exact* URL against `policy.exactFileUrls`, never `policy.origins`: origin-only
+ * matching would let any `file://` URL through, since they all share the same opaque origin
+ * (confirmed against a real Electron process during #201's review -- see this function's own git
+ * history). For every other scheme, this is the exact-origin check `origins` has always been.
+ */
+export function isNavigationAllowed(policy: ApplicationTargetPolicy, url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'file:') {
+    return (policy.exactFileUrls ?? []).includes(url);
+  }
+  return policy.origins.includes(parsed.origin);
 }
 
 export function isActionAllowed(policy: ApplicationTargetPolicy, action: ExecutorAction): boolean {

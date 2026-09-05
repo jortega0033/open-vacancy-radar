@@ -38,6 +38,17 @@ export function registerApplicationGenerationRoutes(
     }
     const { provider, cwd, prompt, model } = parsed.data;
 
+    // The 'no-network' profile only means anything for Claude: `buildClaudeArgs` is the only
+    // provider adapter that reads `opts.hardened` at all (Codex's own `buildCodexArgs` doc comment
+    // states this is deliberate and permanent). Letting any other registered provider through this
+    // route would silently produce a session with none of the tool restrictions this route exists
+    // to guarantee -- a real gap found during #201's review, closed here rather than by trusting
+    // every current and future provider adapter to keep honoring a flag it may not even read.
+    if (provider !== 'claude') {
+      reply.code(400).send({ error: `provider does not support the field-map-generation hardening profile: ${provider}` });
+      return;
+    }
+
     const providerImpl = registry.get(provider);
     if (!providerImpl) {
       reply.code(400).send({ error: `unsupported provider: ${provider}` });

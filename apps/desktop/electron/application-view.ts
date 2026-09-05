@@ -38,8 +38,24 @@ export interface ApplicationView {
  * Creates one isolated view for `attemptId`. Not shown/attached to any window until `show()` is
  * called -- the executor's normal operation (snapshot/fill/select/attach/capture) needs no visible
  * window at all, only a `webContents` to send CDP commands to.
+ *
+ * `isUrlAllowed` is the *runtime* half of #196 §1.1's "any navigation to an unlisted origin
+ * produces a handoff, never a followed redirect" rule. `ApplicationExecutor.openTarget()` (in
+ * `@agent-dock/application-executor`) only checks a URL once, before the CDP `Page.navigate` call
+ * it issues itself -- it has no way to observe a same-tab redirect or a page-driven navigation
+ * (a link click, a script setting `location.href`) after that, because its `CdpTransport` is
+ * request/response only. This is where that gap is closed instead: `will-navigate` and
+ * `will-redirect` fire for every navigation attempt on this view regardless of what triggered it,
+ * and are the only Electron-level hooks that can `preventDefault()` one before it takes effect.
+ * `onBlockedNavigation`, if given, is called (never thrown from) whenever one is blocked, so a
+ * caller can record or surface a real handoff-worthy event -- see `HandoffReason.off_policy_navigation`
+ * in `@agent-dock/application-executor`.
  */
-export function createApplicationView(attemptId: string): ApplicationView {
+export function createApplicationView(
+  attemptId: string,
+  isUrlAllowed: (url: string) => boolean,
+  onBlockedNavigation?: (url: string) => void,
+): ApplicationView {
   const view = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
@@ -61,6 +77,14 @@ export function createApplicationView(attemptId: string): ApplicationView {
   // No child windows, no `window.open` popups escaping the isolated view.
   view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
+  function guardNavigation(event: Electron.Event, url: string): void {
+    if (isUrlAllowed(url)) return;
+    event.preventDefault();
+    onBlockedNavigation?.(url);
+  }
+  view.webContents.on('will-navigate', guardNavigation);
+  view.webContents.on('will-redirect', guardNavigation);
+
   const hostWindow = new BaseWindow({ show: false, width: 1024, height: 768 });
   hostWindow.contentView.addChildView(view);
   view.setBounds({ x: 0, y: 0, width: 1024, height: 768 });
@@ -68,17 +92,24 @@ export function createApplicationView(attemptId: string): ApplicationView {
   let attachedTo: BrowserWindow | undefined;
   let debuggerAttached = false;
 
+  // Registered once, unconditionally -- not inside `ensureDebuggerAttached` below, which runs on
+  // every reattach after an external detach (DevTools opened, renderer crash). A `.on('detach', ...)`
+  // call inside that function would add a new listener on every such cycle with nothing ever
+  // removing the previous one, leaking one closure per cycle (confirmed as a real gap during #201's
+  // review). This flag-flip has no per-attachment state to close over, so one listener for the
+  // view's whole lifetime is all it ever needs.
+  view.webContents.debugger.on('detach', () => {
+    debuggerAttached = false;
+  });
+
   function ensureDebuggerAttached(): void {
     if (debuggerAttached) return;
-    view.webContents.debugger.attach('1.3');
-    debuggerAttached = true;
     // A detach we did not initiate (DevTools invoked on this view, or the OS killed the renderer)
     // is terminal for the executor using this transport -- there is nothing more this view can do
     // until a new one is created. The caller observes this via `webContents.debugger.isAttached()`
-    // going false; this handler's only job is to keep the local flag honest.
-    view.webContents.debugger.on('detach', () => {
-      debuggerAttached = false;
-    });
+    // going false.
+    view.webContents.debugger.attach('1.3');
+    debuggerAttached = true;
   }
 
   const transport: CdpTransport = {

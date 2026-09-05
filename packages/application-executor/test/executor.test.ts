@@ -81,6 +81,37 @@ describe('ApplicationExecutor: policy enforcement', () => {
     await expect(executor.openTarget('https://attacker.example.invalid/apply')).rejects.toThrow(ExecutorPolicyError);
     expect(calls).toHaveLength(0); // never reached the transport at all
   });
+
+  it('refuses a file:// URL not in exactFileUrls, never matching by origin alone', async () => {
+    // Every file:// URL's origin serializes to the same literal string "null" (WHATWG URL spec).
+    // A policy that (mistakenly) put 'null' in `origins` would let ANY local file through if this
+    // were checked the same way as an http(s) origin -- confirmed as a real gap against a live
+    // Electron process (issue #201's review). `exactFileUrls` is the fix: exact-URL match only.
+    const { transport, calls } = fakeTransport();
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ origins: ['null'], exactFileUrls: ['file:///allowed/fixture.html'] }),
+    );
+    await expect(executor.openTarget('file:///some/other/sensitive-file.html')).rejects.toThrow(ExecutorPolicyError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('allows a file:// URL that is an exact match in exactFileUrls', async () => {
+    const { transport, calls } = fakeTransport();
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ origins: [], exactFileUrls: ['file:///allowed/fixture.html'] }),
+    );
+    await executor.openTarget('file:///allowed/fixture.html');
+    expect(calls.at(-1)).toMatchObject({ method: 'Page.navigate', params: { url: 'file:///allowed/fixture.html' } });
+  });
+
+  it('refuses every file:// URL when exactFileUrls is absent, even with a permissive origins list', async () => {
+    const { transport, calls } = fakeTransport();
+    const executor = new ApplicationExecutor(transport, fullPolicy({ origins: ['null'] }));
+    await expect(executor.openTarget('file:///anything.html')).rejects.toThrow(ExecutorPolicyError);
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe('ApplicationExecutor: openTarget', () => {
@@ -192,7 +223,7 @@ describe('ApplicationExecutor: fill', () => {
     expect(mouseCalls[0]).toMatchObject({ params: { type: 'mousePressed', x: 20, y: 30 } });
   });
 
-  it('does nothing for a checkbox fill of "false" (native default is already unchecked)', async () => {
+  it('does nothing for a checkbox fill of "false" when it is already unchecked', async () => {
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
@@ -201,6 +232,49 @@ describe('ApplicationExecutor: fill', () => {
 
     await executor.fill(checkbox.fieldRef, 'false');
     expect(calls.length).toBe(before); // no new CDP calls at all
+  });
+
+  it('does nothing for a checkbox fill of "true" when it is already checked', async () => {
+    const preCheckedTree = {
+      root: {
+        nodeName: 'BODY',
+        nodeType: 1,
+        backendNodeId: 1,
+        children: [{ nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'checkbox', 'name', 'hasPriorExperience', 'checked', ''] }],
+      },
+    };
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': preCheckedTree });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(snapshot.fields[0]!.checked).toBe(true);
+    const before = calls.length;
+
+    await executor.fill(snapshot.fields[0]!.fieldRef, 'true');
+    expect(calls.length).toBe(before); // already in the desired state -- no click needed
+  });
+
+  it('clicks a pre-checked checkbox to uncheck it when the value is "false"', async () => {
+    // Real gap found during #201's review: fill() used to assume every checkbox starts unchecked,
+    // so a validated `value: 'false'` could never actually uncheck a pre-checked box.
+    const preCheckedTree = {
+      root: {
+        nodeName: 'BODY',
+        nodeType: 1,
+        backendNodeId: 1,
+        children: [{ nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'checkbox', 'name', 'hasPriorExperience', 'checked', ''] }],
+      },
+    };
+    const { transport, calls } = fakeTransport({
+      'DOM.getDocument': preCheckedTree,
+      'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+
+    await executor.fill(snapshot.fields[0]!.fieldRef, 'false');
+
+    const mouseCalls = calls.filter((c) => c.method === 'Input.dispatchMouseEvent');
+    expect(mouseCalls).toHaveLength(2); // pressed + released, the same real click as checking one
   });
 
   it('refuses to fill an unknown fieldRef', async () => {
@@ -227,6 +301,27 @@ describe('ApplicationExecutor: fill', () => {
   });
 });
 
+const MULTI_OPTION_SELECT_TREE = {
+  root: {
+    nodeName: 'BODY',
+    nodeType: 1,
+    backendNodeId: 1,
+    children: [
+      {
+        nodeName: 'SELECT',
+        nodeType: 1,
+        backendNodeId: 2,
+        attributes: ['name', 'workAuthorization'],
+        children: [
+          { nodeName: 'OPTION', nodeType: 1, backendNodeId: 3, attributes: ['value', 'no'], children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'No' }] },
+          { nodeName: 'OPTION', nodeType: 1, backendNodeId: 4, attributes: ['value', 'yes'], children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Yes' }] },
+          { nodeName: 'OPTION', nodeType: 1, backendNodeId: 5, attributes: ['value', 'sponsor'], children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Needs sponsorship' }] },
+        ],
+      },
+    ],
+  },
+};
+
 describe('ApplicationExecutor: select', () => {
   it('focuses the select then drives it to the option index with arrow keys and Enter', async () => {
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
@@ -237,9 +332,13 @@ describe('ApplicationExecutor: select', () => {
 
     await executor.select(countryField.fieldRef, option.optionRef);
 
-    const relevant = calls.slice(-2);
+    // NAME_INPUT_TREE's select has exactly one option (index 0): focus, one normalizing ArrowUp
+    // (options.length -- see select()'s own doc comment on why this always runs, even for index 0),
+    // zero ArrowDown (index 0), then Enter.
+    const relevant = calls.slice(-3);
     expect(relevant[0]).toMatchObject({ method: 'DOM.focus', params: { backendNodeId: 4 } });
-    expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Enter' } });
+    expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'ArrowUp' } });
+    expect(relevant[2]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Enter' } });
   });
 
   it('refuses an optionRef that is not on the given field', async () => {
@@ -249,7 +348,53 @@ describe('ApplicationExecutor: select', () => {
     const countryField = snapshot.fields.find((f) => f.controlType === 'select')!;
     await expect(executor.select(countryField.fieldRef, 'o0000000000000ff')).rejects.toThrow(ExecutorPolicyError);
   });
+
+  it('normalizes to index 0 before navigating, regardless of the control\'s real starting selection', async () => {
+    // Real gap found during #201's review: counting only ArrowDown presses from wherever the
+    // control happens to already be assumes it always starts at index 0, which a real form with a
+    // non-first `<option selected>` (or a second select() call on the same field) would violate.
+    // This asserts the actual fix: a full options.length-sized burst of ArrowUp presses always
+    // runs first, then exactly `index` ArrowDown presses -- never fewer, regardless of history.
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': MULTI_OPTION_SELECT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const field = snapshot.fields[0]!;
+    const sponsorOption = field.options!.find((o) => o.label === 'Needs sponsorship')!;
+
+    await executor.select(field.fieldRef, sponsorOption.optionRef);
+
+    const keyEvents = calls.filter((c) => c.method === 'Input.dispatchKeyEvent').map((c) => (c.params as { key: string }).key);
+    const arrowUpCount = keyEvents.filter((k) => k === 'ArrowUp').length;
+    const arrowDownCount = keyEvents.filter((k) => k === 'ArrowDown').length;
+    expect(arrowUpCount).toBe(3); // options.length
+    expect(arrowDownCount).toBe(2); // sponsorOption's index
+    expect(keyEvents.at(-1)).toBe('Enter');
+    // Every ArrowUp precedes every ArrowDown, so the normalize pass always completes before the
+    // real navigation starts -- an interleaved order would defeat the whole point of resetting first.
+    expect(keyEvents.lastIndexOf('ArrowUp')).toBeLessThan(keyEvents.indexOf('ArrowDown'));
+  });
+
+  it('calling select() twice on the same field re-normalizes each time, landing on the second target', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': MULTI_OPTION_SELECT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const field = snapshot.fields[0]!;
+    const sponsorOption = field.options!.find((o) => o.label === 'Needs sponsorship')!; // index 2
+    const noOption = field.options!.find((o) => o.label === 'No')!; // index 0
+
+    await executor.select(field.fieldRef, sponsorOption.optionRef);
+    calls.length = 0; // isolate the second call's own key sequence
+    await executor.select(field.fieldRef, noOption.optionRef);
+
+    const keyEvents = calls.filter((c) => c.method === 'Input.dispatchKeyEvent').map((c) => (c.params as { key: string }).key);
+    // Re-normalizes with a full burst regardless of where the first call left the control (index
+    // 2), then takes zero ArrowDown steps to reach index 0.
+    expect(keyEvents.filter((k) => k === 'ArrowUp')).toHaveLength(3);
+    expect(keyEvents.filter((k) => k === 'ArrowDown')).toHaveLength(0);
+  });
 });
+
+const A_VALID_PDF = { localFilePath: '/staged/resume.pdf', mimeType: 'application/pdf', byteSize: 1000 };
 
 describe('ApplicationExecutor: attach', () => {
   it('calls DOM.setFileInputFiles with the real backend node and given path', async () => {
@@ -258,7 +403,7 @@ describe('ApplicationExecutor: attach', () => {
     const snapshot = await executor.snapshot();
     const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
 
-    await executor.attach(fileField.fieldRef, '/staged/resume.pdf');
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
 
     expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles', params: { files: ['/staged/resume.pdf'], backendNodeId: 6 } });
   });
@@ -268,7 +413,54 @@ describe('ApplicationExecutor: attach', () => {
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
     const textField = snapshot.fields.find((f) => f.controlType === 'text')!;
-    await expect(executor.attach(textField.fieldRef, '/staged/resume.pdf')).rejects.toThrow(ExecutorPolicyError);
+    await expect(executor.attach(textField.fieldRef, A_VALID_PDF)).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('refuses a file larger than the policy\'s upload byte limit, never reaching the transport', async () => {
+    // Real gap found during #201's review: `uploadConstraints` was declared on the policy shape
+    // but never actually enforced anywhere.
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ uploadConstraints: { maxBytes: 500, mimeTypes: ['application/pdf'] } }),
+    );
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+    const before = calls.length;
+
+    await expect(
+      executor.attach(fileField.fieldRef, { localFilePath: '/staged/huge.pdf', mimeType: 'application/pdf', byteSize: 501 }),
+    ).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before); // never reached DOM.setFileInputFiles
+  });
+
+  it('refuses a mime type the policy does not allow, never reaching the transport', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ uploadConstraints: { maxBytes: 10_000_000, mimeTypes: ['application/pdf'] } }),
+    );
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+    const before = calls.length;
+
+    await expect(
+      executor.attach(fileField.fieldRef, { localFilePath: '/staged/resume.exe', mimeType: 'application/x-msdownload', byteSize: 100 }),
+    ).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before);
+  });
+
+  it('allows a file exactly at the policy byte limit', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ uploadConstraints: { maxBytes: 500, mimeTypes: ['application/pdf'] } }),
+    );
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    await executor.attach(fileField.fieldRef, { localFilePath: '/staged/exact.pdf', mimeType: 'application/pdf', byteSize: 500 });
+    expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles' });
   });
 });
 
@@ -300,7 +492,7 @@ describe('ApplicationExecutor: CDP allowlist enforcement is real, not decorative
     await executor.fill(snapshot.fields[0]!.fieldRef, 'x');
     await executor.fill(snapshot.fields[1]!.fieldRef, 'true');
     await executor.select(snapshot.fields[2]!.fieldRef, snapshot.fields[2]!.options![0]!.optionRef);
-    await executor.attach(snapshot.fields[3]!.fieldRef, '/tmp/x.pdf');
+    await executor.attach(snapshot.fields[3]!.fieldRef, { localFilePath: '/tmp/x.pdf', mimeType: 'application/pdf', byteSize: 100 });
     await executor.capture();
 
     const { isAllowedCdpMethod } = await import('../src/cdp-allowlist.js');

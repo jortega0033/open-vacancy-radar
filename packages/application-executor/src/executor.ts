@@ -1,7 +1,7 @@
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
 import { extractSnapshotFields, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
 import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
-import { isActionAllowed, isOriginAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
+import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
 
 const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
 const EMPTY_SNAPSHOT_RETRY_DELAY_MS = 100;
@@ -100,14 +100,17 @@ export class ApplicationExecutor {
     return findSnapshotField(this.#currentSnapshot, fieldRef);
   }
 
-  /** Navigates to `url`, refusing anything outside the policy's compiled origin list -- a
+  /** Navigates to `url`, refusing anything outside the policy's compiled allowlist -- a
    * `handoff('off_policy_navigation')` is the caller's job when this throws, per #196 §1.1's "any
-   * navigation to an unlisted origin produces a handoff, never a followed redirect" rule. */
+   * navigation to an unlisted origin produces a handoff, never a followed redirect" rule. This is
+   * the *pre-navigate* half of that rule; the *never a followed redirect* half is enforced at the
+   * Electron layer (`apps/desktop/electron/application-view.ts`'s `will-navigate`/`will-redirect`
+   * handlers), since `CdpTransport` here is request/response only and cannot observe a navigation
+   * CDP itself didn't initiate. */
   async openTarget(url: string): Promise<void> {
     this.requireAction('openTarget');
-    const origin = new URL(url).origin;
-    if (!isOriginAllowed(this.policy, origin)) {
-      throw new ExecutorPolicyError('openTarget', `origin "${origin}" is not in policy "${this.policy.id}"'s allowlist`);
+    if (!isNavigationAllowed(this.policy, url)) {
+      throw new ExecutorPolicyError('openTarget', `url "${url}" is not allowed by policy "${this.policy.id}"`);
     }
     await this.send('Page.navigate', { url });
     this.#generation += 1; // navigation invalidates any prior snapshot's field refs
@@ -160,8 +163,14 @@ export class ApplicationExecutor {
     if (field.controlType === 'checkbox') {
       // A checkbox has no allowed-method way to set its checked state directly (`DOM.setAttributeValue`
       // is deliberately not on the allowlist -- it would not fire the page's own change handlers at
-      // all). A real click at the element's own box-model center does.
-      if (value !== 'true') return; // native default is unchecked; nothing to do
+      // all). A real click at the element's own box-model center does, toggling whatever the box's
+      // current state is -- so a click is only correct when the desired state actually differs from
+      // it. Comparing against `field.checked` (rather than assuming every checkbox starts unchecked,
+      // a real gap found during #201's review) is what makes this work in both directions: a
+      // pre-checked box can now be unchecked, and an already-correct box is left alone rather than
+      // toggled by an unnecessary click.
+      const desiredChecked = value === 'true';
+      if (desiredChecked === (field.checked ?? false)) return; // already in the desired state
       const box = (await this.send('DOM.getBoxModel', { backendNodeId })) as { model: BoxModel };
       const { x, y } = boxCenter(box.model);
       await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
@@ -177,7 +186,15 @@ export class ApplicationExecutor {
    * control, then drives it with real keyboard events (arrow-down to the option's index, then
    * Enter) -- there is no allowed CDP method that sets a `<select>`'s value directly and still
    * fires the page's own change handlers, and `DOM.setAttributeValue` is deliberately not on the
-   * allowlist for exactly that reason (it would not fire them at all). */
+   * allowlist for exactly that reason (it would not fire them at all).
+   *
+   * Normalizes to index 0 with a burst of `ArrowUp` presses before counting `ArrowDown` presses to
+   * the target -- confirmed as a real gap during #201's review: counting `ArrowDown` alone assumes
+   * the control's real starting selection is always index 0, which is false for a field with a
+   * non-first `<option selected>`, a browser-remembered value, or a second `select()` call on the
+   * same field. `ArrowUp` on an already-first option is a no-op in every real `<select>`, so
+   * sending one per option is a safe, allowlist-only way to guarantee a known starting point
+   * without any CDP method that reads the control's current value. */
   async select(fieldRef: string, optionRef: string): Promise<void> {
     this.requireAction('select');
     const field = this.currentField(fieldRef);
@@ -188,21 +205,40 @@ export class ApplicationExecutor {
     const backendNodeId = this.nodeIdFor('select', fieldRef);
 
     await this.send('DOM.focus', { backendNodeId });
+    for (let i = 0; i < options.length; i++) {
+      await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowUp' });
+    }
     for (let i = 0; i < index; i++) {
       await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown' });
     }
     await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' });
   }
 
-  /** Attaches a local file (resolved by the caller from a registered artifact id -- never a path
-   * the field map itself carries) to a `file` input. */
-  async attach(fieldRef: string, localFilePath: string): Promise<void> {
+  /**
+   * Attaches a local file (resolved by the caller from a registered artifact id -- never a path
+   * the field map itself carries) to a `file` input.
+   *
+   * `mimeType`/`byteSize` come from the caller's own trusted artifact record (#198), never derived
+   * here from the file itself (a file extension is not a security boundary) -- this package does no
+   * filesystem I/O by design. Checked against `policy.uploadConstraints` before the CDP call: a real
+   * gap found during #201's review had this field declared on `ApplicationTargetPolicy` but never
+   * actually enforced anywhere, so an oversized or wrong-type artifact would have reached
+   * `DOM.setFileInputFiles` unchecked once artifact resolution (#198) was wired up.
+   */
+  async attach(fieldRef: string, file: { localFilePath: string; mimeType: string; byteSize: number }): Promise<void> {
     this.requireAction('attach');
     const field = this.currentField(fieldRef);
     if (!field) throw new ExecutorPolicyError('attach', `unknown fieldRef ${fieldRef}`);
     if (field.controlType !== 'file') throw new ExecutorPolicyError('attach', `fieldRef ${fieldRef} is not a file input`);
+    const { maxBytes, mimeTypes } = this.policy.uploadConstraints;
+    if (file.byteSize > maxBytes) {
+      throw new ExecutorPolicyError('attach', `file (${file.byteSize} bytes) exceeds policy "${this.policy.id}"'s ${maxBytes}-byte limit`);
+    }
+    if (!mimeTypes.includes(file.mimeType)) {
+      throw new ExecutorPolicyError('attach', `mime type "${file.mimeType}" is not allowed by policy "${this.policy.id}"`);
+    }
     const backendNodeId = this.nodeIdFor('attach', fieldRef);
-    await this.send('DOM.setFileInputFiles', { files: [localFilePath], backendNodeId });
+    await this.send('DOM.setFileInputFiles', { files: [file.localFilePath], backendNodeId });
   }
 
   /** Captures a screenshot for the review UI / submission evidence record. */

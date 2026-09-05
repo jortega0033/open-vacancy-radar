@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CdpDomNode } from '@agent-dock/application-executor';
+import { FIXTURE_REVIEW_POLICY } from '../electron/application-target-policies.js';
+
+// The real fixture policy's own allowed URL, not an arbitrary literal -- since #201's review fix,
+// `openTarget` refuses any file:// URL not in `exactFileUrls`, so this must be the exact one.
+const FIXTURE_URL = FIXTURE_REVIEW_POLICY.exactFileUrls![0]!;
 
 /**
  * Exercises `application-review-session.ts`'s registry/validate/apply orchestration against a
@@ -74,7 +79,7 @@ describe('application-review-session', () => {
     const result = await openApplicationReview({
       attemptId: '11111111-1111-4111-8111-111111111111',
       policyId: 'ashby-fixture-test-only',
-      targetUrl: 'file:///fixture.html',
+      targetUrl: FIXTURE_URL,
     });
     expect(result.screenshotBase64).toBe('ZmFrZS1zY3JlZW5zaG90');
     expect(result.snapshot.fields).toHaveLength(3);
@@ -84,16 +89,16 @@ describe('application-review-session', () => {
   it('refuses an unknown policy id before ever creating a view', async () => {
     const { openApplicationReview } = await importSession();
     await expect(
-      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'not-a-real-policy', targetUrl: 'file:///fixture.html' }),
+      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'not-a-real-policy', targetUrl: FIXTURE_URL }),
     ).rejects.toThrow(/unknown application target policy/);
     expect(createApplicationView).not.toHaveBeenCalled();
   });
 
   it('refuses to open a second review for an attempt that already has one open', async () => {
     const { openApplicationReview } = await importSession();
-    await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' });
+    await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     await expect(
-      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' }),
+      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL }),
     ).rejects.toThrow(/already has an open review/);
   });
 
@@ -103,12 +108,12 @@ describe('application-review-session', () => {
     createApplicationView.mockImplementation(() => view);
     await expect(
       openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'https://evil.example/apply' }),
-    ).rejects.toThrow(/not in policy/);
+    ).rejects.toThrow(/not allowed by policy/);
     expect(view.destroy).toHaveBeenCalledTimes(1);
 
     // The failed attempt's id is free to retry, proving nothing was left registered for it.
     await expect(
-      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' }),
+      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL }),
     ).resolves.toBeDefined();
   });
 
@@ -116,7 +121,7 @@ describe('application-review-session', () => {
     const { openApplicationReview, applyApplicationFieldMap } = await importSession();
     const view = fakeView();
     createApplicationView.mockImplementation(() => view);
-    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' });
+    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
     const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
     const authField = opened.snapshot.fields.find((f) => f.label === 'workAuthorization')!;
@@ -147,7 +152,7 @@ describe('application-review-session', () => {
 
   it('refuses (never partially applies) a field map targeting a stale snapshot generation', async () => {
     const { openApplicationReview, applyApplicationFieldMap } = await importSession();
-    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' });
+    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
 
     const result = await applyApplicationFieldMap({
@@ -167,7 +172,7 @@ describe('application-review-session', () => {
 
   it('refuses a field map with an artifact assignment, since ownership is never resolved in this slice', async () => {
     const { openApplicationReview, applyApplicationFieldMap } = await importSession();
-    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' });
+    const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
 
     const result = await applyApplicationFieldMap({
@@ -196,14 +201,14 @@ describe('application-review-session', () => {
     const { openApplicationReview, closeApplicationReview } = await importSession();
     const view = fakeView();
     createApplicationView.mockImplementation(() => view);
-    await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' });
+    await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
     await closeApplicationReview('22222222-2222-4222-8222-222222222222'); // no-op
     await closeApplicationReview('11111111-1111-4111-8111-111111111111');
     expect(view.destroy).toHaveBeenCalledTimes(1);
 
     await expect(
-      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' }),
+      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL }),
     ).resolves.toBeDefined();
   });
 });

@@ -26,7 +26,7 @@ function setup() {
   registry.register(provider);
   const sessionManager = new SessionManager(registry, noopLogger);
   const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
-  return { app, provider };
+  return { app, provider, registry };
 }
 
 let cwd: string;
@@ -67,13 +67,37 @@ describe('POST /sessions/application-field-map', () => {
     expect(provider.startedOptions[0]!.resumeProviderSessionId).toBeUndefined();
   });
 
-  it('rejects an unregistered provider', async () => {
-    const { app } = setup();
+  it('rejects any provider other than claude, before ever consulting the registry', async () => {
+    // The 'no-network' hardening profile only means anything for Claude -- Codex's own build-args
+    // never reads `opts.hardened` at all. Registering a FakeProvider under 'codex' and confirming
+    // it's STILL refused proves this is a real provider-identity gate, not merely "not installed".
+    const { app, registry } = setup();
+    registry.register(
+      new FakeProvider(
+        'codex',
+        { id: 'codex', name: 'Codex', installed: true, authenticated: 'authenticated', capabilities: FAKE_PROVIDER_CAPABILITIES },
+        'success',
+      ),
+    );
     const res = await app.inject({
       method: 'POST',
       url: '/sessions/application-field-map',
       headers: { authorization: `Bearer ${TOKEN}` },
       payload: { provider: 'codex', cwd, prompt: 'map these fields' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/does not support the field-map-generation hardening profile/);
+  });
+
+  it('rejects an unregistered (but claude-identified) provider the same way POST /sessions does', async () => {
+    const registry = new ProviderRegistry(); // no claude registered at all
+    const sessionManager = new SessionManager(registry, noopLogger);
+    const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/sessions/application-field-map',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { provider: 'claude', cwd, prompt: 'map these fields' },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/unsupported provider/);
