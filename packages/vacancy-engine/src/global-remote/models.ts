@@ -13,6 +13,7 @@ export const globalRemoteSourceSchema = z.object({
     'lever',
     'personio',
     'recruitee',
+    'rippling',
     'smartrecruiters',
     'successfactors',
     'teamtailor',
