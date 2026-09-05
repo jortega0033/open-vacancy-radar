@@ -11,6 +11,7 @@ export const atsProviderSchema = z.enum([
   'workable',
   'workday',
   'successfactors',
+  'rippling',
   'json_ld',
   'html',
   'unknown',

@@ -8,6 +8,7 @@ import {
   detectLeverSource,
   detectPersonioSource,
   detectRecruiteeSource,
+  detectRipplingSource,
   detectSmartRecruitersSource,
   detectSuccessFactorsSource,
   detectTeamtailorSource,
@@ -66,6 +67,16 @@ describe('ATS provider URL detection', () => {
       provider: 'smartrecruiters',
       boardIdentifier: 'Acme',
     });
+    expect(detectRipplingSource('https://ats.rippling.com/acme-careers/jobs')).toEqual({
+      provider: 'rippling',
+      boardIdentifier: 'acme-careers',
+      baseUrl: 'https://ats.rippling.com/acme-careers/jobs',
+    });
+    expect(
+      detectRipplingSource(
+        'https://ats.rippling.com/acme-careers/jobs/c3fe4961-2d04-4093-b05b-e916b0873463',
+      ),
+    ).toMatchObject({ provider: 'rippling', boardIdentifier: 'acme-careers' });
     expect(detectWorkableSource('https://apply.workable.com/acme/j/ABC123/')).toEqual({
       provider: 'workable',
       boardIdentifier: 'acme',
@@ -154,6 +165,12 @@ describe('ATS provider URL detection', () => {
       ),
     ).toBeNull();
     expect(detectWorkdaySource('https://careers.example.com/External')).toBeNull();
+    expect(detectRipplingSource('http://ats.rippling.com/acme-careers/jobs')).toBeNull();
+    expect(
+      detectRipplingSource('https://user:secret@ats.rippling.com/acme-careers/jobs'),
+    ).toBeNull();
+    expect(detectRipplingSource('https://acme-careers.rippling.com/jobs')).toBeNull();
+    expect(detectRipplingSource('https://careers.example.com/jobs')).toBeNull();
   });
 });
 
@@ -187,6 +204,13 @@ describe('ATS capability metadata', () => {
       status: 'supported',
       productionAdapter: true,
       retrieval: 'public Workday CXS listing and detail JSON endpoints',
+    });
+  });
+
+  it('claims the bounded undocumented Rippling board adapter as production support', () => {
+    expect(ATS_CAPABILITIES.find((capability) => capability.provider === 'rippling')).toMatchObject({
+      status: 'supported',
+      productionAdapter: true,
     });
   });
 

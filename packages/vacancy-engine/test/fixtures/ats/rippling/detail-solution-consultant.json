@@ -1,0 +1,20 @@
+{
+  "uuid": "3ef41f25-465a-4f06-9058-2071a3041bf9",
+  "name": "Solution Consultant",
+  "description": {
+    "company": "<p>Acme is the global leader in workforce intelligence.</p>",
+    "role": "<p>Partner with Sales Engineering on customer-facing demos.</p>"
+  },
+  "workLocations": ["New York, NY"],
+  "department": { "name": "GTM", "base_department": "GTM", "department_tree": ["GTM"] },
+  "employmentType": { "label": "HOURLY_FT", "id": "Hourly, full-time" },
+  "createdOn": "2026-05-11T12:00:00.000000-07:00",
+  "url": "https://ats.rippling.com/acme-careers/jobs/3ef41f25-465a-4f06-9058-2071a3041bf9",
+  "board": { "boardType": "RIPPLING", "slug": "acme-careers", "companyName": "Acme" },
+  "payRangeDetails": [
+    { "location": "US", "currency": "USD", "frequency": "YEAR", "rangeStart": 170000, "rangeEnd": 250000, "isRemote": false }
+  ],
+  "companyName": "Acme",
+  "unlistedFromSearch": false,
+  "jsonLd": null
+}
