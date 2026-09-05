@@ -26,13 +26,22 @@ Everything the app stores lives in Electron's per-user application-data director
   `application_artifacts` tables — #198): as the eventual auto-apply feature is built out in
   stages, this durable record tracks each attempt at applying to a vacancy — the full job
   description text read for that attempt, a hash of the CV content it was generated from, which
-  stage the attempt has reached, and (once later stages add real file generation) records of the
-  tailored CV/cover-letter files staged for it. This is the same category of personal/third-party
-  data `workspace.db` already holds (your CV content, in this case a full third-party job posting's
-  text), stored so a crash or a closed window can never silently duplicate or lose an in-progress
-  application. Nothing in this table causes an application to be sent — as of this stage of the
-  feature, nothing reads a browser, fills a form, or submits anything at all; see the auto-apply
-  tracking issues for what each later stage adds and when.
+  stage the attempt has reached, and records of the tailored CV/cover-letter files staged for it.
+  This is the same category of personal/third-party data `workspace.db` already holds (your CV
+  content, in this case a full third-party job posting's text), stored so a crash or a closed
+  window can never silently duplicate or lose an in-progress application. Nothing in this table
+  causes an application to be sent — as of this stage of the feature, nothing reads a browser,
+  fills a form, or submits anything at all; see the auto-apply tracking issues for what each
+  later stage adds and when.
+- **`application-artifacts/`** (#199): the actual generated PDF files the record above tracks —
+  a tailored CV and/or cover letter, rendered locally through the app's own default template.
+  Rendering never opens a Save dialog for this unattended path (the existing manual "Copy to
+  clipboard" / export actions elsewhere in the app are unaffected); only this app's own main
+  process ever resolves a path into this directory, and no path is ever accepted from the
+  renderer. Content: your CV data, reordered and re-emphasized for one vacancy, plus that
+  vacancy's own name/role/basic details as printed on the document. No third-party job-posting
+  text is embedded in the rendered file itself beyond what a normal application would already
+  contain (e.g. quoting the role title).
 
 ### `agentdock-state/`: session history without session content
 
@@ -127,11 +136,12 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   record (including a `failed` or `submission_unknown` one) is the honest history of what was
   actually done, and quietly discarding it would undermine the very durability #198 exists to
   provide. Deleting the `applications` row an attempt is linked to does not delete the attempt
-  itself (`on delete set null`); deleting `workspace.db` removes both, same as every other table
-  documented here. Generated artifacts (once a later stage actually writes files) are bounded per
-  attempt by a fixed count/size quota, and orphaned records — an artifact whose staged file no
-  longer exists on disk — are surfaced by a reconciliation check the app runs, rather than silently
-  ignored.
+  itself (`on delete set null`); deleting `workspace.db` removes the database records, but not the
+  generated files under `application-artifacts/` themselves — those are only removed by deleting
+  that directory, or (for one attempt's files) by the app's own artifact-deletion path. Generated
+  artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
+  row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
+  runs, rather than silently ignored.
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.

@@ -1,4 +1,5 @@
 import { CV_PROFILE_FIELD_DESCRIPTIONS, CV_PROFILE_FIELD_ORDER } from '../../../electron/workspace/cv-profile-schema.js';
+import { RESUME_JSON_SHAPE } from '../../../electron/resume-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -23,6 +24,16 @@ import type { CvDocument, VacancyLead } from './types.js';
  */
 export const MAX_CV_PROMPT_CHARS = 14_000;
 export const MAX_VACANCY_TEXT_CHARS = 6_000;
+/**
+ * The unattended structured-resume path (#199) reads the full job description rather than this
+ * module's usual ~6,000-character clamp: #193 flagged that clamp as insufficient for full-JD
+ * coverage, and #196's trust-domain design is exactly what makes raising it here safe -- this
+ * budget only ever reaches the text-only *generation* session (no browser tool, see
+ * `buildStructuredResumePrompt` below), never anything that later drives a browser. Still finite,
+ * against a hostile or malformed source page: 60,000 characters is generous for a real posting,
+ * far short of what a scraped page dump or an injection payload would need to matter.
+ */
+export const MAX_UNATTENDED_VACANCY_TEXT_CHARS = 60_000;
 /** Every `Label: value` line below is a single-line field; a real one is far shorter than this. */
 export const MAX_VACANCY_FIELD_CHARS = 300;
 
@@ -30,6 +41,20 @@ function clamp(text: string, limit: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= limit) return trimmed;
   return `${trimmed.slice(0, limit)}\n\n[…truncated at ${limit.toLocaleString('en-US')} characters]`;
+}
+
+/**
+ * Whether `formatVacancy`'s description/requirements text would be truncated at the given limit --
+ * the same computation `clamp` makes internally, exposed so a caller (the unattended staging path,
+ * #199) can persist an honest `jdComplete` flag on the attempt record rather than silently dropping
+ * requirements past a character limit with no record that it happened.
+ */
+export function wasVacancyTextTruncated(vacancy: VacancyLead, limit: number): boolean {
+  const requirements = vacancy.requirements?.filter((line) => line.trim().length > 0) ?? [];
+  const body = [vacancy.description ?? '', requirements.map((line) => `- ${line}`).join('\n')]
+    .filter((part) => part.trim().length > 0)
+    .join('\n\n');
+  return body.trim().length > limit;
 }
 
 /**
@@ -71,8 +96,13 @@ function salaryLine(vacancy: VacancyLead): string {
   return `from ${currency} ${amount}${period}`.replace(/\s+/g, ' ').trim();
 }
 
-/** Renders the vacancy as a labelled block, marking absent facts as absent instead of omitting them. */
-export function formatVacancy(vacancy: VacancyLead): string {
+/**
+ * Renders the vacancy as a labelled block, marking absent facts as absent instead of omitting them.
+ * `textLimit` defaults to this module's usual interactive-prompt clamp; the unattended
+ * structured-resume path (#199) passes `MAX_UNATTENDED_VACANCY_TEXT_CHARS` instead, since it reads
+ * the full JD rather than a fixed excerpt.
+ */
+export function formatVacancy(vacancy: VacancyLead, textLimit: number = MAX_VACANCY_TEXT_CHARS): string {
   const requirements = vacancy.requirements?.filter((line) => line.trim().length > 0) ?? [];
   const body = [
     `Title: ${field(vacancy.title)}`,
@@ -87,7 +117,7 @@ export function formatVacancy(vacancy: VacancyLead): string {
       [vacancy.description ?? '', requirements.map((line) => `- ${line}`).join('\n')]
         .filter((part) => part.trim().length > 0)
         .join('\n\n') || '(none captured: only the fields above are known about this vacancy)',
-      MAX_VACANCY_TEXT_CHARS,
+      textLimit,
     ),
   ];
   return body.join('\n');
@@ -197,6 +227,35 @@ Output the tailored CV text only: no title, no commentary before or after it, no
 
 === VACANCY ===
 ${formatVacancy(vacancy)}
+
+=== CANDIDATE CV (${field(cv.fileName)}) ===
+${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
+}
+
+/**
+ * The unattended counterpart to `buildCvTailorPrompt` above (#199, resolving #156's open
+ * structured-vs-plain-text question): same reordering/re-emphasis task, same no-invention
+ * guarantee, but a single complete JSON object instead of streamed prose, and the full job
+ * description instead of the usual clamp -- see `MAX_UNATTENDED_VACANCY_TEXT_CHARS`'s own comment
+ * for why widening that bound here is safe. Used only by the unattended staging path that renders
+ * a real PDF from the result; `TailorCv.tsx`'s live interactive draft keeps using the plain-text
+ * prompt above unchanged, since a JSON object streamed token by token reads as broken fragments
+ * until the closing brace arrives.
+ */
+export function buildStructuredResumePrompt(cv: CvDocument, vacancy: VacancyLead): string {
+  return `You are helping a candidate tailor their CV for one specific vacancy, using their real CV as the only source of content. Reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
+
+${GROUNDING_RULES}
+This is a reordering and re-emphasis task, not a rewriting task: every employer, title, date, degree, certification, technology, responsibility and metric in the output must already appear in the CV below. Do not add a single fact, skill, tool, employer, title, date or metric that is not already there, even if the vacancy asks for it and the CV is silent on it.
+Order experience entries so the ones most relevant to this vacancy come first, and re-word bullet points (without inventing) to foreground the framing, terminology and emphasis this vacancy asks for, drawing only on what the CV already says.
+Keep the candidate's real employers, titles, dates and structure intact: this is the same CV, re-emphasized for one posting, not a new document with different facts.
+Never invent a value for a field the CV does not state: use an empty string ("") or an empty array ([]) for it, do not guess. A candidate whose CV has no phone number gets "phone": "", not a placeholder.
+
+Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
+${RESUME_JSON_SHAPE}
+
+=== VACANCY ===
+${formatVacancy(vacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)}
 
 === CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
