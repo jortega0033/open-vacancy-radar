@@ -193,6 +193,55 @@ describe('ApplicationExecutor: snapshot', () => {
     expect(calls.filter((c) => c.method === 'DOM.getDocument')).toHaveLength(1);
   });
 
+  const SUBMIT_ONLY_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [{ nodeName: 'BUTTON', nodeType: 1, backendNodeId: 2, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Submit Application' }] }],
+    },
+  };
+
+  it('never retries a field-less page that already has a submit control -- a real, actionable "review and submit" step, not an empty/loading page', async () => {
+    // Real gap found during PR #214's own review: the retry condition originally checked only
+    // fields.length, so a field-less final-review page would have burned the entire retry budget
+    // even though it was already fully actionable via its submit button.
+    let calls = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getDocument') calls += 1;
+        return SUBMIT_ONLY_TREE;
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(calls).toBe(1);
+    expect(snapshot.fields).toEqual([]);
+    expect(snapshot.submitControls).toHaveLength(1);
+  });
+
+  it('stops retrying as soon as fields alone have rendered, even with no submit control yet -- deliberately not waiting for both', async () => {
+    // The retry condition only continues while BOTH fields and submitControls are still empty
+    // (fixing the field-less "review and submit" page above); it does not wait for both to be
+    // non-empty. A page whose fields render before its submit button does is left as a single,
+    // possibly-incomplete read -- the same behavior this loop already had for fields alone before
+    // submitControls existed, deliberately not extended, since retrying until every kind of content
+    // has appeared would reintroduce the same "wait for something that might never come" risk this
+    // loop's bounded retry exists to avoid.
+    const FIELDS_ONLY_TREE = { root: { nodeName: 'BODY', nodeType: 1, backendNodeId: 1, children: [{ nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName'] }] } };
+    let calls = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getDocument') calls += 1;
+        return FIELDS_ONLY_TREE;
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(calls).toBe(1);
+    expect(snapshot.submitControls).toEqual([]);
+  });
+
   const CHALLENGE_TREE = {
     root: {
       nodeName: 'BODY',
@@ -552,6 +601,88 @@ describe('ApplicationExecutor: submit', () => {
     const first = await executor.snapshot();
     await executor.snapshot(); // bumps the generation, replacing #currentSnapshot
     await expect(executor.submit(first.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  const DECOY_BUTTON_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName'] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 3, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Save as draft' }] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 4, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Submit Application' }] },
+      ],
+    },
+  };
+
+  it('refuses to submit a real, present controlRef that is not the one resolveSubmitControl would pick -- re-deriving resolution rather than trusting the caller', async () => {
+    // A real gap found during PR #214's own review: an earlier version of submit() trusted
+    // whatever controlRef the caller passed, as long as it was a real ref in submitControls at
+    // all -- so a caller bug (or any future code path) handing it the "Save as draft" button's ref
+    // instead of the real submit button's had nothing here to stop it.
+    const { transport } = fakeTransport({ 'DOM.getDocument': DECOY_BUTTON_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const decoy = snapshot.submitControls.find((c) => c.label === 'Save as draft')!;
+    await expect(executor.submit(decoy.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('still submits the real, correctly-resolved control when a decoy is present alongside it', async () => {
+    const { transport, calls } = fakeTransport({
+      'DOM.getDocument': DECOY_BUTTON_TREE,
+      'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const real = snapshot.submitControls.find((c) => c.label === 'Submit Application')!;
+
+    await executor.submit(real.controlRef);
+
+    expect(calls.filter((c) => c.method === 'Input.dispatchMouseEvent')).toHaveLength(2);
+  });
+
+  const AMBIGUOUS_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 2, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Submit' }] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 3, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Apply' }] },
+      ],
+    },
+  };
+
+  it('refuses to submit either control when resolution is ambiguous (two equally plausible candidates)', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': AMBIGUOUS_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(snapshot.submitControls).toHaveLength(2);
+    for (const control of snapshot.submitControls) {
+      await expect(executor.submit(control.controlRef)).rejects.toThrow(ExecutorPolicyError);
+    }
+  });
+
+  const CHALLENGE_WITH_SUBMIT_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'IFRAME', nodeType: 1, backendNodeId: 2, attributes: ['src', 'https://www.google.com/recaptcha/api2/anchor'] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 3, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Submit Application' }] },
+      ],
+    },
+  };
+
+  it('refuses to submit when the current snapshot has an active CAPTCHA challenge, even with an otherwise-valid resolved control', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': CHALLENGE_WITH_SUBMIT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(snapshot.challengeDetected).toBe(true);
+    expect(snapshot.submitControls).toHaveLength(1); // the button itself resolves unambiguously
+    await expect(executor.submit(snapshot.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
   });
 });
 

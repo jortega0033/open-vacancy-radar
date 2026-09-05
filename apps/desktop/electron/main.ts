@@ -1241,8 +1241,11 @@ guardedIpc.handle('application-queue:get-status', async () => {
  * `apply-field-map` validates and applies a field map against it, `close-review` tears it down.
  * `policyId` is the only policy-related value that ever crosses this boundary -- the renderer
  * cannot supply origins, upload constraints, or kill switches; those are resolved main-process
- * side from the compiled table in `application-target-policies.ts`. There is no `submit` channel
- * here and none is planned for this ticket -- see that package's own `ExecutorAction` type.
+ * side from the compiled table in `application-target-policies.ts`. There is still no `submit`
+ * channel here: `packages/application-executor`'s `ApplicationExecutor.submit()` is real as of
+ * issue #202, but no compiled policy in `application-target-policies.ts` allows it yet
+ * (`killSwitches.submit` stays on), and no orchestration exists in this file to call it -- wiring
+ * an actual submit channel is a deliberate, separately-reviewed change, not this one.
  * ---------------------------------------------------------------------------------------------
  */
 

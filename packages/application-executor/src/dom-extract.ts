@@ -21,6 +21,13 @@ export interface CdpDomNode {
    * actually target. More stable across the tree's lifetime than `nodeId`, which CDP is explicit
    * can be reused after certain operations. */
   backendNodeId: number;
+  /** Present on an `IFRAME` node only when `DOM.getDocument` was called with `pierce: true`: the
+   * root of that frame's own document, a distinct field from `children` per the CDP protocol (an
+   * iframe's rendered content is never one of its DOM `children`). `executor.ts`'s `readDom()`
+   * does request `pierce: true` -- this field is what makes that request actually do anything;
+   * without reading it, a page whose real application form lives inside an iframe would silently
+   * extract zero fields at all. */
+  contentDocument?: CdpDomNode;
 }
 
 /** The internal (never public, never part of `SnapshotField`) map from a minted `fieldRef` to the
@@ -159,6 +166,25 @@ export interface ExtractedSnapshot {
   challengeDetected: boolean;
 }
 
+/** The most frequent value in a list, or `undefined` for an empty list -- ties broken by
+ * insertion order (`Map` preserves first-seen order, and the `>` comparison below never replaces
+ * a leader on an equal count). Used to find "the" frame/form a page's real fields live in without
+ * needing every field to agree exactly. */
+function mostCommon<T>(values: readonly T[]): T | undefined {
+  if (values.length === 0) return undefined;
+  const counts = new Map<T, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  let best: T | undefined;
+  let bestCount = 0;
+  for (const [value, count] of counts) {
+    if (count > bestCount) {
+      best = value;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 /**
  * Walks a CDP DOM tree and mints a `SnapshotField` for every fillable element (`input`, `select`,
  * `textarea`), and, in the same pass, checks every node for a known CAPTCHA/bot-detection widget
@@ -174,14 +200,35 @@ export interface ExtractedSnapshot {
  * because only the latter was checked). Hiding via a stylesheet rule (`display: none` in CSS,
  * rather than the attribute) is NOT detected -- that needs computed style, which this package has
  * no allowed CDP method to read -- so this remains a best-effort check, not a complete one.
+ *
+ * Descends into an `IFRAME`'s own `contentDocument` (present when the caller requested
+ * `pierce: true`, as `executor.ts`'s `readDom()` does) under a fresh frame id, so a real
+ * application form embedded in an iframe is actually reachable at all -- previously requested via
+ * `pierce: true` but never consumed, silently extracting zero fields from such a page.
+ *
+ * Submit-control candidates are scoped to reduce (not eliminate -- see the caveat below) the
+ * chance of resolving to a control that has nothing to do with the application: a control is kept
+ * only if it shares BOTH the frame and the nearest enclosing `<form>` (or "no form", if that's
+ * what the fields themselves have) that most of the extracted fields are found in. This rules out,
+ * regardless of label wording, an unrelated iframe (a chat widget, an ad) and an unrelated `<form>`
+ * on the same page (a newsletter signup, a header search box) as candidates. It does NOT solve the
+ * hardest case -- a fully JS-driven page where neither the real fields nor an unrelated same-frame
+ * button use a `<form>` element at all, so both end up in the same "no form" bucket -- that would
+ * need real positional/structural reasoning (e.g. nearest common DOM ancestor) beyond this pass's
+ * scope; `submit-control.ts`'s label heuristic and its "refuse rather than guess" rule remain the
+ * only defense against that specific case.
  */
 export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   const fields: SnapshotField[] = [];
-  const submitControls: SnapshotSubmitControl[] = [];
   const nodeIds = new Map<string, number>();
   let challengeDetected = false;
+  let nextFrameId = 0;
 
-  function walk(node: CdpDomNode): void {
+  const fieldFrameIds: number[] = [];
+  const fieldFormScopes: (number | undefined)[] = [];
+  const submitCandidates: Array<{ control: SnapshotSubmitControl; frameId: number; formScope: number | undefined }> = [];
+
+  function walk(node: CdpDomNode, frameId: number, formScope: number | undefined): void {
     if (
       node.nodeName === 'IFRAME' &&
       CHALLENGE_IFRAME_SRC_PATTERN.test(attr(node, 'src') ?? '')
@@ -191,6 +238,8 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       challengeDetected = true;
     }
 
+    const childFormScope = node.nodeName === 'FORM' ? node.backendNodeId : formScope;
+
     // A submit-shaped <input> (type="submit") is also technically an INPUT tag, but it is a click
     // target, never a fillable field -- checked first so it never falls through to the fillable
     // branch below and gets minted as a bogus text field.
@@ -198,7 +247,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       if (!hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
         const controlRef = mintSubmitControlRef();
         nodeIds.set(controlRef, node.backendNodeId);
-        submitControls.push({ controlRef, label: submitControlLabel(node) });
+        submitCandidates.push({ control: { controlRef, label: submitControlLabel(node) }, frameId, formScope });
       }
     } else if (FILLABLE_TAGS.has(node.nodeName)) {
       const inputType = (attr(node, 'type') ?? 'text').toLowerCase();
@@ -217,15 +266,31 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
           ...(controlType === 'checkbox' ? { checked: hasAttr(node, 'checked') } : {}),
           ...(classification ? { classification } : {}),
         });
+        fieldFrameIds.push(frameId);
+        fieldFormScopes.push(formScope);
       }
     }
-    // SELECT's own OPTION children are already consumed by extractOptions above; don't also walk
-    // into them as if they were independent top-level fields.
-    if (node.nodeName !== 'SELECT') {
-      for (const child of node.children ?? []) walk(child);
+
+    if (node.nodeName === 'IFRAME' && node.contentDocument) {
+      nextFrameId += 1;
+      walk(node.contentDocument, nextFrameId, undefined);
+    } else if (node.nodeName !== 'SELECT') {
+      // SELECT's own OPTION children are already consumed by extractOptions above; don't also
+      // walk into them as if they were independent top-level fields.
+      for (const child of node.children ?? []) walk(child, frameId, childFormScope);
     }
   }
 
-  walk(root);
+  walk(root, 0, undefined);
+
+  // A page with no fields yet (a field-less "review and submit" step, or an empty read still
+  // mid-retry in executor.ts) has nothing to compute a dominant frame/form from -- default to the
+  // top document's own top-level scope (frame 0, no form) rather than excluding every candidate.
+  const dominantFrameId = mostCommon(fieldFrameIds) ?? 0;
+  const dominantFormScope = mostCommon(fieldFormScopes) ?? undefined;
+  const submitControls = submitCandidates
+    .filter((candidate) => candidate.frameId === dominantFrameId && candidate.formScope === dominantFormScope)
+    .map((candidate) => candidate.control);
+
   return { fields, submitControls, nodeIds, challengeDetected };
 }

@@ -46,4 +46,13 @@ describe('resolveSubmitControl', () => {
   it('is case-insensitive', () => {
     expect(resolveSubmitControl([control('c1', 'SUBMIT')])).toEqual({ controlRef: 'c1', label: 'SUBMIT' });
   });
+
+  it('excludes a label that says both a submit word AND a non-submit word at once', () => {
+    // Every other exclusion test uses a label that never matches SUBMIT_LABEL_PATTERN to begin
+    // with ('Cancel', 'Save as draft', ...), so NON_SUBMIT_LABEL_PATTERN's own `&&` clause was
+    // never actually exercised by this suite -- found during PR #214's own review. This is the one
+    // case that clause exists for: a label containing both a submit-ish word and a non-submit-ish
+    // one, which SUBMIT_LABEL_PATTERN alone would otherwise accept.
+    expect(resolveSubmitControl([control('c1', 'Submit and Save as Draft')])).toBeUndefined();
+  });
 });

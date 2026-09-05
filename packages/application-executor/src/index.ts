@@ -1,14 +1,17 @@
 export { fieldMapSchema, parseFieldMap, MAX_FIELD_MAP_ENTRIES } from './field-map.js';
 export type { FieldMap, FieldAssignment, UnmappedField } from './field-map.js';
 
-export { mintFieldRef, mintOptionRef, findSnapshotField, findSnapshotOption } from './form-snapshot.js';
+export { mintFieldRef, mintOptionRef, mintSubmitControlRef, findSnapshotField, findSnapshotOption, findSnapshotSubmitControl } from './form-snapshot.js';
 export type {
   FieldControlType,
   FieldClassification,
   SnapshotOption,
   SnapshotField,
+  SnapshotSubmitControl,
   FormSnapshot,
 } from './form-snapshot.js';
+
+export { resolveSubmitControl } from './submit-control.js';
 
 export { isNavigationAllowed, isActionAllowed } from './target-policy.js';
 export type { ExecutorAction, ApplicationTargetPolicy } from './target-policy.js';

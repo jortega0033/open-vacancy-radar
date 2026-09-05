@@ -251,7 +251,8 @@ declare global {
      * skip/cancel an attempt by opaque id, and stream its (content-free) live activity. */
     applicationQueue: import('../electron/application-queue-types.js').ApplicationQueueBridge;
     /** #201. The ninth namespace: review-mode browser executor control -- open an isolated review
-     * for an attempt, apply a validated field map to it, close it. No submit channel exists. */
+     * for an attempt, apply a validated field map to it, close it. No submit channel exists yet --
+     * `ApplicationExecutor.submit()` is real (#202), but nothing here exposes it to the renderer. */
     applicationExecutor: import('../electron/application-executor-types.js').ApplicationExecutorBridge;
   }
 }

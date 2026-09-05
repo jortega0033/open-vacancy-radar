@@ -33,6 +33,11 @@ test.describe('applicationExecutor (#201)', () => {
     expect(opened.snapshot.fields.some((f) => f.label === 'referralSource')).toBe(false);
     expect(opened.screenshotBase64.length).toBeGreaterThan(100);
 
+    // Real DOM extraction of the fixture's own <button type="submit"> too (issue #202): proves
+    // isSubmitControl/submitControlLabel against a genuine Chromium-rendered default button type,
+    // not just the hand-built synthetic trees packages/application-executor's own tests use.
+    expect(opened.snapshot.submitControls).toEqual([{ controlRef: expect.any(String), label: 'Submit Application' }]);
+
     const byLabel = (label: string) => {
       const field = opened.snapshot.fields.find((f) => f.label === label);
       if (!field) throw new Error(`fixture field "${label}" not found in snapshot`);
@@ -96,9 +101,9 @@ test.describe('applicationExecutor (#201)', () => {
 
     expect(applied).toEqual({ ok: true, appliedCount: 6 });
 
-    // Nothing here ever calls a submit action -- there is no such channel, and no such method on
-    // `ApplicationExecutor` at all (see packages/application-executor/src/target-policy.ts's
-    // `ExecutorAction` type). The one and only way this review ends is the explicit close below.
+    // Nothing here ever calls a submit action -- ApplicationExecutor.submit() is real (#202), but
+    // there is no IPC channel exposing it to the renderer, and this spec never invokes it directly
+    // either. The one and only way this review ends is the explicit close below.
     await window.evaluate(async (attemptId) => self.applicationExecutor.closeReview(attemptId), attemptId);
 
     // The attempt id is free to reopen, proving close() actually released it rather than merely
