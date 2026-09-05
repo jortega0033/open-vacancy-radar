@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "id": "c3fe4961-2d04-4093-b05b-e916b0873463",
+      "name": "Implementation Manager, Strategic Workforce Planning",
+      "url": "https://ats.rippling.com/acme-careers/jobs/c3fe4961-2d04-4093-b05b-e916b0873463",
+      "department": { "name": "GTM" },
+      "locations": [
+        {
+          "name": "London, United Kingdom",
+          "country": "United Kingdom",
+          "countryCode": "GB",
+          "state": "England",
+          "stateCode": "ENG",
+          "city": "London",
+          "workplaceType": "ON_SITE"
+        },
+        {
+          "name": "Germany",
+          "country": "Germany",
+          "countryCode": "DE",
+          "state": "Baden-Wurttemberg",
+          "stateCode": "BW",
+          "city": null,
+          "workplaceType": "REMOTE"
+        }
+      ],
+      "language": "en-US"
+    }
+  ],
+  "page": 0,
+  "pageSize": 2,
+  "totalItems": 1,
+  "totalPages": 1
+}

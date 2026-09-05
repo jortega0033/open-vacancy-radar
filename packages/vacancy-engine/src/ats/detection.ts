@@ -8,6 +8,7 @@ export type DetectedAtsSource = {
     | 'lever'
     | 'personio'
     | 'recruitee'
+    | 'rippling'
     | 'smartrecruiters'
     | 'successfactors'
     | 'teamtailor'
@@ -260,6 +261,27 @@ export function detectSmartRecruitersSource(input: string): DetectedAtsSource | 
     : { provider: 'smartrecruiters', boardIdentifier, baseUrl: url.origin };
 }
 
+/** Rippling boards live under one fixed host; the slug is whatever path segment precedes `/jobs`. */
+export function detectRipplingSource(input: string): DetectedAtsSource | null {
+  const url = parseUrl(input);
+  if (url?.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
+    return null;
+  }
+  if (url.hostname.toLowerCase() !== 'ats.rippling.com') return null;
+  // Require the `/jobs` segment itself, not just any path under this host, so a non-board page
+  // (e.g. `/help/faq`) is never misdetected as a valid board.
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments[1]?.toLowerCase() !== 'jobs') return null;
+  const boardIdentifier = firstPathSegment(url);
+  return boardIdentifier === null
+    ? null
+    : {
+        provider: 'rippling',
+        boardIdentifier,
+        baseUrl: `${url.origin}/${encodeURIComponent(boardIdentifier)}/jobs`,
+      };
+}
+
 export function detectWorkdaySource(input: string): DetectedAtsSource | null {
   const board = parseWorkdayBoard(input);
   return board === null
@@ -278,6 +300,7 @@ export function detectAtsSource(input: string): DetectedAtsSource | null {
     detectLeverSource(input) ??
     detectPersonioSource(input) ??
     detectRecruiteeSource(input) ??
+    detectRipplingSource(input) ??
     detectTeamtailorSource(input) ??
     detectSmartRecruitersSource(input) ??
     detectSuccessFactorsSource(input) ??

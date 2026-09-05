@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "id": "9145705c-c0ee-4d64-b6e5-5441587e7353",
+      "name": "RevOps SF Analyst and Power BI",
+      "url": "https://ats.rippling.com/acme-careers/jobs/9145705c-c0ee-4d64-b6e5-5441587e7353",
+      "department": { "name": "Finance" },
+      "locations": [
+        {
+          "name": "Bengaluru, India",
+          "country": "India",
+          "countryCode": "IN",
+          "state": "Karnataka",
+          "stateCode": "KA",
+          "city": "Bengaluru",
+          "workplaceType": "ON_SITE"
+        }
+      ],
+      "language": "en-US"
+    },
+    {
+      "id": "3ef41f25-465a-4f06-9058-2071a3041bf9",
+      "name": "Solution Consultant",
+      "url": "https://ats.rippling.com/acme-careers/jobs/3ef41f25-465a-4f06-9058-2071a3041bf9",
+      "department": { "name": "GTM" },
+      "locations": [
+        {
+          "name": "New York, NY",
+          "country": "United States",
+          "countryCode": "US",
+          "state": "New York",
+          "stateCode": "NY",
+          "city": "New York",
+          "workplaceType": "ON_SITE"
+        }
+      ],
+      "language": "en-US"
+    }
+  ],
+  "page": 0,
+  "pageSize": 2,
+  "totalItems": 2,
+  "totalPages": 1
+}
