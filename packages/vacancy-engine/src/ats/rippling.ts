@@ -142,9 +142,27 @@ function compensationText(value: unknown): string | null {
   return parts.length === 0 ? null : parts.join('; ');
 }
 
+/**
+ * `unlistedFromSearch: true` is Rippling's own delisting signal (the employer took the posting
+ * down), the same kind of deliberate, permanent lifecycle event Ashby signals with `isListed:
+ * false` -- see `AshbyAdapter.listVacancies`, which filters those out *before* computing
+ * `invalidCount` so a delisted posting reads as "not currently on the board" rather than as a
+ * data-quality problem. This must stay a separate check from `job === null` / schema-validation
+ * failures below: `global-remote/official.ts` relies on `!result.complete` to decide whether a
+ * previously-tracked vacancy missing from a fresh scan is safely "confirmed inactive" (complete
+ * scan, genuinely gone) versus an "inconclusive error" (incomplete scan, leave it alone). Counting
+ * a delisted job as invalid would mark every scan that ever encounters one as incomplete, which
+ * would permanently misreport every Rippling posting that gets taken down as inconclusive instead
+ * of correctly detected as closed.
+ */
+function isUnlisted(value: unknown): boolean {
+  const job = objectOrNull(value);
+  return job !== null && optionalBoolean(job.unlistedFromSearch) === true;
+}
+
 function normalizeDetail(value: unknown, summary: PostingSummary): NormalizedVacancy | null {
   const job = objectOrNull(value);
-  if (job === null || optionalBoolean(job.unlistedFromSearch) === true) return null;
+  if (job === null) return null;
   const uuid = optionalString(job.uuid) ?? summary.uuid;
   const title = optionalString(job.name);
   const url = httpUrl(job.url);
@@ -259,7 +277,12 @@ export class RipplingAdapter implements VacancyAdapter {
       const detailUrl = `${API_ROOT}/board/${encodeURIComponent(slug)}/jobs/${encodeURIComponent(summary.uuid)}`;
       const response = await this.http.get(detailUrl);
       requireSuccessfulResponse(provider, response);
-      const vacancy = normalizeDetail(parseJson(response.body, provider), summary);
+      const detail = parseJson(response.body, provider);
+      // Deliberately unlisted postings are excluded silently: see the doc comment on
+      // `isUnlisted` for why this must not affect invalidCount/complete the way a genuinely
+      // malformed detail response does below.
+      if (isUnlisted(detail)) continue;
+      const vacancy = normalizeDetail(detail, summary);
       if (vacancy === null) {
         invalidCount += 1;
         complete = false;

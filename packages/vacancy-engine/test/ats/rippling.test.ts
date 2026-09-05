@@ -38,6 +38,31 @@ describe('RipplingAdapter', () => {
     expect(result.requestCount).toBe(2);
   });
 
+  it('groups a posting into a single vacancy when the server pre-groups locations itself', async () => {
+    // list-pregrouped-page fixture carries a SINGLE row for the posting whose own `locations`
+    // array already has both entries -- the shape `groupJobsByLocation=true` is documented (if
+    // undocumented-server-behaviour-ly) to produce, and was confirmed live per the module doc
+    // comment in rippling.ts, as opposed to the two-rows-sharing-a-uuid shape covered by the test
+    // above. The adapter's own uuid-keyed grouping should be a no-op here, not double-count it.
+    const http = new FixtureHttpClient(
+      new Map([
+        [listUrl(0), await atsFixture('rippling/list-pregrouped-page.json')],
+        [detailUrl(implementationManagerUuid), await atsFixture('rippling/detail-implementation-manager.json')],
+      ]),
+    );
+    const result = await new RipplingAdapter(http, { pageSize: 2, maxPages: 1 }).listVacancies(source);
+
+    expect(result.vacancies).toHaveLength(1);
+    expect(result.vacancies[0]).toMatchObject({
+      externalId: implementationManagerUuid,
+      title: 'Implementation Manager, Strategic Workforce Planning',
+      location: 'London, United Kingdom | Germany',
+      remote: null,
+      workplaceMode: 'hybrid',
+    });
+    expect(result.requestCount).toBe(2);
+  });
+
   it('paginates the list, fetches one detail per unique posting, and normalizes fields', async () => {
     const http = new FixtureHttpClient(
       new Map([
@@ -141,7 +166,13 @@ describe('RipplingAdapter', () => {
     expect(result.vacancies).toHaveLength(1);
   });
 
-  it('skips postings marked unlistedFromSearch', async () => {
+  it('excludes postings marked unlistedFromSearch without counting them as invalid', async () => {
+    // unlistedFromSearch is Rippling's own delisting signal -- a posting the employer took down,
+    // not a malformed response. It must be dropped silently (complete stays true, invalidCount
+    // stays 0), the same way AshbyAdapter drops isListed: false postings, so that
+    // global-remote/official.ts can still tell "confirmed inactive" apart from "inconclusive
+    // error" for a Rippling vacancy that disappears from the board -- see the doc comment on
+    // `isUnlisted` in rippling.ts.
     const detail = JSON.parse(await atsFixture('rippling/detail-revops-analyst.json')) as Record<
       string,
       unknown
@@ -155,7 +186,7 @@ describe('RipplingAdapter', () => {
     );
     const result = await new RipplingAdapter(http, { pageSize: 2, maxPages: 1 }).listVacancies(source);
 
-    expect(result.complete).toBe(false);
+    expect(result).toMatchObject({ complete: true, invalidCount: 0 });
     expect(result.vacancies.map((vacancy) => vacancy.externalId)).toEqual([solutionConsultantUuid]);
   });
 

@@ -171,6 +171,9 @@ describe('ATS provider URL detection', () => {
     ).toBeNull();
     expect(detectRipplingSource('https://acme-careers.rippling.com/jobs')).toBeNull();
     expect(detectRipplingSource('https://careers.example.com/jobs')).toBeNull();
+    // A non-board page under the same host must not be misdetected as a valid board just because
+    // it has a first path segment.
+    expect(detectRipplingSource('https://ats.rippling.com/help/faq')).toBeNull();
   });
 });
 

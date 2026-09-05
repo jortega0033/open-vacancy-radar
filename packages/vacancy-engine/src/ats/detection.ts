@@ -268,6 +268,10 @@ export function detectRipplingSource(input: string): DetectedAtsSource | null {
     return null;
   }
   if (url.hostname.toLowerCase() !== 'ats.rippling.com') return null;
+  // Require the `/jobs` segment itself, not just any path under this host, so a non-board page
+  // (e.g. `/help/faq`) is never misdetected as a valid board.
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments[1]?.toLowerCase() !== 'jobs') return null;
   const boardIdentifier = firstPathSegment(url);
   return boardIdentifier === null
     ? null
