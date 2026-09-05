@@ -1243,6 +1243,7 @@ const SNAPSHOT_RESULT = {
   snapshot: {
     generation: 1,
     capturedAt: '2026-01-01T00:00:00.000Z',
+    challengeDetected: false,
     fields: [
       { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true },
       {
@@ -1253,6 +1254,7 @@ const SNAPSHOT_RESULT = {
         options: [{ optionRef: 'o0000000000000001', label: 'Yes' }],
       },
     ],
+    submitControls: [{ controlRef: 'c0000000000000001', label: 'Submit Application' }],
   },
   screenshotBase64: 'ZmFrZQ==',
 };
@@ -1290,7 +1292,13 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
 
   it('openReview rejects a field with an unrecognized control type rather than passing it through', async () => {
     invoke.mockResolvedValue({
-      snapshot: { generation: 1, capturedAt: '2026-01-01T00:00:00.000Z', fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }] },
+      snapshot: {
+        generation: 1,
+        capturedAt: '2026-01-01T00:00:00.000Z',
+        challengeDetected: false,
+        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }],
+        submitControls: [],
+      },
       screenshotBase64: 'ZmFrZQ==',
     });
     const api = await loadPreload('applicationExecutor');

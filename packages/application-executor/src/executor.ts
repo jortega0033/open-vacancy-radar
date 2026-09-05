@@ -1,6 +1,6 @@
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
 import { extractSnapshotFields, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
-import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
+import { findSnapshotField, findSnapshotSubmitControl, type FormSnapshot } from './form-snapshot.js';
 import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
 
 const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
@@ -11,10 +11,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * The deterministic executor (#196 §1.1, §2): the seven implemented actions
- * (`openTarget`/`snapshot`/`fill`/`select`/`attach`/`capture`/`handoff`) plus the eighth,
- * `submit`, which does not exist in this slice's code at all -- see `target-policy.ts`'s own
- * comment on `ExecutorAction`.
+ * The deterministic executor (#196 §1.1, §2): `openTarget`/`snapshot`/`fill`/`select`/`attach`/
+ * `capture`/`handoff`, plus `submit` -- see `target-policy.ts`'s own comment on `ExecutorAction`
+ * for what changed in #202 and, just as importantly, what this class still does *not* guarantee
+ * about `submit` on its own (the per-instance human confirmation is the caller's responsibility,
+ * not something this package can see or enforce).
  *
  * Every method that ultimately calls the transport goes through `assertAllowedCdpMethod` first
  * (`cdp-allowlist.ts`), so a method outside the frozen allowlist throws before it ever reaches a
@@ -153,6 +154,7 @@ export class ApplicationExecutor {
     const result: FormSnapshot = {
       generation: this.#generation,
       fields: extracted.fields,
+      submitControls: extracted.submitControls,
       capturedAt: new Date().toISOString(),
       challengeDetected: extracted.challengeDetected,
     };
@@ -258,6 +260,34 @@ export class ApplicationExecutor {
     this.requireAction('capture');
     const result = (await this.send('Page.captureScreenshot', {})) as { data: string };
     return result.data;
+  }
+
+  /**
+   * Clicks the identified submit control for real, via the same box-model-center mouse click
+   * `fill()` already uses for a checkbox -- there is no allowed CDP method that submits a form
+   * directly (and none should exist: a real click is what a real applicant does, and is what the
+   * page's own submit-handler, validation, and any fraud/bot scoring actually observe).
+   *
+   * `controlRef` must be a control from the *current* snapshot's `submitControls` -- the caller is
+   * expected to have resolved it via `submit-control.ts`'s `resolveSubmitControl` (or refused and
+   * handed off, if that resolution was ambiguous). This method does not re-run that resolution or
+   * re-validate which button is "the" submit button; it only enforces that the ref is real and
+   * that policy allows the action at all. Every other safety property -- the pre-submit content
+   * gate, and above all the human's per-instance confirmation that this specific filled
+   * application should be sent -- is the orchestrator's responsibility, not this method's: by the
+   * time `submit()` is called, that decision has already been made.
+   */
+  async submit(controlRef: string): Promise<void> {
+    this.requireAction('submit');
+    if (!this.#currentSnapshot) throw new ExecutorPolicyError('submit', 'no current snapshot to submit from');
+    const control = findSnapshotSubmitControl(this.#currentSnapshot, controlRef);
+    if (!control) throw new ExecutorPolicyError('submit', `unknown controlRef ${controlRef}`);
+    const backendNodeId = this.nodeIdFor('submit', controlRef);
+
+    const box = (await this.send('DOM.getBoxModel', { backendNodeId })) as { model: BoxModel };
+    const { x, y } = boxCenter(box.model);
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
   }
 
   /** A pure state transition -- no CDP call. Surfaces the live view to the user and stops the

@@ -7,12 +7,21 @@
  * consumes this package; issue #197's terms register is the evidence base each entry cites.
  */
 
-export type ExecutorAction = 'openTarget' | 'snapshot' | 'fill' | 'select' | 'attach' | 'capture' | 'handoff';
+export type ExecutorAction = 'openTarget' | 'snapshot' | 'fill' | 'select' | 'attach' | 'capture' | 'handoff' | 'submit';
 /*
- * `submit` is deliberately not a member of `ExecutorAction` at all -- not "excluded by an unset
- * kill switch," absent from the type. #196 §9's first approval condition is that no submit code
- * path exists in this slice's build, not even behind a flag; the type system is one more place
- * that condition holds, since adding it back would be a visible, reviewable diff to this file.
+ * `submit` was deliberately absent from this type through #201 (#196 §9's first approval
+ * condition: no submit code path in that slice's build, not even behind a flag) -- adding it back
+ * is itself the visible, reviewable diff that condition was written to require. It is real now
+ * (#202), but the executor package still enforces only its own structural half of the safety
+ * story: this action is off by default (`killSwitches.submit`), a policy must name it in
+ * `allowedActions` to compile it in at all, and `executor.ts`'s `submit()` only ever clicks a
+ * control `submit-control.ts`'s `resolveSubmitControl` unambiguously identified -- it never
+ * guesses among candidates. None of that is a substitute for the actual safety property: the
+ * *caller* (the main-process orchestration, not this package) is what must never invoke `submit`
+ * except immediately after a specific human's explicit, per-instance confirmation of that exact
+ * filled application. An automatic-mode unlock (a platform earning the right to skip that
+ * per-instance confirmation after a tracked run of prior successful manual ones) is a decision the
+ * orchestrator makes, never this package -- `ApplicationExecutor` has no concept of "automatic".
  */
 
 export interface ApplicationTargetPolicy {
@@ -72,5 +81,6 @@ export function isActionAllowed(policy: ApplicationTargetPolicy, action: Executo
   if (action === 'fill' && policy.killSwitches.fill) return false;
   if (action === 'attach' && policy.killSwitches.upload) return false;
   if (action === 'openTarget' && policy.killSwitches.navigate) return false;
+  if (action === 'submit' && policy.killSwitches.submit) return false;
   return policy.allowedActions.includes(action);
 }

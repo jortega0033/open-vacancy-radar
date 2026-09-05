@@ -22,7 +22,7 @@ function fullPolicy(overrides: Partial<ApplicationTargetPolicy> = {}): Applicati
     termsRegisterEntry: 'fixture-ats',
     termsVersion: '1',
     termsReviewedAt: '2026-01-01',
-    allowedActions: ['openTarget', 'snapshot', 'fill', 'select', 'attach', 'capture', 'handoff'],
+    allowedActions: ['openTarget', 'snapshot', 'fill', 'select', 'attach', 'capture', 'handoff', 'submit'],
     uploadConstraints: { maxBytes: 10_000_000, mimeTypes: ['application/pdf'] },
     rateLimits: { perDay: 1, perEmployerPerDay: 1, minIntervalMs: 0 },
     killSwitches: { navigate: false, fill: false, upload: false, submit: false },
@@ -51,6 +51,7 @@ const NAME_INPUT_TREE = {
         ],
       },
       { nodeName: 'INPUT', nodeType: 1, backendNodeId: 6, attributes: ['type', 'file', 'name', 'resume'] },
+      { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 7, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: 'Submit Application' }] },
     ],
   },
 };
@@ -497,6 +498,63 @@ describe('ApplicationExecutor: attach', () => {
   });
 });
 
+describe('ApplicationExecutor: submit', () => {
+  it('clicks the resolved submit control at its real box-model center', async () => {
+    const { transport, calls } = fakeTransport({
+      'DOM.getDocument': NAME_INPUT_TREE,
+      'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(snapshot.submitControls).toHaveLength(1);
+
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const mouseCalls = calls.filter((c) => c.method === 'Input.dispatchMouseEvent');
+    expect(mouseCalls).toHaveLength(2); // pressed + released, the same real click fill() uses for a checkbox
+    expect(mouseCalls[0]).toMatchObject({ params: { type: 'mousePressed', x: 20, y: 30 } });
+    expect(mouseCalls[1]).toMatchObject({ params: { type: 'mouseReleased', x: 20, y: 30 } });
+  });
+
+  it('refuses submit when the policy does not list it in allowedActions', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy({ allowedActions: ['openTarget', 'snapshot'] }));
+    const snapshot = await executor.snapshot();
+    await expect(executor.submit(snapshot.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('refuses submit when the submit kill switch is on, even though allowedActions lists it', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(
+      transport,
+      fullPolicy({ killSwitches: { navigate: false, fill: false, upload: false, submit: true } }),
+    );
+    const snapshot = await executor.snapshot();
+    await expect(executor.submit(snapshot.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('refuses an unknown controlRef', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    await executor.snapshot();
+    await expect(executor.submit('c0000000000000ff')).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('refuses to submit before any snapshot has been taken', async () => {
+    const { transport } = fakeTransport();
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    await expect(executor.submit('c0000000000000ff')).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('refuses a controlRef from a stale (prior-generation) snapshot', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const first = await executor.snapshot();
+    await executor.snapshot(); // bumps the generation, replacing #currentSnapshot
+    await expect(executor.submit(first.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+});
+
 describe('ApplicationExecutor: capture and handoff', () => {
   it('captures a screenshot via Page.captureScreenshot', async () => {
     const { transport } = fakeTransport({ 'Page.captureScreenshot': { data: 'base64data' } });
@@ -527,6 +585,7 @@ describe('ApplicationExecutor: CDP allowlist enforcement is real, not decorative
     await executor.select(snapshot.fields[2]!.fieldRef, snapshot.fields[2]!.options![0]!.optionRef);
     await executor.attach(snapshot.fields[3]!.fieldRef, { localFilePath: '/tmp/x.pdf', mimeType: 'application/pdf', byteSize: 100 });
     await executor.capture();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
 
     const { isAllowedCdpMethod } = await import('../src/cdp-allowlist.js');
     for (const call of calls) {

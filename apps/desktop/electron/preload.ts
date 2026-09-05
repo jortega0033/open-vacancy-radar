@@ -1024,9 +1024,28 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const generation = snapshotSource?.generation;
   const capturedAt = snapshotSource ? optionalString(snapshotSource, 'capturedAt') : undefined;
   const rawFields = snapshotSource?.fields;
-  if (typeof generation !== 'number' || !capturedAt || !Array.isArray(rawFields) || !screenshotBase64) {
+  const rawSubmitControls = snapshotSource?.submitControls;
+  const challengeDetected = snapshotSource?.challengeDetected;
+  if (
+    typeof generation !== 'number' ||
+    !capturedAt ||
+    !Array.isArray(rawFields) ||
+    !Array.isArray(rawSubmitControls) ||
+    typeof challengeDetected !== 'boolean' ||
+    !screenshotBase64
+  ) {
     throw new Error('the application executor returned an unexpected response');
   }
+
+  const submitControls = rawSubmitControls.map((rawControl, index) => {
+    const controlSource = asRecord(rawControl);
+    const controlRef = controlSource ? optionalString(controlSource, 'controlRef') : undefined;
+    const label = controlSource ? optionalString(controlSource, 'label') : undefined;
+    if (!controlRef || label === undefined) {
+      throw new Error(`the application executor returned an unexpected submit control shape at index ${index}`);
+    }
+    return { controlRef, label };
+  });
 
   const fields = rawFields.map((rawField, index) => {
     const fieldSource = asRecord(rawField);
@@ -1066,7 +1085,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     };
   });
 
-  return { snapshot: { generation, fields, capturedAt }, screenshotBase64 };
+  return { snapshot: { generation, fields, submitControls, capturedAt, challengeDetected }, screenshotBase64 };
 }
 
 function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {

@@ -1,5 +1,5 @@
-import type { FieldClassification, FieldControlType, SnapshotField, SnapshotOption } from './form-snapshot.js';
-import { mintFieldRef, mintOptionRef } from './form-snapshot.js';
+import type { FieldClassification, FieldControlType, SnapshotField, SnapshotOption, SnapshotSubmitControl } from './form-snapshot.js';
+import { mintFieldRef, mintOptionRef, mintSubmitControlRef } from './form-snapshot.js';
 
 /**
  * Pure extraction of `SnapshotField`s from a CDP `DOM.getDocument` response tree. Kept separate
@@ -107,6 +107,29 @@ function extractOptions(selectNode: CdpDomNode): SnapshotOption[] {
 
 const FILLABLE_TAGS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
 
+/** Whether `node` is a submit-shaped control: a `<button>` (default type is `submit` per the HTML
+ * spec unless the page says otherwise) or an `<input type="submit">`. Every other button type
+ * (`type="button"`, `type="reset"`) is a no-op or destructive control, never a target `submit()`
+ * should ever click. */
+function isSubmitControl(node: CdpDomNode): boolean {
+  if (node.nodeName === 'BUTTON') {
+    const type = (attr(node, 'type') ?? 'submit').toLowerCase();
+    return type === 'submit';
+  }
+  if (node.nodeName === 'INPUT') {
+    return (attr(node, 'type') ?? '').toLowerCase() === 'submit';
+  }
+  return false;
+}
+
+/** A `<button>`'s visible label is its text content; an `<input type="submit">` carries its own
+ * label in `value` (the attribute the browser itself renders), falling back to the browser's own
+ * default caption when the page didn't set one. */
+function submitControlLabel(node: CdpDomNode): string {
+  if (node.nodeName === 'INPUT') return attr(node, 'value') ?? 'Submit';
+  return textContent(node) || 'Submit';
+}
+
 /**
  * Marks of a bot-detection challenge widget (reCAPTCHA, hCaptcha, Cloudflare Turnstile) that could
  * plausibly appear on a real application form -- checked against an `<iframe>`'s `src` (the
@@ -122,7 +145,10 @@ const CHALLENGE_CLASS_PATTERN = /(^|\s)(g-recaptcha|h-captcha|cf-turnstile)(\s|$
 
 export interface ExtractedSnapshot {
   fields: SnapshotField[];
-  /** `fieldRef -> backendNodeId`, for `executor.ts`'s own internal use only. */
+  submitControls: SnapshotSubmitControl[];
+  /** `fieldRef -> backendNodeId` AND `controlRef -> backendNodeId`, sharing one map since both are
+   * opaque refs `executor.ts` resolves the exact same way (a real CDP node handle to click/focus).
+   * For `executor.ts`'s own internal use only. */
   nodeIds: FieldNodeMap;
   /** Whether a known bot-detection challenge widget (reCAPTCHA/hCaptcha/Turnstile) was found
    * anywhere in the tree, checked in the same pass as field extraction. `executor.ts`'s `snapshot()`
@@ -151,6 +177,7 @@ export interface ExtractedSnapshot {
  */
 export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   const fields: SnapshotField[] = [];
+  const submitControls: SnapshotSubmitControl[] = [];
   const nodeIds = new Map<string, number>();
   let challengeDetected = false;
 
@@ -164,7 +191,16 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       challengeDetected = true;
     }
 
-    if (FILLABLE_TAGS.has(node.nodeName)) {
+    // A submit-shaped <input> (type="submit") is also technically an INPUT tag, but it is a click
+    // target, never a fillable field -- checked first so it never falls through to the fillable
+    // branch below and gets minted as a bogus text field.
+    if (isSubmitControl(node)) {
+      if (!hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
+        const controlRef = mintSubmitControlRef();
+        nodeIds.set(controlRef, node.backendNodeId);
+        submitControls.push({ controlRef, label: submitControlLabel(node) });
+      }
+    } else if (FILLABLE_TAGS.has(node.nodeName)) {
       const inputType = (attr(node, 'type') ?? 'text').toLowerCase();
       if (inputType !== 'hidden' && !hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
         const label = resolveLabel(node);
@@ -191,5 +227,5 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   }
 
   walk(root);
-  return { fields, nodeIds, challengeDetected };
+  return { fields, submitControls, nodeIds, challengeDetected };
 }
