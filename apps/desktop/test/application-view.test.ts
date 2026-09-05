@@ -35,6 +35,9 @@ const { FakeDebugger, instances, baseWindowInstances } = vi.hoisted(() => {
     on(event: string, listener: (event: unknown, reason: string) => void): void {
       if (event === 'detach') this.detachListeners.push(listener);
     }
+    get detachListenerCount(): number {
+      return this.detachListeners.length;
+    }
     /** Test-only: simulates Electron firing 'detach' on its own (DevTools opened, webContents closed). */
     simulateExternalDetach(): void {
       for (const listener of this.detachListeners) listener({}, 'target_closed');
@@ -48,6 +51,7 @@ const { FakeDebugger, instances, baseWindowInstances } = vi.hoisted(() => {
     windowOpenHandler?: () => unknown;
     closeCalls: number;
     setBoundsCalls: unknown[];
+    navigationListeners: Partial<Record<'will-navigate' | 'will-redirect', (event: { preventDefault: () => void }, url: string) => void>>;
   }
 
   const instances: Instance[] = [];
@@ -71,12 +75,13 @@ vi.mock('electron', () => {
       session: { setPermissionRequestHandler: (fn: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void) => void };
       setWindowOpenHandler: (fn: () => unknown) => void;
       close: () => void;
+      on: (event: string, listener: (...args: never[]) => void) => void;
     };
     setBounds: (bounds: unknown) => void;
 
     constructor(options: unknown) {
       const debug = new FakeDebugger();
-      const record: (typeof instances)[number] = { options, debug, closeCalls: 0, setBoundsCalls: [] };
+      const record: (typeof instances)[number] = { options, debug, closeCalls: 0, setBoundsCalls: [], navigationListeners: {} };
       instances.push(record);
       this.webContents = {
         debugger: debug,
@@ -90,6 +95,11 @@ vi.mock('electron', () => {
         },
         close: () => {
           record.closeCalls += 1;
+        },
+        on: (event, listener) => {
+          if (event === 'will-navigate' || event === 'will-redirect') {
+            record.navigationListeners[event] = listener as (event: { preventDefault: () => void }, url: string) => void;
+          }
         },
       };
       this.setBounds = (bounds) => record.setBoundsCalls.push(bounds);
@@ -118,6 +128,8 @@ vi.mock('electron', () => {
 
 import { createApplicationView } from '../electron/application-view.js';
 
+const ALLOW_ALL = () => true;
+
 function fakeWindow(bounds = { x: 0, y: 0, width: 800, height: 600 }) {
   const addChildView = vi.fn();
   const removeChildView = vi.fn();
@@ -134,7 +146,7 @@ beforeEach(() => {
 
 describe('createApplicationView', () => {
   it('gives the view a per-attempt, non-persistent, no-preload, sandboxed configuration', () => {
-    createApplicationView('attempt-123');
+    createApplicationView('attempt-123', ALLOW_ALL);
     expect(instances).toHaveLength(1);
     const options = instances[0]!.options as Record<string, unknown>;
     const webPreferences = options.webPreferences as Record<string, unknown>;
@@ -146,14 +158,14 @@ describe('createApplicationView', () => {
   });
 
   it('gives two attempts two distinct, non-persistent partitions', () => {
-    createApplicationView('attempt-a');
-    createApplicationView('attempt-b');
+    createApplicationView('attempt-a', ALLOW_ALL);
+    createApplicationView('attempt-b', ALLOW_ALL);
     const partitions = instances.map((i) => (i.options as { webPreferences: { partition: string } }).webPreferences.partition);
     expect(partitions).toEqual(['ovr-apply-attempt-a', 'ovr-apply-attempt-b']);
   });
 
   it('denies every permission request unconditionally', () => {
-    createApplicationView('attempt-1');
+    createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     expect(record.permissionHandler).toBeDefined();
     const callback = vi.fn();
@@ -165,14 +177,14 @@ describe('createApplicationView', () => {
   });
 
   it('denies window.open / popups', () => {
-    createApplicationView('attempt-1');
+    createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     expect(record.windowOpenHandler).toBeDefined();
     expect(record.windowOpenHandler!()).toEqual({ action: 'deny' });
   });
 
   it('attaches the CDP debugger lazily, on the first transport call, not at construction', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     expect(record.debug.attachCalls).toHaveLength(0);
     void applicationView.transport.sendCommand('DOM.getDocument', {});
@@ -180,7 +192,7 @@ describe('createApplicationView', () => {
   });
 
   it('does not re-attach the debugger on a second transport call', async () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     await applicationView.transport.sendCommand('DOM.getDocument', {});
     await applicationView.transport.sendCommand('DOM.focus', { nodeId: 1 });
@@ -192,7 +204,7 @@ describe('createApplicationView', () => {
   });
 
   it('re-attaches after an externally-fired detach (DevTools opened), on the next transport call', async () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     await applicationView.transport.sendCommand('DOM.getDocument', {});
     expect(record.debug.attachCalls).toHaveLength(1);
@@ -203,7 +215,7 @@ describe('createApplicationView', () => {
   });
 
   it('show() attaches the view to the window and sizes it to the content bounds', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const window = fakeWindow({ x: 0, y: 0, width: 1024, height: 768 });
     // Construction already sized the view once, for its hidden host window -- see this module's
     // own doc comment on why an unhosted `WebContentsView` doesn't work for real.
@@ -219,7 +231,7 @@ describe('createApplicationView', () => {
   });
 
   it('hide() detaches from the window it was shown in, and is a no-op if never shown', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const window = fakeWindow();
     // No-op: never shown.
     applicationView.hide(window);
@@ -233,7 +245,7 @@ describe('createApplicationView', () => {
   });
 
   it('hide() ignores a window it was not shown in', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const shownIn = fakeWindow();
     const otherWindow = fakeWindow();
     applicationView.show(shownIn);
@@ -242,7 +254,7 @@ describe('createApplicationView', () => {
   });
 
   it('destroy() detaches the debugger (if attached) and closes the webContents, and is idempotent', async () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     await applicationView.transport.sendCommand('DOM.getDocument', {});
 
@@ -259,7 +271,7 @@ describe('createApplicationView', () => {
   });
 
   it('destroy() never attempts a debugger detach when the transport was never used', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const record = instances[0]!;
     applicationView.destroy();
     expect(record.debug.detachCalls).toBe(0);
@@ -267,7 +279,7 @@ describe('createApplicationView', () => {
   });
 
   it('destroy() detaches from whatever window it was shown in', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const window = fakeWindow();
     applicationView.show(window);
     applicationView.destroy();
@@ -277,7 +289,7 @@ describe('createApplicationView', () => {
   });
 
   it('creates a hidden host BaseWindow at construction and adds the view to it', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     expect(baseWindowInstances).toHaveLength(1);
     const host = baseWindowInstances[0]!;
     expect((host.options as { show?: boolean }).show).toBe(false);
@@ -285,7 +297,7 @@ describe('createApplicationView', () => {
   });
 
   it('show() moves the view off the host window before adding it to the real one', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const host = baseWindowInstances[0]!;
     const window = fakeWindow();
     applicationView.show(window);
@@ -293,7 +305,7 @@ describe('createApplicationView', () => {
   });
 
   it('hide() re-parents the view back onto the hidden host window', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const host = baseWindowInstances[0]!;
     const window = fakeWindow();
     applicationView.show(window);
@@ -303,9 +315,65 @@ describe('createApplicationView', () => {
   });
 
   it('destroy() also destroys the hidden host window', () => {
-    const applicationView = createApplicationView('attempt-1');
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const host = baseWindowInstances[0]!;
     applicationView.destroy();
     expect(host.destroyCalls).toBe(1);
+  });
+
+  it('registers exactly one debugger detach listener at construction, never a second on reattach', async () => {
+    // Real gap this test guards against: the listener used to be (re)registered inside the lazy
+    // attach path, so an external detach followed by a reattach added a second listener with
+    // nothing ever removing the first -- unbounded growth over repeated cycles.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const record = instances[0]!;
+    await applicationView.transport.sendCommand('DOM.getDocument', {});
+    record.debug.simulateExternalDetach();
+    await applicationView.transport.sendCommand('DOM.getDocument', {});
+    record.debug.simulateExternalDetach();
+    await applicationView.transport.sendCommand('DOM.getDocument', {});
+
+    expect(record.debug.attachCalls).toHaveLength(3);
+    expect(record.debug.detachListenerCount).toBe(1);
+  });
+
+  it('will-navigate is denied (and reported) for a URL isUrlAllowed rejects, allowed otherwise', () => {
+    const onBlocked = vi.fn();
+    createApplicationView('attempt-1', (url: string) => url === 'https://allowed.example/apply', onBlocked);
+    const record = instances[0]!;
+    const listener = record.navigationListeners['will-navigate'];
+    expect(listener).toBeDefined();
+
+    const allowedEvent = { preventDefault: vi.fn() };
+    listener!(allowedEvent, 'https://allowed.example/apply');
+    expect(allowedEvent.preventDefault).not.toHaveBeenCalled();
+    expect(onBlocked).not.toHaveBeenCalled();
+
+    const blockedEvent = { preventDefault: vi.fn() };
+    listener!(blockedEvent, 'https://attacker.example/apply');
+    expect(blockedEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(onBlocked).toHaveBeenCalledWith('https://attacker.example/apply');
+  });
+
+  it('will-redirect is denied the same way as will-navigate', () => {
+    const onBlocked = vi.fn();
+    createApplicationView('attempt-1', (url: string) => url === 'https://allowed.example/apply', onBlocked);
+    const record = instances[0]!;
+    const listener = record.navigationListeners['will-redirect'];
+    expect(listener).toBeDefined();
+
+    const event = { preventDefault: vi.fn() };
+    listener!(event, 'https://redirected-elsewhere.example/');
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(onBlocked).toHaveBeenCalledWith('https://redirected-elsewhere.example/');
+  });
+
+  it('onBlockedNavigation is optional: a missing callback never throws when a navigation is denied', () => {
+    createApplicationView('attempt-1', () => false);
+    const record = instances[0]!;
+    const listener = record.navigationListeners['will-navigate']!;
+    const event = { preventDefault: vi.fn() };
+    expect(() => listener(event, 'https://anything.example/')).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
   });
 });

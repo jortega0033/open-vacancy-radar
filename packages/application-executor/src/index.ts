@@ -10,7 +10,7 @@ export type {
   FormSnapshot,
 } from './form-snapshot.js';
 
-export { isOriginAllowed, isActionAllowed } from './target-policy.js';
+export { isNavigationAllowed, isActionAllowed } from './target-policy.js';
 export type { ExecutorAction, ApplicationTargetPolicy } from './target-policy.js';
 
 export { ALLOWED_CDP_METHODS, DENIED_CDP_DOMAINS, isAllowedCdpMethod, assertAllowedCdpMethod, CdpMethodNotAllowedError } from './cdp-allowlist.js';

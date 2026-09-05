@@ -32,6 +32,11 @@ export interface SnapshotField {
   options?: readonly SnapshotOption[];
   /** Present only when the field was structurally classified as excluded. */
   classification?: FieldClassification;
+  /** Present only for `checkbox` controls: whether the DOM's own `checked` attribute was set at
+   * snapshot time. Read so `fill()` can toggle a checkbox in *either* direction -- without it, a
+   * checkbox that started pre-checked could never be unchecked (a real gap found during #201's
+   * review: `fill()` used to assume every checkbox starts unchecked). */
+  checked?: boolean;
 }
 
 export interface FormSnapshot {
