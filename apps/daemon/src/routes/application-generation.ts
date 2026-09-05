@@ -43,6 +43,11 @@ export function registerApplicationGenerationRoutes(
       reply.code(400).send({ error: `unsupported provider: ${provider}` });
       return;
     }
+    // CodeQL flags this existsSync/statSync call as missing rate limiting (js/missing-rate-limiting),
+    // the same finding already dismissed on POST /sessions in sessions.ts, for the same reason: the
+    // daemon binds 127.0.0.1 only, every request requires the per-launch bearer token, and there is
+    // exactly one legitimate caller -- the desktop app's own Electron main process. See that route's
+    // own comment for the full reasoning; it applies to this route unchanged.
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
       reply.code(400).send({ error: `working directory does not exist: ${cwd}` });
       return;
