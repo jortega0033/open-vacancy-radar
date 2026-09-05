@@ -42,6 +42,12 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
+import { applyApplicationFieldMap, closeAllApplicationReviews, closeApplicationReview, openApplicationReview } from './application-review-session.js';
+import type {
+  ApplicationValueTableEntryInput,
+  ApplyApplicationFieldMapInput,
+  OpenApplicationReviewInput,
+} from './application-executor-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { buildDaemonEnvironment } from './daemon-environment.js';
@@ -724,6 +730,7 @@ async function killDaemon(): Promise<void> {
   // global with these two keyed registries precisely so this line means what it always claimed to.
   agentWorkspaceRelay.detachAll();
   applicationQueueRelay.detach();
+  closeAllApplicationReviews();
   for (const controller of [...v1EventForwards.values()]) controller.abort();
   v1EventForwards.clear();
   if (client) {
@@ -1223,6 +1230,89 @@ guardedIpc.handle('application-queue:cancel', (_event, input: unknown) => applic
 guardedIpc.handle('application-queue:get-status', async () => {
   const body = await daemonGetJson('/v2/applications');
   return body ?? { entries: [], lease: null };
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Application executor IPC (issue #201). Three channels over `application-review-session.ts`'s
+ * per-attempt registry: `open-review` creates an isolated browser view and returns a snapshot,
+ * `apply-field-map` validates and applies a field map against it, `close-review` tears it down.
+ * `policyId` is the only policy-related value that ever crosses this boundary -- the renderer
+ * cannot supply origins, upload constraints, or kill switches; those are resolved main-process
+ * side from the compiled table in `application-target-policies.ts`. There is no `submit` channel
+ * here and none is planned for this ticket -- see that package's own `ExecutorAction` type.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+function parsePolicyId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
+    throw new Error('"policyId" must be a non-empty string');
+  }
+  return value;
+}
+
+function parseTargetUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2000) {
+    throw new Error('"targetUrl" must be a non-empty string');
+  }
+  try {
+    new URL(value);
+  } catch {
+    throw new Error('"targetUrl" must be a valid URL');
+  }
+  return value;
+}
+
+function parseOpenReviewInput(input: unknown): OpenApplicationReviewInput {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return {
+    attemptId: parseAttemptId(source.attemptId),
+    policyId: parsePolicyId(source.policyId),
+    targetUrl: parseTargetUrl(source.targetUrl),
+  };
+}
+
+const VALUE_PROVENANCES = ['cv', 'profile', 'user_answer', 'jd'] as const;
+
+function parseValueTable(value: unknown): ApplicationValueTableEntryInput[] {
+  if (!Array.isArray(value)) throw new Error('"valueTable" must be an array');
+  return value.map((entry, index) => {
+    const source = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
+    if (typeof source.valueRef !== 'string' || source.valueRef.length === 0) {
+      throw new Error(`valueTable[${index}].valueRef must be a non-empty string`);
+    }
+    if (typeof source.value !== 'string') {
+      throw new Error(`valueTable[${index}].value must be a string`);
+    }
+    if (typeof source.provenance !== 'string' || !(VALUE_PROVENANCES as readonly string[]).includes(source.provenance)) {
+      throw new Error(`valueTable[${index}].provenance must be one of ${VALUE_PROVENANCES.join(', ')}`);
+    }
+    return { valueRef: source.valueRef, value: source.value, provenance: source.provenance as ApplicationValueTableEntryInput['provenance'] };
+  });
+}
+
+function parseApplyFieldMapInput(input: unknown): ApplyApplicationFieldMapInput {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return {
+    attemptId: parseAttemptId(source.attemptId),
+    // Untrusted beyond this point: `validateFieldMap` (#196 §2.4) is the real boundary for this
+    // field, run inside `applyApplicationFieldMap` itself, never here.
+    fieldMap: source.fieldMap,
+    valueTable: parseValueTable(source.valueTable),
+    ...(typeof source.allowJdProvenance === 'boolean' ? { allowJdProvenance: source.allowJdProvenance } : {}),
+  };
+}
+
+guardedIpc.handle('application-executor:open-review', async (_event, input: unknown) => {
+  return openApplicationReview(parseOpenReviewInput(input));
+});
+
+guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
+  return applyApplicationFieldMap(parseApplyFieldMapInput(input));
+});
+
+guardedIpc.handle('application-executor:close-review', async (_event, input: unknown) => {
+  await closeApplicationReview(parseAttemptId(input));
 });
 
 guardedIpc.handle('dialog:select-directory', async () => {

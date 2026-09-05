@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApplicationExecutor, ExecutorPolicyError, type CdpTransport } from '../src/executor.js';
 import type { ApplicationTargetPolicy } from '../src/target-policy.js';
 
@@ -111,6 +111,54 @@ describe('ApplicationExecutor: snapshot', () => {
     const first = await executor.snapshot();
     const second = await executor.snapshot();
     expect(second.generation).toBe(first.generation + 1);
+  });
+
+  const EMPTY_TREE = { root: { nodeName: 'BODY', nodeType: 1, backendNodeId: 1, children: [] } };
+
+  it('retries an initially-empty DOM read and returns the real fields once the page catches up', async () => {
+    // Confirmed against a real Electron WebContentsView (e2e/application-executor.spec.ts):
+    // Page.navigate resolves before the document is actually parsed, so an immediate
+    // DOM.getDocument can race ahead and see nothing yet.
+    let calls = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method !== 'DOM.getDocument') return {};
+        calls += 1;
+        return calls < 3 ? EMPTY_TREE : NAME_INPUT_TREE;
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    expect(calls).toBe(3);
+    expect(snapshot.fields).toHaveLength(4);
+  });
+
+  it('gives up after the retry limit and returns an empty snapshot rather than waiting forever', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const transport: CdpTransport = {
+        async sendCommand(method) {
+          if (method === 'DOM.getDocument') calls += 1;
+          return EMPTY_TREE;
+        },
+      };
+      const executor = new ApplicationExecutor(transport, fullPolicy());
+      const snapshotPromise = executor.snapshot();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const snapshot = await snapshotPromise;
+      expect(snapshot.fields).toEqual([]);
+      expect(calls).toBe(21); // the first read plus EMPTY_SNAPSHOT_RETRY_LIMIT retries
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never retries when the first read already finds fields, matching every fake-transport test above', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    await executor.snapshot();
+    expect(calls.filter((c) => c.method === 'DOM.getDocument')).toHaveLength(1);
   });
 });
 

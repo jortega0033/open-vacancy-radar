@@ -55,6 +55,22 @@ describe('extractSnapshotFields', () => {
     expect(fields[0]!.label).toBe('real-field');
   });
 
+  it('also skips a text-type input carrying the generic HTML `hidden` attribute, not just type="hidden"', () => {
+    // Confirmed against a real Electron WebContentsView (e2e/application-executor.spec.ts): a
+    // `<input type="text" hidden>` honeypot field was originally surfaced as fillable, because
+    // only `type="hidden"` was checked, never the separate `hidden` boolean attribute.
+    const root = node({
+      nodeName: 'DIV',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'referralSource', hidden: '' }) }),
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'real-field' }) }),
+      ],
+    });
+    const { fields } = extractSnapshotFields(root);
+    expect(fields).toHaveLength(1);
+    expect(fields[0]!.label).toBe('real-field');
+  });
+
   it('gives each fillable element a distinct fieldRef mapped to its own backendNodeId', () => {
     const root = node({
       nodeName: 'DIV',

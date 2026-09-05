@@ -1,7 +1,14 @@
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
-import { extractSnapshotFields, type CdpDomNode, type FieldNodeMap } from './dom-extract.js';
+import { extractSnapshotFields, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
 import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
 import { isActionAllowed, isOriginAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
+
+const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
+const EMPTY_SNAPSHOT_RETRY_DELAY_MS = 100;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * The deterministic executor (#196 §1.1, §2): the seven implemented actions
@@ -108,13 +115,29 @@ export class ApplicationExecutor {
     this.#nodeIds = new Map();
   }
 
+  private async readDom(): Promise<ExtractedSnapshot> {
+    const document = (await this.send('DOM.getDocument', { depth: -1, pierce: true })) as { root: CdpDomNode };
+    return extractSnapshotFields(document.root);
+  }
+
   /** Reads the current DOM into a fresh `FormSnapshot`, minting a new set of field/option refs.
    * Bumps the generation counter, so a field map produced against the previous snapshot is
-   * structurally stale afterward (Domain B's rule 2). */
+   * structurally stale afterward (Domain B's rule 2).
+   *
+   * Retries a genuinely empty read a few times before minting a zero-field snapshot: `Page.navigate`
+   * resolves once navigation is dispatched, not once the document is parsed, so a `snapshot()` called
+   * immediately after `openTarget()` can race ahead of the real page and see an empty/interim
+   * document -- confirmed against a real Electron `WebContentsView` (`e2e/application-executor.spec.ts`),
+   * where every fake-transport unit test's fixed, always-non-empty tree never triggers this path. Only
+   * a read that finds zero fields retries; a real form that legitimately has none is indistinguishable
+   * from that race and simply pays the (bounded) retry cost once. */
   async snapshot(): Promise<FormSnapshot> {
     this.requireAction('snapshot');
-    const document = (await this.send('DOM.getDocument', { depth: -1, pierce: true })) as { root: CdpDomNode };
-    const extracted = extractSnapshotFields(document.root);
+    let extracted = await this.readDom();
+    for (let attempt = 0; extracted.fields.length === 0 && attempt < EMPTY_SNAPSHOT_RETRY_LIMIT; attempt++) {
+      await sleep(EMPTY_SNAPSHOT_RETRY_DELAY_MS);
+      extracted = await this.readDom();
+    }
     this.#generation += 1;
     this.#nodeIds = extracted.nodeIds;
     const result: FormSnapshot = { generation: this.#generation, fields: extracted.fields, capturedAt: new Date().toISOString() };

@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * permission request is denied, and that `attach`/`detach`/`show`/`hide`/`destroy` compose the
  * fake debugger's calls in the right order and don't double-attach or double-detach.
  */
-const { FakeDebugger, instances } = vi.hoisted(() => {
+const { FakeDebugger, instances, baseWindowInstances } = vi.hoisted(() => {
   class FakeDebugger {
     attachCalls: unknown[] = [];
     detachCalls = 0;
@@ -52,7 +52,16 @@ const { FakeDebugger, instances } = vi.hoisted(() => {
 
   const instances: Instance[] = [];
 
-  return { FakeDebugger, instances };
+  interface BaseWindowInstance {
+    options: unknown;
+    addChildViewCalls: unknown[];
+    removeChildViewCalls: unknown[];
+    destroyCalls: number;
+  }
+
+  const baseWindowInstances: BaseWindowInstance[] = [];
+
+  return { FakeDebugger, instances, baseWindowInstances };
 });
 
 vi.mock('electron', () => {
@@ -87,7 +96,24 @@ vi.mock('electron', () => {
     }
   }
 
-  return { WebContentsView: FakeWebContentsView };
+  class FakeBaseWindow {
+    contentView: { addChildView: (v: unknown) => void; removeChildView: (v: unknown) => void };
+    destroy: () => void;
+
+    constructor(options: unknown) {
+      const record = { options, addChildViewCalls: [] as unknown[], removeChildViewCalls: [] as unknown[], destroyCalls: 0 };
+      baseWindowInstances.push(record);
+      this.contentView = {
+        addChildView: (v) => record.addChildViewCalls.push(v),
+        removeChildView: (v) => record.removeChildViewCalls.push(v),
+      };
+      this.destroy = () => {
+        record.destroyCalls += 1;
+      };
+    }
+  }
+
+  return { WebContentsView: FakeWebContentsView, BaseWindow: FakeBaseWindow };
 });
 
 import { createApplicationView } from '../electron/application-view.js';
@@ -103,6 +129,7 @@ function fakeWindow(bounds = { x: 0, y: 0, width: 800, height: 600 }) {
 
 beforeEach(() => {
   instances.length = 0;
+  baseWindowInstances.length = 0;
 });
 
 describe('createApplicationView', () => {
@@ -178,11 +205,17 @@ describe('createApplicationView', () => {
   it('show() attaches the view to the window and sizes it to the content bounds', () => {
     const applicationView = createApplicationView('attempt-1');
     const window = fakeWindow({ x: 0, y: 0, width: 1024, height: 768 });
+    // Construction already sized the view once, for its hidden host window -- see this module's
+    // own doc comment on why an unhosted `WebContentsView` doesn't work for real.
+    expect(instances[0]!.setBoundsCalls).toEqual([{ x: 0, y: 0, width: 1024, height: 768 }]);
     applicationView.show(window);
     expect((window as unknown as { contentView: { addChildView: ReturnType<typeof vi.fn> } }).contentView.addChildView).toHaveBeenCalledWith(
       applicationView.view,
     );
-    expect(instances[0]!.setBoundsCalls).toEqual([{ x: 0, y: 0, width: 1024, height: 768 }]);
+    expect(instances[0]!.setBoundsCalls).toEqual([
+      { x: 0, y: 0, width: 1024, height: 768 },
+      { x: 0, y: 0, width: 1024, height: 768 },
+    ]);
   });
 
   it('hide() detaches from the window it was shown in, and is a no-op if never shown', () => {
@@ -241,5 +274,38 @@ describe('createApplicationView', () => {
     expect((window as unknown as { contentView: { removeChildView: ReturnType<typeof vi.fn> } }).contentView.removeChildView).toHaveBeenCalledWith(
       applicationView.view,
     );
+  });
+
+  it('creates a hidden host BaseWindow at construction and adds the view to it', () => {
+    const applicationView = createApplicationView('attempt-1');
+    expect(baseWindowInstances).toHaveLength(1);
+    const host = baseWindowInstances[0]!;
+    expect((host.options as { show?: boolean }).show).toBe(false);
+    expect(host.addChildViewCalls).toEqual([applicationView.view]);
+  });
+
+  it('show() moves the view off the host window before adding it to the real one', () => {
+    const applicationView = createApplicationView('attempt-1');
+    const host = baseWindowInstances[0]!;
+    const window = fakeWindow();
+    applicationView.show(window);
+    expect(host.removeChildViewCalls).toEqual([applicationView.view]);
+  });
+
+  it('hide() re-parents the view back onto the hidden host window', () => {
+    const applicationView = createApplicationView('attempt-1');
+    const host = baseWindowInstances[0]!;
+    const window = fakeWindow();
+    applicationView.show(window);
+    applicationView.hide(window);
+    // Once at construction, once again on hide().
+    expect(host.addChildViewCalls).toEqual([applicationView.view, applicationView.view]);
+  });
+
+  it('destroy() also destroys the hidden host window', () => {
+    const applicationView = createApplicationView('attempt-1');
+    const host = baseWindowInstances[0]!;
+    applicationView.destroy();
+    expect(host.destroyCalls).toBe(1);
   });
 });

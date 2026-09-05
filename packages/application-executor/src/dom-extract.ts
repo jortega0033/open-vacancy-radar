@@ -115,8 +115,14 @@ export interface ExtractedSnapshot {
 
 /**
  * Walks a CDP DOM tree and mints a `SnapshotField` for every fillable element (`input`, `select`,
- * `textarea`). `hidden`/`disabled` inputs are skipped -- there is nothing a real applicant could
- * fill in either, so nothing for the field map to target.
+ * `textarea`). Three kinds of element are skipped, none of them something a real applicant could
+ * fill: `<input type="hidden">` (a value carrier, not a control); anything `disabled`; and anything
+ * carrying the generic HTML `hidden` boolean attribute (confirmed against a real Electron
+ * `WebContentsView` in `e2e/application-executor.spec.ts` -- a field the page marks `hidden` for
+ * CSS-invisibility reasons, distinct from `type="hidden"`, was originally surfaced as fillable
+ * because only the latter was checked). Hiding via a stylesheet rule (`display: none` in CSS,
+ * rather than the attribute) is NOT detected -- that needs computed style, which this package has
+ * no allowed CDP method to read -- so this remains a best-effort check, not a complete one.
  */
 export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   const fields: SnapshotField[] = [];
@@ -125,7 +131,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   function walk(node: CdpDomNode): void {
     if (FILLABLE_TAGS.has(node.nodeName)) {
       const inputType = (attr(node, 'type') ?? 'text').toLowerCase();
-      if (inputType !== 'hidden' && !hasAttr(node, 'disabled')) {
+      if (inputType !== 'hidden' && !hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
         const label = resolveLabel(node);
         const controlType = controlTypeFor(node, inputType);
         const classification = classify(node, inputType, `${label} ${attr(node, 'name') ?? ''} ${attr(node, 'id') ?? ''}`);

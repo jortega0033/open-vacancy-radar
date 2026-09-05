@@ -1,4 +1,4 @@
-import { WebContentsView, type BrowserWindow } from 'electron';
+import { BaseWindow, WebContentsView, type BrowserWindow } from 'electron';
 import type { CdpTransport } from '@agent-dock/application-executor';
 
 /**
@@ -12,6 +12,14 @@ import type { CdpTransport } from '@agent-dock/application-executor';
  * no window chrome of its own, meant to be attached to (and detached from) the main window's
  * `contentView` on demand -- exactly the shape a handoff needs ("show the live view only when the
  * user must see it"), without a second top-level OS window the user could lose track of.
+ *
+ * A `WebContentsView` with no parent `contentView` at all was verified, against a real Electron
+ * process (`e2e/application-executor.spec.ts`), to fail real navigation/CDP commands with "target
+ * closed while handling command" -- its `webContents` needs an actual native window hosting it to
+ * keep the renderer alive, even while nothing is meant to be visible. `hostWindow` below is that
+ * host: a `BaseWindow` (no `webContents` of its own, unlike `BrowserWindow`), created `show:
+ * false` and never shown, that owns the view for its whole lifetime except while a real handoff
+ * has re-parented it onto the app's own visible main window.
  */
 
 export interface ApplicationView {
@@ -53,6 +61,10 @@ export function createApplicationView(attemptId: string): ApplicationView {
   // No child windows, no `window.open` popups escaping the isolated view.
   view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
+  const hostWindow = new BaseWindow({ show: false, width: 1024, height: 768 });
+  hostWindow.contentView.addChildView(view);
+  view.setBounds({ x: 0, y: 0, width: 1024, height: 768 });
+
   let attachedTo: BrowserWindow | undefined;
   let debuggerAttached = false;
 
@@ -80,6 +92,7 @@ export function createApplicationView(attemptId: string): ApplicationView {
     view,
     transport,
     show(window) {
+      hostWindow.contentView.removeChildView(view);
       window.contentView.addChildView(view);
       const bounds = window.getContentBounds();
       view.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
@@ -88,6 +101,8 @@ export function createApplicationView(attemptId: string): ApplicationView {
     hide(window) {
       if (attachedTo === window) {
         window.contentView.removeChildView(view);
+        hostWindow.contentView.addChildView(view);
+        view.setBounds({ x: 0, y: 0, width: 1024, height: 768 });
         attachedTo = undefined;
       }
     },
@@ -105,6 +120,7 @@ export function createApplicationView(attemptId: string): ApplicationView {
         debuggerAttached = false;
       }
       view.webContents.close();
+      hostWindow.destroy();
     },
   };
 }
