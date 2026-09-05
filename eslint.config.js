@@ -45,6 +45,9 @@ export default tseslint.config(
     // controls.
     files: [
       'packages/agent-runtime/src/**/*.ts',
+      // #201: the browser-executor package has no legitimate reason to spawn a process at all --
+      // it drives an already-running Electron webContents over CDP, nothing more.
+      'packages/application-executor/src/**/*.ts',
       'apps/daemon/src/**/*.ts',
       'apps/desktop/electron/**/*.ts',
     ],

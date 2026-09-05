@@ -1202,3 +1202,91 @@ describe('electron/preload.ts: applicationQueue bridge (#200)', () => {
     expect(received).toEqual([]);
   });
 });
+
+const SNAPSHOT_RESULT = {
+  snapshot: {
+    generation: 1,
+    capturedAt: '2026-01-01T00:00:00.000Z',
+    fields: [
+      { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true },
+      {
+        fieldRef: 'f0000000000000002',
+        label: 'workAuthorization',
+        controlType: 'select',
+        required: true,
+        options: [{ optionRef: 'o0000000000000001', label: 'Yes' }],
+      },
+    ],
+  },
+  screenshotBase64: 'ZmFrZQ==',
+};
+
+describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
+  it('exposes exactly the three documented capability functions and nothing else', async () => {
+    const api = await loadPreload('applicationExecutor');
+    expect(Object.keys(api).sort()).toEqual(['openReview', 'applyFieldMap', 'closeReview'].sort());
+    for (const [name, value] of Object.entries(api)) {
+      expect(typeof value, `${name} should be a plain function`).toBe('function');
+    }
+  });
+
+  it('exposes no generic IPC passthrough', async () => {
+    const api = await loadPreload('applicationExecutor');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+  });
+
+  it('openReview invokes the hard-coded open-review channel and rebuilds a well-formed snapshot', async () => {
+    invoke.mockResolvedValue(SNAPSHOT_RESULT);
+    const api = await loadPreload('applicationExecutor');
+    const input = { attemptId: 'attempt-1', policyId: 'ashby-fixture-test-only', targetUrl: 'file:///fixture.html' };
+    const result = await (api.openReview as (i: unknown) => Promise<unknown>)(input);
+    expect(invoke).toHaveBeenCalledWith('application-executor:open-review', input);
+    expect(result).toEqual(SNAPSHOT_RESULT);
+  });
+
+  it('openReview throws rather than returning a fabricated snapshot when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unexpected response/);
+  });
+
+  it('openReview rejects a field with an unrecognized control type rather than passing it through', async () => {
+    invoke.mockResolvedValue({
+      snapshot: { generation: 1, capturedAt: '2026-01-01T00:00:00.000Z', fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }] },
+      screenshotBase64: 'ZmFrZQ==',
+    });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unrecognized control type/);
+  });
+
+  it('applyFieldMap invokes the hard-coded apply-field-map channel and passes the result through', async () => {
+    invoke.mockResolvedValue({ ok: true, appliedCount: 2 });
+    const api = await loadPreload('applicationExecutor');
+    const input = { attemptId: 'attempt-1', fieldMap: { fake: true }, valueTable: [] };
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)(input);
+    expect(invoke).toHaveBeenCalledWith('application-executor:apply-field-map', input);
+    expect(result).toEqual({ ok: true, appliedCount: 2 });
+  });
+
+  it('applyFieldMap surfaces a refusal reason/detail without fabricating success', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'stale_snapshot_generation', detail: 'targets generation 1, current is 2' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
+    expect(result).toEqual({ ok: false, reason: 'stale_snapshot_generation', detail: 'targets generation 1, current is 2' });
+  });
+
+  it('applyFieldMap throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.applyFieldMap as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unexpected response/);
+  });
+
+  it('closeReview invokes the hard-coded close-review channel with the attemptId', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('applicationExecutor');
+    await (api.closeReview as (id: string) => Promise<void>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:close-review', 'attempt-1');
+  });
+});

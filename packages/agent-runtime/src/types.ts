@@ -41,12 +41,20 @@ export interface StartSessionOptions {
    * ignores it today. Claude honors it in `providers/claude/build-args.ts`, which is where the
    * exact flag set and the reasoning for each value live.
    *
-   * The field is deliberately a plain boolean rather than a policy object. There is exactly one
-   * reviewed hardening profile per provider, defined next to that provider's argv construction, so
-   * a caller can ask for it but cannot compose a weaker variant of it -- the restriction set is not
-   * request-derived, and a route that could tune it would be a route that could turn it off.
+   * The field is deliberately a closed enum rather than a policy object. There are exactly two
+   * reviewed hardening profiles per provider, both defined next to that provider's argv
+   * construction, so a caller can ask for one of them but cannot compose a weaker variant of
+   * either -- the restriction set is not request-derived, and a route that could tune it would be
+   * a route that could turn it off.
+   *
+   * `'no-network'` (issue #201) additionally drops `WebFetch`/`WebSearch` from the tool allowlist,
+   * for the one session type -- the application executor's field-map generation -- that has no
+   * legitimate use for either and whose prompts always embed attacker-influenced text (a scraped
+   * job description). See `CLAUDE_HARDENING_ARGS_NO_NETWORK` in `providers/claude/build-args.ts`.
+   * Only the daemon's dedicated field-map-generation route passes it; every other caller passes
+   * `true` or omits the field, exactly as before this value existed.
    */
-  hardened?: boolean;
+  hardened?: boolean | 'no-network';
 }
 
 /**

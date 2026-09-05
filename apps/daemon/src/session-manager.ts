@@ -292,6 +292,13 @@ export class SessionManager {
    * signature. Every existing positional parameter keeps its position and its meaning, so v1's call
    * site in `routes/sessions.ts` is untouched by that ticket -- a claim its empty diff makes
    * checkable rather than merely stated.
+   *
+   * Issue #201 adds one more trailing, optional, defaulted parameter, `toolProfile`. It is never
+   * read from a request body anywhere in this codebase -- only `routes/application-generation.ts`
+   * passes `'no-network'`, and every other call site omits it, keeping its default. That is the
+   * point: which hardening profile a session gets is chosen by which route calls `create()`, not
+   * by a field a caller can set, matching `StartSessionOptions.hardened`'s own "closed,
+   * non-caller-suppliable discriminant" rule.
    */
   create(
     provider: ProviderId,
@@ -302,6 +309,7 @@ export class SessionManager {
     protocolVersion: 1 | 2 = 1,
     workspaceId?: string,
     v2?: CreateSessionV2Options,
+    toolProfile: 'standard' | 'no-network' = 'standard',
   ): AgentSession {
     // The v2 route mints the id itself so its pre-effect audit entry can name the session it is
     // about to start. Everything downstream (the limiter, the durable record, the workspace index,
@@ -406,7 +414,10 @@ export class SessionManager {
         // to untrusted scraped vacancy text in the prompt. The v1/v2 split was incidental plumbing,
         // not a security boundary -- `buildClaudeArgs` applies `CLAUDE_HARDENING_ARGS` the same way
         // regardless of protocol version -- so hardening is now unconditional for every session.
-        hardened: true,
+        // `toolProfile` only ever narrows this further (issue #201); it can never leave a session
+        // unhardened, since `'standard'` still maps to the same `hardened: true` every other caller
+        // has always gotten.
+        hardened: toolProfile === 'no-network' ? 'no-network' : true,
       });
     } catch (err) {
       if (reserved) this.limiter.release(id);

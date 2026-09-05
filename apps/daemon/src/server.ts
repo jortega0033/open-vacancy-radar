@@ -5,6 +5,7 @@ import { extractBearerToken, tokensMatch } from './auth-token.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { registerApplicationGenerationRoutes } from './routes/application-generation.js';
 import type { SessionManager } from './session-manager.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import type { McpConnectionManager } from './mcp/manager.js';
@@ -129,6 +130,7 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
   });
   registerProviderRoutes(app, opts.registry);
   registerSessionRoutes(app, opts.sessionManager, opts.registry);
+  registerApplicationGenerationRoutes(app, opts.sessionManager, opts.registry);
   if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
   if (opts.v2) {
     registerV2ProviderRoutes(app, opts.registry, opts.v2.limiter);

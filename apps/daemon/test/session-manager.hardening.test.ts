@@ -122,3 +122,28 @@ describe('SessionManager.create: v2 sessions are hardened (ADI-08b)', () => {
     expect(options.sessionId).toBe('11111111-1111-4111-8111-111111111111');
   });
 });
+
+describe('SessionManager.create: toolProfile "no-network" (issue #201)', () => {
+  it('sets `hardened: "no-network"` only when the trailing toolProfile argument asks for it', () => {
+    const { provider, sessionManager } = setup();
+    sessionManager.create('claude', '/tmp/work', 'fill this form', undefined, undefined, 1, undefined, undefined, 'no-network');
+
+    expect(provider.started[0]!.hardened).toBe('no-network');
+  });
+
+  it('defaults to the plain hardened profile when toolProfile is omitted, at every arity', () => {
+    const { provider, sessionManager } = setup();
+    sessionManager.create('claude', '/tmp/work', 'find me some roles');
+    sessionManager.create('claude', '/tmp/work', 'find me some roles', undefined, undefined, 2);
+
+    expect(provider.started[0]!.hardened).toBe(true);
+    expect(provider.started[1]!.hardened).toBe(true);
+  });
+
+  it('defaults to the plain hardened profile when toolProfile is explicitly "standard"', () => {
+    const { provider, sessionManager } = setup();
+    sessionManager.create('claude', '/tmp/work', 'find me some roles', undefined, undefined, 1, undefined, undefined, 'standard');
+
+    expect(provider.started[0]!.hardened).toBe(true);
+  });
+});

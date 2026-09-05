@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_HARDENED_DISALLOWED_TOOLS,
   CLAUDE_HARDENED_TOOLS,
+  CLAUDE_HARDENED_TOOLS_NO_NETWORK,
   CLAUDE_HARDENING_ARGS,
+  CLAUDE_HARDENING_ARGS_NO_NETWORK,
   buildClaudeArgs,
 } from '../src/providers/claude/build-args.js';
 
@@ -175,5 +177,49 @@ describe('buildClaudeArgs: hardened v2 sessions (ADI-08b)', () => {
 
   it('is a frozen constant, so no caller can compose a weaker hardening set', () => {
     expect(Object.isFrozen(CLAUDE_HARDENING_ARGS)).toBe(true);
+  });
+});
+
+/**
+ * Issue #201: the application executor's field-map generation session drops WebFetch/WebSearch
+ * on top of everything ADI-08b already restricts. Mirrors the `hardened: true` suite above.
+ */
+describe('buildClaudeArgs: hardened "no-network" sessions (#201)', () => {
+  it('is exactly CLAUDE_HARDENED_TOOLS minus WebFetch/WebSearch, with no other drift', () => {
+    expect([...CLAUDE_HARDENED_TOOLS_NO_NETWORK]).toEqual(
+      CLAUDE_HARDENED_TOOLS.filter((tool) => tool !== 'WebFetch' && tool !== 'WebSearch'),
+    );
+  });
+
+  it('carries the same five non-tools restriction flags as the network-permitting profile', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'no-network' });
+    const pairAt = (flag: string): string | undefined => args[args.indexOf(flag) + 1];
+
+    expect(args).toContain('--safe-mode');
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).toContain('--disable-slash-commands');
+    expect(pairAt('--setting-sources')).toBe('');
+    expect(pairAt('--tools')).toBe('Read,Write,Edit,Glob,Grep,NotebookEdit');
+    expect(pairAt('--disallowed-tools')).toBe('Bash,PowerShell');
+  });
+
+  it('grants neither WebFetch nor WebSearch, unlike the plain hardened profile', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'no-network' });
+    const toolsValue = args[args.indexOf('--tools') + 1];
+    expect(toolsValue).not.toContain('WebFetch');
+    expect(toolsValue).not.toContain('WebSearch');
+
+    const plainHardened = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: true });
+    expect(plainHardened[plainHardened.indexOf('--tools') + 1]).toContain('WebFetch');
+  });
+
+  it('appends the no-network suffix as a suffix, leaving the v1 prefix untouched', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'no-network' });
+    expect(args.slice(0, V1_FRESH_ARGV.length)).toEqual([...V1_FRESH_ARGV]);
+    expect(args.slice(V1_FRESH_ARGV.length)).toEqual([...CLAUDE_HARDENING_ARGS_NO_NETWORK]);
+  });
+
+  it('is a frozen constant, so no caller can compose a weaker hardening set', () => {
+    expect(Object.isFrozen(CLAUDE_HARDENING_ARGS_NO_NETWORK)).toBe(true);
   });
 });

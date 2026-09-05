@@ -22,6 +22,11 @@ import type {
   ApplicationQueueEventType,
   ApplicationQueueStatus,
 } from './application-queue-types.js';
+import type {
+  ApplicationExecutorBridge,
+  ApplyApplicationFieldMapResult,
+  OpenApplicationReviewResult,
+} from './application-executor-types.js';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
@@ -991,3 +996,97 @@ const applicationQueueApi: ApplicationQueueBridge = {
 };
 
 contextBridge.exposeInMainWorld('applicationQueue', applicationQueueApi);
+
+const FIELD_CONTROL_TYPES = ['text', 'textarea', 'select', 'checkbox', 'radio', 'file', 'unknown'] as const;
+const FIELD_CLASSIFICATIONS = ['credential_field', 'consent_field'] as const;
+
+/** Fail-closed the way `toApplicationQueueEntry` does: a shape this build cannot interpret throws
+ * rather than handing the renderer a snapshot with silently-missing or fabricated fields -- a
+ * dropped field here is a field the field-map generation session never gets to see or fill,
+ * exactly the fail-closed direction #196's design calls for. */
+function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewResult {
+  const source = asRecord(value);
+  const snapshotSource = source ? asRecord(source.snapshot) : undefined;
+  const screenshotBase64 = source ? optionalString(source, 'screenshotBase64') : undefined;
+  const generation = snapshotSource?.generation;
+  const capturedAt = snapshotSource ? optionalString(snapshotSource, 'capturedAt') : undefined;
+  const rawFields = snapshotSource?.fields;
+  if (typeof generation !== 'number' || !capturedAt || !Array.isArray(rawFields) || !screenshotBase64) {
+    throw new Error('the application executor returned an unexpected response');
+  }
+
+  const fields = rawFields.map((rawField, index) => {
+    const fieldSource = asRecord(rawField);
+    const fieldRef = fieldSource ? optionalString(fieldSource, 'fieldRef') : undefined;
+    const label = fieldSource ? optionalString(fieldSource, 'label') : undefined;
+    const controlType = fieldSource ? optionalString(fieldSource, 'controlType') : undefined;
+    const required = fieldSource?.required;
+    if (!fieldRef || label === undefined || !controlType || typeof required !== 'boolean') {
+      throw new Error(`the application executor returned an unexpected field shape at index ${index}`);
+    }
+    if (!(FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) {
+      throw new Error(`the application executor returned an unrecognized control type at index ${index}`);
+    }
+    const rawOptions = fieldSource?.options;
+    const options = Array.isArray(rawOptions)
+      ? rawOptions.map((rawOption) => {
+          const optionSource = asRecord(rawOption);
+          const optionRef = optionSource ? optionalString(optionSource, 'optionRef') : undefined;
+          const optionLabel = optionSource ? optionalString(optionSource, 'label') : undefined;
+          if (!optionRef || optionLabel === undefined) {
+            throw new Error('the application executor returned an unexpected option shape');
+          }
+          return { optionRef, label: optionLabel };
+        })
+      : undefined;
+    const classification = fieldSource ? optionalString(fieldSource, 'classification') : undefined;
+    if (classification !== undefined && !(FIELD_CLASSIFICATIONS as readonly string[]).includes(classification)) {
+      throw new Error(`the application executor returned an unrecognized classification at index ${index}`);
+    }
+    return {
+      fieldRef,
+      label,
+      controlType: controlType as OpenApplicationReviewResult['snapshot']['fields'][number]['controlType'],
+      required,
+      ...(options ? { options } : {}),
+      ...(classification ? { classification: classification as 'credential_field' | 'consent_field' } : {}),
+    };
+  });
+
+  return { snapshot: { generation, fields, capturedAt }, screenshotBase64 };
+}
+
+function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const appliedCount = source?.appliedCount;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ApplyApplicationFieldMapResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(typeof appliedCount === 'number' ? { appliedCount } : {}),
+  };
+}
+
+const applicationExecutorApi: ApplicationExecutorBridge = {
+  async openReview(input) {
+    const result = await ipcRenderer.invoke('application-executor:open-review', input);
+    return toOpenApplicationReviewResult(result);
+  },
+
+  async applyFieldMap(input) {
+    const result = await ipcRenderer.invoke('application-executor:apply-field-map', input);
+    return toApplyApplicationFieldMapResult(result);
+  },
+
+  async closeReview(attemptId) {
+    await ipcRenderer.invoke('application-executor:close-review', attemptId);
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationExecutor', applicationExecutorApi);
