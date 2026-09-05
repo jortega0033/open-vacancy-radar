@@ -18,6 +18,8 @@ import { registerV2AuditRoutes } from './routes/v2-audit.js';
 import type { WorkspaceTrustStore } from './workspace-trust-store.js';
 import type { AuditStore } from './audit-store.js';
 import type { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
+import { registerV2ApplicationRoutes } from './routes/v2-applications.js';
+import type { ApplicationQueueStore } from './application-queue-store.js';
 
 /**
  * Present only when the daemon has a working durable store this run.
@@ -66,6 +68,15 @@ export interface BuildServerOptions {
   logger: Logger;
   mcpManager?: McpConnectionManager;
   v2?: BuildServerV2Options;
+  /**
+   * The #200 application queue store. Deliberately a sibling of `v2` rather than nested inside it:
+   * `v2.store`/`v2.limiter` are required fields tied to the AI-session durable store's own health,
+   * and this queue has no dependency on either -- a session-schema-mismatch rollback that disables
+   * `v2` entirely (see `open-durable-store.ts`) must not also silently disable an unrelated,
+   * perfectly healthy queue store. Its own absence is its own downgrade path:
+   * `/v2/applications/*` simply isn't registered, and every other route is unaffected.
+   */
+  applicationQueue?: ApplicationQueueStore;
   /** Overridable only for tests that assert the value round-trips; production mints a fresh UUID. */
   daemonInstanceId?: string;
 }
@@ -144,6 +155,7 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
       });
     }
   }
+  if (opts.applicationQueue) registerV2ApplicationRoutes(app, opts.applicationQueue);
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
     // Fastify's own body-parsing errors (malformed JSON, payload-too-large, ...) carry a real

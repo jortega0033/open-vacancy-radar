@@ -15,6 +15,13 @@ import {
 import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
+import type {
+  ApplicationQueueBridge,
+  ApplicationQueueEntry,
+  ApplicationQueueEvent,
+  ApplicationQueueEventType,
+  ApplicationQueueStatus,
+} from './application-queue-types.js';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
@@ -887,3 +894,100 @@ const agentWorkspaceApi: AgentWorkspaceBridgeType = {
 };
 
 contextBridge.exposeInMainWorld('agentWorkspace', agentWorkspaceApi);
+
+const APPLICATION_QUEUE_ENTRY_STATES = ['queued', 'active', 'paused', 'cancelled', 'done', 'failed'] as const;
+const APPLICATION_QUEUE_EVENT_TYPES = [
+  'enqueued',
+  'lease_acquired',
+  'paused',
+  'resumed',
+  'skipped',
+  'cancelled',
+  'released',
+] as const;
+
+/** Fail-closed the way every other bridge coercion here does: a response shape this build cannot
+ * interpret produces `null`/is dropped, never a fabricated entry. */
+function toApplicationQueueEntry(value: unknown): ApplicationQueueEntry | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const attemptId = optionalString(source, 'attemptId');
+  const state = optionalString(source, 'state');
+  const queuedAt = optionalString(source, 'queuedAt');
+  const updatedAt = optionalString(source, 'updatedAt');
+  if (!attemptId || !state || !queuedAt || !updatedAt) return null;
+  if (!(APPLICATION_QUEUE_ENTRY_STATES as readonly string[]).includes(state)) return null;
+  return { attemptId, state: state as ApplicationQueueEntry['state'], queuedAt, updatedAt };
+}
+
+const applicationQueueApi: ApplicationQueueBridge = {
+  async enqueue(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:enqueue', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async pause(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:pause', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async resume(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:resume', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async skip(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:skip', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async cancel(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:cancel', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async getStatus(): Promise<ApplicationQueueStatus> {
+    const result: unknown = await ipcRenderer.invoke('application-queue:get-status');
+    const source = asRecord(result);
+    const rawEntries = Array.isArray(source?.entries) ? source.entries : [];
+    const entries: ApplicationQueueEntry[] = [];
+    for (const raw of rawEntries) {
+      const entry = toApplicationQueueEntry(raw);
+      if (entry) entries.push(entry);
+    }
+    const leaseSource = asRecord(source?.lease);
+    const leaseId = leaseSource ? optionalString(leaseSource, 'leaseId') : undefined;
+    const leaseAttemptId = leaseSource ? optionalString(leaseSource, 'attemptId') : undefined;
+    const acquiredAt = leaseSource ? optionalString(leaseSource, 'acquiredAt') : undefined;
+    const lease = leaseId && leaseAttemptId && acquiredAt ? { leaseId, attemptId: leaseAttemptId, acquiredAt } : null;
+    return { entries, lease };
+  },
+
+  onActivity(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      if (!source) return;
+      const seq = source.seq;
+      const at = optionalString(source, 'at');
+      const type = optionalString(source, 'type');
+      const attemptId = optionalString(source, 'attemptId');
+      if (typeof seq !== 'number' || !at || !type || !attemptId) return;
+      if (!(APPLICATION_QUEUE_EVENT_TYPES as readonly string[]).includes(type)) return;
+      callback({ seq, at, type: type as ApplicationQueueEventType, attemptId } satisfies ApplicationQueueEvent);
+    };
+    ipcRenderer.on('application-queue:activity', listener);
+    return () => ipcRenderer.removeListener('application-queue:activity', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationQueue', applicationQueueApi);

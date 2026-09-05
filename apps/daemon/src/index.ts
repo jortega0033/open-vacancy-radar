@@ -13,6 +13,7 @@ import { buildServer, type BuildServerV2Options } from './server.js';
 import { SessionManager } from './session-manager.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
 import { openDurableStore } from './open-durable-store.js';
+import { openApplicationQueueStore } from './open-application-queue-store.js';
 import { openWorkspaceStores } from './open-workspace-stores.js';
 import { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
 import type { McpCredentialStore } from './mcp/types.js';
@@ -46,6 +47,9 @@ async function main() {
   const registry = buildProviderRegistry(logger);
   const limiter = new ActiveSessionLimiter();
   const durable = openDurableStore(appId, logger);
+  // #200. Independent of `durable` above -- it needs no session/workspace collaborators -- so it
+  // is opened unconditionally rather than only when the session store is available.
+  const applicationQueue = openApplicationQueueStore(appId, logger);
   // ADI-06. Opened before the session manager because the manager takes the trust store as a
   // collaborator: `workspaceIsTrusted` has to read the same store the routes write, or a revocation
   // would be visible to one and not the other.
@@ -75,7 +79,15 @@ async function main() {
         ...(workspaceStores ? { workspace: { ...workspaceStores, leaseManager } } : {}),
       }
     : undefined;
-  const app = buildServer({ registry, sessionManager, token, logger, mcpManager, ...(v2 ? { v2 } : {}) });
+  const app = buildServer({
+    registry,
+    sessionManager,
+    token,
+    logger,
+    mcpManager,
+    ...(v2 ? { v2 } : {}),
+    ...(applicationQueue ? { applicationQueue } : {}),
+  });
 
   const requestedPort = Number(process.env.AGENT_DOCK_PORT ?? '0');
   await app.listen({ port: requestedPort, host: '127.0.0.1' });

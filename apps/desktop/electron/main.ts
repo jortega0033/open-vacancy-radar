@@ -40,6 +40,8 @@ import {
 } from './agent-workspace-ipc.js';
 import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
+import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
+import type { ApplicationQueueEvent } from './application-queue-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
 import { buildDaemonEnvironment } from './daemon-environment.js';
@@ -461,6 +463,11 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
         // `ready`, so no renderer can consume a stale grant against the new daemon.
         adoptDaemonInstance(health.daemonInstanceId);
         sendStatus({ state: 'ready' });
+        // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
+        // request), there is exactly one application queue and no per-session redaction concern,
+        // so this attaches proactively -- "reopening the window reflects current queue state"
+        // needs the stream live before any renderer even asks.
+        applicationQueueRelay.attach();
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -716,6 +723,7 @@ async function killDaemon(): Promise<void> {
   // Every stream, not "whichever one started last". ADI-07 replaced a single `activeStreamAbort`
   // global with these two keyed registries precisely so this line means what it always claimed to.
   agentWorkspaceRelay.detachAll();
+  applicationQueueRelay.detach();
   for (const controller of [...v1EventForwards.values()]) controller.abort();
   v1EventForwards.clear();
   if (client) {
@@ -1085,6 +1093,136 @@ registerAgentWorkspaceHandlers(guardedIpc, {
   getJson: daemonGetJson,
   aliasesFor: aliasesForSession,
   relay: agentWorkspaceRelay,
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * #200: the daemon-owned application queue. Content-free by design (see
+ * `application-queue-store.ts`'s own doc comment) -- these handlers only ever pass an opaque
+ * attempt id back and forth, never a job description, a CV, or a rendered file. Reaches the daemon
+ * via `daemonFetch`/`daemonGetJson` rather than `@agent-dock/client`, matching every other v2
+ * surface in this file (see that pair's own doc comments for why).
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * Incrementally parses the daemon's application-queue SSE byte stream. A close cousin of
+ * `@agent-dock/client`'s internal `parseSseStream`, reimplemented locally rather than imported: that
+ * one is tied to `agentEventEnvelopeSchema` (the AI-session protocol), and this stream carries a
+ * different, much simpler event shape this app's own daemon defines, not a shared protocol type.
+ */
+async function* parseApplicationQueueSseStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<ApplicationQueueEvent, void, void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const onAbort = () => void reader.cancel().catch(() => {});
+  signal.addEventListener('abort', onAbort);
+  try {
+    while (true) {
+      if (signal.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex: number;
+      while ((separatorIndex = buffer.indexOf('\n\n')) >= 0) {
+        const rawFrame = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const dataLine = rawFrame.split('\n').find((line) => line.startsWith('data: '));
+        if (!dataLine) continue; // comment/keepalive frame (the daemon's leading ":ok")
+        try {
+          yield JSON.parse(dataLine.slice('data: '.length)) as ApplicationQueueEvent;
+        } catch {
+          // A malformed frame from this app's own daemon is not worth ending the whole relay over;
+          // the next well-formed frame still arrives.
+        }
+      }
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+const applicationQueueEventSource: ApplicationQueueEventSource = {
+  events({ signal, lastEventId }) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        if (!daemonConnection) return;
+        const headers: Record<string, string> = { Authorization: `Bearer ${daemonConnection.token}` };
+        if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+        const res = await fetch(`${daemonConnection.baseUrl}/v2/applications/events`, { headers, signal });
+        if (!res.ok || !res.body) return;
+        yield* parseApplicationQueueSseStream(res.body, signal);
+      },
+    };
+  },
+};
+
+/** Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
+ * own "one-way push, not a handle channel" rule. */
+const APPLICATION_QUEUE_ACTIVITY_CHANNEL = 'application-queue:activity';
+
+const applicationQueueRelay = new ApplicationQueueRelay({
+  // Read fresh rather than captured, for the same reason `agentWorkspaceRelay` does: a daemon
+  // restart replaces `daemonConnection`, and a relay holding the old one would stream from a
+  // process that no longer exists.
+  client: () => (daemonConnection ? applicationQueueEventSource : undefined),
+  push: (event: ApplicationQueueEvent) => sendToRenderer(mainWindow, APPLICATION_QUEUE_ACTIVITY_CHANNEL, event),
+  onEvent: (message, meta) => console.warn(`[application-queue] ${message}`, meta ?? {}),
+});
+
+/** The renderer-facing message for a queue-route refusal, chosen from a closed table by the
+ * daemon's machine-readable `code` -- never its `error` text -- matching `daemonRefusal`'s own
+ * discipline for the same reason: a message this process did not write must never reach the
+ * renderer verbatim. */
+async function applicationQueueRefusal(res: Response, fallback: string): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+  if (body.code === 'application_not_found') return 'no such attempt is in the queue';
+  if (body.code === 'invalid_transition') return 'that action cannot be applied to this attempt right now';
+  return fallback;
+}
+
+function parseAttemptId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
+    throw new Error('"attemptId" must be a non-empty string');
+  }
+  return value;
+}
+
+guardedIpc.handle('application-queue:enqueue', async (_event, input: unknown) => {
+  const attemptId = parseAttemptId(input);
+  const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+  if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+  return ((await res.json()) as { entry: unknown }).entry;
+});
+
+/**
+ * The shared body for pause/resume/skip/cancel: identical shape, only the daemon path verb
+ * differs. Each channel is still registered through its own separate, literal-string
+ * `guardedIpc.handle` call below, rather than this function looping over a channel list --
+ * `test/ipc-sender-guard.test.ts` finds every registration by scanning main.ts's source text for
+ * exactly that call shape with a literal first argument, so a channel name built from a variable
+ * would be invisible to that audit even though the guard itself would still work correctly at
+ * runtime.
+ */
+async function applicationQueueTransition(verb: 'pause' | 'resume' | 'skip' | 'cancel', input: unknown) {
+  const attemptId = parseAttemptId(input);
+  const res = await daemonFetch(`/v2/applications/${encodeURIComponent(attemptId)}/${verb}`, { method: 'POST' });
+  if (!res.ok) throw new Error(await applicationQueueRefusal(res, `could not ${verb} this attempt`));
+  return ((await res.json()) as { entry: unknown }).entry;
+}
+guardedIpc.handle('application-queue:pause', (_event, input: unknown) => applicationQueueTransition('pause', input));
+guardedIpc.handle('application-queue:resume', (_event, input: unknown) => applicationQueueTransition('resume', input));
+guardedIpc.handle('application-queue:skip', (_event, input: unknown) => applicationQueueTransition('skip', input));
+guardedIpc.handle('application-queue:cancel', (_event, input: unknown) => applicationQueueTransition('cancel', input));
+
+guardedIpc.handle('application-queue:get-status', async () => {
+  const body = await daemonGetJson('/v2/applications');
+  return body ?? { entries: [], lease: null };
 });
 
 guardedIpc.handle('dialog:select-directory', async () => {

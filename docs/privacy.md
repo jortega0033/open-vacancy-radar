@@ -90,6 +90,22 @@ Approving a folder always requires you to pick it in a system folder picker and 
 dialog that spells out what the agent will be able to do in it. The app's interface cannot name a
 folder on your behalf and cannot approve one without that dialog.
 
+### The application queue
+
+A third small store, `application-queue-v1/`, lives alongside the two above (#200, part of the
+same eventual auto-apply feature the `application_attempts`/`application_artifacts` entry near the
+top of this page describes). It exists purely so the app can tell "which application attempt, if
+any, is currently being worked on" without losing that information if the app crashes or is
+restarted — the daemon-owned counterpart to `workspace.db`'s own attempt records.
+
+It is exactly as content-free as the security log above, for the same reason: it holds an opaque
+attempt id and a scheduling state (queued, active, paused, done, and so on), a timestamp, and
+nothing else. No job description, no CV text, no company or role name, no rendered file, ever
+reaches this store — that data lives only in `workspace.db`, which this daemon process never
+opens (see [SECURITY.md](../SECURITY.md) for that boundary). Deleting the `application-queue-v1/`
+directory yourself, with the app closed, is safe at any time: the app rebuilds an empty queue on
+next launch, the same way deleting `agentdock-state/` itself is safe.
+
 None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
 plain SQLite file on your own disk, readable by anything running as your OS user, same as any other
 desktop app's local data.
@@ -161,6 +177,11 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   through the app marks it withdrawn and adds a line saying so, rather than erasing the earlier
   lines. Deleting either file yourself, with the app closed, is safe: every folder simply becomes
   unapproved again and has to be re-approved through the same dialog.
+- **The application queue (`agentdock-state/application-queue-v1/`)**: not pruned by a separate
+  policy of its own; a completed, failed, or cancelled attempt's queue row is simply replaced the
+  next time that same attempt is genuinely re-queued, and the row otherwise persists until you
+  delete the directory yourself (safe at any time the app is closed, per the note above) or delete
+  `agentdock-state/` entirely.
 
 ## What this project cannot promise
 
