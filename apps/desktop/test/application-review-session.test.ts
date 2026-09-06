@@ -637,6 +637,80 @@ describe('application-review-session', () => {
       const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toEqual({ ok: false, reason: 'not_eligible_for_automation' });
     });
+
+    it('a real, small queue run unattended: every guardrail exercised together, not just individually', async () => {
+      // Three attempts, one fireDueAutomaticSubmissions call, a stateful mock so a fire earlier in
+      // the same batch is actually visible to a later one's own guardrail checks -- the same way a
+      // real database would behave, and the only way "per-employer cap" can mean anything within
+      // one unattended run rather than only across separate ones.
+      mockAutomationPolicy({ rateLimits: { perDay: 10, perEmployerPerDay: 1, minIntervalMs: 0 } });
+      const { openApplicationReview, fireDueAutomaticSubmissions } = await importSession();
+
+      // submitApplicationReview stamps submittedAt from the real wall clock (correct: a manual
+      // submit has no injected "now" to use), so this batch's own injected times must be anchored
+      // to the real clock too -- a fixed historical date would make A's real-time submission look
+      // like it happened in the future relative to B/C's checks, tripping minIntervalMs for the
+      // wrong reason.
+      const REAL_NOW = Date.now();
+      const QUEUE_NOW = new Date(REAL_NOW - 3 * 60 * 1000).toISOString(); // scheduled 3 minutes ago
+      const FIRE_AT = new Date(REAL_NOW).toISOString();
+
+      const ATTEMPT_A = ATTEMPT_ID; // Acme Corp -- eligible, should fire
+      const ATTEMPT_B = '22222222-2222-4222-8222-222222222222'; // Beta Inc -- no prior submission at all
+      const ATTEMPT_C = '33333333-3333-4333-8333-333333333333'; // Acme Corp again -- blocked by A's own fire in this batch
+
+      const views = new Map([
+        [ATTEMPT_A, fakeView(SUBMIT_TREE)],
+        [ATTEMPT_B, fakeView(SUBMIT_TREE)],
+        [ATTEMPT_C, fakeView(SUBMIT_TREE)],
+      ]);
+      createApplicationView.mockImplementation((attemptId: string) => views.get(attemptId)!);
+      let matchingHash = '';
+      for (const attemptId of views.keys()) {
+        const opened = await openApplicationReview({ attemptId, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+        matchingHash = createHash('sha256')
+          .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
+          .digest('hex'); // identical for every attempt here -- they all open the same SUBMIT_TREE
+      }
+
+      const attemptRecords = new Map<string, ReturnType<typeof fakeAttempt>>([
+        [ATTEMPT_A, withRealJdHash(fakeAttempt({ id: ATTEMPT_A, company: 'Acme Corp', scheduledAutomaticSubmitAt: QUEUE_NOW }))],
+        [ATTEMPT_B, withRealJdHash(fakeAttempt({ id: ATTEMPT_B, company: 'Beta Inc', scheduledAutomaticSubmitAt: QUEUE_NOW }))],
+        [ATTEMPT_C, withRealJdHash(fakeAttempt({ id: ATTEMPT_C, company: 'Acme Corp', scheduledAutomaticSubmitAt: QUEUE_NOW }))],
+      ]);
+      const priorSubmissions = [submittedAttempt({ id: 'prior-acme', company: 'Acme Corp', formStructureHash: matchingHash, submittedAt: QUEUE_NOW })]; // establishes Acme's template; Beta has none
+
+      workspaceMock.getApplicationAttempt.mockImplementation((_db: unknown, id: string) => attemptRecords.get(id));
+      workspaceMock.listApplicationAttempts.mockImplementation(() => [...attemptRecords.values(), ...priorSubmissions]);
+      workspaceMock.updateApplicationAttempt.mockImplementation((_db: unknown, id: string, patch: Record<string, unknown>) => {
+        const current = attemptRecords.get(id)!;
+        const updated = { ...current, ...patch };
+        attemptRecords.set(id, updated);
+        return updated;
+      });
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: QUEUE_NOW, expiresAt: '2027-01-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      extractPdfText.mockImplementation(async () => 'placeholder');
+
+      // extractPdfText must name the right company/role per attempt for the gate to pass -- easier
+      // to just return a superset string covering both employers' names/roles used above.
+      extractPdfText.mockResolvedValue('Acme Corp Beta Inc Senior Engineer');
+
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, FIRE_AT);
+
+      const byAttempt = new Map(fired.map((f) => [f.attemptId, f]));
+      expect(byAttempt.get(ATTEMPT_A)?.result.ok).toBe(true); // eligible, fires for real
+      expect(byAttempt.get(ATTEMPT_B)?.result).toMatchObject({ ok: false, reason: 'no_prior_manual_submission_for_employer' });
+      expect(byAttempt.get(ATTEMPT_C)?.result).toMatchObject({ ok: false, reason: 'per_employer_daily_cap_reached' });
+
+      // Every one of the three was actually exercised (not silently skipped), and every one had
+      // its schedule cleared regardless of outcome -- none is left dangling as "still scheduled".
+      expect(fired).toHaveLength(3);
+      for (const id of [ATTEMPT_A, ATTEMPT_B, ATTEMPT_C]) {
+        expect(attemptRecords.get(id)!.scheduledAutomaticSubmitAt).toBeNull();
+      }
+      expect(notifyAutomaticSubmission).toHaveBeenCalledTimes(3);
+    });
   });
 
   it('closeReview destroys the view and frees the attemptId for reuse; is a no-op if never opened', async () => {

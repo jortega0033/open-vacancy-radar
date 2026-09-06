@@ -78,13 +78,21 @@ export function checkRateLimits(input: RateLimitCheckInput): RateLimitCheckResul
     const at = Date.parse(entry.submittedAt);
     return latest === undefined || at > latest ? at : latest;
   }, undefined);
-  if (mostRecent !== undefined && nowMs - mostRecent < input.rateLimits.minIntervalMs) {
-    const remainingMs = input.rateLimits.minIntervalMs - (nowMs - mostRecent);
-    return {
-      ok: false,
-      reason: 'min_interval_not_elapsed',
-      detail: `the minimum interval between automatic submissions hasn't elapsed yet (${Math.ceil(remainingMs / 1000)}s remaining)`,
-    };
+  if (mostRecent !== undefined) {
+    // Floored at zero: a submission timestamped fractionally after `now` (real clock skew between
+    // when a caller captured `now` and when a just-fired submission actually got stamped, or a
+    // clock that simply isn't perfectly monotonic across two calls) must never read as "even more
+    // time must still elapse" -- elapsed time cannot be negative, so treat it as effectively zero,
+    // not as a reason to demand an even longer wait than minIntervalMs itself asks for.
+    const elapsedMs = Math.max(0, nowMs - mostRecent);
+    if (elapsedMs < input.rateLimits.minIntervalMs) {
+      const remainingMs = input.rateLimits.minIntervalMs - elapsedMs;
+      return {
+        ok: false,
+        reason: 'min_interval_not_elapsed',
+        detail: `the minimum interval between automatic submissions hasn't elapsed yet (${Math.ceil(remainingMs / 1000)}s remaining)`,
+      };
+    }
   }
 
   return { ok: true };

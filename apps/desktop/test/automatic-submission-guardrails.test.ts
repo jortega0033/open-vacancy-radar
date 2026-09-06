@@ -45,6 +45,16 @@ describe('checkRateLimits', () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it('allows even when the most recent submission is timestamped fractionally after `now` -- real clock skew between two calls, never read as "wait even longer"', () => {
+    // A real, if narrow, possibility: `now` is captured once for a whole batch, but a submission
+    // fired moments later gets stamped with the actual wall-clock time at that later instant. That
+    // must never make the elapsed time negative and demand more than minIntervalMs itself asks for.
+    const recentAutomaticSubmissions = [{ company: 'Zeta', submittedAt: '2026-01-02T12:00:00.500Z' }]; // 500ms "after" now
+    const zeroInterval: RateLimits = { ...RATE_LIMITS, minIntervalMs: 0 };
+    const result = checkRateLimits({ rateLimits: zeroInterval, company: 'Eta', now: NOW, recentAutomaticSubmissions });
+    expect(result).toEqual({ ok: true });
+  });
+
   it('checks the daily cap before the min-interval check, reporting the more fundamental refusal first', () => {
     const recentAutomaticSubmissions = [
       { company: 'Acme', submittedAt: '2026-01-02T11:59:50.000Z' },
