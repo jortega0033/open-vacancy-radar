@@ -1553,6 +1553,13 @@ function scheduleBackgroundScanTick(): void {
 // add meaningful latency on top of it once it elapses.
 const AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS = 30 * 1000;
 
+/** Guards against two ticks running `fireDueAutomaticSubmissions` at once -- if a batch of due
+ * attempts takes longer than `AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS` to process (real CDP round
+ * trips, several attempts due at once), `setInterval` does not wait for the previous callback to
+ * finish before firing the next one. A skipped tick here costs nothing: the next one still finds
+ * every attempt that's actually due. */
+let automaticSubmissionTickInFlight = false;
+
 /**
  * Started once in `app.whenReady()`, runs for the process's whole lifetime -- the same
  * `setInterval`-with-a-real-catch discipline `scheduleBackgroundScanTick` already uses, so one
@@ -1562,10 +1569,15 @@ const AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS = 30 * 1000;
  */
 function scheduleAutomaticSubmissionTick(): void {
   setInterval(() => {
+    if (automaticSubmissionTickInFlight) return;
+    automaticSubmissionTickInFlight = true;
     void ensureWorkspaceDb()
       .then((db) => fireDueAutomaticSubmissions(db))
       .catch((error: unknown) => {
         console.error('[automatic-submission] scheduled tick failed', error);
+      })
+      .finally(() => {
+        automaticSubmissionTickInFlight = false;
       });
   }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
 }

@@ -25,6 +25,10 @@ const workspaceMock = vi.hoisted(() => ({
   listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string }>),
   updateApplicationAttempt: vi.fn(),
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
+  // The real class, not a stand-in: application-review-session.ts imports this from the same
+  // mocked module and does `err instanceof WorkspaceNotFoundError`, which only works if both sides
+  // resolve to the identical class reference.
+  WorkspaceNotFoundError: class WorkspaceNotFoundError extends Error {},
 }));
 const { extractPdfText } = vi.hoisted(() => ({ extractPdfText: vi.fn(async () => '') }));
 const { notifyAutomaticSubmission } = vi.hoisted(() => ({ notifyAutomaticSubmission: vi.fn() }));
@@ -119,6 +123,13 @@ function withRealJdHash<T extends { jdSnapshot: string }>(attempt: T): T & { jdS
   // attempt must carry the real hash of its own jdSnapshot text for the gate to pass, matching how
   // a genuinely-created attempt would have been hashed at creation time.
   return { ...attempt, jdSnapshotHash: createHash('sha256').update(attempt.jdSnapshot).digest('hex') };
+}
+
+/** Mirrors `application-review-session.ts`'s own `computeFormStructureHash` exactly, so a test can
+ * fabricate a "prior submission with a matching structure" fixture. */
+function computeExpectedFormStructureHash(fields: readonly { label: string; controlType: string; required: boolean }[]): string {
+  const structure = fields.map((f) => JSON.stringify([f.label, f.controlType, f.required])).sort();
+  return createHash('sha256').update(JSON.stringify(structure)).digest('hex');
 }
 
 beforeEach(() => {
@@ -409,6 +420,51 @@ describe('application-review-session', () => {
       expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(1, FAKE_DB, ATTEMPT_ID, { checkpoint: 'submitting' });
       expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, { checkpoint: 'ready', checkpointDetail: expect.any(String) });
     });
+
+    it('refuses a second concurrent submit for the same attempt instead of clicking submit twice', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+      // Never resolves on its own -- holds the in-flight lock open long enough for a second call to
+      // land while the first is still mid-submit, the same window a real CDP click occupies.
+      readFile.mockImplementationOnce(() => new Promise(() => {}));
+
+      const first = submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+      const second = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+      expect(second).toEqual({ ok: false, reason: 'already_submitting', detail: expect.any(String) });
+      void first; // left pending deliberately; nothing else in this test awaits it
+    });
+
+    it('refuses to submit an attempt that already reached checkpoint "submitted" instead of resubmitting it', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submitted' })));
+
+      const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+      expect(result).toEqual({ ok: false, reason: 'already_submitted', detail: expect.any(String) });
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitting' }));
+    });
+
+    it('returns a clean refusal, never a thrown error, when a scheduled artifact cannot be read from disk', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      readFile.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
+
+      await expect(submitApplicationReview(FAKE_DB, ATTEMPT_ID)).resolves.toEqual({
+        ok: false,
+        reason: 'artifact_read_failed',
+        detail: expect.stringContaining('ENOENT'),
+      });
+    });
   });
 
   describe('automatic submission (#203)', () => {
@@ -446,7 +502,7 @@ describe('application-review-session', () => {
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toEqual({ ok: false, reason: 'not_eligible_for_automation' });
     });
 
@@ -458,7 +514,7 @@ describe('application-review-session', () => {
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
       workspaceMock.findActiveAutomationGrant.mockReturnValue(undefined);
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toEqual({ ok: false, reason: 'no_active_grant' });
     });
 
@@ -471,7 +527,7 @@ describe('application-review-session', () => {
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
       workspaceMock.listApplicationAttempts.mockReturnValue([]); // no prior submission for this employer at all
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toMatchObject({ ok: false, reason: 'no_prior_manual_submission_for_employer' });
     });
 
@@ -484,7 +540,7 @@ describe('application-review-session', () => {
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
       workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: 'a-completely-different-hash' })]);
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toMatchObject({ ok: false, reason: 'form_structure_changed_since_last_review' });
     });
 
@@ -493,14 +549,12 @@ describe('application-review-session', () => {
       const { openApplicationReview, evaluateAndScheduleAutomaticSubmission, AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS } = await importSession();
       createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
       const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
-      const matchingHash = createHash('sha256')
-        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
-        .digest('hex');
+      const matchingHash = computeExpectedFormStructureHash(opened.snapshot.fields);
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
       workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: matchingHash })]);
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
 
       const expectedAt = new Date(Date.parse(NOW) + AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS).toISOString();
       expect(result).toEqual({ ok: true, scheduledAutomaticSubmitAt: expectedAt });
@@ -512,9 +566,7 @@ describe('application-review-session', () => {
       const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
       createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
       const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
-      const matchingHash = createHash('sha256')
-        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
-        .digest('hex');
+      const matchingHash = computeExpectedFormStructureHash(opened.snapshot.fields);
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
       workspaceMock.listApplicationAttempts.mockReturnValue([
@@ -523,7 +575,7 @@ describe('application-review-session', () => {
         submittedAttempt({ id: 'other-attempt', company: 'Beta Inc', submissionMode: 'automatic', submittedAt: '2026-02-01T06:00:00.000Z' }),
       ]);
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toEqual({ ok: false, reason: 'daily_cap_reached', detail: expect.any(String) });
     });
 
@@ -566,9 +618,7 @@ describe('application-review-session', () => {
       const view = fakeView(SUBMIT_TREE);
       createApplicationView.mockImplementation(() => view);
       const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
-      const matchingHash = createHash('sha256')
-        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
-        .digest('hex');
+      const matchingHash = computeExpectedFormStructureHash(opened.snapshot.fields);
 
       const attemptNow = withRealJdHash(fakeAttempt());
       workspaceMock.getApplicationAttempt.mockReturnValue(attemptNow);
@@ -577,7 +627,7 @@ describe('application-review-session', () => {
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
       workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: matchingHash })]);
 
-      const scheduled = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const scheduled = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(scheduled.ok).toBe(true);
 
       // Reflect the schedule for the "what's due" query fireDueAutomaticSubmissions runs, plus the
@@ -634,7 +684,7 @@ describe('application-review-session', () => {
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
       workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt()]);
 
-      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      const result = await evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
       expect(result).toEqual({ ok: false, reason: 'not_eligible_for_automation' });
     });
 
@@ -668,9 +718,7 @@ describe('application-review-session', () => {
       let matchingHash = '';
       for (const attemptId of views.keys()) {
         const opened = await openApplicationReview({ attemptId, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
-        matchingHash = createHash('sha256')
-          .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
-          .digest('hex'); // identical for every attempt here -- they all open the same SUBMIT_TREE
+        matchingHash = computeExpectedFormStructureHash(opened.snapshot.fields); // identical for every attempt here -- they all open the same SUBMIT_TREE
       }
 
       const attemptRecords = new Map<string, ReturnType<typeof fakeAttempt>>([
@@ -711,6 +759,50 @@ describe('application-review-session', () => {
       }
       expect(notifyAutomaticSubmission).toHaveBeenCalledTimes(3);
     });
+
+    it('refuses to fire an attempt that has already reached checkpoint "submitted" -- closes the manual/automatic double-submit race', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, fireDueAutomaticSubmissions } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      const scheduledAt = '2026-02-01T12:03:00.000Z';
+      // A manual submit reached the attempt first (checkpoint already "submitted") while it was
+      // still scheduled for automatic firing too -- the exact race this guard exists to close.
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submitted', scheduledAutomaticSubmitAt: scheduledAt })));
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ checkpoint: 'submitted', scheduledAutomaticSubmitAt: scheduledAt }))]);
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, '2026-02-01T12:05:00.000Z');
+
+      expect(fired).toEqual([{ attemptId: ATTEMPT_ID, company: 'Acme Corp', role: 'Senior Engineer', result: { ok: false, reason: 'already_submitted', detail: undefined } }]);
+      // Never reached a second real click -- refused before the executor was ever touched again.
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitting' }));
+    });
+
+    it('refuses (and does not fire) a schedule found overdue by more than the cancel window -- the app was likely asleep or closed through it', async () => {
+      mockAutomationPolicy();
+      const { fireDueAutomaticSubmissions, AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS } = await importSession();
+      const scheduledAt = '2026-02-01T12:03:00.000Z';
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ scheduledAutomaticSubmitAt: scheduledAt }))]);
+
+      // Well past scheduledAt + the cancel window itself -- a real cancel window could not possibly
+      // have elapsed while the app was actually running and visible to the user.
+      const wayLater = new Date(Date.parse(scheduledAt) + AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS + 60_000).toISOString();
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, wayLater);
+
+      expect(fired).toEqual([{ attemptId: ATTEMPT_ID, company: 'Acme Corp', role: 'Senior Engineer', result: { ok: false, reason: 'schedule_expired', detail: expect.any(String) } }]);
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, { scheduledAutomaticSubmitAt: null });
+      expect(notifyAutomaticSubmission).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+    });
+  });
+
+  it('cancelScheduledAutomaticSubmission is a safe no-op for an attempt that no longer exists, never a thrown error', async () => {
+    const { cancelScheduledAutomaticSubmission } = await importSession();
+    workspaceMock.updateApplicationAttempt.mockImplementationOnce(() => {
+      throw new workspaceMock.WorkspaceNotFoundError('application attempt', 'ghost-id');
+    });
+
+    expect(() => cancelScheduledAutomaticSubmission(FAKE_DB, 'ghost-id')).not.toThrow();
   });
 
   it('closeReview destroys the view and frees the attemptId for reuse; is a no-op if never opened', async () => {

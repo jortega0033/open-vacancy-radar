@@ -13,6 +13,7 @@ import {
 import { extractPdfText } from './cv-text.js';
 import { notifyAutomaticSubmission } from './automatic-submission-notify.js';
 import * as workspace from './workspace/repository.js';
+import { WorkspaceNotFoundError } from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import type { ApplicationAttemptRecord } from './workspace/types.js';
 import type {
@@ -40,6 +41,12 @@ interface ActiveReview {
 }
 
 const activeReviews = new Map<string, ActiveReview>();
+
+/** Attempt ids currently mid-`submitApplicationReview`. The manual (renderer IPC) and automatic
+ * (timer tick) paths are otherwise entirely independent callers of the same function with no other
+ * shared state -- this is what stops them (or two overlapping timer ticks) from both reaching
+ * `executor.submit()` for the same attempt at once. */
+const submittingAttemptIds = new Set<string>();
 
 export async function openApplicationReview(input: OpenApplicationReviewInput): Promise<OpenApplicationReviewResult> {
   if (activeReviews.has(input.attemptId)) {
@@ -123,9 +130,12 @@ export type SubmitApplicationReviewRefusalReason =
   | PreSubmitGateRefusalReason
   | 'no_open_review'
   | 'no_snapshot'
+  | 'already_submitting'
+  | 'already_submitted'
   | 'captcha_detected'
   | 'unresolved_submit_control'
   | 'source_cv_not_found'
+  | 'artifact_read_failed'
   | 'submit_refused'
   | 'submission_unknown';
 
@@ -144,11 +154,15 @@ function sha256(text: string): string {
  * never changes the result. Never a value: this exists to detect when the *page itself* changed
  * since a human last reviewed it (#203 scope item 1), not to compare what was typed into it. */
 function computeFormStructureHash(snapshot: FormSnapshot): string {
+  // JSON-encode each field individually rather than joining raw strings with a `|` delimiter:
+  // labels are unsanitized third-party page text and can themselves contain `|`, which let two
+  // structurally different field sets serialize to the same string under naive concatenation.
+  // JSON.stringify escapes quotes/backslashes and preserves array structure, so no field content
+  // can be crafted to collide with a delimiter.
   const structure = snapshot.fields
-    .map((field) => `${field.label}|${field.controlType}|${field.required}`)
-    .sort()
-    .join('||');
-  return sha256(structure);
+    .map((field) => JSON.stringify([field.label, field.controlType, field.required]))
+    .sort();
+  return sha256(JSON.stringify(structure));
 }
 
 /**
@@ -188,75 +202,107 @@ export async function submitApplicationReview(
 ): Promise<SubmitApplicationReviewResult> {
   const active = activeReviews.get(attemptId);
   if (!active) return { ok: false, reason: 'no_open_review', detail: `no open review for attempt ${attemptId}` };
-  const snapshot = active.executor.currentSnapshot;
-  if (!snapshot) return { ok: false, reason: 'no_snapshot', detail: `attempt ${attemptId} has no snapshot yet` };
-  if (snapshot.challengeDetected) {
-    return { ok: false, reason: 'captcha_detected', detail: 'the current page has an active CAPTCHA/bot-detection challenge' };
+
+  // Refuses a second concurrent call for the same attempt outright -- the manual (renderer IPC) and
+  // automatic (timer tick) callers are otherwise unaware of each other, and two overlapping timer
+  // ticks are possible too (see `fireDueAutomaticSubmissions`'s own doc comment). Checked and
+  // reserved before anything else so neither caller can ever reach `executor.submit()` twice for
+  // the same attempt at once.
+  if (submittingAttemptIds.has(attemptId)) {
+    return { ok: false, reason: 'already_submitting', detail: `attempt ${attemptId} is already mid-submit` };
   }
+  submittingAttemptIds.add(attemptId);
 
-  const resolved = resolveSubmitControl(snapshot.submitControls);
-  if (!resolved) {
-    return { ok: false, reason: 'unresolved_submit_control', detail: 'could not unambiguously identify the submit control on the current page' };
-  }
-
-  const attempt = workspace.getApplicationAttempt(db, attemptId);
-
-  let currentSourceCvContentHash = attempt.sourceCvContentHash;
-  if (attempt.sourceCvId) {
-    const cv = workspace.listCvDocuments(db).find((candidate) => candidate.id === attempt.sourceCvId);
-    if (!cv) {
-      return {
-        ok: false,
-        reason: 'source_cv_not_found',
-        detail: `the source CV (${attempt.sourceCvId}) used for this attempt no longer exists in the library`,
-      };
-    }
-    currentSourceCvContentHash = sha256(cv.text);
-  }
-  const currentJdSnapshotHash = sha256(attempt.jdSnapshot);
-
-  const artifacts = workspace.listApplicationArtifacts(db, attemptId);
-  const cvArtifact = artifacts.find((artifact) => artifact.kind === 'cv_pdf' || artifact.kind === 'combined_pdf');
-  const letterArtifact = artifacts.find((artifact) => artifact.kind === 'cover_letter_pdf');
-  const renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readFile(cvArtifact.storagePath))) : '';
-  const renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readFile(letterArtifact.storagePath))) : null;
-
-  const gateResult = runPreSubmitGate({
-    attempt: {
-      company: attempt.company,
-      role: attempt.role,
-      sourceCvContentHash: attempt.sourceCvContentHash,
-      jdSnapshotHash: attempt.jdSnapshotHash,
-    },
-    currentSourceCvContentHash,
-    currentJdSnapshotHash,
-    renderedCvText,
-    renderedLetterText,
-  });
-  if (!gateResult.ok) {
-    return { ok: false, reason: gateResult.reason, detail: gateResult.detail };
-  }
-
-  workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submitting' });
   try {
-    await active.executor.submit(resolved.controlRef);
-  } catch (err) {
-    if (err instanceof ExecutorPolicyError) {
-      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: err.message });
-      return { ok: false, reason: 'submit_refused', detail: err.message };
+    // Automatic mode re-reads the live page here rather than trusting whatever was snapshotted when
+    // the review was opened (possibly minutes ago, across the whole cancel window) -- manual mode
+    // keeps the existing cached snapshot, since a human is looking at the live view seconds before
+    // approving.
+    const snapshot = mode === 'automatic' ? await active.executor.snapshot() : active.executor.currentSnapshot;
+    if (!snapshot) return { ok: false, reason: 'no_snapshot', detail: `attempt ${attemptId} has no snapshot yet` };
+    if (snapshot.challengeDetected) {
+      return { ok: false, reason: 'captcha_detected', detail: 'the current page has an active CAPTCHA/bot-detection challenge' };
     }
-    const detail = err instanceof Error ? err.message : String(err);
-    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submission_unknown', checkpointDetail: detail });
-    return { ok: false, reason: 'submission_unknown', detail };
-  }
 
-  workspace.updateApplicationAttempt(db, attemptId, {
-    checkpoint: 'submitted',
-    submittedAt: new Date().toISOString(),
-    submissionMode: mode,
-    formStructureHash: computeFormStructureHash(snapshot),
-  });
-  return { ok: true };
+    const resolved = resolveSubmitControl(snapshot.submitControls);
+    if (!resolved) {
+      return { ok: false, reason: 'unresolved_submit_control', detail: 'could not unambiguously identify the submit control on the current page' };
+    }
+
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+      return { ok: false, reason: 'already_submitted', detail: `attempt ${attemptId} already reached checkpoint "${attempt.checkpoint}"` };
+    }
+
+    let currentSourceCvContentHash = attempt.sourceCvContentHash;
+    if (attempt.sourceCvId) {
+      const cv = workspace.listCvDocuments(db).find((candidate) => candidate.id === attempt.sourceCvId);
+      if (!cv) {
+        return {
+          ok: false,
+          reason: 'source_cv_not_found',
+          detail: `the source CV (${attempt.sourceCvId}) used for this attempt no longer exists in the library`,
+        };
+      }
+      currentSourceCvContentHash = sha256(cv.text);
+    }
+    const currentJdSnapshotHash = sha256(attempt.jdSnapshot);
+
+    const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+    const cvArtifact = artifacts.find((artifact) => artifact.kind === 'cv_pdf' || artifact.kind === 'combined_pdf');
+    const letterArtifact = artifacts.find((artifact) => artifact.kind === 'cover_letter_pdf');
+    let renderedCvText: string;
+    let renderedLetterText: string | null;
+    try {
+      renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readFile(cvArtifact.storagePath))) : '';
+      renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readFile(letterArtifact.storagePath))) : null;
+    } catch (err) {
+      // Never let a missing/corrupted artifact throw out of this function: the automatic path's
+      // caller treats a thrown error very differently from a returned refusal (see
+      // `fireDueAutomaticSubmissions`), and only a returned refusal is guaranteed to notify the user.
+      const detail = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: 'artifact_read_failed', detail };
+    }
+
+    const gateResult = runPreSubmitGate({
+      attempt: {
+        company: attempt.company,
+        role: attempt.role,
+        sourceCvContentHash: attempt.sourceCvContentHash,
+        jdSnapshotHash: attempt.jdSnapshotHash,
+      },
+      currentSourceCvContentHash,
+      currentJdSnapshotHash,
+      renderedCvText,
+      renderedLetterText,
+    });
+    if (!gateResult.ok) {
+      return { ok: false, reason: gateResult.reason, detail: gateResult.detail };
+    }
+
+    workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submitting' });
+    try {
+      await active.executor.submit(resolved.controlRef);
+    } catch (err) {
+      if (err instanceof ExecutorPolicyError) {
+        workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'ready', checkpointDetail: err.message });
+        return { ok: false, reason: 'submit_refused', detail: err.message };
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'submission_unknown', checkpointDetail: detail });
+      return { ok: false, reason: 'submission_unknown', detail };
+    }
+
+    workspace.updateApplicationAttempt(db, attemptId, {
+      checkpoint: 'submitted',
+      submittedAt: new Date().toISOString(),
+      submissionMode: mode,
+      formStructureHash: computeFormStructureHash(snapshot),
+    });
+    return { ok: true };
+  } finally {
+    submittingAttemptIds.delete(attemptId);
+  }
 }
 
 /** Real time between an attempt being cleared for automatic submission and the submit action
@@ -267,9 +313,11 @@ export const AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS = 3 * 60 * 1000;
 export type AutomaticSubmissionRefusalReason =
   | 'no_open_review'
   | 'no_snapshot'
+  | 'already_submitted'
   | 'unresolved_policy'
   | 'not_eligible_for_automation'
   | 'no_active_grant'
+  | 'schedule_expired'
   | RateLimitRefusalReason
   | AutomaticEligibilityRefusalReason;
 
@@ -291,13 +339,21 @@ function attemptsForPolicy(db: WorkspaceDb, policyId: string): ApplicationAttemp
  * could be hit by another attempt, an employer's form could change). Order matters only in that it
  * checks structurally-cheaper things first; every check is otherwise independent.
  */
-function checkAutomaticSubmissionEligibility(db: WorkspaceDb, attemptId: string, now: string): AutomaticSubmissionCheckResult {
+async function checkAutomaticSubmissionEligibility(db: WorkspaceDb, attemptId: string, now: string): Promise<AutomaticSubmissionCheckResult> {
   const active = activeReviews.get(attemptId);
   if (!active) return { ok: false, reason: 'no_open_review' };
-  const snapshot = active.executor.currentSnapshot;
-  if (!snapshot) return { ok: false, reason: 'no_snapshot' };
 
   const attempt = workspace.getApplicationAttempt(db, attemptId);
+  if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+    return { ok: false, reason: 'already_submitted' };
+  }
+
+  // Re-reads the live page rather than trusting whatever `active.executor.currentSnapshot` still
+  // holds from whenever the review was opened -- the whole point of re-validating "from scratch" is
+  // to catch drift on the real page (a new required field, a CAPTCHA appearing) during the cancel
+  // window, not to re-derive the same stale in-memory object at both call sites.
+  const snapshot = await active.executor.snapshot();
+
   const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
   if (!policyId) return { ok: false, reason: 'unresolved_policy' };
   const policy = resolveApplicationTargetPolicy(policyId);
@@ -333,12 +389,12 @@ export interface ScheduleAutomaticSubmissionResult extends AutomaticSubmissionCh
 
 /** Runs every #203 guardrail and, only if all pass, queues the attempt for an automatic submit
  * `AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS` from `now` -- never submits immediately, even when eligible. */
-export function evaluateAndScheduleAutomaticSubmission(
+export async function evaluateAndScheduleAutomaticSubmission(
   db: WorkspaceDb,
   attemptId: string,
   now: string = new Date().toISOString(),
-): ScheduleAutomaticSubmissionResult {
-  const check = checkAutomaticSubmissionEligibility(db, attemptId, now);
+): Promise<ScheduleAutomaticSubmissionResult> {
+  const check = await checkAutomaticSubmissionEligibility(db, attemptId, now);
   if (!check.ok) return check;
 
   const scheduledAutomaticSubmitAt = new Date(Date.parse(now) + AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS).toISOString();
@@ -347,9 +403,16 @@ export function evaluateAndScheduleAutomaticSubmission(
 }
 
 /** The one and only way to stop a scheduled automatic submit before it fires. Safe to call for an
- * attempt that was never scheduled at all (a plain, redundant no-op). */
+ * attempt that was never scheduled at all, or that no longer exists (e.g. deleted concurrently) --
+ * both are a plain, redundant no-op, never a thrown error, since this is the one code path a user
+ * relies on to urgently stop an unwanted automatic submission. */
 export function cancelScheduledAutomaticSubmission(db: WorkspaceDb, attemptId: string): void {
-  workspace.updateApplicationAttempt(db, attemptId, { scheduledAutomaticSubmitAt: null });
+  try {
+    workspace.updateApplicationAttempt(db, attemptId, { scheduledAutomaticSubmitAt: null });
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) return;
+    throw err;
+  }
 }
 
 export interface FiredAutomaticSubmission {
@@ -374,15 +437,35 @@ export interface FiredAutomaticSubmission {
  * function itself has no timer of its own; it only answers "what's due right now."
  */
 export async function fireDueAutomaticSubmissions(db: WorkspaceDb, now: string = new Date().toISOString()): Promise<FiredAutomaticSubmission[]> {
+  const nowMs = Date.parse(now);
   const due = workspace
     .listApplicationAttempts(db)
-    .filter((attempt) => attempt.scheduledAutomaticSubmitAt !== null && Date.parse(attempt.scheduledAutomaticSubmitAt) <= Date.parse(now));
+    .filter((attempt) => attempt.scheduledAutomaticSubmitAt !== null && Date.parse(attempt.scheduledAutomaticSubmitAt) <= nowMs);
 
   const fired: FiredAutomaticSubmission[] = [];
   for (const attempt of due) {
+    // `scheduledAutomaticSubmitAt` is guaranteed non-null by the filter above.
+    const scheduledAtMs = Date.parse(attempt.scheduledAutomaticSubmitAt as string);
     workspace.updateApplicationAttempt(db, attempt.id, { scheduledAutomaticSubmitAt: null });
 
-    const revalidated = checkAutomaticSubmissionEligibility(db, attempt.id, now);
+    // A schedule found overdue by more than the cancel window itself means the app was not actually
+    // running/awake for a real cancel window's worth of wall-clock time before this became due (the
+    // machine slept, or the app was closed) -- firing immediately here would silently skip the one
+    // real chance #203 promises the user to cancel. Refuse instead of firing; the attempt falls back
+    // to manual review rather than being resubmitted for automatic mode on its own.
+    const overdueMs = nowMs - scheduledAtMs;
+    if (overdueMs > AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS) {
+      const result = {
+        ok: false as const,
+        reason: 'schedule_expired' as const,
+        detail: `overdue by ${Math.round(overdueMs / 1000)}s -- the app may have been asleep or closed through the cancel window, so this was not fired without one`,
+      };
+      notifyAutomaticSubmission({ company: attempt.company, role: attempt.role, ok: false, detail: result.detail });
+      fired.push({ attemptId: attempt.id, company: attempt.company, role: attempt.role, result });
+      continue;
+    }
+
+    const revalidated = await checkAutomaticSubmissionEligibility(db, attempt.id, now);
     if (!revalidated.ok) {
       const result = { ok: false as const, reason: revalidated.reason, detail: revalidated.detail };
       notifyAutomaticSubmission({ company: attempt.company, role: attempt.role, ok: false, detail: result.detail ?? result.reason });

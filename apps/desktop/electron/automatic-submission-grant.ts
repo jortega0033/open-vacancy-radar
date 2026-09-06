@@ -1,8 +1,11 @@
-import { dialog, type BrowserWindow, type MessageBoxOptions } from 'electron';
+import type { BrowserWindow, MessageBoxOptions } from 'electron';
 import { resolveApplicationTargetPolicy } from './application-target-policies.js';
+import { ALLOW_BUTTON_INDEX, CANCEL_BUTTON_INDEX, showConfirmDialog } from './workspace-confirm.js';
 import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import type { AutomationGrantRecord } from './workspace/types.js';
+
+export { CANCEL_BUTTON_INDEX, ALLOW_BUTTON_INDEX };
 
 /**
  * The one and only way an `automation_grants` row is ever created (#203 scope item 5's
@@ -18,9 +21,6 @@ import type { AutomationGrantRecord } from './workspace/types.js';
 /** A grant older than this needs a fresh confirmation -- there is no such thing as a permanent,
  * unattended-forever authorization. */
 export const MAX_AUTOMATION_GRANT_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
-
-export const CANCEL_BUTTON_INDEX = 0;
-export const ALLOW_BUTTON_INDEX = 1;
 
 export interface AutomationGrantConfirmInput {
   displayName: string;
@@ -74,8 +74,8 @@ export async function requestAutomationGrant(
 
   const expiresAt = new Date(Date.now() + durationMs).toISOString();
   const options = buildAutomationGrantConfirmOptions({ displayName: policy.displayName, expiresAt });
-  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
-  if (result.response !== ALLOW_BUTTON_INDEX) return { ok: false, reason: 'declined' };
+  const approved = await showConfirmDialog(parent, options);
+  if (!approved) return { ok: false, reason: 'declined' };
 
   const grant = workspace.createAutomationGrant(db, { policyId, expiresAt });
   return { ok: true, grant };
