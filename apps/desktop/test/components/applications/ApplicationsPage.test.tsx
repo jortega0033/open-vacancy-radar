@@ -473,6 +473,37 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(within(dialog).getByText(/does not appear in the rendered documents/i)).toBeInTheDocument());
     });
 
+    it('shows a cancel affordance for an attempt scheduled for automatic submission, and cancelling it clears the schedule (issue #203)', async () => {
+      const attempt = makeAttempt({ scheduledAutomaticSubmitAt: '2026-08-20T10:03:00.000Z' });
+      const listApplicationAttempts = vi.fn().mockResolvedValue([attempt]);
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([]), listApplicationAttempts });
+      const cancelScheduledAutomaticSubmission = vi.fn().mockResolvedValue(undefined);
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn(),
+        openReview: vi.fn(),
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn(),
+        requestAutomationGrant: vi.fn(),
+        scheduleAutomaticSubmission: vi.fn(),
+        cancelScheduledAutomaticSubmission,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      const row = screen.getByRole('row', { name: /senior frontend engineer/i });
+      expect(within(row).getByText(/submitting automatically at/i)).toBeInTheDocument();
+
+      fireEvent.click(within(row).getByRole('button', { name: /^cancel$/i }));
+
+      await waitFor(() => expect(cancelScheduledAutomaticSubmission).toHaveBeenCalledWith(attempt.id));
+      // Clicking Cancel must not also open the review session -- it's a distinct action on the row.
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      await waitFor(() => expect(listApplicationAttempts).toHaveBeenCalledTimes(2)); // refreshed after cancelling
+    });
+
     it('surfaces an attempts load error without crashing', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
