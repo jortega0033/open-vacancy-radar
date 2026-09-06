@@ -20,15 +20,19 @@ const FIXTURE_URL = FIXTURE_REVIEW_POLICY.exactFileUrls![0]!;
 const { createApplicationView } = vi.hoisted(() => ({ createApplicationView: vi.fn() }));
 const workspaceMock = vi.hoisted(() => ({
   getApplicationAttempt: vi.fn(),
+  listApplicationAttempts: vi.fn(() => [] as unknown[]),
   listCvDocuments: vi.fn(() => [] as Array<{ id: string; text: string }>),
   listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string }>),
   updateApplicationAttempt: vi.fn(),
+  findActiveAutomationGrant: vi.fn(() => undefined as unknown),
 }));
 const { extractPdfText } = vi.hoisted(() => ({ extractPdfText: vi.fn(async () => '') }));
+const { notifyAutomaticSubmission } = vi.hoisted(() => ({ notifyAutomaticSubmission: vi.fn() }));
 
 vi.mock('../electron/application-view.js', () => ({ createApplicationView }));
 vi.mock('../electron/workspace/repository.js', () => workspaceMock);
 vi.mock('../electron/cv-text.js', () => ({ extractPdfText }));
+vi.mock('../electron/automatic-submission-notify.js', () => ({ notifyAutomaticSubmission }));
 const { readFile } = vi.hoisted(() => ({ readFile: vi.fn(async () => Buffer.from('')) }));
 vi.mock('node:fs/promises', () => ({ readFile, default: { readFile } }));
 
@@ -103,6 +107,9 @@ function fakeAttempt(overrides: Partial<Record<string, unknown>> = {}) {
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     submittedAt: null,
+    formStructureHash: null,
+    scheduledAutomaticSubmitAt: null,
+    submissionMode: null,
     ...overrides,
   };
 }
@@ -118,9 +125,12 @@ beforeEach(() => {
   createApplicationView.mockReset();
   createApplicationView.mockImplementation(() => fakeView());
   workspaceMock.getApplicationAttempt.mockReset();
+  workspaceMock.listApplicationAttempts.mockReset().mockReturnValue([]);
   workspaceMock.listCvDocuments.mockReset().mockReturnValue([]);
   workspaceMock.listApplicationArtifacts.mockReset().mockReturnValue([]);
   workspaceMock.updateApplicationAttempt.mockReset();
+  workspaceMock.findActiveAutomationGrant.mockReset().mockReturnValue(undefined);
+  notifyAutomaticSubmission.mockReset();
   extractPdfText.mockReset().mockResolvedValue('');
 });
 
@@ -398,6 +408,234 @@ describe('application-review-session', () => {
       expect(result.reason).toBe('submit_refused');
       expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(1, FAKE_DB, ATTEMPT_ID, { checkpoint: 'submitting' });
       expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, { checkpoint: 'ready', checkpointDetail: expect.any(String) });
+    });
+  });
+
+  describe('automatic submission (#203)', () => {
+    // A dedicated policy, isolated from the shared FIXTURE_REVIEW_POLICY, so rate limits can be
+    // set tight enough to actually exercise (the real fixture's own perDay:1000 exists to never
+    // get in #202's fixture tests' way, which would make it useless for testing a cap here).
+    const AUTOMATION_POLICY_ID = 'ashby-fixture-test-only';
+    function automationPolicy(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        ...FIXTURE_REVIEW_POLICY,
+        id: AUTOMATION_POLICY_ID,
+        rateLimits: { perDay: 2, perEmployerPerDay: 1, minIntervalMs: 0 },
+        termsEligibleForAutomation: true,
+        ...overrides,
+      };
+    }
+    function mockAutomationPolicy(overrides: Partial<Record<string, unknown>> = {}) {
+      const policy = automationPolicy(overrides);
+      vi.doMock('../electron/application-target-policies.js', () => ({
+        FIXTURE_REVIEW_POLICY: policy,
+        resolveApplicationTargetPolicy: (id: string) => (id === policy.id ? policy : undefined),
+        resolvePolicyIdForCanonicalUrl: (url: string) => (url === FIXTURE_URL ? policy.id : undefined),
+      }));
+    }
+
+    const NOW = '2026-02-01T12:00:00.000Z';
+    const submittedAttempt = (overrides: Partial<Record<string, unknown>> = {}) =>
+      withRealJdHash(fakeAttempt({ checkpoint: 'submitted', submittedAt: '2026-01-31T12:00:00.000Z', submissionMode: 'manual', ...overrides }));
+
+    it('refuses to schedule when the target is not eligible for automation under the terms register, even with an active grant', async () => {
+      mockAutomationPolicy({ termsEligibleForAutomation: false });
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toEqual({ ok: false, reason: 'not_eligible_for_automation' });
+    });
+
+    it('refuses to schedule when no active grant exists', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue(undefined);
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toEqual({ ok: false, reason: 'no_active_grant' });
+    });
+
+    it('refuses the first attempt at any employer, even with an active grant -- it is always manually reviewed', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationAttempts.mockReturnValue([]); // no prior submission for this employer at all
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toMatchObject({ ok: false, reason: 'no_prior_manual_submission_for_employer' });
+    });
+
+    it('refuses when the current form structure does not match the employer\'s most recent submission', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: 'a-completely-different-hash' })]);
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toMatchObject({ ok: false, reason: 'form_structure_changed_since_last_review' });
+    });
+
+    it('schedules a real automatic submit, exactly the cancel window out, once every guardrail passes', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission, AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      const matchingHash = createHash('sha256')
+        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
+        .digest('hex');
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: matchingHash })]);
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+
+      const expectedAt = new Date(Date.parse(NOW) + AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS).toISOString();
+      expect(result).toEqual({ ok: true, scheduledAutomaticSubmitAt: expectedAt });
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, { scheduledAutomaticSubmitAt: expectedAt });
+    });
+
+    it('the daily automatic-submission cap actually blocks scheduling a queue past it, not just a config value that goes unchecked', async () => {
+      mockAutomationPolicy({ rateLimits: { perDay: 1, perEmployerPerDay: 10, minIntervalMs: 0 } });
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      const matchingHash = createHash('sha256')
+        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
+        .digest('hex');
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationAttempts.mockReturnValue([
+        submittedAttempt({ formStructureHash: matchingHash }),
+        // Already one automatic submission in the last 24h -- the perDay:1 cap is already spent.
+        submittedAttempt({ id: 'other-attempt', company: 'Beta Inc', submissionMode: 'automatic', submittedAt: '2026-02-01T06:00:00.000Z' }),
+      ]);
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toEqual({ ok: false, reason: 'daily_cap_reached', detail: expect.any(String) });
+    });
+
+    it('cancelling a scheduled automatic submit within the window means it never fires', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, cancelScheduledAutomaticSubmission, fireDueAutomaticSubmissions } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      const scheduledAt = '2026-02-01T12:03:00.000Z';
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ scheduledAutomaticSubmitAt: scheduledAt }))]);
+
+      cancelScheduledAutomaticSubmission(FAKE_DB, ATTEMPT_ID);
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, { scheduledAutomaticSubmitAt: null });
+
+      // Once cancelled, this attempt must never be found "due", even asking well after the
+      // original schedule would have elapsed.
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ scheduledAutomaticSubmitAt: null }))]);
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, '2026-02-01T13:00:00.000Z');
+      expect(fired).toEqual([]);
+    });
+
+    it('does not fire a scheduled submit before its cancel window has actually elapsed', async () => {
+      mockAutomationPolicy();
+      const { fireDueAutomaticSubmissions } = await importSession();
+      const scheduledAt = '2026-02-01T12:03:00.000Z';
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ scheduledAutomaticSubmitAt: scheduledAt }))]);
+
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, '2026-02-01T12:00:00.000Z'); // before scheduledAt
+      expect(fired).toEqual([]);
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('end to end: schedules, then fires for real once the window elapses, re-validating every guardrail and notifying either way', async () => {
+      mockAutomationPolicy();
+      const {
+        openApplicationReview,
+        evaluateAndScheduleAutomaticSubmission,
+        fireDueAutomaticSubmissions,
+      } = await importSession();
+      const view = fakeView(SUBMIT_TREE);
+      createApplicationView.mockImplementation(() => view);
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      const matchingHash = createHash('sha256')
+        .update(opened.snapshot.fields.map((f) => `${f.label}|${f.controlType}|${f.required}`).sort().join('||'))
+        .digest('hex');
+
+      const attemptNow = withRealJdHash(fakeAttempt());
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNow);
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+      workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: matchingHash })]);
+
+      const scheduled = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(scheduled.ok).toBe(true);
+
+      // Reflect the schedule for the "what's due" query fireDueAutomaticSubmissions runs, plus the
+      // employer's prior submission still needed for the re-validated eligibility check.
+      workspaceMock.listApplicationAttempts.mockReturnValue([
+        { ...attemptNow, scheduledAutomaticSubmitAt: scheduled.scheduledAutomaticSubmitAt },
+        submittedAttempt({ formStructureHash: matchingHash }),
+      ]);
+
+      const afterWindow = new Date(Date.parse(NOW) + 4 * 60 * 1000).toISOString(); // past the 3-minute window
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, afterWindow);
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({ attemptId: ATTEMPT_ID, company: 'Acme Corp', role: 'Senior Engineer', result: { ok: true } });
+      expect(notifyAutomaticSubmission).toHaveBeenCalledWith({ company: 'Acme Corp', role: 'Senior Engineer', ok: true, detail: undefined });
+      const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
+      expect(calledMethods).toContain('Input.dispatchMouseEvent'); // the real automatic submit click
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, { scheduledAutomaticSubmitAt: null });
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(
+        FAKE_DB,
+        ATTEMPT_ID,
+        expect.objectContaining({ checkpoint: 'submitted', submissionMode: 'automatic' }),
+      );
+    });
+
+    it('a guardrail that newly fails between scheduling and firing (grant revoked in the meantime) refuses at fire time and notifies, rather than submitting on stale authorization', async () => {
+      mockAutomationPolicy();
+      const { openApplicationReview, fireDueAutomaticSubmissions } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+
+      const scheduledAt = '2026-02-01T12:03:00.000Z';
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationAttempts.mockReturnValue([withRealJdHash(fakeAttempt({ scheduledAutomaticSubmitAt: scheduledAt }))]);
+      // The grant was revoked sometime during the cancel window -- re-validation at fire time must
+      // catch this even though it was presumably active when this attempt was first scheduled.
+      workspaceMock.findActiveAutomationGrant.mockReturnValue(undefined);
+
+      const fired = await fireDueAutomaticSubmissions(FAKE_DB, '2026-02-01T12:05:00.000Z');
+
+      expect(fired).toEqual([{ attemptId: ATTEMPT_ID, company: 'Acme Corp', role: 'Senior Engineer', result: { ok: false, reason: 'no_active_grant', detail: undefined } }]);
+      expect(notifyAutomaticSubmission).toHaveBeenCalledWith({ company: 'Acme Corp', role: 'Senior Engineer', ok: false, detail: 'no_active_grant' });
+      expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, { scheduledAutomaticSubmitAt: null });
+      // Never actually clicked anything -- the guardrail refused before any submit was attempted.
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitting' }));
+    });
+
+    it('a target the terms register has not cleared for automation can never run under automatic mode, even if every other guardrail would pass', async () => {
+      mockAutomationPolicy({ termsEligibleForAutomation: false });
+      const { openApplicationReview, evaluateAndScheduleAutomaticSubmission } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
+      workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt()]);
+
+      const result = evaluateAndScheduleAutomaticSubmission(FAKE_DB, ATTEMPT_ID, NOW);
+      expect(result).toEqual({ ok: false, reason: 'not_eligible_for_automation' });
     });
   });
 

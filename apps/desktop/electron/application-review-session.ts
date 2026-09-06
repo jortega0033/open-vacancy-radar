@@ -11,6 +11,7 @@ import {
   type RateLimitRefusalReason,
 } from './automatic-submission-guardrails.js';
 import { extractPdfText } from './cv-text.js';
+import { notifyAutomaticSubmission } from './automatic-submission-notify.js';
 import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import type { ApplicationAttemptRecord } from './workspace/types.js';
@@ -353,6 +354,8 @@ export function cancelScheduledAutomaticSubmission(db: WorkspaceDb, attemptId: s
 
 export interface FiredAutomaticSubmission {
   attemptId: string;
+  company: string;
+  role: string;
   /** Either an automatic-submission guardrail refused (re-validated at fire time, so this can
    * differ from whatever passed at scheduling time), or it passed every guardrail and the result
    * is whatever `submitApplicationReview` itself returned. */
@@ -381,12 +384,15 @@ export async function fireDueAutomaticSubmissions(db: WorkspaceDb, now: string =
 
     const revalidated = checkAutomaticSubmissionEligibility(db, attempt.id, now);
     if (!revalidated.ok) {
-      fired.push({ attemptId: attempt.id, result: { ok: false, reason: revalidated.reason, detail: revalidated.detail } });
+      const result = { ok: false as const, reason: revalidated.reason, detail: revalidated.detail };
+      notifyAutomaticSubmission({ company: attempt.company, role: attempt.role, ok: false, detail: result.detail ?? result.reason });
+      fired.push({ attemptId: attempt.id, company: attempt.company, role: attempt.role, result });
       continue;
     }
 
     const result = await submitApplicationReview(db, attempt.id, 'automatic');
-    fired.push({ attemptId: attempt.id, result });
+    notifyAutomaticSubmission({ company: attempt.company, role: attempt.role, ok: result.ok, detail: result.detail ?? result.reason });
+    fired.push({ attemptId: attempt.id, company: attempt.company, role: attempt.role, result });
   }
   return fired;
 }
