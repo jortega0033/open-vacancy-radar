@@ -240,9 +240,11 @@ describe('electron/preload.ts: workspace bridge', () => {
     'getApplicationAttempt',
     'updateApplicationAttempt',
     'listApplicationArtifacts',
+    'listAutomationGrants',
+    'revokeAutomationGrant',
   ];
 
-  it('exposes exactly the twenty-five documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -494,6 +496,11 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getApplicationAttempt',
     'updateApplicationAttempt',
     'listApplicationArtifacts',
+    // Added by issue #203, same reasoning: read/revoke-only automation-grant access legitimately
+    // belongs on this namespace (creating a grant is deliberately NOT here -- see
+    // WorkspaceBridge's own comment on why that needs a native dialog instead).
+    'listAutomationGrants',
+    'revokeAutomationGrant',
   ],
   cv: ['getWorkspaceDir', 'selectAndRead'],
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
@@ -1260,9 +1267,20 @@ const SNAPSHOT_RESULT = {
 };
 
 describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
-  it('exposes exactly the five documented capability functions and nothing else', async () => {
+  it('exposes exactly the eight documented capability functions and nothing else', async () => {
     const api = await loadPreload('applicationExecutor');
-    expect(Object.keys(api).sort()).toEqual(['openReview', 'applyFieldMap', 'submitReview', 'closeReview', 'resolveTargetPolicyId'].sort());
+    expect(Object.keys(api).sort()).toEqual(
+      [
+        'openReview',
+        'applyFieldMap',
+        'submitReview',
+        'closeReview',
+        'resolveTargetPolicyId',
+        'requestAutomationGrant',
+        'scheduleAutomaticSubmission',
+        'cancelScheduledAutomaticSubmission',
+      ].sort(),
+    );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
@@ -1368,5 +1386,55 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     const api = await loadPreload('applicationExecutor');
     const result = await (api.resolveTargetPolicyId as (url: string) => Promise<string | null>)('https://example.com/careers/apply');
     expect(result).toBeNull();
+  });
+
+  it('requestAutomationGrant invokes the hard-coded request-automation-grant channel with the input, passing a real result through', async () => {
+    invoke.mockResolvedValue({ ok: true, expiresAt: '2026-03-01T00:00:00.000Z' });
+    const api = await loadPreload('applicationExecutor');
+    const input = { policyId: 'workable-jobs-board', durationMs: 86_400_000 };
+    const result = await (api.requestAutomationGrant as (i: unknown) => Promise<unknown>)(input);
+    expect(invoke).toHaveBeenCalledWith('application-executor:request-automation-grant', input);
+    expect(result).toEqual({ ok: true, expiresAt: '2026-03-01T00:00:00.000Z' });
+  });
+
+  it('requestAutomationGrant surfaces a refusal reason without fabricating success', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'declined' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.requestAutomationGrant as (i: unknown) => Promise<unknown>)({ policyId: 'x', durationMs: 1000 });
+    expect(result).toEqual({ ok: false, reason: 'declined' });
+  });
+
+  it('requestAutomationGrant throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.requestAutomationGrant as (i: unknown) => Promise<unknown>)({ policyId: 'x', durationMs: 1000 })).rejects.toThrow(/unexpected response/);
+  });
+
+  it('scheduleAutomaticSubmission invokes the hard-coded schedule-automatic-submission channel with the attemptId', async () => {
+    invoke.mockResolvedValue({ ok: true, scheduledAutomaticSubmitAt: '2026-01-01T00:03:00.000Z' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.scheduleAutomaticSubmission as (id: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:schedule-automatic-submission', 'attempt-1');
+    expect(result).toEqual({ ok: true, scheduledAutomaticSubmitAt: '2026-01-01T00:03:00.000Z' });
+  });
+
+  it('scheduleAutomaticSubmission surfaces a refusal reason/detail without fabricating success', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'no_active_grant', detail: 'no grant found' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.scheduleAutomaticSubmission as (id: string) => Promise<unknown>)('attempt-1');
+    expect(result).toEqual({ ok: false, reason: 'no_active_grant', detail: 'no grant found' });
+  });
+
+  it('scheduleAutomaticSubmission throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
+    invoke.mockResolvedValue({ nonsense: true });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.scheduleAutomaticSubmission as (id: string) => Promise<unknown>)('attempt-1')).rejects.toThrow(/unexpected response/);
+  });
+
+  it('cancelScheduledAutomaticSubmission invokes the hard-coded cancel channel with the attemptId', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('applicationExecutor');
+    await (api.cancelScheduledAutomaticSubmission as (id: string) => Promise<void>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:cancel-scheduled-automatic-submission', 'attempt-1');
   });
 });

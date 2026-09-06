@@ -26,6 +26,8 @@ import type {
   ApplicationExecutorBridge,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewResult,
+  RequestAutomationGrantResult,
+  ScheduleAutomaticSubmissionResult,
   SubmitApplicationReviewResult,
 } from './application-executor-types.js';
 
@@ -299,6 +301,12 @@ const workspaceApi: WorkspaceBridge = {
   },
   listApplicationArtifacts(attemptId) {
     return ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+  },
+  listAutomationGrants() {
+    return ipcRenderer.invoke('workspace:automation-grants:list');
+  },
+  revokeAutomationGrant(id) {
+    return ipcRenderer.invoke('workspace:automation-grants:revoke', { id });
   },
 };
 
@@ -1121,6 +1129,38 @@ function toSubmitApplicationReviewResult(value: unknown): SubmitApplicationRevie
   };
 }
 
+function toRequestAutomationGrantResult(value: unknown): RequestAutomationGrantResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const expiresAt = source ? optionalString(source, 'expiresAt') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<RequestAutomationGrantResult['reason']> } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+function toScheduleAutomaticSubmissionResult(value: unknown): ScheduleAutomaticSubmissionResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const scheduledAutomaticSubmitAt = source ? optionalString(source, 'scheduledAutomaticSubmitAt') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ScheduleAutomaticSubmissionResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(scheduledAutomaticSubmitAt ? { scheduledAutomaticSubmitAt } : {}),
+  };
+}
+
 const applicationExecutorApi: ApplicationExecutorBridge = {
   async openReview(input) {
     const result = await ipcRenderer.invoke('application-executor:open-review', input);
@@ -1144,6 +1184,20 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
   async resolveTargetPolicyId(canonicalUrl) {
     const result = await ipcRenderer.invoke('application-executor:resolve-target-policy', canonicalUrl);
     return typeof result === 'string' ? result : null;
+  },
+
+  async requestAutomationGrant(input) {
+    const result = await ipcRenderer.invoke('application-executor:request-automation-grant', input);
+    return toRequestAutomationGrantResult(result);
+  },
+
+  async scheduleAutomaticSubmission(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:schedule-automatic-submission', attemptId);
+    return toScheduleAutomaticSubmissionResult(result);
+  },
+
+  async cancelScheduledAutomaticSubmission(attemptId) {
+    await ipcRenderer.invoke('application-executor:cancel-scheduled-automatic-submission', attemptId);
   },
 };
 

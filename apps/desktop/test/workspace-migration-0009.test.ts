@@ -189,7 +189,11 @@ describe('migration 0009 adds application_attempts and application_artifacts', (
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0009_TAGS.length + 1);
+      // Against the real migrations folder (not the pre-0009 seeded subset above), so this counts
+      // every migration that exists today, not just up through 0009 -- update alongside PRE_0009_TAGS
+      // whenever a later migration lands, the same way this file's own comment already expects.
+      const realMigrationCount = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')).entries.length as number;
+      expect(applied.n).toBe(realMigrationCount);
     } finally {
       connection.close();
     }

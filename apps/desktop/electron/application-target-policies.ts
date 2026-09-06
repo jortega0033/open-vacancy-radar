@@ -53,6 +53,12 @@ export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
   uploadConstraints: { maxBytes: 10 * 1024 * 1024, mimeTypes: ['application/pdf'] },
   rateLimits: { perDay: 1000, perEmployerPerDay: 1000, minIntervalMs: 0 },
   killSwitches: { navigate: false, fill: false, upload: false, submit: false },
+  // Same reasoning as 'submit' above: `true` here authorizes nothing real, since this policy can
+  // never resolve to an actual employer page. It exists so issue #203's automatic-mode orchestration
+  // has a genuine end-to-end fixture path to test against. No real policy gets this without a named
+  // human reviewer confirming its #197 register entry has no live caveat left -- see this field's
+  // own doc comment on `ApplicationTargetPolicy`.
+  termsEligibleForAutomation: true,
   maxSteps: 100,
   timeoutMs: 60_000,
   maximumSnapshotBytes: 2 * 1024 * 1024,

@@ -26,6 +26,7 @@ function fullPolicy(overrides: Partial<ApplicationTargetPolicy> = {}): Applicati
     uploadConstraints: { maxBytes: 10_000_000, mimeTypes: ['application/pdf'] },
     rateLimits: { perDay: 1, perEmployerPerDay: 1, minIntervalMs: 0 },
     killSwitches: { navigate: false, fill: false, upload: false, submit: false },
+    termsEligibleForAutomation: false,
     maxSteps: 50,
     timeoutMs: 30_000,
     maximumSnapshotBytes: 1_000_000,

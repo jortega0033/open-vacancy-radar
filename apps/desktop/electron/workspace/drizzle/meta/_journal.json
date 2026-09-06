@@ -71,6 +71,20 @@
       "when": 1788558895187,
       "tag": "0009_aspiring_rick_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788640967459,
+      "tag": "0010_smart_wolfsbane",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788648009623,
+      "tag": "0011_mixed_darkstar",
+      "breakpoints": true
     }
   ]
 }

@@ -143,6 +143,15 @@ export function ApplicationsPage() {
     setAttempts(null); // re-triggers the load-once effect so a changed checkpoint is reflected
   }, []);
 
+  const cancelScheduledAutomaticSubmission = useCallback(async (attempt: ApplicationAttemptRecord) => {
+    try {
+      await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
+      setAttempts(null); // re-triggers the load-once effect so the cleared schedule is reflected
+    } catch (err) {
+      setAttemptsError(describeError(err, 'could not cancel the scheduled automatic submission'));
+    }
+  }, []);
+
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
   const closeDrawer = useCallback(() => setDrawerState(null), []);
@@ -339,7 +348,11 @@ export function ApplicationsPage() {
 
           {!isAttemptsLoading && sortedAttempts.length > 0 && (
             <div className="mt-4">
-              <ApplicationAttemptsTable attempts={sortedAttempts} onOpen={openAttemptRow} />
+              <ApplicationAttemptsTable
+                attempts={sortedAttempts}
+                onOpen={openAttemptRow}
+                onCancelScheduledAutomaticSubmission={cancelScheduledAutomaticSubmission}
+              />
             </div>
           )}
         </>

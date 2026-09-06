@@ -73,19 +73,28 @@ export function buildConfirmOptions(input: WorkspaceConfirmInput): MessageBoxOpt
 }
 
 /**
- * Shows the dialog and reports whether the user approved.
+ * Shows a `dialog.showMessageBox` confirmation and reports whether the user approved.
  *
- * Returns `true` **only** for an exact click on the allow button. Every other outcome (Cancel,
- * Escape, closing the window, and any unexpected response index) is a refusal, because there is no
- * reading of an ambiguous result that should authorize filesystem access.
+ * Returns `true` **only** for an exact click on `allowIndex` (defaulting to `ALLOW_BUTTON_INDEX`).
+ * Every other outcome (Cancel, Escape, closing the window, and any unexpected response index) is a
+ * refusal, because there is no reading of an ambiguous result that should authorize anything.
+ * Shared by every native grant-confirmation dialog in the app (`confirmWorkspaceGrant` below,
+ * `automatic-submission-grant.ts`'s `requestAutomationGrant`) so this rule, and the parent-window
+ * branching, live in exactly one place rather than being re-typed at each call site.
  */
+export async function showConfirmDialog(
+  parent: BrowserWindow | undefined,
+  options: MessageBoxOptions,
+  allowIndex: number = ALLOW_BUTTON_INDEX,
+): Promise<boolean> {
+  const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+  return result.response === allowIndex;
+}
+
+/** Shows the workspace-grant dialog specifically. See `showConfirmDialog` for the shared consent rule. */
 export async function confirmWorkspaceGrant(
   parent: BrowserWindow | undefined,
   input: WorkspaceConfirmInput,
 ): Promise<boolean> {
-  const options = buildConfirmOptions(input);
-  const result = parent
-    ? await dialog.showMessageBox(parent, options)
-    : await dialog.showMessageBox(options);
-  return result.response === ALLOW_BUTTON_INDEX;
+  return showConfirmDialog(parent, buildConfirmOptions(input));
 }
