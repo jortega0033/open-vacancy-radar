@@ -25,10 +25,15 @@ const workspaceMock = vi.hoisted(() => ({
   listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string }>),
   updateApplicationAttempt: vi.fn(),
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
-  // The real class, not a stand-in: application-review-session.ts imports this from the same
-  // mocked module and does `err instanceof WorkspaceNotFoundError`, which only works if both sides
-  // resolve to the identical class reference.
-  WorkspaceNotFoundError: class WorkspaceNotFoundError extends Error {},
+  // Mirrors the real class's constructor: application-review-session.ts imports this from the
+  // same mocked module and does `err instanceof WorkspaceNotFoundError`, which only works if both
+  // sides resolve to the identical class reference.
+  WorkspaceNotFoundError: class WorkspaceNotFoundError extends Error {
+    constructor(entity: string, id: string) {
+      super(`no ${entity} with id "${id}"`);
+      this.name = 'WorkspaceNotFoundError';
+    }
+  },
 }));
 const { extractPdfText } = vi.hoisted(() => ({ extractPdfText: vi.fn(async () => '') }));
 const { notifyAutomaticSubmission } = vi.hoisted(() => ({ notifyAutomaticSubmission: vi.fn() }));
