@@ -1,5 +1,6 @@
 import type { FieldMapRefusalReason, FormSnapshot, ValueProvenance } from '@agent-dock/application-executor';
-import type { SubmitApplicationReviewRefusalReason } from './application-review-session.js';
+import type { AutomaticSubmissionRefusalReason, SubmitApplicationReviewRefusalReason } from './application-review-session.js';
+import type { RequestAutomationGrantRefusalReason } from './automatic-submission-grant.js';
 
 /**
  * The `window.applicationExecutor` wire contract (issue #201), mirroring
@@ -49,6 +50,27 @@ export interface SubmitApplicationReviewResult {
   detail?: string;
 }
 
+export interface RequestAutomationGrantInput {
+  policyId: string;
+  /** Milliseconds, capped by `automatic-submission-grant.ts`'s own `MAX_AUTOMATION_GRANT_DURATION_MS`. */
+  durationMs: number;
+}
+
+export interface RequestAutomationGrantResult {
+  ok: boolean;
+  reason?: RequestAutomationGrantRefusalReason;
+  /** ISO-8601. Present only when `ok` is true. */
+  expiresAt?: string;
+}
+
+export interface ScheduleAutomaticSubmissionResult {
+  ok: boolean;
+  reason?: AutomaticSubmissionRefusalReason;
+  detail?: string;
+  /** ISO-8601. Present only when `ok` is true. */
+  scheduledAutomaticSubmitAt?: string;
+}
+
 export interface ApplicationExecutorBridge {
   /** Opens an isolated browser view for `attemptId`, navigates it to `targetUrl` (refused unless
    * `targetUrl`'s origin is in the resolved policy's allowlist), and returns a fresh snapshot plus
@@ -82,4 +104,20 @@ export interface ApplicationExecutorBridge {
    * compiled policy covers the URL, which is every real (non-fixture) URL today.
    */
   resolveTargetPolicyId(canonicalUrl: string): Promise<string | null>;
+  /**
+   * The one and only way to authorize automatic (unattended) submission for a policy (#203):
+   * behind a real native OS confirmation dialog, never a plain call this bridge could grant on its
+   * own. Refuses before ever showing that dialog for an unknown policy, one the terms register
+   * hasn't cleared, or an out-of-bounds duration.
+   */
+  requestAutomationGrant(input: RequestAutomationGrantInput): Promise<RequestAutomationGrantResult>;
+  /**
+   * Runs every #203 guardrail for `attemptId` and, only if all pass, queues it for an automatic
+   * submit a few minutes out -- never immediately, even when eligible. Requires an already-open
+   * review for the attempt, the same precondition `submitReview` has.
+   */
+  scheduleAutomaticSubmission(attemptId: string): Promise<ScheduleAutomaticSubmissionResult>;
+  /** Cancels a scheduled automatic submit before it fires. Safe to call for an attempt that was
+   * never scheduled at all. */
+  cancelScheduledAutomaticSubmission(attemptId: string): Promise<void>;
 }

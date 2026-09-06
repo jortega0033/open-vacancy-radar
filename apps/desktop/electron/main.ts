@@ -42,8 +42,18 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
-import { applyApplicationFieldMap, closeAllApplicationReviews, closeApplicationReview, openApplicationReview, submitApplicationReview } from './application-review-session.js';
+import {
+  applyApplicationFieldMap,
+  cancelScheduledAutomaticSubmission,
+  closeAllApplicationReviews,
+  closeApplicationReview,
+  evaluateAndScheduleAutomaticSubmission,
+  fireDueAutomaticSubmissions,
+  openApplicationReview,
+  submitApplicationReview,
+} from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
+import { requestAutomationGrant } from './automatic-submission-grant.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
@@ -1331,6 +1341,29 @@ guardedIpc.handle('application-executor:close-review', async (_event, input: unk
   await closeApplicationReview(parseAttemptId(input));
 });
 
+function parseRequestAutomationGrantInput(input: unknown): { policyId: string; durationMs: number } {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const durationMs = source.durationMs;
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error('"durationMs" must be a positive number');
+  }
+  return { policyId: parsePolicyId(source.policyId), durationMs };
+}
+
+guardedIpc.handle('application-executor:request-automation-grant', async (_event, input: unknown) => {
+  const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
+  const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
+  return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+});
+
+guardedIpc.handle('application-executor:schedule-automatic-submission', async (_event, input: unknown) => {
+  return evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+});
+
+guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', async (_event, input: unknown) => {
+  cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+});
+
 guardedIpc.handle('dialog:select-directory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
@@ -1513,6 +1546,28 @@ function scheduleBackgroundScanTick(): void {
       console.error('[background-scan] scheduled scan failed', error);
     });
   }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
+}
+
+// A short poll relative to the cancel window itself (#203's own AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS
+// is 3 minutes): the point of that window is a person having real time to cancel, so this must not
+// add meaningful latency on top of it once it elapses.
+const AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS = 30 * 1000;
+
+/**
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime -- the same
+ * `setInterval`-with-a-real-catch discipline `scheduleBackgroundScanTick` already uses, so one
+ * automatic submission failing (a real bug, a CDP hiccup) never takes the whole timer down with it.
+ * `fireDueAutomaticSubmissions` itself already handles the actual guardrail re-validation and
+ * notification for each attempt; this function's only job is calling it on a schedule.
+ */
+function scheduleAutomaticSubmissionTick(): void {
+  setInterval(() => {
+    void ensureWorkspaceDb()
+      .then((db) => fireDueAutomaticSubmissions(db))
+      .catch((error: unknown) => {
+        console.error('[automatic-submission] scheduled tick failed', error);
+      });
+  }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
 }
 
 async function candidateProfilePath(): Promise<string> {
@@ -1761,6 +1816,7 @@ if (gotSingleInstanceLock) {
     // #195: pick up a report a previous process lifetime's scan already wrote to disk.
     void hydrateLatestVacancyReport();
     scheduleBackgroundScanTick();
+    scheduleAutomaticSubmissionTick();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
