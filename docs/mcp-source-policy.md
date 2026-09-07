@@ -4,6 +4,21 @@ MCP is a transport, not permission to collect or retain vacancy data. Open Vacan
 connects to providers represented by a reviewed, compiled `McpProviderPolicy`; no route accepts a
 server URL, tool name, headers, or native provider arguments from the renderer.
 
+## Not the same thing as AgentDock's generic provider MCP
+
+This app is built on a copy-derived fork of upstream [`jortega0033/agentdock`](https://github.com/jortega0033/agentdock)
+(see [adr-agentdock-v2-provenance.md](adr-agentdock-v2-provenance.md)), whose own protocol lets a
+caller configure arbitrary provider-owned MCP servers and invoke arbitrary components at runtime —
+a stdio command, an HTTPS endpoint with custom headers, a tool name, all supplied by whoever is
+driving that session. This document does not describe that model, and this app does not ship it:
+ADI-10 (issue #128) is the explicit decision to keep it out entirely, mechanically enforced by
+`apps/daemon/test/generic-mcp-deferral.test.ts` and `apps/desktop/test/generic-mcp-deferral.test.ts`.
+The four `/mcp/*` routes and the `daemon:mcp-*` bridge channels described below are the entire MCP
+surface this app exposes: a fixed, reviewed set of job-source providers, an allowlisted `providerId`,
+and an opaque credential — never a server the caller names. See
+[adr-generic-mcp-reconsideration.md](adr-generic-mcp-reconsideration.md) for what would actually be
+required to revisit that decision.
+
 ## Required review record
 
 Every provider policy must identify its source URL, attribution, terms/policy version, review date,
