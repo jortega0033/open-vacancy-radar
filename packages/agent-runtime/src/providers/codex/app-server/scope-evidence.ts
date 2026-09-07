@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ProviderTransportStartupError } from '../../common/fallback-gate.js';
-import { CodexAppServerProtocolError, safeDisplay } from './errors.js';
-
-type JsonObject = Record<string, unknown>;
+import { asObject, CodexAppServerProtocolError, safeDisplay } from './errors.js';
 
 export interface CodexAppServerModel {
   id: string;
@@ -30,13 +28,6 @@ export interface CodexAccountScope {
 export interface CodexContinuationEvidence {
   accountFingerprint: string;
   selectedModel: string;
-}
-
-function asObject(value: unknown, label: string): JsonObject {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new CodexAppServerProtocolError('frame_invalid', `Invalid ${label}`);
-  }
-  return value as JsonObject;
 }
 
 function asString(value: unknown, label: string): string {

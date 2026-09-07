@@ -22,3 +22,4 @@ export {
 } from './scope-evidence.js';
 export { probeCodexAppServerScope, type CodexAppServerScopeProbeOptions } from './scope-probe.js';
 export { CodexAppServerNormalizer } from './normalizer.js';
+export { createCodexAppServerTransport, type CodexAppServerTransportOptions } from './transport.js';

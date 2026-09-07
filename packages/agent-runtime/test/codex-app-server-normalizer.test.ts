@@ -31,6 +31,23 @@ describe('CodexAppServerNormalizer: session lifecycle', () => {
     ]);
   });
 
+  it('setProviderSessionId lets a caller supply the thread id from the RPC response directly, with no thread/started notification needed', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    normalizer.setProviderSessionId('thread-from-response');
+    expect(normalizer.normalize('turn/completed', { turn: { id: 't1', status: 'completed' } })).toEqual([
+      { type: 'session.completed', providerSessionId: 'thread-from-response' },
+    ]);
+  });
+
+  it('a later thread/started notification overwrites a value set via setProviderSessionId', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    normalizer.setProviderSessionId('thread-from-response');
+    normalizer.normalize('thread/started', { thread: { id: 'thread-from-notification' } });
+    expect(normalizer.normalize('turn/completed', { turn: { id: 't1', status: 'completed' } })).toEqual([
+      { type: 'session.completed', providerSessionId: 'thread-from-notification' },
+    ]);
+  });
+
   it('maps turn.status completed/interrupted/failed to the three distinct terminal events', () => {
     const completed = new CodexAppServerNormalizer();
     expect(completed.normalize('turn/completed', { turn: { id: 't1', status: 'completed' } })).toEqual([

@@ -51,3 +51,16 @@ export function safeDisplay(value: unknown, maximumBytes: number, fallback: stri
   }).join('');
   return boundedUtf8(printable, maximumBytes);
 }
+
+/**
+ * Asserts `value` is a plain (non-null, non-array) object, throwing `CodexAppServerProtocolError`
+ * otherwise. Every module parsing raw app-server JSON (`scope-evidence.ts`, `normalizer.ts`,
+ * `transport.ts`) had its own copy of this exact three-line check; consolidated here once a third
+ * real caller needed it, rather than the moment a second one merely could have.
+ */
+export function asObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new CodexAppServerProtocolError('frame_invalid', `Invalid ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
