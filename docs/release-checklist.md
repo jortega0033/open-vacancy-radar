@@ -30,6 +30,14 @@ Repeatable steps for cutting a release of Open Vacancy Radar. Windows-only for n
 - [ ] No open CodeQL alerts without a documented dismissal rationale; no open Dependabot alerts
       above low severity. Check via `gh api repos/jortega0033/open-vacancy-radar/code-scanning/alerts`
       and `.../dependabot/alerts`.
+- [ ] If `packages/agent-runtime/src/providers/compatibility-manifest.ts`'s pinned Claude/Codex
+      versions changed since the last release, run the live provider smoke matrix against real,
+      authenticated installs of both CLIs before claiming the new versions are verified:
+      `AGENT_DOCK_LIVE_PROVIDER_SMOKE=1 pnpm --filter @agent-dock/daemon run smoke:live-providers`
+      (see [providers.md#live-provider-smoke-matrix](providers.md#live-provider-smoke-matrix)).
+      Read `apps/daemon/live-provider-smoke-evidence.jsonl` afterward — every row you're relying on
+      must show `resultCode: "success"`; a `skipped_*` row means that transport wasn't actually
+      exercised and proves nothing. Skip this box entirely when the pins didn't change.
 
 ## 4. Package
 
