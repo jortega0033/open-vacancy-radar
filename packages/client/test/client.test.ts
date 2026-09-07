@@ -350,6 +350,40 @@ describe('AgentDockClient: SSE event streaming', () => {
     expect(collected).toHaveLength(1); // the one valid event before the malformed one
   });
 
+  it('throws ValidationError on a single frame exceeding the byte ceiling, defense in depth against a daemon that does not enforce it (ADI-17)', async () => {
+    const oversized = `data: ${JSON.stringify({ type: 'assistant.message', text: 'x'.repeat(1_100_000), sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' })}\n\n`;
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return sseResponse([oversized]);
+    });
+    const client = makeClient(fetchImpl);
+
+    const collected: AgentEventEnvelope[] = [];
+    await expect(
+      (async () => {
+        for await (const event of client.sessions.events('s1')) collected.push(event);
+      })(),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(collected).toHaveLength(0);
+  });
+
+  it('throws ValidationError on a frame that never terminates, instead of buffering it without limit (ADI-17)', async () => {
+    // No `\n\n` anywhere in this chunk -- exactly the "daemon never closes the frame" failure mode
+    // the client-side cap exists to bound.
+    const neverTerminated = `data: ${'x'.repeat(1_100_000)}`;
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return sseResponse([neverTerminated]);
+    });
+    const client = makeClient(fetchImpl);
+
+    await expect(async () => {
+      for await (const _event of client.sessions.events('s1')) {
+        // no-op
+      }
+    }).rejects.toBeInstanceOf(ValidationError);
+  });
+
   it('throws SessionNotFoundError when opening the stream for an unknown session', async () => {
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/health')) return healthOk();

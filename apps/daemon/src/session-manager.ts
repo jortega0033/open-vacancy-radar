@@ -7,6 +7,7 @@ import type {
   ProviderId,
   TerminalReasonV2,
 } from '@agent-dock/shared';
+import { utf8ByteLength } from '@agent-dock/shared';
 import type { Logger, ProviderRegistry, ProviderSessionHandle, SessionLaunchProbe } from '@agent-dock/agent-runtime';
 import { AcceptedWorkLatch, UnknownFrameLedger } from '@agent-dock/agent-runtime';
 import { MemorySessionStore, type SessionStore } from './session-store.js';
@@ -26,6 +27,13 @@ import type { WorkspaceExecutionLeaseManager, WorkspaceLease } from './workspace
 interface RuntimeState {
   handle: ProviderSessionHandle;
   events: AgentEventEnvelope[];
+  /** UTF-8 serialized bytes of every envelope currently in `events`, kept incrementally instead of
+   * re-summed on each append so a long-running session's replay accounting stays O(1) per event
+   * (ADI-17). */
+  replayBytes: number;
+  /** True once the 5,000-event or 16 MiB replay ceiling has been hit, so the daemon logs the
+   * "history full" warning at most once per session instead of once per subsequent event. */
+  replayFull: boolean;
   listeners: Set<(index: number, event: AgentEventEnvelope) => void>;
   /**
    * Per-session monotonic counter for `AgentEventEnvelope.sequence`. Deliberately independent of
@@ -50,6 +58,15 @@ interface RuntimeState {
 }
 
 const MAX_STORED_EVENTS_PER_SESSION = 5_000;
+/** ADI-17: a byte dimension alongside the count cap above, so a session emitting unusually large
+ * provider JSONL lines (a big tool result, a verbose assistant response) still bounds replay
+ * memory even well under the event-count cap. */
+const MAX_STORED_EVENT_BYTES_PER_SESSION = 16 * 1024 * 1024;
+/** One normalized envelope over this size cannot be safely replayed or streamed at all -- it would
+ * itself already exceed a single SSE subscriber's whole queue budget (see sse-writer.ts). The
+ * session fails rather than silently dropping or truncating provider-controlled content, since v1
+ * has no per-event delivery guarantee a silent drop could violate. */
+const MAX_EVENT_ENVELOPE_BYTES = 1024 * 1024;
 
 /**
  * Bounds how many terminal (completed/failed/cancelled) sessions' runtime state (event history
@@ -439,6 +456,8 @@ export class SessionManager {
     const runtimeEntry: RuntimeState = {
       handle,
       events: [],
+      replayBytes: 0,
+      replayFull: false,
       listeners: new Set(),
       nextSequence: 0,
       done: Promise.resolve(),
@@ -545,11 +564,44 @@ export class SessionManager {
         // the events that are still buffered.
         const sequence = runtime.nextSequence++;
         const envelope: AgentEventEnvelope = { ...event, sequence, timestamp: new Date().toISOString() };
-        if (runtime.events.length < MAX_STORED_EVENTS_PER_SESSION) {
-          runtime.events.push(envelope);
-        } else {
-          this.logger.warn('session event history full; further events will not be replayable', { sessionId: id });
+        const bytes = utf8ByteLength(JSON.stringify(envelope));
+
+        if (bytes > MAX_EVENT_ENVELOPE_BYTES) {
+          // Deliberately stricter than the ordinary history-full path below: this event is never
+          // stored or streamed at all, and the whole session fails rather than continuing, since v1
+          // has no per-event delivery guarantee a silent drop could violate (ADI-17). The failure
+          // envelope reuses `sequence` rather than minting a new one, replacing the oversized event
+          // at the same position instead of leaving a gap -- `subscribe()`'s replay path serves
+          // `runtime.events[i]` at array index `i` as if it equals that event's own `sequence`
+          // field, an invariant a skipped sequence number would silently break.
+          this.logger.warn('session event exceeded the per-envelope byte ceiling; failing the session', {
+            sessionId: id,
+            eventType: event.type,
+            bytes,
+          });
+          // Awaited, via the same `cancelRuntime` every other cancellation path in this class uses
+          // (never fire-and-forget): the `finally` block below releases the limiter reservation, the
+          // workspace execution lease, and the workspace index the instant this loop exits, and a
+          // lease released while the real provider process is still alive is exactly the double-write
+          // hazard the lease exists to prevent. Session status is flipped to 'failed' only after this
+          // resolves (or times out, logged, not thrown -- see `cancelRuntime`'s own doc comment), so
+          // `cancelAll()`'s active-session filter cannot exclude this session, and therefore skip
+          // waiting on it, before termination was genuinely attempted.
+          await this.cancelRuntime(id, runtime);
+          const failure: AgentEventEnvelope = {
+            type: 'session.failed',
+            message: 'a provider event exceeded the maximum frame size and could not be delivered',
+            sequence,
+            timestamp: new Date().toISOString(),
+          };
+          this.mutateSession(id, (session) => this.applyStatusTransition(session, failure));
+          this.storeEnvelope(id, runtime, failure, utf8ByteLength(JSON.stringify(failure)));
+          this.persistEvent(id, failure);
+          for (const listener of runtime.listeners) listener(sequence, failure);
+          break;
         }
+
+        this.storeEnvelope(id, runtime, envelope, bytes);
         this.persistEvent(id, envelope);
         for (const listener of runtime.listeners) listener(sequence, envelope);
       }
@@ -574,11 +626,46 @@ export class SessionManager {
       // try to cancel finished sessions forever and would keep the index growing without bound.
       this.unindexWorkspaceSession(id);
 
-      // The loop only exits after the provider's terminal event closed its channel (exactly one,
-      // always last: see run-session.ts), so reaching here means the session is now terminal.
-      // Track it for bounded retention (AD-11) rather than keeping every RuntimeState forever.
+      // The loop only exits once the session is terminal: either the provider's own terminal event
+      // closed its channel (exactly one, always last: see run-session.ts), or the oversized-envelope
+      // path above synthesized one and `break`, an equally terminal exit (ADI-17). Either way,
+      // reaching here means the session is now terminal. Track it for bounded retention (AD-11)
+      // rather than keeping every RuntimeState forever.
       this.completedOrder.push(id);
       this.evictOldestCompletedIfOverCap();
+    }
+  }
+
+  /**
+   * Bounded by both event count and UTF-8 serialized bytes (ADI-17): once either cap is hit, a
+   * session simply stops accepting further replayable history rather than evicting the oldest
+   * event, so `events[index]` keeps meaning exactly "the event whose own `sequence` field is
+   * `index`" for every index `subscribe()`'s replay path still has to serve. Logs the "history
+   * full" warning at most once per session, not once per event thereafter.
+   *
+   * `replayFull` is checked FIRST and is the only thing that can ever stop storage -- once true, it
+   * never resets. This is deliberate, not redundant with the two cap checks below it: without this
+   * latch, the byte-cap check on its own is not monotonic. An event too large to fit is skipped
+   * without adding to `replayBytes`, so a later, SMALLER event can still satisfy
+   * `replayBytes + bytes <= MAX` even though a larger one in between it and the last stored entry
+   * was skipped -- which would push that later event onto the end of `events` at an array index
+   * that no longer equals its own `.sequence` field, silently breaking the exact invariant this
+   * comment (and `subscribe()`'s replay loop) depends on. Latching on first skip, for either cap,
+   * makes "stops accepting further history" permanently true the moment it becomes true at all.
+   */
+  private storeEnvelope(id: string, runtime: RuntimeState, envelope: AgentEventEnvelope, bytes: number): void {
+    if (
+      !runtime.replayFull &&
+      runtime.events.length < MAX_STORED_EVENTS_PER_SESSION &&
+      runtime.replayBytes + bytes <= MAX_STORED_EVENT_BYTES_PER_SESSION
+    ) {
+      runtime.events.push(envelope);
+      runtime.replayBytes += bytes;
+      return;
+    }
+    if (!runtime.replayFull) {
+      runtime.replayFull = true;
+      this.logger.warn('session event history full; further events will not be replayable', { sessionId: id });
     }
   }
 
