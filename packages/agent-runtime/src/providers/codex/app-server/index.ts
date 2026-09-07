@@ -10,3 +10,4 @@
 export { CodexAppServerProtocolError, boundedUtf8, safeDisplay } from './errors.js';
 export { deferred, type Deferred } from './deferred.js';
 export { CodexAppServerRpc, type CodexAppServerRpcOptions, type IncomingRequestResponder, type RpcId } from './rpc.js';
+export { ManagedAppServerProcess, type ManagedAppServerProcessOptions } from './managed-process.js';
