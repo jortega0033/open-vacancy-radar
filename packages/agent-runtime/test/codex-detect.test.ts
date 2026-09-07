@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseCodexLoginStatus } from '../src/providers/codex/detect.js';
+import { parseCodexAuthSource, parseCodexLoginStatus } from '../src/providers/codex/detect.js';
 
 describe('parseCodexLoginStatus: pure parser (AD-16)', () => {
   it('returns "authenticated" for a real "Logged in using ChatGPT" line', () => {
@@ -30,6 +30,22 @@ describe('parseCodexLoginStatus: pure parser (AD-16)', () => {
   it('returns "unknown" for unexpected/unrecognized output', () => {
     expect(parseCodexLoginStatus('codex: unrecognized subcommand "status"')).toBe('unknown');
     expect(parseCodexLoginStatus('some future wording this parser has never seen')).toBe('unknown');
+  });
+});
+
+describe('parseCodexAuthSource: pure parser (ADI-08)', () => {
+  it('returns "chatgpt" for a real "Logged in using ChatGPT" line', () => {
+    expect(parseCodexAuthSource('Logged in using ChatGPT')).toBe('chatgpt');
+  });
+
+  it('returns "api_key" for a real "Logged in using API key" line', () => {
+    expect(parseCodexAuthSource('Logged in using API key')).toBe('api_key');
+  });
+
+  it('returns "unknown" for output that does not name a specific source, including unauthenticated output', () => {
+    expect(parseCodexAuthSource('Not logged in')).toBe('unknown');
+    expect(parseCodexAuthSource('')).toBe('unknown');
+    expect(parseCodexAuthSource('some future wording this parser has never seen')).toBe('unknown');
   });
 });
 
@@ -68,7 +84,7 @@ describe('detectCodex: end-to-end failure paths (mocked exec, no real CLI)', () 
     expect(status).toMatchObject({ installed: true, authenticated: 'unknown', error: 'login status check timed out' });
   });
 
-  it('reports "authenticated" end to end when both commands succeed with a logged-in line', async () => {
+  it('reports "authenticated" end to end when both commands succeed with a logged-in line, threading authSource through', async () => {
     vi.doMock('../src/detect-executable.js', () => ({ findExecutable: async () => '/usr/local/bin/codex' }));
     vi.doMock('../src/process/exec-capture.js', () => ({
       execCapture: async (_cmd: string, args: string[]) =>
@@ -78,7 +94,34 @@ describe('detectCodex: end-to-end failure paths (mocked exec, no real CLI)', () 
     }));
     const { detectCodex } = await import('../src/providers/codex/detect.js');
     const status = await detectCodex({ debug() {}, info() {}, warn() {}, error() {} });
-    expect(status).toMatchObject({ installed: true, authenticated: 'authenticated', version: '0.147.0' });
+    expect(status).toMatchObject({ installed: true, authenticated: 'authenticated', version: '0.147.0', authSource: 'chatgpt' });
+  });
+
+  it('reports authSource: "api_key" end to end for an API-key logged-in line', async () => {
+    vi.doMock('../src/detect-executable.js', () => ({ findExecutable: async () => '/usr/local/bin/codex' }));
+    vi.doMock('../src/process/exec-capture.js', () => ({
+      execCapture: async (_cmd: string, args: string[]) =>
+        args.includes('--version')
+          ? { code: 0, stdout: 'codex-cli 0.147.0', stderr: '', timedOut: false }
+          : { code: 0, stdout: 'Logged in using API key', stderr: '', timedOut: false },
+    }));
+    const { detectCodex } = await import('../src/providers/codex/detect.js');
+    const status = await detectCodex({ debug() {}, info() {}, warn() {}, error() {} });
+    expect(status).toMatchObject({ installed: true, authenticated: 'authenticated', authSource: 'api_key' });
+  });
+
+  it('never sets authSource when the login state is not "authenticated"', async () => {
+    vi.doMock('../src/detect-executable.js', () => ({ findExecutable: async () => '/usr/local/bin/codex' }));
+    vi.doMock('../src/process/exec-capture.js', () => ({
+      execCapture: async (_cmd: string, args: string[]) =>
+        args.includes('--version')
+          ? { code: 0, stdout: 'codex-cli 0.147.0', stderr: '', timedOut: false }
+          : { code: 0, stdout: 'Not logged in', stderr: '', timedOut: false },
+    }));
+    const { detectCodex } = await import('../src/providers/codex/detect.js');
+    const status = await detectCodex({ debug() {}, info() {}, warn() {}, error() {} });
+    expect(status.authenticated).toBe('unauthenticated');
+    expect(status.authSource).toBeUndefined();
   });
 
   it('reports "unauthenticated" end to end for a clean not-logged-in response', async () => {
