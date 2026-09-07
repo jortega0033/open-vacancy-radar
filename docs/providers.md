@@ -238,6 +238,49 @@ functions.
 provider-neutral abstraction survives a transport swap cleanly, which is exactly why this decision
 is safe to defer rather than urgent to make now.
 
+#### Superseding update (ADI-08, #126): the app-server transport was built anyway
+
+AD-21's own stated revisit trigger #3 above ("OpenAI drops the `[experimental]` label from
+`app-server`") has **not** fired -- `codex --help` on the pinned 0.147.0 build still labels
+`app-server` experimental. ADI-08 built and shipped it anyway, as a deliberate, explicit override of
+this decision rather than a claim that the trigger fired, once re-investigation found the actual
+engineering cost was much smaller than AD-21's "largest and least copyable file in the repo"
+framing assumed: `CodexAppServerTransport` is a second, *internal* implementation path inside
+`CodexProvider`, producing the exact same `AgentEvent` stream and `ProviderSessionHandle` contract
+every other transport already does -- not upstream's rich `AgentEventV2`/`InteractiveProviderTransport`
+layer, which this repo never built and still doesn't need. AD-21's own prediction two paragraphs up
+("`ProviderSessionHandle` and `AgentEvent` themselves would not need to change") held exactly true.
+
+What actually shipped, staged across nine PRs (issue #126's own staged-plan comment has the full
+breakdown): a narrowed JSON-RPC method allowlist (`app-server-support.ts`), a managed long-lived
+process built on the existing `spawnProcess()` primitive (not a reimplementation), an account/model
+scope probe, a notification normalizer, the transport itself, a second compatibility-manifest entry
+and the first real arming of `FallbackGate`, and the daemon wiring in this section covers.
+
+**The sandbox posture is a real, deliberate relaxation, not an oversight.** Codex's app-server
+protocol has no authoritative self-report of enforced sandbox restrictions at thread start (verified
+directly against the pinned 0.147.0 protocol schema), and upstream AgentDock's own app-server
+integration ships with the same gap -- its docs state plainly that app-server "advertises no
+isolation.* enforcement guarantee." Rather than build the originally-intended black-box enforcement
+probe (a real write/network attempt under each sandbox policy, asserting the denial), this repo ships
+upstream's honest posture instead: `transport.ts` passes a fixed `sandbox: 'workspace-write'` to
+`thread/start`/`turn/start` (matching the exec transport's own undeclared default as closely as
+verifiable) and makes **no independent claim of enforcement** anywhere -- no `ProviderStatus`/
+`ProviderCapabilities` field claims verified sandboxing. This repo relies entirely on Codex's own
+sandbox enforcement for this transport, exactly as it always has for `codex exec`, and does not
+verify network or writable-root restriction independently. Recorded here in exactly those terms so a
+future reader can tell this was a conscious, reviewed tradeoff, not something nobody noticed.
+
+**Shipped inert by default, with `codex exec` as the rollback path.** `AGENT_DOCK_CODEX_TRANSPORT`
+defaults to `'exec'` -- an operator must explicitly opt into `'app-server'` or `'auto'`. Even once
+opted in, `CodexProvider.startSession()` (`transport-selection.ts`) never lets an app-server startup
+failure fail a session outright: `api_key` auth and a compatibility-manifest miss route straight to
+the legacy exec transport before any process is even spawned, and a genuine startup failure (nothing
+delivered) is retried over exec via `FallbackGate`'s one-shot authorization, transparently to the
+caller. Flipping the env var back to `'exec'` (or simply never setting it) is the same real
+transport this section otherwise describes, byte-identical to the pre-ADI-08 code path -- the
+rollback path this decision's own revisit-trigger framework always assumed would exist.
+
 ## Provider contract tests
 
 `packages/agent-runtime/test/support/provider-contract.ts` exports `describeProviderContract()`:

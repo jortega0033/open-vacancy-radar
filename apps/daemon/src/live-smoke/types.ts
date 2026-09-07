@@ -1,13 +1,18 @@
 import type { AuthStatus, ProviderId } from '@agent-dock/shared';
 
 /**
- * The two production transports this repo actually ships (ADI-19). Upstream's own live-smoke
- * harness also covers `claude-agent-sdk`/`codex-app-server`, but neither transport exists in this
- * repo yet -- both are still deferred (see ADI-08c and ADI-08's own Codex app-server scope). This
- * union is deliberately narrower than upstream's, not a placeholder for the missing two: adding
- * them back is a real follow-on once those transports themselves land, not something to stub now.
+ * The production transports this repo actually ships. Upstream's own live-smoke harness also
+ * covers `claude-agent-sdk`, which still doesn't exist in this repo (deferred, see ADI-08c) -- this
+ * union stays narrower than upstream's for that one, not a placeholder for it.
+ *
+ * `'codex-app-server'` was added in ADI-08 stage 8, once the transport itself (stage 5), its
+ * compatibility-manifest entry (stage 6), and its daemon wiring with a safe exec fallback
+ * (stage 7) all shipped. It is a genuinely separate case from `'codex-legacy-one-shot'`, not a
+ * variant of it: `cli.ts`'s `CASES` runs it with `AGENT_DOCK_CODEX_TRANSPORT=app-server` set for
+ * the duration of that one case, so a real session actually attempts the app-server transport
+ * rather than the operator-facing default (`'exec'`) every other case in this file exercises.
  */
-export type LiveSmokeTransportId = 'claude-legacy-one-shot' | 'codex-legacy-one-shot';
+export type LiveSmokeTransportId = 'claude-legacy-one-shot' | 'codex-legacy-one-shot' | 'codex-app-server';
 
 /**
  * Every way a smoke case can end. Only `success` means a real session actually completed.
@@ -22,6 +27,7 @@ export type LiveSmokeResultCode =
   | 'skipped_missing_binary'
   | 'skipped_missing_auth'
   | 'skipped_version_stale'
+  | 'skipped_auth_source_incompatible'
   | 'failed_timeout'
   | 'failed_protocol_violation'
   | 'failed_error';

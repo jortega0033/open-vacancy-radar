@@ -218,16 +218,23 @@ new packaging entry was needed**.
 
 ### The three-way scope split
 
-Upstream's v2 work divides into three parts, and only the first is in scope for this ticket:
+Upstream's v2 work divides into three parts. At the time this ADR was written, only the first was
+in scope for this ticket:
 
 1. **Legacy-supervisor-compatible core (ported).** The compatibility manifest, accepted-work
    boundaries, launch-scope freezing, the fallback-authorization gate, the bounded unknown-frame
-   ledger, and process-tree-aware cancellation. All of it is meaningful over a one-shot CLI
-   transport, which is the only transport this repo has.
-2. **App-server / SDK-specific (not ported).** `providers/codex/app-server/**`,
-   `providers/claude/sdk/**`, and the interactive-transport machinery they exist to serve. This
-   repo has no interactive transport, and AD-21 (see [providers.md](providers.md)) already records
-   the standing decision to stay on `codex exec --json`.
+   ledger, and process-tree-aware cancellation. All of it was meaningful over a one-shot CLI
+   transport even before this repo had any other kind.
+2. **App-server / SDK-specific.** `providers/claude/sdk/**` and the Claude Agent SDK integration it
+   would need remain not ported -- this repo has no interactive transport for Claude, and that
+   scope is deliberately deferred (see issue #144/ADI-08c). **The Codex half of this line item is no
+   longer accurate**: ADI-08 (#126) built and shipped `providers/codex/app-server/**` as a real,
+   internal transport inside `CodexProvider`, explicitly overriding AD-21's standing "stay on
+   `codex exec --json`" decision (see [providers.md](providers.md)'s AD-21 section, superseding
+   update). It is not upstream's rich interactive-transport machinery, though -- it produces the
+   same plain `AgentEvent`/`ProviderSessionHandle` contract every transport in this repo already
+   satisfies, shipped inert behind an operator opt-in (`AGENT_DOCK_CODEX_TRANSPORT`, default
+   `'exec'`) with a safe, automatic fallback to the legacy transport on startup failure.
 3. **Durable persistence / execution-graph store (not ported).** That is ADI-05's scope.
 
 ### This supervisor is not upstream's supervisor
@@ -1031,6 +1038,15 @@ throughout. That is "incomplete sandbox evidence", one of the parent ticket's ow
 and it is unblocked only by an ACL remediation across the user's home directory, a reinstall from the
 MSIX package, or a version bump that reopens the pin. Nothing in this section should be read as a
 claim that it shipped.
+
+> **Update (ADI-08, #126):** the sentence above described a real stop condition at the time it was
+> written, and stayed true through ADI-08b's own scope. It is no longer true of the *parent* ticket:
+> the blocker was resolved by an explicit decision (ship upstream's honest, unenforced sandbox
+> posture rather than requiring the black-box enforcement proof this repo originally demanded -- see
+> [providers.md](providers.md)'s AD-21 superseding update for the full reasoning), and the Codex
+> app-server transport shipped across nine staged PRs. This section is left as-written rather than
+> edited, since it is an accurate record of the state at the time ADI-08b was split out; see "The
+> three-way scope split" above for the current state.
 
 ### What ADI-08b actually is
 

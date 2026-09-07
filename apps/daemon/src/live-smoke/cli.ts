@@ -2,9 +2,16 @@ import { platform } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { AgentDockClient } from '@agent-dock/client';
-import { CLAUDE_LEGACY_COMPATIBILITY, CODEX_LEGACY_COMPATIBILITY, createConsoleLogger, execCapture } from '@agent-dock/agent-runtime';
+import {
+  CLAUDE_LEGACY_COMPATIBILITY,
+  CODEX_APP_SERVER_COMPATIBILITY,
+  CODEX_LEGACY_COMPATIBILITY,
+  createConsoleLogger,
+  execCapture,
+} from '@agent-dock/agent-runtime';
 import type { ProviderId } from '@agent-dock/shared';
 import { buildProviderRegistry } from '../providers.js';
+import { checkAuthSourceSupportsAppServer } from './auth-source-gate.js';
 import { isLiveProviderSmokeEnabled } from './opt-in.js';
 import { checkVersionSupported } from './version-gate.js';
 import { withSyntheticWorkspace } from './synthetic-workspace.js';
@@ -21,14 +28,33 @@ interface SmokeCaseDefinition {
   id: LiveSmokeTransportId;
   provider: ProviderId;
   pinnedVersion: string;
+  /**
+   * Set only for the app-server case (ADI-08 stage 8): `AGENT_DOCK_CODEX_TRANSPORT` is set to this
+   * value for the duration of that one case's daemon-driven run, so `CodexProvider.startSession()`
+   * (which reads that env var fresh on every call, not once at import time -- see
+   * `resolveCodexTransportMode`) actually attempts the app-server transport instead of the
+   * operator-facing default. Every other case leaves the env var untouched, matching the real
+   * shipped default an operator who has set nothing would get.
+   */
+  transportModeEnv?: string;
 }
 
-/** ADI-19's scope: the two production transports this repo actually ships. Upstream's own harness
- * also covers `claude-agent-sdk`/`codex-app-server`; see `types.ts`'s doc comment on why those are
- * deliberately not here. */
+/**
+ * ADI-19's original scope was the two one-shot transports this repo shipped at the time; ADI-08
+ * stage 8 added a third once the app-server transport (stage 5), its compatibility-manifest entry
+ * (stage 6), and its daemon wiring with a safe exec fallback (stage 7) all landed. Upstream's own
+ * harness also covers `claude-agent-sdk`; see `types.ts`'s doc comment on why that one is still
+ * deliberately not here.
+ */
 const CASES: SmokeCaseDefinition[] = [
   { id: 'claude-legacy-one-shot', provider: 'claude', pinnedVersion: CLAUDE_LEGACY_COMPATIBILITY.providerVersion },
   { id: 'codex-legacy-one-shot', provider: 'codex', pinnedVersion: CODEX_LEGACY_COMPATIBILITY.providerVersion },
+  {
+    id: 'codex-app-server',
+    provider: 'codex',
+    pinnedVersion: CODEX_APP_SERVER_COMPATIBILITY.providerVersion,
+    transportModeEnv: 'app-server',
+  },
 ];
 
 /** Spawns through `execCapture` (ADI-15's environment allowlist), not a bare `node:child_process`
@@ -83,58 +109,79 @@ async function runOneCase(evidencePath: string, commit: string, definition: Smok
     await record('skipped_version_stale');
     return 'skipped_version_stale';
   }
+  if (definition.transportModeEnv && !checkAuthSourceSupportsAppServer(status.authSource).supported) {
+    await record('skipped_auth_source_incompatible');
+    return 'skipped_auth_source_incompatible';
+  }
 
-  const daemon = await startLiveSmokeDaemon();
+  // Scoped to this one case's daemon-driven run only, and always restored -- including if
+  // `startLiveSmokeDaemon()` itself throws before the daemon-owning `try` below ever starts, which
+  // is exactly why that call is INSIDE this `try`, not before it. `resolveCodexTransportMode` reads
+  // this env var fresh on every `CodexProvider.startSession()` call (see its own doc comment), so
+  // setting it here -- rather than needing a per-daemon-instance option -- is what actually makes
+  // the daemon this case drives attempt the app-server transport instead of the shipped `'exec'`
+  // default every other case in this file exercises with nothing set.
+  const previousTransportEnv = process.env.AGENT_DOCK_CODEX_TRANSPORT;
+  if (definition.transportModeEnv) process.env.AGENT_DOCK_CODEX_TRANSPORT = definition.transportModeEnv;
+
   try {
-    const client = new AgentDockClient({ baseUrl: daemon.baseUrl, token: daemon.token });
-    return await withSyntheticWorkspace(async (workspace) => {
-      const fresh = await runFreshRunCase(client.sessions, {
-        provider: definition.provider,
-        cwd: workspace.cwd,
-        prompt: SMOKE_PROMPT,
-        timeoutMs: SMOKE_TIMEOUT_MS,
-      });
+    const daemon = await startLiveSmokeDaemon();
+    try {
+      const client = new AgentDockClient({ baseUrl: daemon.baseUrl, token: daemon.token });
+      return await withSyntheticWorkspace(async (workspace) => {
+        const fresh = await runFreshRunCase(client.sessions, {
+          provider: definition.provider,
+          cwd: workspace.cwd,
+          prompt: SMOKE_PROMPT,
+          timeoutMs: SMOKE_TIMEOUT_MS,
+        });
 
-      if (fresh.resultCode === 'success' && fresh.session) {
-        if (status.capabilities.cancellation) {
-          const cancellation = await withSyntheticWorkspace(async (cancelWorkspace) => {
-            // Deliberately NOT `runFreshRunCase` here: that helper drains a session to full
-            // completion before returning, which would make the cancel below race an
-            // already-terminal session and fail every real run. `runCancellationCase` needs the
-            // session while it's still live, so it is created directly and handed off immediately.
-            const cancelSession = await client.sessions.create({
-              provider: definition.provider,
-              cwd: cancelWorkspace.cwd,
-              prompt: CANCEL_PROMPT,
+        if (fresh.resultCode === 'success' && fresh.session) {
+          if (status.capabilities.cancellation) {
+            const cancellation = await withSyntheticWorkspace(async (cancelWorkspace) => {
+              // Deliberately NOT `runFreshRunCase` here: that helper drains a session to full
+              // completion before returning, which would make the cancel below race an
+              // already-terminal session and fail every real run. `runCancellationCase` needs the
+              // session while it's still live, so it is created directly and handed off immediately.
+              const cancelSession = await client.sessions.create({
+                provider: definition.provider,
+                cwd: cancelWorkspace.cwd,
+                prompt: CANCEL_PROMPT,
+              });
+              return runCancellationCase(client.sessions, cancelSession, SMOKE_TIMEOUT_MS);
             });
-            return runCancellationCase(client.sessions, cancelSession, SMOKE_TIMEOUT_MS);
-          });
-          if (cancellation.resultCode !== 'success') {
-            await record(cancellation.resultCode);
-            return cancellation.resultCode;
+            if (cancellation.resultCode !== 'success') {
+              await record(cancellation.resultCode);
+              return cancellation.resultCode;
+            }
+          }
+
+          if (status.capabilities.resume && fresh.session.providerSessionId) {
+            const continuation = await runFreshRunCase(client.sessions, {
+              provider: definition.provider,
+              cwd: workspace.cwd,
+              prompt: SMOKE_PROMPT,
+              timeoutMs: SMOKE_TIMEOUT_MS,
+              resumeProviderSessionId: fresh.session.providerSessionId,
+            });
+            if (continuation.resultCode !== 'success') {
+              await record(continuation.resultCode);
+              return continuation.resultCode;
+            }
           }
         }
 
-        if (status.capabilities.resume && fresh.session.providerSessionId) {
-          const continuation = await runFreshRunCase(client.sessions, {
-            provider: definition.provider,
-            cwd: workspace.cwd,
-            prompt: SMOKE_PROMPT,
-            timeoutMs: SMOKE_TIMEOUT_MS,
-            resumeProviderSessionId: fresh.session.providerSessionId,
-          });
-          if (continuation.resultCode !== 'success') {
-            await record(continuation.resultCode);
-            return continuation.resultCode;
-          }
-        }
-      }
-
-      await record(fresh.resultCode);
-      return fresh.resultCode;
-    });
+        await record(fresh.resultCode);
+        return fresh.resultCode;
+      });
+    } finally {
+      await daemon.close();
+    }
   } finally {
-    await daemon.close();
+    if (definition.transportModeEnv) {
+      if (previousTransportEnv === undefined) delete process.env.AGENT_DOCK_CODEX_TRANSPORT;
+      else process.env.AGENT_DOCK_CODEX_TRANSPORT = previousTransportEnv;
+    }
   }
 }
 
