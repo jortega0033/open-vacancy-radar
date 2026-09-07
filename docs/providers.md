@@ -352,6 +352,35 @@ fails rather than getting a silently wrong boundary.
 
 Run both contract suites together with `pnpm test:provider-conformance` from the repo root.
 
+## Live provider smoke matrix
+
+Every test above runs against fixtures or fakes — deterministic on purpose, and never dependent on
+a real, authenticated CLI. That also means none of it proves a specific installed provider CLI, at
+a specific version, still completes a real session the way the fixtures assume it does.
+
+`apps/daemon/src/live-smoke/` (ADI-19, ported from upstream AgentDock's own harness at commit
+`1f22cc2`) is a separate, explicit opt-in harness for exactly that question: it drives one real
+Protocol v1 session per production transport this repo actually ships — Claude CLI one-shot,
+Codex exec one-shot; see `live-smoke/types.ts`'s own doc comment for why this repo's matrix is
+narrower than upstream's (no Claude Agent SDK or Codex app-server transport exists here yet) —
+against whatever provider CLI is actually installed, and records redacted, publishable evidence
+(commit, OS, provider version, auth status, transport, result code, duration, timestamp — never a
+credential, account identifier, raw prompt/output, or private path). It never runs unless
+`AGENT_DOCK_LIVE_PROVIDER_SMOKE=1` is set, treats a version that doesn't match this repo's
+pinned/tested version as a clean skip rather than a false pass, and always tears down its synthetic
+Git workspace and daemon instance, even on failure:
+
+```bash
+AGENT_DOCK_LIVE_PROVIDER_SMOKE=1 pnpm --filter @agent-dock/daemon run smoke:live-providers
+```
+
+The harness's own logic (opt-in gating, evidence redaction, version matching, stream timeout,
+duplicate-terminal and malformed-stream detection, cleanup-on-throw) is unit-tested with fake
+providers under `apps/daemon/test/live-smoke/`, the same way everything else in this section is —
+only the manual/scheduled `.github/workflows/live-provider-smoke.yml` workflow and a local opt-in
+run ever touch a real CLI. See [release-checklist.md](release-checklist.md) for when this harness's
+evidence is expected before a release.
+
 ## Adding a new provider
 
 Say you want to add `GeminiProvider`. You should not need to touch the daemon's routes, the client
