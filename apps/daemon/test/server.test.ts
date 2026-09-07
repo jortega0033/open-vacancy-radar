@@ -336,6 +336,43 @@ describe('SSE events + cancellation', () => {
     expect(resumedFrames.map((f) => f.event.type)).toEqual(fullFrames.slice(1).map((f) => f.event.type));
   });
 
+  it('ends the SSE response instead of hanging forever when reconnecting with Last-Event-ID past the terminal event (ADI-17)', async () => {
+    const { app } = setup('success');
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/sessions',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { provider: 'claude', cwd, prompt: 'hello' },
+    });
+    const sessionId = createRes.json().id;
+    await new Promise((resolve) => setTimeout(resolve, 30)); // let the fake session actually complete
+
+    const fullRes = await app.inject({
+      method: 'GET',
+      url: `/sessions/${sessionId}/events`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const lastId = fullRes.payload
+      .trim()
+      .split('\n\n')
+      .filter((frame) => frame.startsWith('id: '))
+      .map((frame) => Number(frame.split('\n')[0]?.slice('id: '.length)))
+      .at(-1)!;
+
+    // Reconnects claiming it already has the terminal event -- nothing left to replay. Before
+    // ADI-17 this left the response hijacked and open forever, since the writer never saw a
+    // terminal frame to close on. The key assertion is that inject() resolves at all.
+    const res = await app.inject({
+      method: 'GET',
+      url: `/sessions/${sessionId}/events`,
+      headers: { authorization: `Bearer ${TOKEN}`, 'last-event-id': String(lastId) },
+    });
+    expect(res.statusCode).toBe(200);
+    // Only the opening ":ok" comment line every stream starts with -- no replayed frame, since
+    // there was nothing left to replay. The response still ends on its own rather than hanging.
+    expect(res.payload.trim()).toBe(':ok');
+  });
+
   it('ends the SSE response cleanly instead of hanging forever if the session is removed between the existence check and subscribe() (AD-11 race)', async () => {
     const { app, sessionManager } = setup('success');
     const createRes = await app.inject({

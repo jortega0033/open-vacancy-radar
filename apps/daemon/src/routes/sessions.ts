@@ -5,6 +5,9 @@ import type { ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { SessionManager } from '../session-manager.js';
 import { ActiveSessionLimitError } from '../active-session-limiter.js';
 import { StorageFullError } from '../session-lineage-store.js';
+import { BoundedSseWriter } from '../sse-writer.js';
+
+const TERMINAL_SESSION_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -100,30 +103,55 @@ export function registerSessionRoutes(
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
     });
-    reply.raw.write(':ok\n\n');
 
     const lastEventIdHeader = req.headers['last-event-id'];
     const lastEventId = Array.isArray(lastEventIdHeader) ? lastEventIdHeader[0] : lastEventIdHeader;
     const sinceIndex = lastEventId ? Number(lastEventId) + 1 : 0;
 
-    let ended = false;
     // Declared separately (not `const unsubscribe = subscribe(...)`) because the listener below
     // can run *synchronously inside* this call (replaying already-stored events). Referencing
-    // `unsubscribe` from inside it before a combined declaration+assignment finished initializing
-    // would throw. `let` here is deliberate, not a lint slip.
+    // `unsubscribe`/`cleanup` from inside it before a combined declaration+assignment finished
+    // initializing would throw. `let` here is deliberate, not a lint slip.
     let unsubscribe: (() => void) | undefined;
-    // eslint-disable-next-line prefer-const
+    let cleanupRequested = false;
+    const cleanup = (): void => {
+      if (!unsubscribe) {
+        // subscribe() hasn't returned its disposer yet -- the writer closed synchronously during
+        // replay, before `unsubscribe` below could be assigned. Remember it and unsubscribe the
+        // instant it is.
+        cleanupRequested = true;
+        return;
+      }
+      const release = unsubscribe;
+      unsubscribe = undefined;
+      release();
+    };
+    // Bounded, backpressure-aware writer (see sse-writer.ts): enqueues synchronously, honors
+    // `reply.raw.write`'s drain signal, and disconnects only this one slow subscriber -- never the
+    // provider session -- on overflow.
+    const writer = new BoundedSseWriter(reply.raw, cleanup);
+    // Both `reply.raw` (the response) and `req.raw` (the request) can independently emit their own
+    // `'close'`, and on some platforms/Node versions one can fire without the other -- both routes
+    // to teardown go through `writer.close()`, never a second, independent cleanup path, so there is
+    // exactly one place that decides "this connection is done" regardless of which side noticed
+    // first. `writer.close()` -> `#finish()` is idempotent, so both firing is always safe.
+    reply.raw.once('close', () => writer.close());
+    req.raw.once('close', () => writer.close());
+    if (reply.raw.destroyed || reply.raw.writableEnded) {
+      // The response was already torn down before this handler even reached here (a client that
+      // aborted during routing/auth, before either 'close' listener above could be registered in
+      // time to observe it) -- `once('close', ...)` never replays a past event to a late listener,
+      // so without this check the writer, and the session-manager listener it will register below,
+      // would never be torn down until the runtime object itself became unreachable.
+      writer.close();
+      return;
+    }
+    writer.start();
+
     unsubscribe = sessionManager.subscribe(
       params.data.sessionId,
       Number.isFinite(sinceIndex) ? sinceIndex : 0,
-      (index, event) => {
-        reply.raw.write(`id: ${index}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-        if (event.type === 'session.completed' || event.type === 'session.failed' || event.type === 'session.cancelled') {
-          ended = true;
-          unsubscribe?.();
-          reply.raw.end();
-        }
-      },
+      (_index, event) => writer.write(event),
     );
 
     if (!unsubscribe) {
@@ -131,14 +159,22 @@ export function registerSessionRoutes(
       // subscribe(): the session's runtime state is already gone. Without this, the already-200
       // response would stay open forever with no data and no close (the exact race the daemon
       // audit flagged for this route).
-      reply.raw.end();
+      writer.close();
       return;
     }
-
-    // If the session was already terminal, the listener above fired synchronously during
-    // subscribe() (before `unsubscribe` was assigned). Clean it up now instead.
-    if (ended) unsubscribe();
-    else req.raw.on('close', () => unsubscribe?.());
+    if (cleanupRequested) {
+      // The writer already closed synchronously during replay (a terminal event was already
+      // stored, or the connection overflowed while replaying); the disposer above never ran it.
+      cleanup();
+      return;
+    }
+    // A client reconnecting with Last-Event-ID past the terminal event (it already has that event)
+    // replays nothing, so the writer never sees a terminal frame to close on; without this the
+    // connection would stay open forever once the session has no more events left to ever emit.
+    const current = sessionManager.get(params.data.sessionId);
+    if (!current || TERMINAL_SESSION_STATUSES.has(current.status)) writer.finishReplay();
+    // No separate `req.raw`/`reply.raw` 'close' listener needed here: both were already registered,
+    // once each, before `writer.start()` above, and both route through the same `writer.close()`.
   });
 
   app.post('/sessions/:sessionId/cancel', async (req, reply) => {

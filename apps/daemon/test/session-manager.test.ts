@@ -293,6 +293,131 @@ describe('SessionManager: past the history cap (AD-01)', () => {
   }, 15_000);
 });
 
+describe('SessionManager: the per-envelope byte ceiling fails the session (ADI-17)', () => {
+  it('synthesizes session.failed at the SAME sequence (no gap), reaps the provider, and stops consuming further raw events', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    const received: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => received.push(event));
+
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) }); // over the 1 MiB ceiling
+    testSession.push({ type: 'assistant.message', text: 'must never be delivered' });
+    testSession.push({ type: 'session.completed' }); // must never be delivered either
+    await tick(20);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ type: 'session.failed', sequence: 0 });
+    expect(sessionManager.get(session.id)?.status).toBe('failed');
+    expect(testSession.isCancelled()).toBe(true);
+  });
+
+  it('replays the synthesized failure to a later subscriber at index 0, same as any other stored terminal event', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) });
+    await tick(20);
+
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed).toEqual([{ type: 'session.failed', message: expect.any(String), sequence: 0, timestamp: replayed[0]?.timestamp }]);
+  });
+
+  it('awaits cancellation before flipping session status, so a concurrent cancelAll() cannot see this session as already-inactive before termination was even attempted', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    let resolveCancel: () => void = () => {};
+    let cancelCalled = false;
+    testSession.handle.cancel = () =>
+      new Promise<void>((resolve) => {
+        cancelCalled = true;
+        resolveCancel = resolve;
+      });
+
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) });
+    await tick(20);
+
+    // cancel() has been called and is still pending -- status must not have flipped yet. Before
+    // this fix, cancel() was fire-and-forget and status flipped (and the workspace lease/limiter
+    // reservation released) immediately, regardless of whether termination had even begun.
+    expect(cancelCalled).toBe(true);
+    expect(sessionManager.get(session.id)?.status).toBe('running');
+
+    resolveCancel();
+    await tick(20);
+    expect(sessionManager.get(session.id)?.status).toBe('failed');
+  });
+});
+
+describe('SessionManager: byte-bounded replay history (ADI-17)', () => {
+  it('stops retaining replay history once the 16 MiB session byte cap is hit, well before the 5,000-event count cap', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    const collected = collectUntilTerminal(sessionManager, session.id);
+
+    // Each event is ~200 KB of payload -- comfortably under the 1 MiB per-envelope ceiling on its
+    // own, but ~84 of them cross the 16 MiB session-wide replay cap, long before 90 would ever
+    // approach the 5,000-event count cap.
+    const CHUNK = 'x'.repeat(200_000);
+    const PUSHED = 90;
+    for (let i = 0; i < PUSHED; i++) testSession.push({ type: 'assistant.message', text: CHUNK });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collected;
+    expect(events.length).toBe(PUSHED + 1); // every event still delivered live, byte cap or not
+    expect(events.at(-1)?.type).toBe('session.completed');
+
+    // A subscriber connecting fresh (nothing live left to receive) only ever gets what replay
+    // storage actually retained -- proving the byte dimension, not just the much higher event-count
+    // cap, is what bounded retention here.
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(replayed.length).toBeLessThan(PUSHED);
+  }, 15_000);
+
+  it('once history is full, a later SMALL event is not stored either, even though its bytes alone would fit -- the byte cap latches, it does not un-trip', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    // Push large-but-under-the-1-MiB-per-envelope-ceiling chunks until the 16 MiB replay cap is
+    // exceeded and storage latches shut -- detected by two consecutive pushes producing the same
+    // stored count.
+    const LARGE = 'x'.repeat(900_000);
+    let storedCount = -1;
+    for (let i = 0; i < 40; i++) {
+      testSession.push({ type: 'assistant.message', text: LARGE });
+      await tick(5);
+      const replayed: AgentEventEnvelope[] = [];
+      sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+      if (replayed.length === storedCount) break;
+      storedCount = replayed.length;
+    }
+    expect(storedCount).toBeGreaterThan(0);
+    expect(storedCount).toBeLessThan(40); // the cap genuinely latched before the loop ran out
+
+    // A single tiny event now. Before the fix, `replayBytes` was only ever incremented on a
+    // successful push -- never on a skip -- so this could still satisfy `replayBytes + 10 <= cap`
+    // even with a large skipped event sitting between it and the last stored one, landing at the
+    // next array index with a `.sequence` far higher than that index. That silently breaks
+    // `subscribe()`'s replay contract, which serves `events[i]` as if `i` always equals that
+    // event's own `sequence`.
+    testSession.push({ type: 'assistant.message', text: 'tiny' });
+    await tick(20);
+
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed.length).toBe(storedCount); // the tiny event was NOT stored either
+    replayed.forEach((event, index) => expect(event.sequence).toBe(index)); // index == sequence, always
+  }, 15_000);
+});
+
 describe('SessionManager: replay', () => {
   it('a subscriber connecting after events were already emitted receives them via replay, in order', async () => {
     const { provider, sessionManager } = setup();
