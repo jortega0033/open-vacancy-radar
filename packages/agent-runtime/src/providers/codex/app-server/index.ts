@@ -11,3 +11,14 @@ export { CodexAppServerProtocolError, boundedUtf8, safeDisplay } from './errors.
 export { deferred, type Deferred } from './deferred.js';
 export { CodexAppServerRpc, type CodexAppServerRpcOptions, type IncomingRequestResponder, type RpcId } from './rpc.js';
 export { ManagedAppServerProcess, type ManagedAppServerProcessOptions } from './managed-process.js';
+export {
+  parseCodexAccountScope,
+  parseCodexModelCatalog,
+  resolveCodexSelectedModel,
+  toCodexContinuationEvidence,
+  type CodexAccountScope,
+  type CodexAppServerModel,
+  type CodexContinuationEvidence,
+} from './scope-evidence.js';
+export { probeCodexAppServerScope, type CodexAppServerScopeProbeOptions } from './scope-probe.js';
+export { CodexAppServerNormalizer } from './normalizer.js';

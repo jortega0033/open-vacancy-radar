@@ -46,18 +46,53 @@ export const CODEX_APP_SERVER_INCOMING_REQUEST_METHODS = Object.freeze([
   'mcpServer/elicitation/request',
 ] as const);
 
-/** Notifications the normalizer (`app-server/normalizer.ts`) translates into existing `AgentEvent`
- * members. `turn/completed` alone carries success/failure/interruption via its own `status` field
- * (verified directly against upstream's normalizer: there is no separate `turn/failed` method), so
- * no separate failure notification needs allowlisting. */
+/**
+ * The allowlist boundary here is deliberately wider than what the normalizer (`app-server/
+ * normalizer.ts`) turns into an `AgentEvent`: this list exists to answer "can a normal, successful
+ * single-turn run legitimately send this method at all," not "does this repo's v1 event model have
+ * something to do with it." A notification a real running session sends as an ordinary part of its
+ * protocol (in-progress deltas, plan/diff updates, status changes) but that this repo's normalizer
+ * has nothing to turn into a v1 `AgentEvent` is still allowlisted and consumed as a deliberate
+ * no-op -- leaving it off this list instead would make the RPC layer fail the whole session with
+ * `forbidden_method` the first time an entirely ordinary turn used a facet of the protocol nobody
+ * thought to allowlist. That failure mode (a real, successful-looking session dying on a method this
+ * repo simply doesn't act on) is worse than allowlisting and ignoring a few extra notifications, so
+ * this matches upstream's own full incoming-notification list except `account/rateLimits/updated`
+ * (tracked separately in #221, deliberately deferred until this repo has a `usage.rate_limits`
+ * event) and `remoteControl/status/changed`/`mcpServer/startupStatus/updated` (this transport never
+ * pairs with a remote-control client or configures MCP servers, so these two genuinely cannot
+ * fire). `warning` and `serverRequest/resolved` are deliberately kept, not excluded: the vendored
+ * schema shows `warning`'s `threadId` is optional -- it is a general-purpose caveat channel, not
+ * something tied to remote control or MCP, so a normal single-turn session can legitimately receive
+ * one -- and `serverRequest/resolved` is plausibly the server's own confirmation that one of the
+ * approval/elicitation requests this transport already auto-answers was resolved, which this
+ * transport's own auto-answer flow can trigger as an ordinary consequence. Excluding either would
+ * risk exactly the failure mode this whole widening exists to prevent.
+ *
+ * `turn/completed` alone carries success/failure/interruption via its own `status` field (verified
+ * directly against upstream's normalizer: there is no separate `turn/failed` method), so no
+ * separate failure notification needs allowlisting for that.
+ */
 export const CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS = Object.freeze([
   'thread/started',
+  'thread/status/changed',
+  'thread/tokenUsage/updated',
   'turn/started',
   'turn/completed',
+  'turn/plan/updated',
+  'turn/diff/updated',
   'item/started',
   'item/completed',
   'item/agentMessage/delta',
-  'thread/tokenUsage/updated',
+  'item/commandExecution/outputDelta',
+  'item/fileChange/outputDelta',
+  'item/fileChange/patchUpdated',
+  'item/mcpToolCall/progress',
+  'item/reasoning/summaryTextDelta',
+  'item/reasoning/summaryPartAdded',
+  'item/reasoning/textDelta',
+  'serverRequest/resolved',
+  'warning',
   'error',
 ] as const);
 
