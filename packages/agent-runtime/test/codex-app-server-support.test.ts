@@ -43,6 +43,48 @@ describe('method allowlists', () => {
   });
 });
 
+describe('CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS: pinned against upstream (drift guard)', () => {
+  it('is exactly upstream\'s full incoming-notification list minus the two genuinely-unreachable methods', () => {
+    // Upstream AgentDock's own app-server-support.ts constant (23 methods, commit 8d0d9ef,
+    // cross-verified against its normalizer.ts's own KNOWN_NOTIFICATION_METHODS set), hardcoded
+    // here so a future edit to this repo's list that silently drops a method upstream still sends
+    // -- or silently re-adds account/rateLimits/updated or a remote-control/MCP-server-lifecycle
+    // method that's deliberately excluded -- fails this test instead of drifting unnoticed.
+    const upstreamFullList = new Set([
+      'remoteControl/status/changed',
+      'warning',
+      'mcpServer/startupStatus/updated',
+      'account/rateLimits/updated',
+      'thread/started',
+      'thread/status/changed',
+      'turn/started',
+      'turn/completed',
+      'turn/plan/updated',
+      'turn/diff/updated',
+      'item/started',
+      'item/completed',
+      'item/agentMessage/delta',
+      'item/commandExecution/outputDelta',
+      'item/fileChange/outputDelta',
+      'item/fileChange/patchUpdated',
+      'item/mcpToolCall/progress',
+      'item/reasoning/summaryTextDelta',
+      'item/reasoning/summaryPartAdded',
+      'item/reasoning/textDelta',
+      'serverRequest/resolved',
+      'thread/tokenUsage/updated',
+      'error',
+    ]);
+    // Deliberately excluded: this transport never pairs with a remote-control client or
+    // configures MCP servers, so these two genuinely cannot fire (see app-server-support.ts's own
+    // doc comment). account/rateLimits/updated is separately deferred (#221) until this repo has
+    // a usage.rate_limits event.
+    const deliberatelyExcluded = new Set(['remoteControl/status/changed', 'mcpServer/startupStatus/updated', 'account/rateLimits/updated']);
+    const expected = new Set([...upstreamFullList].filter((method) => !deliberatelyExcluded.has(method)));
+    expect(new Set(CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS)).toEqual(expected);
+  });
+});
+
 describe('resolveCodexTransportMode', () => {
   it('defaults to "exec" when unset, not upstream\'s "auto" -- new infrastructure stays inert until an operator opts in', () => {
     expect(resolveCodexTransportMode(undefined)).toBe('exec');

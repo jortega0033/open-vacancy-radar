@@ -172,11 +172,21 @@ describe('CodexAppServerRpc: incoming frame validation', () => {
 });
 
 describe('CodexAppServerRpc: incoming server-initiated requests', () => {
-  it('fails fatally on an incoming request method that is not allowlisted', () => {
+  it('fails fatally on an incoming request method that is not allowlisted at all', () => {
     const { rpc, fatals } = setup();
-    rpc.acceptStdout(line({ id: 'srv-1', method: 'thread/status/changed', params: {} }));
+    rpc.acceptStdout(line({ id: 'srv-1', method: 'thread/fork/completed', params: {} }));
     expect(fatals).toHaveLength(1);
     expect((fatals[0] as CodexAppServerProtocolError).code).toBe('forbidden_method');
+  });
+
+  it('accepts a notification-only method sent as a request (carrying an id), matching upstream\'s own general incoming-method gate', () => {
+    // thread/status/changed is allowlisted as a notification (a real running session sends it
+    // routinely), but never as a request -- isCodexAppServerIncomingMethod's own definition is the
+    // union of both incoming lists, so this specifically proves handleIncomingRequest does not
+    // treat "on the notification list" as license to also accept it with an id attached.
+    const { rpc, fatals } = setup();
+    rpc.acceptStdout(line({ id: 'srv-1b', method: 'thread/status/changed', params: {} }));
+    expect(fatals).toHaveLength(0);
   });
 
   it('delivers an allowlisted server request to onRequest, and respond() writes a correctly-shaped response', async () => {
