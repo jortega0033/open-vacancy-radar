@@ -3,20 +3,33 @@
  * repo has actually exercised, and where each one's "accepted work" boundary sits.
  *
  * Ported from upstream AgentDock (`packages/agent-runtime/src/providers/compatibility-manifest.ts`
- * at commit 7aec0f1) and re-pinned to the two CLI versions this fork was verified against. The
- * upstream entry for a rich interactive transport is deliberately omitted: this repo ships exactly
- * one transport per provider (see LEGACY_ONE_SHOT_TRANSPORT_ID), and adding a second entry here is
- * the thing that would let the fallback gate ever say "allowed" (see providers/common/fallback-gate.ts).
+ * at commit 7aec0f1) and re-pinned to the CLI versions this fork was verified against.
+ *
+ * As of ADI-08 stage 6, this manifest lists **two** transport ids -- adding
+ * `CODEX_APP_SERVER_TRANSPORT_ID` is the first time this repo has registered a second transport for
+ * any provider. That alone does not arm `providers/common/fallback-gate.ts`: `FallbackGate` has no
+ * real caller anywhere in this repo yet (grep confirms it), so nothing today constructs a non-empty
+ * `alternateTransportIds` from this manifest and passes it to `authorize()`. This manifest entry is
+ * necessary but not sufficient for the gate to ever say "allowed" -- ADI-08 stage 7 is what wires a
+ * real call site that reads this manifest and finally makes the gate's already-tested non-empty-input
+ * behavior reachable. See fallback-gate.ts's own doc comment for the shipped-configuration claim this
+ * keeps intact for now.
  *
  * See docs/adr-agentdock-v2-provenance.md for the full three-way scope split.
  */
 
 /**
- * The only transport this repo has: `runProviderSession` spawning a provider CLI once,
+ * The only one-shot transport this repo has: `runProviderSession` spawning a provider CLI once,
  * non-interactively, reading its JSONL on stdout until it exits. Named rather than implied so the
  * fallback gate and the manifest can both refer to "the transport we actually ship" by identity.
  */
 export const LEGACY_ONE_SHOT_TRANSPORT_ID = 'legacy-one-shot';
+
+/**
+ * Codex's long-lived app-server JSON-RPC transport (`providers/codex/app-server/transport.ts`,
+ * ADI-08 stage 5). Not yet reachable from any adapter -- see this file's own doc comment above.
+ */
+export const CODEX_APP_SERVER_TRANSPORT_ID = 'codex-app-server';
 
 /**
  * Deliberately a wider union than `ProviderId`: a manifest entry describes a *CLI implementation*
@@ -41,8 +54,15 @@ export type ProviderImplementation = 'claude' | 'codex' | 'fake';
  * adapters now deliver their prompt over stdin. The value is deliberately kept rather than removed,
  * because it is still the value `acceptedWorkBoundaryFor` returns for an unrecognized
  * provider/version pairing — the fail-closed default, which must stay expressible.
+ *
+ * - `'turn-start-write-attempt'` (added ADI-08 stage 6) — the app-server transport never writes the
+ *   prompt to a process's stdin at all: `thread/start`/`turn/start` are individual JSON-RPC requests
+ *   over a connection that already exists (the process itself carries no prompt content at spawn
+ *   time -- see `transport.ts`). The safe-to-retry point is therefore before the `turn/start` request
+ *   is written, not before any stdin byte; everything up through a successful `thread/start` is
+ *   provably retryable on its own, since it can't yet have executed anything on the user's behalf.
  */
-export type AcceptedWorkBoundary = 'first-prompt-byte-to-stdin' | 'process-spawn-attempt';
+export type AcceptedWorkBoundary = 'first-prompt-byte-to-stdin' | 'process-spawn-attempt' | 'turn-start-write-attempt';
 
 export interface ProviderCompatibilityManifestEntry {
   readonly provider: ProviderImplementation;
@@ -53,6 +73,18 @@ export interface ProviderCompatibilityManifestEntry {
   /** Names the conformance fixture corpus this pairing is expected to satisfy. */
   readonly fixtureSet: string;
 }
+
+/**
+ * Upstream AgentDock gives the app-server entry a *separate* interface, carrying a pinned SHA-256 of
+ * its vendored `codex app-server generate-json-schema` bundle plus the artifact path that hash
+ * covers -- because upstream vendors that schema file and gates the whole transport on it matching
+ * exactly. This repo does not vendor that schema file (Stage 1-5's own review work read it from a
+ * local clone of the upstream repo, never checked a copy into this one -- see the ADI-08 staged-plan
+ * comment on issue #126), so there is no schema digest here to pin and no divergent field set that
+ * would justify a second interface. `CODEX_APP_SERVER_COMPATIBILITY` below reuses the plain
+ * `ProviderCompatibilityManifestEntry` shape, matching this repo's own established pattern of
+ * shipping narrower than upstream rather than replicating infrastructure with nothing behind it.
+ */
 
 /**
  * Claude Code. `providers/claude/adapter.ts` sets `promptViaStdin: true` and
@@ -96,8 +128,26 @@ export const CODEX_LEGACY_COMPATIBILITY: ProviderCompatibilityManifestEntry = Ob
   fixtureSet: 'codex-legacy-0.147.0-v1',
 });
 
+/**
+ * Codex app-server, matching Stage 5's `transport.ts`. Same `providerVersion` pin as the legacy
+ * entry above -- both describe the same installed `codex-cli 0.147.0` binary, just two different
+ * ways of talking to it.
+ *
+ * `fixtureSet` names `codex-app-server-transport.test.ts`'s live-fixture-process suite (Stage 5)
+ * rather than a replayed-JSON-file corpus like the other entries: the app-server transport is a
+ * long-lived JSON-RPC connection, not a one-shot JSONL replay, so there is no equivalent static
+ * fixture file set for it to name.
+ */
+export const CODEX_APP_SERVER_COMPATIBILITY: ProviderCompatibilityManifestEntry = Object.freeze({
+  provider: 'codex',
+  providerVersion: '0.147.0',
+  transportId: CODEX_APP_SERVER_TRANSPORT_ID,
+  acceptedWorkBoundary: 'turn-start-write-attempt',
+  fixtureSet: 'codex-app-server-0.147.0-live-fixture-v1',
+});
+
 export const PROVIDER_COMPATIBILITY_MANIFEST: readonly ProviderCompatibilityManifestEntry[] =
-  Object.freeze([CLAUDE_LEGACY_COMPATIBILITY, CODEX_LEGACY_COMPATIBILITY]);
+  Object.freeze([CLAUDE_LEGACY_COMPATIBILITY, CODEX_LEGACY_COMPATIBILITY, CODEX_APP_SERVER_COMPATIBILITY]);
 
 /**
  * Exact-match lookup. There is deliberately no version-range matching and no "nearest version"

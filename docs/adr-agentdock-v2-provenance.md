@@ -340,13 +340,19 @@ visible at every use site rather than letting a reader assume the scope binds to
 ### The fallback gate is provably always-deny in the shipped configuration
 
 `FallbackGate.authorize()` denies with `no_alternate_transport` whenever `alternateTransportIds` is
-empty, and **nothing in this repo registers a second transport id**: `compatibility-manifest.ts`
-defines exactly one (`legacy-one-shot`) and both adapters use it. So every reachable call today
-denies. This is enforced by code and pinned by a test, not merely asserted in a comment:
-`test/fallback-gate.test.ts` exhausts the full `AcceptedWorkState x ProviderDeliveryState x terminal`
-product (18 cases) against an empty alternate list and requires a denial for every one. The rest of
-the gate's rules are implemented and tested anyway, so that the ticket introducing a second transport
-turns the gate on against already-reviewed logic rather than writing safety rules under deadline.
+empty. As of ADI-08 stage 6, `compatibility-manifest.ts` registers a **second** transport id
+(`codex-app-server`, alongside `legacy-one-shot`) — but `FallbackGate` still has no real caller
+anywhere in this repo (every construction and every `.authorize()` call lives in test code), so a
+second manifest entry existing is not the same claim as the gate ever returning `allowed: true` in
+production. Every reachable call today still denies. This is enforced by code and pinned by tests,
+not merely asserted in a comment: `test/fallback-gate.test.ts` exhausts the full
+`AcceptedWorkState x ProviderDeliveryState x terminal` product (18 cases) against an empty alternate
+list, and — since stage 6 — a second, parallel 17-case run of the same product against a real,
+non-empty `alternateTransportIds` populated from the manifest's actual transport ids, proving the
+manifest change alone creates no new allow path for anything but the one genuinely safe combination.
+The rest of the gate's rules are implemented and tested anyway, so that the ticket giving the gate its
+first real caller (ADI-08 stage 7) turns it on against already-reviewed logic rather than writing
+safety rules under deadline.
 
 ### One behavioral change that is not purely additive
 

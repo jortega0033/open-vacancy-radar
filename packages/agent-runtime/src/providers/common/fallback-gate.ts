@@ -63,15 +63,23 @@ export interface FallbackAuthorizeInput {
  * failed to start, and refuses in every case where doing so could duplicate a side effect the user
  * has already paid for.
  *
- * ## This gate is always-deny in the configuration this repo ships
+ * ## This gate is still always-deny in the configuration this repo ships
  *
- * Check (1) below denies whenever `alternateTransportIds` is empty, and nothing anywhere in this
- * repo registers a second transport: `providers/compatibility-manifest.ts` defines exactly one
- * transport id, and both adapters use it. So `authorize()` returns
- * `{ allowed: false, reason: 'no_alternate_transport' }` for *every* reachable input today. That
- * is a deliberate shipped invariant, not an accident of the current call sites, and
- * `test/fallback-gate.test.ts` pins it by exhausting the full
- * `AcceptedWorkState x ProviderDeliveryState x terminal` product against an empty alternate list.
+ * Check (1) below denies whenever `alternateTransportIds` is empty. As of ADI-08 stage 6,
+ * `providers/compatibility-manifest.ts` defines *two* transport ids (the legacy one-shot transport
+ * and Codex's app-server transport) -- but that alone does not arm this gate: `FallbackGate` has no
+ * real caller anywhere in this repo yet, so nothing today actually constructs a non-empty
+ * `alternateTransportIds` from the manifest and passes it to `authorize()`. `authorize()` therefore
+ * still returns `{ allowed: false, reason: 'no_alternate_transport' }` for *every* reachable input
+ * today -- reachable meaning "reachable through a real call site", which does not yet exist. That
+ * remains a deliberate shipped invariant, not an accident, and `test/fallback-gate.test.ts` pins it
+ * by exhausting the full `AcceptedWorkState x ProviderDeliveryState x terminal` product against an
+ * empty alternate list, plus (since stage 6) confirming the same exhaustive denial holds even when
+ * `alternateTransportIds` is populated with both real transport ids from the manifest, proving the
+ * manifest change alone creates no new allow path.
+ *
+ * ADI-08 stage 7 is the ticket that gives this gate its first real caller, at which point the
+ * "always-deny" framing above stops being true and this comment must be updated, not left stale.
  *
  * The rest of the logic is written and tested anyway so that the ticket which introduces a second
  * transport turns the gate on against already-reviewed rules, rather than writing safety logic

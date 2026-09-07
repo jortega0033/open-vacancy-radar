@@ -8,7 +8,10 @@ import {
   type ProviderDeliveryState,
 } from '../src/providers/common/fallback-gate.js';
 import { freezeLaunchScope, type FrozenLaunchScope } from '../src/providers/common/launch-scope.js';
-import { LEGACY_ONE_SHOT_TRANSPORT_ID } from '../src/providers/compatibility-manifest.js';
+import {
+  CODEX_APP_SERVER_TRANSPORT_ID,
+  LEGACY_ONE_SHOT_TRANSPORT_ID,
+} from '../src/providers/compatibility-manifest.js';
 import type { StartSessionOptions } from '../src/types.js';
 
 const status: ProviderStatus = {
@@ -95,6 +98,72 @@ describe('shipped configuration is provably always-deny', () => {
       alternateTransportIds: [],
     });
     expect(decision.allowed).toBe(false);
+  });
+});
+
+/**
+ * ADI-08 stage 6 gave `providers/compatibility-manifest.ts` a second real transport id
+ * (`CODEX_APP_SERVER_TRANSPORT_ID`). This re-runs the exact same exhaustive
+ * `AcceptedWorkState x ProviderDeliveryState x terminal` product as the always-deny suite above, but
+ * with `alternateTransportIds` populated from the real manifest transport ids instead of `[]` --
+ * proving the manifest change alone creates no new allow path for any input except the one genuinely
+ * safe combination (pinned separately below, not folded into this matrix).
+ */
+describe('registering a second real transport id does not create any new allow path (ADI-08 stage 6)', () => {
+  const realAlternateTransportIds = [CODEX_APP_SERVER_TRANSPORT_ID];
+  const cases = ACCEPTED_WORK_STATES.flatMap((acceptedWork) =>
+    DELIVERY_STATES.flatMap((delivery) =>
+      [false, true].map((terminal) => ({ acceptedWork, delivery, terminal })),
+    ),
+  ).filter((c) => !(c.acceptedWork === 'not_accepted' && c.delivery === 'not_delivered' && !c.terminal));
+
+  it('the matrix, minus the one genuinely safe combination, still has 17 cases', () => {
+    expect(cases).toHaveLength(17);
+  });
+
+  it.each(cases)(
+    'still denies for acceptedWork=$acceptedWork delivery=$delivery terminal=$terminal, with a real non-empty alternateTransportIds',
+    ({ acceptedWork, delivery, terminal }) => {
+      const gate = new FallbackGate(primaryScope());
+      const decision = gate.authorize({
+        candidate: primaryScope(),
+        acceptedWork,
+        delivery,
+        alternateTransportIds: realAlternateTransportIds,
+        terminal,
+      });
+      expect(decision.allowed).toBe(false);
+      // Never no_alternate_transport here: this is the one thing that must be different from the
+      // always-deny suite above, proving this test actually exercises a distinct code path rather
+      // than accidentally re-running the same denial for the same reason.
+      if (!decision.allowed) expect(decision.reason).not.toBe('no_alternate_transport');
+    },
+  );
+
+  it('the one genuinely safe combination allows, once a real alternate transport id exists', () => {
+    const gate = new FallbackGate(primaryScope());
+    const decision = gate.authorize({
+      candidate: primaryScope(),
+      acceptedWork: 'not_accepted',
+      delivery: 'not_delivered',
+      alternateTransportIds: realAlternateTransportIds,
+      terminal: false,
+    });
+    expect(decision).toEqual({ allowed: true, attempt: 1, scope: primaryScope() });
+  });
+
+  it('denies with scope_mismatch when the candidate was launched on the app-server transport instead of the primary\'s legacy one', () => {
+    const gate = new FallbackGate(primaryScope());
+    const candidate = freezeLaunchScope(status, start, CODEX_APP_SERVER_TRANSPORT_ID);
+    expect(
+      gate.authorize({
+        candidate,
+        acceptedWork: 'not_accepted',
+        delivery: 'not_delivered',
+        alternateTransportIds: realAlternateTransportIds,
+        terminal: false,
+      }),
+    ).toEqual({ allowed: false, reason: 'scope_mismatch' });
   });
 });
 

@@ -4,6 +4,8 @@ import { buildCodexArgs } from '../src/providers/codex/build-args.js';
 import {
   acceptedWorkBoundaryFor,
   CLAUDE_LEGACY_COMPATIBILITY,
+  CODEX_APP_SERVER_COMPATIBILITY,
+  CODEX_APP_SERVER_TRANSPORT_ID,
   CODEX_LEGACY_COMPATIBILITY,
   findProviderCompatibility,
   LEGACY_ONE_SHOT_TRANSPORT_ID,
@@ -11,14 +13,24 @@ import {
 } from '../src/providers/compatibility-manifest.js';
 
 describe('PROVIDER_COMPATIBILITY_MANIFEST', () => {
-  it('pins the two exact CLI versions this fork was verified against', () => {
+  it('pins the exact CLI versions this fork was verified against', () => {
     expect(CLAUDE_LEGACY_COMPATIBILITY.providerVersion).toBe('2.1.228');
     expect(CODEX_LEGACY_COMPATIBILITY.providerVersion).toBe('0.147.0');
+    expect(CODEX_APP_SERVER_COMPATIBILITY.providerVersion).toBe('0.147.0');
   });
 
-  it('declares exactly one transport, which is what keeps the fallback gate always-deny', () => {
+  it('declares exactly two transports (ADI-08 stage 6) -- the first time this repo has more than one for a provider', () => {
     const transports = new Set(PROVIDER_COMPATIBILITY_MANIFEST.map((e) => e.transportId));
-    expect([...transports]).toEqual([LEGACY_ONE_SHOT_TRANSPORT_ID]);
+    expect([...transports].sort()).toEqual([CODEX_APP_SERVER_TRANSPORT_ID, LEGACY_ONE_SHOT_TRANSPORT_ID].sort());
+  });
+
+  it('registering a second transport here does not by itself arm the fallback gate -- see fallback-gate.test.ts', () => {
+    // FallbackGate has no real caller anywhere in this repo yet (ADI-08 stage 7 adds one), so a
+    // second manifest entry existing is not the same claim as the gate ever returning allowed:true
+    // in shipped behavior. This test exists only to point a future reader at where that claim is
+    // actually proven, since it is easy to assume "two transports in the manifest" already means
+    // "fallback is live".
+    expect(PROVIDER_COMPATIBILITY_MANIFEST.length).toBeGreaterThan(1);
   });
 
   it('is frozen, entries included', () => {
@@ -52,6 +64,13 @@ describe('PROVIDER_COMPATIBILITY_MANIFEST', () => {
       expect(buildCodexArgs(opts).join(' ')).not.toContain(prompt);
       expect(buildCodexArgs({ ...opts, resumeProviderSessionId: 'thread-1' }).join(' ')).not.toContain(prompt);
       expect(CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary).toBe('first-prompt-byte-to-stdin');
+    });
+
+    it('codex app-server never writes the prompt to a process stdin at all, so its boundary is the turn/start write (ADI-08 stage 6)', () => {
+      // Nothing to assert against build-args.ts here: the app-server transport (transport.ts) has
+      // no argv-building step comparable to buildCodexArgs -- the prompt travels as a turn/start
+      // JSON-RPC param over an already-open connection, never as process argv or a raw stdin byte.
+      expect(CODEX_APP_SERVER_COMPATIBILITY.acceptedWorkBoundary).toBe('turn-start-write-attempt');
     });
 
     it('leaves no manifest entry claiming the argv boundary, since no adapter uses it any more', () => {
@@ -97,6 +116,16 @@ describe('findProviderCompatibility', () => {
     expect(findProviderCompatibility('claude', '2.1.228', 'rich-interactive')).toBeUndefined();
   });
 
+  it('finds the codex app-server entry by its own transport id, distinct from the legacy one', () => {
+    expect(findProviderCompatibility('codex', '0.147.0', CODEX_APP_SERVER_TRANSPORT_ID)).toBe(
+      CODEX_APP_SERVER_COMPATIBILITY,
+    );
+    // Same provider, same version, different transport id -- must not cross-match either direction.
+    expect(findProviderCompatibility('codex', '0.147.0', LEGACY_ONE_SHOT_TRANSPORT_ID)).toBe(
+      CODEX_LEGACY_COMPATIBILITY,
+    );
+  });
+
   it('misses on a provider with no manifest entry at all', () => {
     expect(findProviderCompatibility('fake', '1.0.0', LEGACY_ONE_SHOT_TRANSPORT_ID)).toBeUndefined();
   });
@@ -124,9 +153,10 @@ describe('acceptedWorkBoundaryFor fails closed on a manifest miss', () => {
     expect(acceptedWorkBoundaryFor(undefined)).not.toBe('first-prompt-byte-to-stdin');
   });
 
-  it('returns the entry boundary when there is a real match, for both providers', () => {
+  it('returns the entry boundary when there is a real match, for every shipped entry', () => {
     expect(acceptedWorkBoundaryFor(CLAUDE_LEGACY_COMPATIBILITY)).toBe('first-prompt-byte-to-stdin');
     expect(acceptedWorkBoundaryFor(CODEX_LEGACY_COMPATIBILITY)).toBe('first-prompt-byte-to-stdin');
+    expect(acceptedWorkBoundaryFor(CODEX_APP_SERVER_COMPATIBILITY)).toBe('turn-start-write-attempt');
   });
 
   it('still fails closed to the argv boundary even though no entry declares it (ADI-14)', () => {
