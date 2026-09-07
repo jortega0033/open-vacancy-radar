@@ -19,14 +19,18 @@ import { InvalidWorkspacePathError, UncWorkspacePathError } from '../workspace-i
  *
  * Every field here is a literal written in this file. No part of it is derived from an exception, a
  * path, or anything else the filesystem produced -- see `appendAudit` for why that matters. The
- * three cases are kept distinct because the operator action differs: archive the log, restart the
- * daemon, or look at the daemon log.
+ * three cases are kept distinct because the operator action differs: `audit_log_full` needs no
+ * operator action at all since ADI-18 -- the store rotates the log to an archive segment and keeps
+ * accepting entries on its own; the code below is now reached only for the one thing rotation
+ * cannot fix, a single entry too large to fit even a fresh empty file, so seeing it in the wild
+ * points at a schema bound, not a full disk. The other two still mean restart the daemon, or look
+ * at the daemon log.
  */
 export const AUDIT_FAILURES = {
   audit_log_full: {
     status: 507,
     code: 'audit_log_full',
-    message: 'the workspace audit log is full, so this action was refused rather than performed unrecorded',
+    message: 'this audit entry does not fit within the workspace audit log\'s size cap, so this action was refused rather than performed unrecorded',
   },
   audit_unavailable: {
     status: 503,

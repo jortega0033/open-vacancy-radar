@@ -101,35 +101,146 @@ describe('AuditStore: sequencing and durability', () => {
   });
 });
 
-describe('AuditStore: the byte cap denies rather than evicting', () => {
-  it('throws AuditCapacityError instead of dropping the oldest entry', async () => {
+describe('AuditStore: the byte cap rotates rather than evicting or denying forever', () => {
+  function segmentFiles(): string[] {
+    return readdirSync(join(stateRoot, 'workspace-audit')).filter((name) => name !== 'audit.jsonl' && name !== 'quarantine');
+  }
+
+  it('rotates the full file to an archive segment and keeps accepting new entries, instead of refusing forever', async () => {
     // Sized so a couple of entries fit and the next does not.
     const store = new AuditStore({ stateRoot, maxBytes: 900 });
     const first = await store.append(entry({ event: 'grant.issued' }));
+    const second = await store.append(entry({ event: 'grant.consumed' }));
 
-    let denied: unknown;
-    for (let i = 0; i < 20; i++) {
-      try {
-        await store.append(entry());
-      } catch (err) {
-        denied = err;
-        break;
-      }
-    }
+    // The next append is the one that trips the cap and triggers a rotation, transparently to the
+    // caller: it still resolves, never rejects.
+    const third = await store.append(entry({ event: 'trust.granted' }));
 
-    expect(denied).toBeInstanceOf(AuditCapacityError);
-    // The opposite of SessionLineageStore's policy, and the point of this test: the OLDEST entry is
-    // still there. Nothing was evicted to make room, because forgetting an audited decision is a
-    // worse outcome than refusing the next one.
-    const onDisk = readFileSync(logPath(), 'utf8');
-    expect(onDisk).toContain(first.entryId);
+    expect(store.unhealthy).toBe(false);
+    // The opposite of SessionLineageStore's policy, and the point of this test: no entry was ever
+    // evicted to make room. `first` and `second` moved into the sealed archive segment, and
+    // nothing about their own fields (entryId, sequence, content) changed there.
+    const segments = segmentFiles();
+    expect(segments).toHaveLength(1);
+    const archived = readFileSync(join(stateRoot, 'workspace-audit', segments[0] as string), 'utf8');
+    expect(archived).toContain(first.entryId);
+    expect(archived).toContain(second.entryId);
+    expect(archived).not.toContain(third.entryId);
+
+    // The fresh active file starts a brand new sequence at 0, not a continuation of the old file's.
+    const active = readFileSync(logPath(), 'utf8').trim().split('\n');
+    expect(active).toHaveLength(1);
+    expect((JSON.parse(active[0] as string) as { sequence: number }).sequence).toBe(0);
+    expect(third.sequence).toBe(0);
+    expect(store.entryCount).toBe(1);
   });
 
-  it('does not latch unhealthy on a capacity refusal: a full log is recoverable, a broken one is not', async () => {
-    const store = new AuditStore({ stateRoot, maxBytes: 400 });
-    await expect(store.append(entry())).resolves.toBeDefined();
+  it('still throws AuditCapacityError for a single entry that would not fit even in a freshly-rotated, empty file', async () => {
+    // No entry can ever fit under this cap -- rotating would only ever produce another empty file
+    // just as unable to hold it, so this must fail closed rather than rotate forever.
+    const store = new AuditStore({ stateRoot, maxBytes: 10 });
     await expect(store.append(entry())).rejects.toBeInstanceOf(AuditCapacityError);
     expect(store.unhealthy).toBe(false);
+    expect(segmentFiles()).toHaveLength(0);
+  });
+
+  it('does not latch unhealthy on a rotation: the store keeps accepting appends across many rotations', async () => {
+    const store = new AuditStore({ stateRoot, maxBytes: 500 });
+    for (let i = 0; i < 15; i++) {
+      await expect(store.append(entry())).resolves.toBeDefined();
+    }
+    expect(store.unhealthy).toBe(false);
+    expect(segmentFiles().length).toBeGreaterThan(1);
+  });
+
+  it('many rotations landing on the identical millisecond do not collide: every entry survives exactly once, none silently overwritten', async () => {
+    // A fixed `now()` -- never advancing -- is exactly the scenario that would make every rotation
+    // compute the same `<epoch-ms>` if the archive filename had no other uniqueness component. A
+    // tight cap forces a rotation on nearly every append, so several segments land on that one
+    // frozen timestamp. This deliberately does not try to predict which entry ends up in which
+    // segment (that boundary shifts by one every time a rotation-triggering append itself becomes
+    // the next segment's first entry) -- it only asserts the real invariant: nothing written is
+    // ever lost or duplicated, regardless of how the rotations land.
+    const frozenNow = new Date('2026-01-01T00:00:00.000Z');
+    const store = new AuditStore({ stateRoot, maxBytes: 500, now: () => frozenNow });
+
+    const written = [];
+    for (let i = 0; i < 12; i++) written.push(await store.append(entry()));
+
+    const segments = segmentFiles();
+    expect(segments.length).toBeGreaterThan(1); // several rotations actually happened, all at the same timestamp
+    const onDiskFiles = [...segments.map((name) => join(stateRoot, 'workspace-audit', name)), logPath()];
+    const onDiskEntryIds = onDiskFiles.flatMap((path) =>
+      readFileSync(path, 'utf8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => (JSON.parse(line) as { entryId: string }).entryId),
+    );
+    expect(onDiskEntryIds.sort()).toEqual(written.map((record) => record.entryId).sort());
+  });
+
+  it('a restart after rotation reloads only the active segment, validated as its own contiguous-from-zero log', async () => {
+    const first = new AuditStore({ stateRoot, maxBytes: 900 });
+    await first.append(entry());
+    await first.append(entry());
+    await first.append(entry()); // rotates; this one lands at sequence 0 of a fresh file
+
+    const reopened = new AuditStore({ stateRoot, maxBytes: 900 });
+    expect(reopened.entryCount).toBe(1);
+    const next = await reopened.append(entry());
+    expect(next.sequence).toBe(1);
+  });
+});
+
+describe('AuditStore: archive segment expiry (ADI-18)', () => {
+  function segmentFiles(): string[] {
+    return readdirSync(join(stateRoot, 'workspace-audit')).filter((name) => name !== 'audit.jsonl' && name !== 'quarantine');
+  }
+
+  it('deletes an archive segment older than maxSegmentAgeMs on load, never the active file', async () => {
+    let now = new Date('2026-01-01T00:00:00.000Z');
+    const store = new AuditStore({ stateRoot, maxBytes: 900, maxSegmentAgeMs: 1000, now: () => now });
+    await store.append(entry());
+    await store.append(entry());
+    await store.append(entry()); // rotates -- one segment now on disk, timestamped at `now`
+    expect(segmentFiles()).toHaveLength(1);
+
+    now = new Date(now.getTime() + 2000); // past maxSegmentAgeMs
+    const reopened = new AuditStore({ stateRoot, maxBytes: 900, maxSegmentAgeMs: 1000, now: () => now });
+    expect(segmentFiles()).toHaveLength(0); // pruned on load
+    expect(fs.existsSync(logPath())).toBe(true); // the active segment is untouched
+    expect(reopened.entryCount).toBe(1);
+  });
+
+  it('keeps a segment younger than maxSegmentAgeMs', async () => {
+    let now = new Date('2026-01-01T00:00:00.000Z');
+    const store = new AuditStore({ stateRoot, maxBytes: 900, maxSegmentAgeMs: 100_000, now: () => now });
+    await store.append(entry());
+    await store.append(entry());
+    await store.append(entry());
+    expect(segmentFiles()).toHaveLength(1);
+
+    now = new Date(now.getTime() + 1000); // well within maxSegmentAgeMs
+    new AuditStore({ stateRoot, maxBytes: 900, maxSegmentAgeMs: 100_000, now: () => now });
+    expect(segmentFiles()).toHaveLength(1);
+  });
+
+  it('prunes an expired segment immediately after a later rotation, not only at the next daemon restart', async () => {
+    let now = new Date('2026-01-01T00:00:00.000Z');
+    const store = new AuditStore({ stateRoot, maxBytes: 900, maxSegmentAgeMs: 1000, now: () => now });
+    await store.append(entry());
+    await store.append(entry());
+    await store.append(entry()); // rotation #1
+    expect(segmentFiles()).toHaveLength(1);
+
+    now = new Date(now.getTime() + 2000); // rotation #1's segment is now expired
+    await store.append(entry());
+    await store.append(entry());
+    await store.append(entry()); // rotation #2 (same 2-fit/3rd-rotates pattern as rotation #1), same still-open store instance, no restart
+    const segments = segmentFiles();
+    // Rotation #1's segment was pruned; only rotation #2's fresh segment remains.
+    expect(segments).toHaveLength(1);
   });
 });
 

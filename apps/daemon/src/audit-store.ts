@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { Logger } from '@agent-dock/agent-runtime';
 import { auditEntryV2Schema, type AuditEntryV2 } from '@agent-dock/shared';
-import { appendDurably, quarantine } from './durable-store/atomic-fs.js';
+import { appendDurably, assertContainedIn, quarantine, syncDirectory } from './durable-store/atomic-fs.js';
 
 /**
  * The append-only audit log for workspace trust decisions (ADI-06).
@@ -16,10 +16,15 @@ import { appendDurably, quarantine } from './durable-store/atomic-fs.js';
  * ## The retention policy is the opposite of `SessionLineageStore`'s, on purpose
  *
  * `SessionLineageStore` evicts its oldest records when it hits its quota, because losing old session
- * history degrades a feature. This store **throws** when it hits its cap, because an audit log that
- * silently forgets is not an audit log. The consequence is deliberate and is the whole design: when
- * the log cannot record a decision, the decision is refused. Refusing to grant access to a
- * workspace is a recoverable inconvenience; granting access that nothing recorded is not.
+ * history degrades a feature. This store never evicts an entry to make room, because an audit log
+ * that silently forgets is not an audit log. What happens instead when the cap is hit is **rotation**
+ * (ADI-18), not eviction: the full active file is renamed aside, whole and unmodified, to an
+ * immutable timestamped archive segment, and a fresh file starts at sequence 0. No surviving entry's
+ * own fields are ever rewritten or renumbered, and nothing already recorded is ever lost -- only the
+ * file it lives in changes. Archive segments older than `#maxSegmentAgeMs` are deleted whole (never
+ * partially rewritten) once per store lifetime, at load; the active segment is never a candidate.
+ * `AuditCapacityError` still exists, narrowed to the one case rotation cannot fix: a single entry
+ * that would not fit even in a freshly-rotated, empty file.
  *
  * ## Three properties, and what enforces each
  *
@@ -30,9 +35,10 @@ import { appendDurably, quarantine } from './durable-store/atomic-fs.js';
  *    every subsequent `append()` throws. Without the latch, a write that failed halfway would be
  *    followed by later entries at higher sequence numbers, and the gap would be indistinguishable
  *    from deliberate tampering on the next load.
- * 3. **Truncation is detectable.** Sequences are validated as contiguous from zero at load. Any gap,
- *    any unparseable line, and any non-zero starting sequence quarantines the file (never deletes
- *    it) and starts a fresh log.
+ * 3. **Truncation is detectable, within the active segment.** Sequences are validated as contiguous
+ *    from zero at load. Any gap, any unparseable line, and any non-zero starting sequence quarantines
+ *    the *active* file (never deletes it) and starts a fresh log. This property is scoped to
+ *    whichever file is currently active: see "What rotation costs" below for what it does not cover.
  *
  * ## Why there is no hash chain (D5)
  *
@@ -42,6 +48,26 @@ import { appendDurably, quarantine } from './durable-store/atomic-fs.js';
  * user. Shipping one would look like tamper-evidence while providing none. Contiguous-sequence
  * validation makes the honest, smaller claim it can actually keep: truncation and deletion are
  * detected, editing is not.
+ *
+ * ## What rotation costs (ADI-18)
+ *
+ * Rotation is a genuine, deliberate tradeoff, not a free one, and the same "honest claim, not fake
+ * tamper-evidence" reasoning above applies to it: a linked-chain-of-segments design was considered
+ * and rejected here for the identical reason a hash chain was -- the same-user attacker who can
+ * already edit or delete a file can just as easily edit whatever chain-of-custody record would
+ * point at it. So this is disclosed rather than hidden behind an illusion of protection: once a
+ * segment is rotated away, nothing in this class ever re-opens, re-parses, or re-validates it again
+ * (`#pruneExpiredSegments` only ever inspects filenames and ages, never contents). Before rotation
+ * existed, the same-user attacker's only tamper-evidence-free move was deleting the *entire* single
+ * log (an obviously drastic act, and losing everything). After rotation, that same attacker can
+ * delete or edit exactly one archived segment -- a more surgical, lower-collateral erasure of one
+ * time window -- while every other segment, including the active one, stays fully valid. Contiguous-
+ * sequence validation still catches tampering with the *active* segment; it does not, and structurally
+ * cannot without reintroducing a fake-tamper-evidence chain, catch tampering with an already-rotated
+ * one. `#pruneExpiredSegments`'s own age cutoff is likewise measured against wall-clock time
+ * (`#now()`), which the same already-assumed attacker can move on their own machine to prune a
+ * segment before its real 90-day window -- an inherent limitation of any local, non-monotonic
+ * retention clock, not something this store can close without a trusted time source it does not have.
  */
 
 const STORE_DIR = 'workspace-audit';
@@ -51,17 +77,24 @@ const QUARANTINE_DIR = 'quarantine';
 /** 64 MB. At roughly 300 bytes per entry that is over 200,000 decisions, which no local user reaches. */
 export const DEFAULT_AUDIT_MAX_BYTES = 64 * 1024 * 1024;
 
+/** How long a rotated (no longer active) archive segment survives before deletion (ADI-18).
+ * Deliberately long: a safety-net age cap on top of the size cap above, not a short-lived cache. */
+export const DEFAULT_AUDIT_SEGMENT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+
 /** Default page size for `list()`, matching the v2 read routes' own default. */
 export const DEFAULT_AUDIT_PAGE_LIMIT = 50;
 
-/** Thrown when the log has reached its byte cap. The caller must deny whatever it was about to do. */
+/** Thrown only when a single entry would not fit even in a freshly-rotated, empty log -- the one
+ * case rotation cannot resolve, since rotating again still leaves an empty file too small for it.
+ * The caller must deny whatever it was about to do. */
 export class AuditCapacityError extends Error {
   readonly code = 'audit_log_full';
 
   constructor(maxBytes: number) {
     super(
-      `the workspace audit log has reached its ${maxBytes}-byte cap. Actions that require an audit ` +
-        'entry are refused until it is archived: an unrecorded grant is not an acceptable fallback.',
+      `a single workspace audit entry does not fit within the ${maxBytes}-byte log cap, even in a ` +
+        'freshly-rotated, empty file. Actions that require an audit entry are refused: an ' +
+        'unrecorded grant is not an acceptable fallback.',
     );
     this.name = 'AuditCapacityError';
   }
@@ -89,6 +122,8 @@ export interface AuditStoreOptions {
   logger?: Logger;
   now?: () => Date;
   maxBytes?: number;
+  /** Overrides `DEFAULT_AUDIT_SEGMENT_MAX_AGE_MS`. Exposed for tests. */
+  maxSegmentAgeMs?: number;
 }
 
 export interface AuditPage {
@@ -116,6 +151,7 @@ export class AuditStore {
   readonly #logger: Logger;
   readonly #now: () => Date;
   readonly #maxBytes: number;
+  readonly #maxSegmentAgeMs: number;
 
   /** Every entry currently on disk, in sequence order. Small and bounded by `#maxBytes`. */
   #entries: AuditEntryV2[] = [];
@@ -132,6 +168,7 @@ export class AuditStore {
     this.#logger = options.logger ?? noopLogger;
     this.#now = options.now ?? (() => new Date());
     this.#maxBytes = options.maxBytes ?? DEFAULT_AUDIT_MAX_BYTES;
+    this.#maxSegmentAgeMs = options.maxSegmentAgeMs ?? DEFAULT_AUDIT_SEGMENT_MAX_AGE_MS;
 
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.#load();
@@ -160,6 +197,7 @@ export class AuditStore {
    * evidence (`quarantine` never deletes), which is the entire reason the file mattered.
    */
   #load(): void {
+    this.#pruneExpiredSegments();
     if (!existsSync(this.#logPath)) return;
 
     let raw: string;
@@ -268,10 +306,18 @@ export class AuditStore {
     const line = JSON.stringify(entry);
     const lineBytes = Buffer.byteLength(line, 'utf8') + 1; // + the newline appendDurably adds
     if (this.#bytes + lineBytes > this.#maxBytes) {
-      // Deliberately NOT latched as unhealthy: a full log is a recoverable condition (archive the
-      // file and restart), not a broken one, and latching would keep refusing even after the
-      // operator fixed it. It still denies the action, which is the part that matters.
-      throw new AuditCapacityError(this.#maxBytes);
+      if (this.#bytes === 0) {
+        // Nothing to rotate: this single entry alone does not fit even in an empty file. Rotating
+        // again would produce another empty file just as unable to hold it.
+        throw new AuditCapacityError(this.#maxBytes);
+      }
+      // Seal the current file into an archive segment and start a fresh one at sequence 0, then
+      // retry this same append against it (issue ADI-18) -- rather than refusing forever, per the
+      // class doc comment above. Re-entering `#appendNow` re-derives `entry`/`line`/`lineBytes`
+      // against the now-empty state, which also gives the retried entry an honest `recordedAt` for
+      // when it actually landed, not the moment rotation was merely decided.
+      this.#rotate();
+      return this.#appendNow(input);
     }
 
     try {
@@ -290,6 +336,118 @@ export class AuditStore {
     this.#nextSequence += 1;
     this.#bytes += lineBytes;
     return entry;
+  }
+
+  /** The archive segment name for a rotation happening at `rotatedAt`: the active log's own
+   * basename with `.jsonl` replaced by `.<epoch-ms>-<8 hex chars>.jsonl`, so segments sort
+   * chronologically by name and `#pruneExpiredSegments` can recognize and age them without a
+   * separate manifest. The random suffix (mirroring `quarantine()`'s own UUID-in-filename pattern a
+   * few methods away in this same module) matters, not just cosmetically: two rotations landing on
+   * the same millisecond (a coarse or mocked clock, a very fast small-`maxBytes` test) would
+   * otherwise both compute the identical path, and `renameSync` silently overwrites an existing
+   * destination on both POSIX and Windows -- exactly the kind of quiet data loss this store exists
+   * to prevent. */
+  #archivedSegmentPath(rotatedAt: Date): string {
+    const name = basename(this.#logPath);
+    const prefix = name.endsWith('.jsonl') ? name.slice(0, -'.jsonl'.length) : name;
+    return join(this.root, `${prefix}.${rotatedAt.getTime()}-${randomUUID().slice(0, 8)}.jsonl`);
+  }
+
+  /**
+   * Seals the current active file into an immutable archive segment (a plain rename, never a
+   * rewrite of any entry already in it) and resets in-memory state so the next append starts a
+   * fresh file at sequence 0. Only called from within `#appendNow`'s cap check, which is itself
+   * already serialized on `#writeQueue`, so this never races another rotation or append.
+   *
+   * The rename and the directory fsync are handled as two separate failure points on purpose. If
+   * the rename itself fails, in-memory state is left untouched -- it still correctly describes the
+   * file that (since the rename never happened) is still sitting at `#logPath`. But once the rename
+   * *succeeds*, the world has already changed regardless of whether the following fsync does: the
+   * in-memory reset below runs immediately after the rename, not after the fsync, so `all()`/`list()`
+   * never keep describing a file that has already moved. Either failure still latches the store
+   * unhealthy, since durability of the rotation (not the rotation itself) is what a fsync failure
+   * leaves uncertain.
+   */
+  #rotate(): void {
+    if (existsSync(this.#logPath)) {
+      const archivePath = this.#archivedSegmentPath(this.#now());
+      assertContainedIn(this.root, archivePath);
+      try {
+        renameSync(this.#logPath, archivePath);
+      } catch (err) {
+        this.#unhealthy = err instanceof Error ? err.message : String(err);
+        this.#logger.error('the workspace audit log could not be rotated to an archive segment', {
+          error: this.#unhealthy,
+        });
+        throw new AuditUnavailableError(this.#unhealthy);
+      }
+
+      this.#entries = [];
+      this.#nextSequence = 0;
+      this.#bytes = 0;
+
+      try {
+        syncDirectory(this.root);
+      } catch (err) {
+        this.#unhealthy = err instanceof Error ? err.message : String(err);
+        this.#logger.error('the workspace audit directory could not be synced after rotation', {
+          error: this.#unhealthy,
+        });
+        this.#pruneExpiredSegments();
+        throw new AuditUnavailableError(this.#unhealthy);
+      }
+
+      this.#logger.info('rotated the workspace audit log to an archive segment', { archivePath });
+    } else {
+      this.#entries = [];
+      this.#nextSequence = 0;
+      this.#bytes = 0;
+    }
+    this.#pruneExpiredSegments();
+  }
+
+  /**
+   * Deletes whole rotated archive segments older than `#maxSegmentAgeMs`. Never touches the active
+   * file (it is never named like a segment) and never partially rewrites one -- each segment is
+   * either kept exactly as rotation left it, or deleted whole. Runs once at load (startup) and once
+   * more right after every rotation, so a long-lived daemon that never restarts still ages out old
+   * segments rather than only doing so on the next launch.
+   */
+  #pruneExpiredSegments(): void {
+    let names: string[];
+    try {
+      names = readdirSync(this.root);
+    } catch (err) {
+      this.#logger.warn('could not list the workspace audit directory while pruning archive segments', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    const logName = basename(this.#logPath);
+    const prefix = logName.endsWith('.jsonl') ? logName.slice(0, -'.jsonl'.length) : logName;
+    const cutoff = this.#now().getTime() - this.#maxSegmentAgeMs;
+    let prunedCount = 0;
+    for (const name of names) {
+      if (name === logName) continue; // never the active segment
+      if (!name.startsWith(`${prefix}.`) || !name.endsWith('.jsonl')) continue;
+      const middle = name.slice(prefix.length + 1, -'.jsonl'.length);
+      // `<epoch-ms>-<8 hex chars>`, matching `#archivedSegmentPath`. Anything else is not a segment
+      // this store itself rotated -- leave it alone rather than guess.
+      const match = /^(\d+)-[0-9a-f]{8}$/.exec(middle);
+      if (!match) continue;
+      if (Number(match[1]) >= cutoff) continue; // not old enough yet
+      try {
+        unlinkSync(join(this.root, name));
+        prunedCount += 1;
+      } catch (err) {
+        this.#logger.warn('could not delete an expired workspace audit archive segment', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (prunedCount > 0) {
+      this.#logger.info('pruned expired workspace audit archive segments', { prunedCount });
+    }
   }
 
   /** Every entry, oldest first. Used by tests and by the read route's paging. */
