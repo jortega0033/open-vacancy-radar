@@ -1,14 +1,7 @@
 import type { AgentEvent } from '@agent-dock/shared';
-import { CodexAppServerProtocolError, safeDisplay } from './errors.js';
+import { asObject as object, CodexAppServerProtocolError, safeDisplay } from './errors.js';
 
 type JsonObject = Record<string, unknown>;
-
-function object(value: unknown, label: string): JsonObject {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new CodexAppServerProtocolError('frame_invalid', `Invalid ${label}`);
-  }
-  return value as JsonObject;
-}
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -74,6 +67,19 @@ function boundedToolName(server: unknown, tool: unknown): string {
  */
 export class CodexAppServerNormalizer {
   private providerSessionId: string | undefined;
+
+  /**
+   * Lets a caller (`transport.ts`) hand in the thread id it already has authoritatively from the
+   * `thread/start`/`thread/resume` RPC *response* itself, rather than this class depending on a
+   * `thread/started` *notification* ever arriving. Both exist in the real protocol, but the
+   * response is the one guaranteed by the request/response contract; the notification's delivery
+   * timing (or whether it fires at all for a single-client connection) is not something this
+   * class's terminal-event correctness should depend on. A later notification, if one does arrive,
+   * still overwrites this via the `thread/started` case below -- harmless, since both should agree.
+   */
+  setProviderSessionId(threadId: string): void {
+    this.providerSessionId = threadId;
+  }
 
   normalize(method: string, params: unknown): AgentEvent[] {
     switch (method) {
