@@ -84,7 +84,17 @@ resources/
     icon-256.png                 packaged-safe BrowserWindow icon
   daemon/
     index.js                     the daemon's own esbuild bundle, unmodified from apps/daemon/dist/
+    agent-dock-job-host.exe      AgentDock's Windows Job Object host, compiled from
+                                  apps/daemon/native/windows/AgentDock.JobHost.cs (see
+                                  adr-agentdock-v2-provenance.md's "What was ported" section) --
+                                  ships as part of the same `daemon` extraResources entry, not a
+                                  separate one
+  vacancy-engine/
+    drizzle/                     vacancy-engine's own SQL migrations, read at runtime by migrateDatabase()
+    config/                      seeds each user's writable copy under userData on first run
 ```
+
+Two things this tree is easy to miss if you only skim `electron-builder.yml`'s top-level `extraResources` list: `agent-dock-job-host.exe` isn't its own entry -- it lands under `daemon/` because `prepackage:win` (see `apps/desktop/package.json`) compiles it into `apps/daemon/dist/` via `apps/daemon/scripts/build-windows-job-host.mjs` *before* `extraResources: [{ from: ../daemon/dist, to: daemon }]` copies that whole directory as one unit, so no packaging-config change was needed to add it. And the VC++ redistributable isn't a packaged *resource* at all: `scripts/download-vc-redist.mjs` (run by `pnpm package:win`, before `electron-builder` itself) fetches the redistributable installer, and `installer.nsh` (referenced by `nsis.include` above) runs it silently during NSIS install if the target machine needs it -- see issue #62. Neither of these needed new work for ADI-09 (#127): both were already correct, verified directly against a real `pnpm package:win` run leaving `agent-dock-job-host.exe` under `dist-packages/win-unpacked/resources/daemon/`, before that ticket's own investigation began.
 
 ## The daemon ships outside `app.asar`
 
