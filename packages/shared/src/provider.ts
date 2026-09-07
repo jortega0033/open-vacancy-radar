@@ -13,6 +13,16 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type AuthStatus = 'authenticated' | 'unauthenticated' | 'unknown';
 
 /**
+ * Which credential an authenticated CLI session is actually using, when the CLI's own status
+ * output distinguishes it. Only Codex's `login status` reports this today (`'chatgpt'` vs.
+ * `'api_key'`) -- Claude's own status output has no equivalent distinction, so `ProviderStatus`
+ * leaves `authSource` absent for Claude rather than guessing. `'unknown'` is a real, conservative
+ * value (matching `AuthStatus`'s own philosophy): it means the CLI reported *some* authenticated
+ * state but the source text didn't match a recognized pattern, never a guess dressed up as a fact.
+ */
+export type AuthSource = 'chatgpt' | 'api_key' | 'unknown';
+
+/**
  * What an AgentDock adapter actually does for a provider, not a marketing claim about the
  * underlying model. A capability is `true` only if this codebase's adapter reliably implements
  * and normalizes that behavior today; if support is flaky, partial, or untested, it's `false` or
@@ -57,4 +67,7 @@ export interface ProviderStatus {
   /** Provider-native model ids/aliases this adapter will pass through as-is. Absent means the
    * provider has no selectable model (it always uses its CLI's own default). */
   availableModels?: string[];
+  /** See `AuthSource`'s own doc comment. Absent for a provider whose CLI reports no such
+   * distinction, or when `authenticated` is not `'authenticated'`. */
+  authSource?: AuthSource;
 }

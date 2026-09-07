@@ -35,6 +35,12 @@ export function parseClaudeAuthStatus(rawStdout: string): AuthStatus {
  * 2.1.228 binary: `auth status --json` still reports `loggedIn: true` with `authMethod: claude.ai`,
  * because the CLI resolves its own on-disk OAuth state, which is exactly the arrangement this repo
  * wants and never touches.
+ *
+ * Deliberately does not set `ProviderStatus.authSource`, even though the real JSON carries an
+ * `authMethod` field: nothing in this repo's Claude adapter needs the distinction today (unlike
+ * Codex's `chatgpt` vs. `api_key`, which ADI-08's app-server continuation binding depends on), so
+ * parsing and exposing it now would be exactly the speculative-capability pattern this codebase
+ * avoids elsewhere -- add it if and when a real Claude-side consumer needs it.
  */
 export async function detectClaude(logger: Logger): Promise<ProviderStatus> {
   const base = {

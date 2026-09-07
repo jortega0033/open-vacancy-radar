@@ -1,4 +1,4 @@
-import type { AuthStatus, ProviderStatus } from '@agent-dock/shared';
+import type { AuthSource, AuthStatus, ProviderStatus } from '@agent-dock/shared';
 import { execCapture } from '../../process/exec-capture.js';
 import { findExecutable } from '../../detect-executable.js';
 import type { Logger } from '../../logger.js';
@@ -17,6 +17,20 @@ const EXECUTABLE_NAMES = ['codex'];
 export function parseCodexLoginStatus(output: string): AuthStatus {
   if (/logged in/i.test(output) && !/not logged in/i.test(output)) return 'authenticated';
   if (/not logged in|not authenticated|no credentials/i.test(output)) return 'unauthenticated';
+  return 'unknown';
+}
+
+/**
+ * Pure parsing of the same `codex login status` output as `parseCodexLoginStatus`, but extracting
+ * *which* credential is in use rather than just whether one is. Only meaningful when
+ * `parseCodexLoginStatus` itself returned `'authenticated'` -- callers should not call this on
+ * unauthenticated or unrecognized output and expect a real answer, since neither line pattern below
+ * can appear there. ADI-08 needs this distinction because Codex's app-server transport cannot bind a
+ * resume/fork continuation to an API-key session the way it can a ChatGPT one.
+ */
+export function parseCodexAuthSource(output: string): AuthSource {
+  if (/logged in using chatgpt/i.test(output)) return 'chatgpt';
+  if (/logged in using api key/i.test(output)) return 'api_key';
   return 'unknown';
 }
 
@@ -67,6 +81,9 @@ export async function detectCodex(logger: Logger): Promise<ProviderStatus> {
 
   const output = `${statusResult.stdout}\n${statusResult.stderr}`.trim();
   const authenticated = parseCodexLoginStatus(output);
+  if (authenticated === 'authenticated') {
+    return { ...base, installed: true, authenticated, executablePath, version, authSource: parseCodexAuthSource(output) };
+  }
   if (authenticated !== 'unknown') {
     return { ...base, installed: true, authenticated, executablePath, version };
   }

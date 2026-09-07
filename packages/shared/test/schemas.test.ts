@@ -152,6 +152,32 @@ describe('providerStatusSchema', () => {
     const status = { id: 'claude', name: 'Claude Code', installed: true, authenticated: 'authenticated' };
     expect(providerStatusSchema.safeParse(status).success).toBe(false);
   });
+
+  it('round-trips authSource rather than silently stripping it (ADI-08)', () => {
+    const status = {
+      id: 'codex',
+      name: 'Codex',
+      installed: true,
+      authenticated: 'authenticated',
+      capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true },
+      authSource: 'chatgpt',
+    };
+    const result = providerStatusSchema.safeParse(status);
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.authSource).toBe('chatgpt');
+  });
+
+  it('rejects an authSource outside the closed enum', () => {
+    const status = {
+      id: 'codex',
+      name: 'Codex',
+      installed: true,
+      authenticated: 'authenticated',
+      capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true },
+      authSource: 'oauth_someday',
+    };
+    expect(providerStatusSchema.safeParse(status).success).toBe(false);
+  });
 });
 
 describe('agentEventEnvelopeSchema', () => {

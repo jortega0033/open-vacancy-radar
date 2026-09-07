@@ -31,6 +31,9 @@ export const providerStatusSchema = z.object({
   /** Provider-native model ids/aliases this adapter will pass through as-is. Absent means the
    * provider has no selectable model (it always uses its CLI's own default). */
   availableModels: z.array(z.string()).optional(),
+  /** See `AuthSource`'s own doc comment (provider.ts). Absent for a provider whose CLI reports no
+   * such distinction. */
+  authSource: z.enum(['chatgpt', 'api_key', 'unknown']).optional(),
 });
 
 /** Body for POST /sessions. Rejects anything not an absolute-looking, non-empty path/prompt. */
