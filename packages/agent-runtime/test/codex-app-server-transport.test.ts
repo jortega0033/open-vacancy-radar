@@ -62,6 +62,41 @@ describe('createCodexAppServerTransport: failed turn', () => {
   }, 10_000);
 }, 15_000);
 
+describe('createCodexAppServerTransport: launchProbe.onPromptDelivered (ADI-08 stage 7)', () => {
+  it('fires exactly once, immediately before turn/start is written -- not before thread/start, not after the response', async () => {
+    const calls: string[] = [];
+    const events = await collect(
+      start('success', {
+        launchProbe: { onPromptDelivered: () => calls.push('onPromptDelivered') },
+      }).events,
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'session.completed' });
+    expect(calls).toEqual(['onPromptDelivered']);
+  }, 10_000);
+
+  it('never fires when the session fails before turn/start is ever reached (malformed thread/start response)', async () => {
+    const calls: string[] = [];
+    const events = await collect(
+      start('malformed-thread', {
+        launchProbe: { onPromptDelivered: () => calls.push('onPromptDelivered') },
+      }).events,
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'session.failed' });
+    expect(calls).toEqual([]);
+  }, 10_000);
+
+  it('still fires even when the turn itself later fails, since the write was genuinely attempted', async () => {
+    const calls: string[] = [];
+    const events = await collect(
+      start('failure', {
+        launchProbe: { onPromptDelivered: () => calls.push('onPromptDelivered') },
+      }).events,
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'session.failed' });
+    expect(calls).toEqual(['onPromptDelivered']);
+  }, 10_000);
+});
+
 describe('createCodexAppServerTransport: process failure with a genuinely in-flight request', () => {
   it('ends promptly in session.failed(PROCESS_FAILED) when the process exits while turn/start is unanswered', async () => {
     const startedAt = Date.now();

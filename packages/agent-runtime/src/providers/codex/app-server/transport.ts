@@ -1,6 +1,7 @@
 import type { AgentEvent, AuthSource } from '@agent-dock/shared';
+import { overflowTerminalEvents, TERMINAL_AGENT_EVENT_TYPES } from '../../common/agent-event-terminal.js';
 import { AsyncChannel } from '../../../process/async-channel.js';
-import type { ProviderSessionHandle } from '../../../types.js';
+import type { ProviderSessionHandle, SessionLaunchProbe } from '../../../types.js';
 import { asObject, CodexAppServerProtocolError } from './errors.js';
 import { ManagedAppServerProcess } from './managed-process.js';
 import { CodexAppServerRpc } from './rpc.js';
@@ -26,6 +27,24 @@ export interface CodexAppServerTransportOptions {
   windowsJobHostPath?: string;
   /** Test seam only. */
   processPlatform?: NodeJS.Platform;
+  /**
+   * Only `onPromptDelivered` is wired -- narrowed from the full `SessionLaunchProbe` shape rather
+   * than accepting all of it, because the other callbacks don't mean anything for this transport.
+   * `onSpawnAttempt` exists to mark accepted-work the instant an argv-embedded prompt hands itself
+   * over atomically at process creation (see `types.ts`'s own doc comment); spawning the app-server
+   * *process* carries no prompt content at all here, so firing it would be actively misleading, not
+   * merely unused. `onUnknownFrame` is about the exec transport's line-based JSONL parsing
+   * (`parser.ts`); this transport's protocol violations already surface as a proper `AgentEvent`
+   * (`PROTOCOL_VIOLATION`), so there is nothing for it to report.
+   *
+   * `onPromptDelivered` fires immediately before the `turn/start` request is written -- the exact
+   * `'turn-start-write-attempt'` boundary `compatibility-manifest.ts` documents (ADI-08 stage 6) as
+   * this transport's accepted-work line: everything up through a successful `thread/start` is
+   * provably retryable, and this is the one moment after which that stops being true. ADI-08 stage 7
+   * (`transport-selection.ts`) is what actually consumes this, to decide whether an app-server
+   * startup failure is still safe to retry over the legacy exec transport.
+   */
+  launchProbe?: Pick<SessionLaunchProbe, 'onPromptDelivered'>;
 }
 
 /**
@@ -59,8 +78,6 @@ export interface CodexAppServerTransportOptions {
  */
 const FIXED_SANDBOX = 'workspace-write';
 const FIXED_APPROVAL_POLICY = 'never';
-
-const TERMINAL_TYPES = new Set<AgentEvent['type']>(['session.completed', 'session.failed', 'session.cancelled']);
 
 /** How long `cancel()` waits for the interrupted turn's own `turn/completed` notification to
  * arrive naturally before it gives up and closes the session itself. Bounded so `cancel()` can
@@ -113,10 +130,7 @@ export function createCodexAppServerTransport(options: CodexAppServerTransportOp
   }
 
   function closeWithOverflow(): void {
-    finish([
-      { type: 'error', code: 'EVENT_OVERFLOW', message: 'session event buffer overflowed', recoverable: false },
-      { type: 'session.failed', message: 'session event buffer overflowed' },
-    ]);
+    finish(overflowTerminalEvents());
   }
 
   async function run(): Promise<void> {
@@ -174,7 +188,7 @@ export function createCodexAppServerTransport(options: CodexAppServerTransportOp
           ]);
           return;
         }
-        const terminalIndex = events.findIndex((event) => TERMINAL_TYPES.has(event.type));
+        const terminalIndex = events.findIndex((event) => TERMINAL_AGENT_EVENT_TYPES.has(event.type));
         const deliverable = terminalIndex === -1 ? events : events.slice(0, terminalIndex);
         for (const event of deliverable) {
           if (!channel.push(event)) {
@@ -229,7 +243,11 @@ export function createCodexAppServerTransport(options: CodexAppServerTransportOp
         return;
       }
 
-      const turnResult = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: options.prompt }] });
+      const turnResult = await rpc.request(
+        'turn/start',
+        { threadId, input: [{ type: 'text', text: options.prompt }] },
+        () => options.launchProbe?.onPromptDelivered?.(),
+      );
       turnId = extractTurnId(turnResult);
 
       // cancel() may have already run and given up on sending turn/interrupt, because turnId was

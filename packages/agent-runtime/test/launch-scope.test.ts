@@ -4,6 +4,7 @@ import {
   freezeLaunchScope,
   launchScopesEqual,
   LAUNCH_SCOPE_FIELDS,
+  LAUNCH_SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY,
   type FrozenLaunchScope,
 } from '../src/providers/common/launch-scope.js';
 import type { StartSessionOptions } from '../src/types.js';
@@ -100,28 +101,31 @@ describe('launchScopesEqual', () => {
   });
 
   /**
-   * The mutation matrix. Every field is mutated in isolation and must break equality.
+   * The mutation matrix. Every *compared* field is mutated in isolation and must break equality.
    *
-   * The field list is derived from `Object.keys` of a real scope (not hand-written here), and the
-   * count assertion below cross-checks it against the module's own exported field list. So adding
-   * a field to `FrozenLaunchScope` without adding it to the comparison — the failure mode where
-   * two materially different launches silently compare equal — fails this test rather than
-   * passing unnoticed.
+   * `LAUNCH_SCOPE_FIELDS` (the compared fields) plus `LAUNCH_SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY`
+   * (deliberately not compared -- currently just `transportId`, see that export's own doc comment)
+   * together must equal every real key `Object.keys` reports on a live scope -- not hand-written
+   * here -- so adding a field to `FrozenLaunchScope` without either comparing it or explicitly
+   * excluding it fails this test rather than passing unnoticed (the module's own compile-time
+   * exhaustiveness check catches the same gap at build time; this is the runtime half of the same
+   * claim).
    */
   describe('mutation matrix', () => {
     const fields = Object.keys(scope()) as (keyof FrozenLaunchScope)[];
 
-    it('covers exactly the fields the module declares it compares', () => {
-      expect([...fields].sort()).toEqual([...LAUNCH_SCOPE_FIELDS].sort());
-      expect(fields.length).toBe(LAUNCH_SCOPE_FIELDS.length);
-      // Every field must have a mutation defined, or its row below would be vacuous.
+    it('every real field is accounted for by exactly one of: compared, or explicitly excluded', () => {
+      const accountedFor = [...LAUNCH_SCOPE_FIELDS, ...LAUNCH_SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY];
+      expect([...fields].sort()).toEqual([...accountedFor].sort());
+      expect(new Set(accountedFor).size).toBe(accountedFor.length);
+      // Every field must have a mutation defined, or a row below would be vacuous.
       for (const field of fields) {
         expect(MUTATIONS[field], `no mutation defined for new field: ${field}`).toBeDefined();
         expect(MUTATIONS[field]).not.toEqual(scope()[field]);
       }
     });
 
-    it.each(Object.keys(scope()))('reports a difference in %s', (field) => {
+    it.each(LAUNCH_SCOPE_FIELDS)('reports a difference in %s', (field) => {
       const candidate = {
         ...scope(),
         [field]: MUTATIONS[field as keyof FrozenLaunchScope],
@@ -132,6 +136,20 @@ describe('launchScopesEqual', () => {
     it('reports a difference when an optional field goes from a value to undefined', () => {
       const candidate = { ...scope(), model: undefined } as FrozenLaunchScope;
       expect(launchScopesEqual(scope(), candidate)).toBe(false);
+    });
+
+    /**
+     * The exact bug ADI-08 stage 7 found: `transportId` is real, frozen, and part of the scope --
+     * but comparing it here would make `FallbackGate.authorize()`'s `scope_mismatch` check fire on
+     * every legitimate cross-transport fallback, unconditionally, since a fallback's whole premise
+     * is "same launch context, different transport". This is the regression test for that fix.
+     */
+    it.each(LAUNCH_SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY)('does NOT report a difference in %s -- excluded from equality on purpose', (field) => {
+      const candidate = {
+        ...scope(),
+        [field]: MUTATIONS[field as keyof FrozenLaunchScope],
+      } as FrozenLaunchScope;
+      expect(launchScopesEqual(scope(), candidate)).toBe(true);
     });
   });
 });
