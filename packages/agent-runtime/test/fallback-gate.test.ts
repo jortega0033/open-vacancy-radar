@@ -152,9 +152,35 @@ describe('registering a second real transport id does not create any new allow p
     expect(decision).toEqual({ allowed: true, attempt: 1, scope: primaryScope() });
   });
 
-  it('denies with scope_mismatch when the candidate was launched on the app-server transport instead of the primary\'s legacy one', () => {
+  /**
+   * Corrected from this test's original ADI-08 stage 6 form, which asserted the OPPOSITE of what
+   * turned out to be correct: it expected `scope_mismatch` here. That was wrong -- the whole point
+   * of a fallback is retrying on a *different* transport than the one that just failed, so a
+   * candidate whose only difference from the primary is its transport id is exactly the one shape
+   * a real fallback candidate always has. ADI-08 stage 7 found this while wiring the gate's first
+   * real caller: `launchScopesEqual` was comparing `transportId`, which made `scope_mismatch` fire
+   * on every legitimate cross-transport retry, unconditionally (see `launch-scope.ts`'s
+   * `SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY`, and its own test in `launch-scope.test.ts`, for the fix).
+   * This test now pins the corrected behavior directly at the gate level, not just at
+   * `launchScopesEqual`'s.
+   */
+  it('allows a candidate that differs from the primary ONLY in transport id -- the normal shape of a real fallback', () => {
     const gate = new FallbackGate(primaryScope());
     const candidate = freezeLaunchScope(status, start, CODEX_APP_SERVER_TRANSPORT_ID);
+    expect(
+      gate.authorize({
+        candidate,
+        acceptedWork: 'not_accepted',
+        delivery: 'not_delivered',
+        alternateTransportIds: realAlternateTransportIds,
+        terminal: false,
+      }),
+    ).toEqual({ allowed: true, attempt: 1, scope: candidate });
+  });
+
+  it('still denies with scope_mismatch when the candidate differs in a field that actually matters (cwd), even alongside a transport change', () => {
+    const gate = new FallbackGate(primaryScope());
+    const candidate = freezeLaunchScope(status, { ...start, cwd: '/elsewhere' }, CODEX_APP_SERVER_TRANSPORT_ID);
     expect(
       gate.authorize({
         candidate,

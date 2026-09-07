@@ -65,10 +65,16 @@ export function freezeLaunchScope(
 }
 
 /**
- * The exact field list compared by `launchScopesEqual`, and the list the mutation-matrix test
- * iterates. Declared as a `const` tuple typed against `keyof FrozenLaunchScope` so that adding a
- * field to the interface without adding it here is a compile error at the `satisfies` below,
- * rather than a silent hole where two different launches compare equal.
+ * The field list compared by `launchScopesEqual`, and the list the mutation-matrix test iterates
+ * expecting every mutation to break equality. Declared as a `const` tuple typed against
+ * `keyof FrozenLaunchScope` so that adding a field to the interface without either comparing it
+ * here or explicitly excluding it in `SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY` below is a compile error
+ * at the `satisfies` further down — the exhaustiveness guard that stops a future field from being
+ * silently excluded from equality by omission, a hole that would let a materially different launch
+ * pass the gate's scope check without anyone deciding that was fine.
+ *
+ * `transportId` is deliberately NOT in this list (ADI-08 stage 7) -- see
+ * `SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY`'s own doc comment for why.
  */
 const SCOPE_FIELDS = [
   'provider',
@@ -78,22 +84,52 @@ const SCOPE_FIELDS = [
   'authenticated',
   'model',
   'platform',
-  'transportId',
   'accountEvidence',
 ] as const satisfies readonly (keyof FrozenLaunchScope)[];
 
 /**
- * Compile-time exhaustiveness: if `FrozenLaunchScope` gains a field that is missing from
- * `SCOPE_FIELDS`, this type resolves to that field name instead of `never` and the assignment
- * below fails to compile. This is what stops a future field from being silently excluded from
- * equality — a hole that would let a materially different launch pass the gate's scope check.
+ * Fields that exist on `FrozenLaunchScope` but are deliberately excluded from
+ * `launchScopesEqual`'s comparison -- kept as its own explicit list (rather than just a gap in
+ * `SCOPE_FIELDS`) so a reviewer sees exactly why, and so the compile-time exhaustiveness check
+ * below still catches a genuinely-forgotten future field rather than silently ignoring anything
+ * not in `SCOPE_FIELDS`.
+ *
+ * `transportId`: `FallbackGate` exists specifically to authorize retrying a session on a
+ * *different* transport than the one that just failed (`providers/common/fallback-gate.ts`) --
+ * comparing `transportId` for "same launch context" equality would make its own `scope_mismatch`
+ * check fire on every legitimate fallback, unconditionally, since the primary's transportId can
+ * never equal a cross-transport candidate's by definition. This field was harmlessly part of the
+ * comparison from ADI-04 until ADI-08 stage 6, because exactly one transport id existed the whole
+ * time (`LEGACY_ONE_SHOT_TRANSPORT_ID`) and every scope's `transportId` was trivially equal to
+ * every other's -- the bug was latent, not absent, and only became reachable once
+ * `transport-selection.ts` (stage 7) became `FallbackGate`'s first real caller and tried to
+ * authorize an actual cross-transport retry. `transportId` still exists on `FrozenLaunchScope` and
+ * is still frozen/compared for every OTHER purpose that reads the field directly (compatibility
+ * lookups, logging); it is excluded from *this* equality check alone.
  */
-type MissingScopeField = Exclude<keyof FrozenLaunchScope, (typeof SCOPE_FIELDS)[number]>;
-const _allScopeFieldsCompared: MissingScopeField extends never ? true : MissingScopeField = true;
-void _allScopeFieldsCompared;
+const SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY = ['transportId'] as const satisfies readonly (keyof FrozenLaunchScope)[];
 
-/** Field names compared for scope equality. Exported for the mutation-matrix test's field count. */
+/**
+ * Compile-time exhaustiveness: if `FrozenLaunchScope` gains a field that is missing from BOTH
+ * `SCOPE_FIELDS` and `SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY`, this type resolves to that field name
+ * instead of `never` and the assignment below fails to compile.
+ */
+type UnaccountedScopeField = Exclude<
+  keyof FrozenLaunchScope,
+  (typeof SCOPE_FIELDS)[number] | (typeof SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY)[number]
+>;
+const _allScopeFieldsAccountedFor: UnaccountedScopeField extends never ? true : UnaccountedScopeField = true;
+void _allScopeFieldsAccountedFor;
+
+/** Field names compared for scope equality. Exported for the mutation-matrix test's field count.
+ * Deliberately NOT every key of `FrozenLaunchScope` -- see `SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY`. */
 export const LAUNCH_SCOPE_FIELDS: readonly (keyof FrozenLaunchScope)[] = SCOPE_FIELDS;
+
+/** Field names deliberately excluded from `launchScopesEqual`'s comparison. Exported so a test can
+ * assert both halves of the same claim: every real field is accounted for by one list or the
+ * other, and a mutation to an excluded field must NOT break equality. */
+export const LAUNCH_SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY: readonly (keyof FrozenLaunchScope)[] =
+  SCOPE_FIELDS_EXCLUDED_FROM_EQUALITY;
 
 /**
  * Field-by-field strict equality over the full declared field list.

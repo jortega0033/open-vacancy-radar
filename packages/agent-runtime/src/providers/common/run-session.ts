@@ -6,6 +6,7 @@ import { spawnProcess } from '../../process/spawn-process.js';
 import { findExecutable } from '../../detect-executable.js';
 import type { Logger } from '../../logger.js';
 import type { ProviderSessionHandle, StartSessionOptions } from '../../types.js';
+import { overflowTerminalEvents } from './agent-event-terminal.js';
 import { checkProviderFrameBounds, PROVIDER_FRAME_BOUNDS } from './unknown-frames.js';
 
 export interface ParsedLine {
@@ -75,10 +76,7 @@ export function runProviderSession(
    * deliver exactly one terminal event, not silently strand every subscriber in "running".
    */
   function closeWithOverflow(): void {
-    channel.closeWith([
-      { type: 'error', code: 'EVENT_OVERFLOW', message: 'session event buffer overflowed', recoverable: false },
-      { type: 'session.failed', message: 'session event buffer overflowed' },
-    ]);
+    channel.closeWith(overflowTerminalEvents());
   }
 
   async function run() {
