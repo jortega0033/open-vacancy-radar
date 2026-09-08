@@ -48,7 +48,23 @@ export default defineConfig({
               // at require-time: CJS globals that don't exist once Rollup inlines it into this
               // ESM bundle ("__filename is not defined" at runtime). Keeping it external means
               // it's `require`d from node_modules like any native addon, never bundled.
-              external: ['electron', 'better-sqlite3'],
+              //
+              // pino and cheerio (both pulled in transitively via
+              // @open-vacancy-radar/vacancy-engine) are external for a different reason: each has
+              // an internal dependency whose own CJS module calls `require(<node builtin>)` from
+              // inside a dynamically-invoked module factory (pino itself does `require("node:os")`;
+              // cheerio's encoding-sniffer -> iconv-lite chain does `require("buffer")`). Vite 8's
+              // default bundler (Rolldown) doesn't rewrite that nested `require` the way Rollup
+              // did, so it survives into the bundle as a literal `require()` call with no real
+              // `require` in scope ("Calling `require` for \"<name>\" in an environment that
+              // doesn't expose the `require` function"), crashing the app before any window opens.
+              // Externalizing the whole package sidesteps bundling its internals at all -- Node's
+              // own ESM-importing-CJS interop loads it directly, same as any other external CJS
+              // dependency. If a future dependency bump surfaces the same crash for some other
+              // transitively-bundled package, the fix is the same: add it here and move it from
+              // devDependencies to a real "dependencies" entry so electron-builder's dependency
+              // walker packages it (see the file-level comment in electron-builder.yml).
+              external: ['electron', 'better-sqlite3', 'pino', 'cheerio'],
             },
           },
         },

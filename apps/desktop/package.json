@@ -20,7 +20,9 @@
     "workspace:db:generate": "drizzle-kit generate --config drizzle.workspace.config.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3"
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "pino": "^10.3.1"
   },
   "devDependencies": {
     "@agent-dock/application-executor": "workspace:*",
