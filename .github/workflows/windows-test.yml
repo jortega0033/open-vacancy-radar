@@ -33,7 +33,18 @@ concurrency:
 jobs:
   full-suite:
     name: Full suite (Node ${{ matrix.node-version }})
-    runs-on: windows-latest
+    # Pinned to windows-2022, not the floating `windows-latest` label, because this job's own
+    # first real run (cold pnpm cache, forcing a genuine `node-gyp` rebuild of better-sqlite3's
+    # native binding) found `windows-latest` had rolled to an image whose Visual Studio version
+    # `@electron/node-gyp`'s VisualStudioFinder does not recognize ("unknown version 'undefined'
+    # found"), failing `pnpm install` outright. `package-windows.yml`/`release.yml` use the same
+    # floating label and have only kept passing because their pnpm cache has stayed warm enough to
+    # skip a real rebuild -- the same failure is latently waiting for them too. Left unfixed here
+    # deliberately, per an explicit scope decision: fixing this job's own real, now-reproduced
+    # break is this stage's job; auditing and fixing the same latent risk in the two release-
+    # critical workflows is flagged as separate follow-up work, not silently absorbed into this
+    # otherwise purely-additive stage.
+    runs-on: windows-2022
     timeout-minutes: 20
     strategy:
       fail-fast: false
