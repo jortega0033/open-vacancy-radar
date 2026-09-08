@@ -1,0 +1,7 @@
+# ADI-09 (#127). gitleaks (.github/workflows/secret-scan.yml) flags this one line as a possible
+# generic API key. It is not a secret: `ADZUNA_APP_KEY=` in this .env.example file is an EMPTY
+# placeholder naming an optional environment variable a user may set locally -- the whole point of
+# an .env.example file is to enumerate variable names with no real values. Verified directly by
+# reading the file (packages/vacancy-engine/.env.example line 31) before adding this entry, not
+# added speculatively: gitleaks' entropy heuristic apparently reacts to the bare key name itself.
+packages/vacancy-engine/.env.example:generic-api-key:31
