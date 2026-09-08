@@ -73,3 +73,11 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # ADI-09. `--prod` scopes this to dependencies actually reachable from a shipped runtime
+      # path -- a vulnerable devDependency (a build tool, a test runner) never blocks this gate,
+      # matching upstream AgentDock's own reasoning for the same flag. Verified clean on this repo
+      # before adding: `pnpm audit --prod` reports "No known vulnerabilities found" today, so this
+      # is a real gate from the moment it ships, not a check added pre-armed to fail.
+      - name: Production dependency audit
+        run: pnpm audit --prod
