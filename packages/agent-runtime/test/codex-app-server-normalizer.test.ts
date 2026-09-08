@@ -15,7 +15,9 @@ describe('CodexAppServerNormalizer: exhaustiveness', () => {
         normalizer.normalize(method, {});
       } catch (error) {
         if (error instanceof CodexAppServerProtocolError && error.message.includes('no normalizer case')) {
-          throw new Error(`CodexAppServerNormalizer has no case for allowlisted method: ${method}`);
+          throw new Error(`CodexAppServerNormalizer has no case for allowlisted method: ${method}`, {
+            cause: error,
+          });
         }
       }
     }

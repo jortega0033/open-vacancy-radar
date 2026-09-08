@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { NotificationMock, isSupported, show } = vi.hoisted(() => {
   const show = vi.fn();
   const isSupported = vi.fn(() => true);
-  const NotificationMock = vi.fn().mockImplementation(() => ({ show }));
+  const NotificationMock = vi.fn().mockImplementation(function () {
+    return { show };
+  });
   (NotificationMock as unknown as { isSupported: typeof isSupported }).isSupported = isSupported;
   return { NotificationMock, isSupported, show };
 });
