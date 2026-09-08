@@ -34,19 +34,19 @@
     "assets:validate": "python scripts/assets/validate_assets.py"
   },
   "devDependencies": {
-    "@eslint/js": "^9.18.0",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.5",
-    "eslint": "^9.18.0",
+    "eslint": "^10.10.0",
     "globals": "^15.14.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.19.1",
-    "vitest": "^3.2.6"
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^5.0.0"
   },
   "packageManager": "pnpm@10.29.2",
   "pnpm": {
     "overrides": {
-      "vite": "^6.0.7",
+      "vite": "^8.2.2",
       "@types/node": "^22.10.5",
       "tar": "^7.5.18",
       "esbuild": "^0.25.0",
