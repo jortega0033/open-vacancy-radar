@@ -14,9 +14,10 @@
     "url": "https://github.com/jortega0033/open-vacancy-radar/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=20 <23"
   },
   "scripts": {
+    "preinstall": "node scripts/preflight.mjs",
     "build": "pnpm -r --filter=./packages/* --filter=./apps/* run build",
     "dev:daemon": "pnpm --filter @agent-dock/daemon run dev",
     "dev:desktop": "pnpm --filter @agent-dock/desktop run dev",
