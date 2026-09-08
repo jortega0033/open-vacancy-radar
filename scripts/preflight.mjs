@@ -1,9 +1,19 @@
-#!/usr/bin/env node
 // Surfaces, before pnpm resolves or links anything, when the active Node/pnpm toolchain isn't one
 // this repo's own CI actually tests. Wired as package.json's "preinstall" script, so it runs
 // automatically as the first step of `pnpm install` -- not an opt-in step someone can skip.
 // Advisory only (see `main()`'s own doc comment for why this repo's version deliberately never
 // fails the install, unlike upstream AgentDock's equivalent script).
+//
+// Deliberately no `#!/usr/bin/env node` shebang, even though this is a CLI-style script: it is
+// never invoked as a standalone executable (package.json's "preinstall" always runs it via
+// `node scripts/preflight.mjs`), and a shebang line breaks this file the moment anything imports
+// it as a plain ES module dependency rather than running it directly -- Node's own loader strips
+// a shebang for both cases, but Vite/esbuild's transform (what actually loads this file when
+// apps/daemon/test/preflight.test.mjs imports its exported pure functions) does not extend that
+// same stripping to a file reached as an ordinary dependency, only to its own designated entry
+// points. Confirmed directly: this exact file with a shebang reproducibly threw `SyntaxError:
+// Invalid or unexpected token` from Vitest, on Windows, the moment a test imported it -- not a
+// transient CI flake.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -12,16 +22,24 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageJsonPath = join(scriptDir, '..', 'package.json');
 
 /**
- * The Node major versions this repo's own CI actually exercises today, collectively across every
- * workflow that runs `pnpm install` -- not copied from upstream's own range, even though it
- * happens to land on the same numbers. `ci.yml`, `e2e.yml`, `package-windows.yml`, and
- * `release.yml` all pin Node 22; `live-provider-smoke.yml` (ADI-19) deliberately pins Node 20
- * instead. Narrowing this to "22 only" would make this preflight check itself fail that one real,
- * currently-green workflow the moment it runs `pnpm install` -- the exact kind of blind-port
- * mistake this repo's own review discipline exists to catch. Widen or narrow this only after
- * checking every `.github/workflows/*.yml` `node-version` value again, not by assumption.
+ * Node 22 only. `ci.yml`, `e2e.yml`, `package-windows.yml`, and `release.yml` all pin Node 22;
+ * `live-provider-smoke.yml` (ADI-19) pins Node 20 instead -- but that workflow only exercises
+ * `apps/daemon`, which has no dependency on `packages/vacancy-engine`/`better-sqlite3` at all.
+ * `packages/vacancy-engine`'s own `better-sqlite3@13.0.3` dependency declares `"engines": { "node":
+ * ">=22" }` and genuinely crashes (a native `ACCESS_VIOLATION`, confirmed directly on Windows +
+ * Node 20.20.2, not a configuration issue) when loaded under Node 20 -- so a *full* `pnpm install`
+ * across this whole workspace cannot actually be considered Node-20-supported, even though one
+ * narrow workflow happens to get away with it.
+ *
+ * This range used to be `20-22`, on the reasoning that `live-provider-smoke.yml`'s own Node 20 pin
+ * proved this repo tests that version. That reasoning was the actual mistake, caught only once
+ * ADI-09 stage 4's windows-test.yml ran `pnpm test` (the whole workspace, `packages/vacancy-engine`
+ * included) on Windows + Node 20 for the first time and it genuinely crashed. Widen this again only
+ * after re-verifying every workspace package's own dependencies against whatever Node range is
+ * proposed -- not by re-reading `.github/workflows/*.yml` node-version values alone, which is
+ * exactly the check that missed this the first time.
  */
-export const SUPPORTED_NODE_RANGE = Object.freeze({ minMajor: 20, maxMajorExclusive: 23 });
+export const SUPPORTED_NODE_RANGE = Object.freeze({ minMajor: 22, maxMajorExclusive: 23 });
 
 export function parseSemver(version) {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version ?? '').trim());
@@ -61,15 +79,25 @@ export function parseDeclaredPnpmVersion(packageManagerField) {
   return match?.[1];
 }
 
+/** Renders a range as "22.x" when it names exactly one supported major (the common case now that
+ * `packages/vacancy-engine`'s own `better-sqlite3` dependency floor narrowed this to Node 22
+ * only), or "20.x through 22.x" for a genuine multi-major range -- rather than the redundant
+ * "22.x through 22.x" a single-version range would otherwise produce. */
+export function describeNodeRange(range = SUPPORTED_NODE_RANGE) {
+  const { minMajor, maxMajorExclusive } = range;
+  const maxMajor = maxMajorExclusive - 1;
+  return minMajor === maxMajor ? `${minMajor}.x` : `${minMajor}.x through ${maxMajor}.x`;
+}
+
 export function buildReport({ nodeVersion, userAgent, declaredPnpmField, platform, arch }) {
   const nodeOk = isNodeVersionSupported(nodeVersion);
   const activePnpm = parseActivePnpmVersion(userAgent);
   const declaredPnpm = parseDeclaredPnpmVersion(declaredPnpmField);
   const pnpmOk = activePnpm !== undefined && pnpmVersionMatches(activePnpm, declaredPnpm);
-  const { minMajor, maxMajorExclusive } = SUPPORTED_NODE_RANGE;
+  const rangeDescription = describeNodeRange();
 
   const lines = [
-    `Node:     ${nodeVersion} (${nodeOk ? 'supported' : 'UNSUPPORTED'} -- this repo tests ${minMajor}.x through ${maxMajorExclusive - 1}.x)`,
+    `Node:     ${nodeVersion} (${nodeOk ? 'supported' : 'UNSUPPORTED'} -- this repo tests ${rangeDescription})`,
     `pnpm:     ${activePnpm ?? 'not detected (are you running "pnpm install", not npm/yarn?)'} (${pnpmOk ? 'matches packageManager' : `expected ${declaredPnpm ?? 'unknown'}`})`,
     `Platform: ${platform} (${arch})`,
   ];
@@ -77,7 +105,7 @@ export function buildReport({ nodeVersion, userAgent, declaredPnpmField, platfor
   const fixes = [];
   if (!nodeOk) {
     fixes.push(
-      `Unsupported Node version. Install Node ${minMajor}.x or ${maxMajorExclusive - 1}.x from https://nodejs.org/, or switch with a version manager (nvm/fnm/volta).`,
+      `Unsupported Node version. Install Node ${rangeDescription} from https://nodejs.org/, or switch with a version manager (nvm/fnm/volta).`,
     );
   }
   if (!pnpmOk) {

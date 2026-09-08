@@ -1,9 +1,9 @@
 name: Windows Test Suite
 
-# ADI-09 (#127). Proves the full test suite is actually green on Windows, on both ends of the
-# supported Node range -- ci.yml's build-and-test job only runs on ubuntu-latest, so this was
-# previously unverified in CI at all, despite this being a Windows-only desktop application
-# (electron-builder.yml's only packaging target is `nsis`/win).
+# ADI-09 (#127). Proves the full test suite is actually green on Windows -- ci.yml's
+# build-and-test job only runs on ubuntu-latest, so this was previously unverified in CI at all,
+# despite this being a Windows-only desktop application (electron-builder.yml's only packaging
+# target is `nsis`/win).
 #
 # Ported from upstream AgentDock's own windows-test.yml, minus its second job
 # (`stress-flaky-files`, a targeted repetition-stress run for two specific files upstream had
@@ -49,9 +49,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Matches package.json's "engines": { "node": ">=20 <23" } (ADI-09 stage 1) -- 20 is the
-        # floor, 22 is what every other CI workflow in this repo actually pins.
-        node-version: [20, 22]
+        # Node 22 only, NOT the [20, 22] range package.json's own "engines" field (ADI-09 stage 1)
+        # implies -- this job's first real run found that range was wrong for the full monorepo
+        # suite specifically: `packages/vacancy-engine`'s `better-sqlite3@13.0.3` dependency
+        # declares `"engines": { "node": ">=22" }` in its own package.json, and really does crash
+        # (a genuine native ACCESS_VIOLATION, confirmed directly on Windows + Node 20.20.2, not a
+        # vitest/pool configuration issue) when loaded under Node 20. `live-provider-smoke.yml`'s
+        # own Node 20 pin stays legitimate: that workflow only exercises `apps/daemon`, which has
+        # no dependency on `packages/vacancy-engine` or `better-sqlite3` at all. `pnpm test` here
+        # runs the whole workspace, so it inherits the narrower floor. See the matching correction
+        # to package.json's "engines" field and scripts/preflight.mjs's SUPPORTED_NODE_RANGE.
+        node-version: [22]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
