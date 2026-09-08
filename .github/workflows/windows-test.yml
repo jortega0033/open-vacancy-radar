@@ -1,0 +1,77 @@
+name: Windows Test Suite
+
+# ADI-09 (#127). Proves the full test suite is actually green on Windows -- ci.yml's
+# build-and-test job only runs on ubuntu-latest, so this was previously unverified in CI at all,
+# despite this being a Windows-only desktop application (electron-builder.yml's only packaging
+# target is `nsis`/win).
+#
+# Ported from upstream AgentDock's own windows-test.yml, minus its second job
+# (`stress-flaky-files`, a targeted repetition-stress run for two specific files upstream had
+# observed flaking under Windows' real parallel-worker CPU/IO contention). Deliberately not ported:
+# one of the two files it names (apps/daemon/test/subagent-worktree.test.ts) does not exist in this
+# repo at all -- worktree/subagent functionality is still ADI-12's own deferred design work, not
+# shipped here -- and there is no evidence this repo's other file (apps/desktop/test/App.test.tsx,
+# which does exist) has ever actually flaked on Windows. Speculatively stress-testing a file with no
+# observed problem, based on a different repo's history, is exactly the kind of blind port this
+# project's own review discipline exists to catch. If this job's own real Windows runs surface a
+# genuinely flaky file here, that is the moment to add a targeted repetition-stress job for
+# whichever file actually earned it -- not preemptively, for someone else's history.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-suite:
+    name: Full suite (Node ${{ matrix.node-version }})
+    # Pinned to windows-2022, not the floating `windows-latest` label, because this job's own
+    # first real run (cold pnpm cache, forcing a genuine `node-gyp` rebuild of better-sqlite3's
+    # native binding) found `windows-latest` had rolled to an image whose Visual Studio version
+    # `@electron/node-gyp`'s VisualStudioFinder does not recognize ("unknown version 'undefined'
+    # found"), failing `pnpm install` outright. `package-windows.yml`/`release.yml` use the same
+    # floating label and have only kept passing because their pnpm cache has stayed warm enough to
+    # skip a real rebuild -- the same failure is latently waiting for them too. Left unfixed here
+    # deliberately, per an explicit scope decision: fixing this job's own real, now-reproduced
+    # break is this stage's job; auditing and fixing the same latent risk in the two release-
+    # critical workflows is flagged as separate follow-up work, not silently absorbed into this
+    # otherwise purely-additive stage.
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 22 only, NOT the [20, 22] range package.json's own "engines" field (ADI-09 stage 1)
+        # implies -- this job's first real run found that range was wrong for the full monorepo
+        # suite specifically: `packages/vacancy-engine`'s `better-sqlite3@13.0.3` dependency
+        # declares `"engines": { "node": ">=22" }` in its own package.json, and really does crash
+        # (a genuine native ACCESS_VIOLATION, confirmed directly on Windows + Node 20.20.2, not a
+        # vitest/pool configuration issue) when loaded under Node 20. `live-provider-smoke.yml`'s
+        # own Node 20 pin stays legitimate: that workflow only exercises `apps/daemon`, which has
+        # no dependency on `packages/vacancy-engine` or `better-sqlite3` at all. `pnpm test` here
+        # runs the whole workspace, so it inherits the narrower floor. See the matching correction
+        # to package.json's "engines" field and scripts/preflight.mjs's SUPPORTED_NODE_RANGE.
+        node-version: [22]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
