@@ -70,6 +70,13 @@ export type ActivityBody =
       cachedInputTokens?: number;
       cost?: number;
     }
+  | {
+      kind: 'usage.rate_limits';
+      limitId?: string;
+      limitName?: string;
+      primary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+      secondary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+    }
   | { kind: 'error'; code?: string; recoverable: boolean }
   | { kind: 'session.completed' }
   | { kind: 'session.failed' }
