@@ -320,6 +320,7 @@ export async function runGlobalRemoteScan(
       joobleApiKey: appConfig.keyedDiscovery.joobleApiKey,
       reedApiKey: appConfig.keyedDiscovery.reedApiKey,
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
+      navArbeidsplassenApiKey: appConfig.keyedDiscovery.navArbeidsplassenApiKey,
     },
   };
   const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {

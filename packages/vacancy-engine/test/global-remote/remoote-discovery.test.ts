@@ -46,6 +46,7 @@ function profile(): GlobalRemoteConfig {
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -54,6 +55,8 @@ function profile(): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources: [],
   };

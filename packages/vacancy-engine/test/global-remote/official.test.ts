@@ -39,6 +39,7 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -47,6 +48,8 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources,
   };
