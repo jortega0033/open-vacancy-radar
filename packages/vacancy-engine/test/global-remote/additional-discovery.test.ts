@@ -31,6 +31,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -166,7 +167,7 @@ describe('Additional public and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(26);
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(27);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',
