@@ -19,6 +19,7 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+import { runNavArbeidsplassenDiscovery } from './nav-arbeidsplassen-discovery.js';
 
 function basicAuthHeader(apiKey: string): string {
   return `Basic ${Buffer.from(`${apiKey}:`, 'utf8').toString('base64')}`;
@@ -279,6 +280,9 @@ export async function runKeyedDiscovery(
     ...(config.discovery.joobleApiKey.trim().length > 0 ? [discoverJooble(http, config)] : []),
     ...(config.discovery.reedApiKey.trim().length > 0 ? [discoverReed(http, config)] : []),
     ...(config.discovery.jobspipeApiKey.trim().length > 0 ? [discoverJobsPipe(http, config)] : []),
+    ...(config.discovery.navArbeidsplassenApiKey.trim().length > 0
+      ? [runNavArbeidsplassenDiscovery(http, config)]
+      : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

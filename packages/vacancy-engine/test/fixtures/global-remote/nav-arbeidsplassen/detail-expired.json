@@ -1,0 +1,29 @@
+{
+  "uuid": "77777777-7777-4777-8777-777777777777",
+  "sistEndret": "2020-02-01T00:00:00Z",
+  "status": "ACTIVE",
+  "ad_content": {
+    "uuid": "77777777-7777-4777-8777-777777777777",
+    "published": "2020-01-01T08:00:00Z",
+    "expires": "2020-02-01T00:00:00Z",
+    "updated": "2020-02-01T00:00:00Z",
+    "workLocations": [],
+    "contactList": [],
+    "title": "Frontend Developer",
+    "description": "Stale listing that should never be surfaced.",
+    "sourceurl": null,
+    "source": null,
+    "applicationUrl": null,
+    "applicationDue": null,
+    "occupationCategories": [],
+    "categoryList": [],
+    "jobtitle": "Frontend Developer",
+    "link": "https://arbeidsplassen.nav.no/stillinger/stilling/77777777-7777-4777-8777-777777777777",
+    "employer": { "name": "Old Corp AS", "orgnr": null, "description": null, "homepage": null },
+    "engagementtype": null,
+    "extent": null,
+    "starttime": null,
+    "positioncount": null,
+    "sector": null
+  }
+}
