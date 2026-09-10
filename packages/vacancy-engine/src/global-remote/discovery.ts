@@ -1,5 +1,6 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
+import { discoverAiDevJobs } from './ai-dev-jobs-discovery.js';
 import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runFeedDiscovery } from './feed-discovery.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
@@ -153,9 +154,10 @@ export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const [himalayas, jobicy, structured, feeds, jobtech, additional, keyed] = await Promise.all([
+  const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed] = await Promise.all([
     discoverHimalayas(http, config),
     discoverJobicy(http, config),
+    discoverAiDevJobs(http, config),
     runStructuredDiscovery(http, config),
     runFeedDiscovery(http, config),
     runJobtechDiscovery(http, config),
@@ -166,6 +168,7 @@ export async function runGlobalRemoteDiscovery(
     sources: [
       ...himalayas.sources,
       ...jobicy.sources,
+      ...aiDevJobs.sources,
       ...structured.sources,
       ...feeds.sources,
       ...jobtech.sources,
@@ -175,6 +178,7 @@ export async function runGlobalRemoteDiscovery(
     vacancies: [
       ...himalayas.vacancies,
       ...jobicy.vacancies,
+      ...aiDevJobs.vacancies,
       ...structured.vacancies,
       ...feeds.vacancies,
       ...jobtech.vacancies,
