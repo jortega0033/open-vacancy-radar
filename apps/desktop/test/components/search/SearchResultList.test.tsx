@@ -226,4 +226,38 @@ describe('SearchResultList', () => {
     fireEvent.click(rows[1]!);
     expect(onSelect).toHaveBeenCalledWith(second);
   });
+
+  it('leaves room for the detail pane below it when the two panes are stacked (under lg)', () => {
+    // Regression guard. `SearchPage` lays this pane and `VacancyDetail` out as `flex-col lg:flex-row`,
+    // and the app's own default window is 1000px wide -- narrower than `lg`'s 1024px -- so the
+    // stacked column is the layout a user gets out of the box. `VacancyDetail` is `flex-1`
+    // (`flex: 1 1 0%`, a zero flex basis). While this pane was `flex: 0 1 auto`, basing itself on its
+    // own page-of-25-rows-tall content, the column had no free space left to distribute and the
+    // detail pane stayed at its zero basis: it rendered at zero height, below the bottom of a
+    // `<main>` that does not scroll, so "Save job", "Generate Letter" and the verification cards were
+    // all invisible and unclickable at the default window size.
+    //
+    // jsdom runs no layout engine, so the flex classes themselves are the testable contract here:
+    // `flex-1` below `lg` (an even split with the detail pane, each scrolling internally) and
+    // `lg:flex-none` from `lg` up (so the side-by-side layout's own `lg:w-2/5` sizing still applies).
+    const { container } = render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer')]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const pane = container.firstElementChild!;
+    expect(pane).toHaveClass('flex-1');
+    expect(pane).toHaveClass('lg:flex-none');
+    // The side-by-side sizing must stay exactly as it was; this fix is scoped to the stacked case.
+    expect(pane).toHaveClass('lg:w-2/5');
+  });
 });
