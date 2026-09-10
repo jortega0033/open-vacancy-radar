@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import type { ProviderId } from '@agent-dock/shared';
 import type { CvDocumentRecord, CvProfile } from '../../window.js';
 import { buildCvParsePrompt } from '../cv/prompts.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
@@ -78,6 +79,23 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const parseAppliedRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
 
+  // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
+  // through: the persisted `default_provider` setting, not a hardcoded provider. A failure here
+  // just leaves the Claude Code default in place rather than blocking the feature.
+  const [provider, setProvider] = useState<ProviderId>('claude');
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setProvider(settings.defaultProvider);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
@@ -120,7 +138,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     if (!record || !canParseWithAi) return;
     parseAppliedRef.current = false;
     setParseError(undefined);
-    void parseRun.start(buildCvParsePrompt(record.name, record.text));
+    void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
   }
 
   async function handleSubmit(e: FormEvent) {

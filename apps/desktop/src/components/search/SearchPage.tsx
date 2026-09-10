@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from '@phosphor-icons/react';
+import type { ProviderId } from '@agent-dock/shared';
 import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
@@ -197,6 +199,9 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
+  // Which CLI the gap-analysis offer below actually runs through, so its copy names the real
+  // provider instead of assuming Claude Code. A failure here just leaves that default in place.
+  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -392,6 +397,21 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         // the card falls back to "a CV you load"
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setDefaultProvider(settings.defaultProvider);
+      })
+      .catch(() => {
+        // the card falls back to the Claude Code default
+      });
     return () => {
       cancelled = true;
     };
@@ -660,6 +680,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
             <VacancyDetail
               result={selected}
               defaultCvName={defaultCvName}
+              providerLabel={PROVIDER_LABEL[defaultProvider]}
               saveState={saveState}
               {...(saveError ? { saveError } : {})}
               onSave={() => void handleSave()}
