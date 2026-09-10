@@ -246,7 +246,16 @@ describe('spawned child environment (sentinel sweep for issue #250)', () => {
 
 describe('vacancyEngineConfig integration (issue #250)', () => {
   it('still resolves vacancy-source keys from process.env before filtering', () => {
-    const savedEnv = { ...process.env };
+    const testKeys = [
+      'AI_API_KEY',
+      'BRAVE_SEARCH_API_KEY',
+      'ADZUNA_APP_ID',
+      'ADZUNA_APP_KEY',
+      'JOOBLE_API_KEY',
+      'REED_API_KEY',
+      'JOBSPIPE_API_KEY',
+    ] as const;
+    const saved = new Map(testKeys.map((name) => [name, process.env[name]]));
     try {
       process.env.AI_API_KEY = 'test-key';
       process.env.BRAVE_SEARCH_API_KEY = 'test-brave';
@@ -268,7 +277,13 @@ describe('vacancyEngineConfig integration (issue #250)', () => {
       expect(config.keyedDiscovery.reedApiKey).toBe('test-reed');
       expect(config.keyedDiscovery.jobspipeApiKey).toBe('test-jobspipe');
     } finally {
-      Object.assign(process.env, savedEnv);
+      // Restore rather than Object.assign-merge: this worker's process.env is shared across every
+      // test file in the same vitest worker, so a key that didn't exist before this test must be
+      // deleted, not left behind with its test value.
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 
