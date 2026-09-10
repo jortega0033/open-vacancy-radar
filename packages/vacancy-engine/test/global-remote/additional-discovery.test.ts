@@ -30,6 +30,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       remooteRoleTitle: 'frontend',
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
+      aiDevJobsMaxPages: 1,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -163,7 +164,7 @@ describe('Additional public and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(25);
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(26);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',
@@ -188,6 +189,13 @@ describe('Additional public and configuration-gated discovery', () => {
     });
     expect(registry.find((source) => source.id === 'remoote')).toMatchObject({
       state: 'active',
+      transport: 'api',
+      ingestionMode: 'linked_index',
+      adapter: 'active',
+    });
+    expect(registry.find((source) => source.id === 'ai_dev_jobs')).toMatchObject({
+      state: 'active',
+      url: 'https://aidevboard.com/docs',
       transport: 'api',
       ingestionMode: 'linked_index',
       adapter: 'active',

@@ -94,6 +94,7 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('devitjobs_uk', 'DevITJobs United Kingdom RSS', 'https://devitjobs.uk/rss', 'rss', 'devitjobs_uk'),
     active('dice', 'Dice MCP Job Search', 'https://www.dice.com/career-advice/how-to-connect-the-dice-mcp-server-to-your-ai-assistant', 'mcp', 'dice'),
     active('remoote', 'Remoote Agent Jobs API', 'https://remoote.app/agents', 'api', 'remoote'),
+    active('ai_dev_jobs', 'AI Dev Jobs Public REST API', 'https://aidevboard.com/docs', 'api', 'ai_dev_jobs'),
     active('jobspresso', 'Jobspresso Job Feed', 'https://jobspresso.co/?feed=job_feed', 'rss', 'jobspresso'),
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),
     active('un_careers', 'United Nations Careers RSS', 'https://careers.un.org/jobfeed?language=en', 'rss', 'un_careers'),
