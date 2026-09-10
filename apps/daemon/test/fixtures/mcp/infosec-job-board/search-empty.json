@@ -1,0 +1,7 @@
+{
+  "content": [
+    { "type": "text", "text": "{\"jobs\":[]}" }
+  ],
+  "structuredContent": { "jobs": [] },
+  "isError": false
+}

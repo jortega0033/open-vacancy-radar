@@ -1,0 +1,5 @@
+[
+  { "name": "search_jobs", "inputSchema": { "type": "object", "properties": { "query": { "type": "string" }, "limit": { "type": "number" } } } },
+  { "name": "get_job", "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } },
+  { "name": "apply_to_job", "inputSchema": { "type": "object", "properties": { "id": { "type": "string" }, "resumeUrl": { "type": "string" } } } }
+]

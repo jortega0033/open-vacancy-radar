@@ -1,0 +1,7 @@
+{
+  "content": [
+    { "type": "text", "text": "Job not found for id \"job-does-not-exist\"." }
+  ],
+  "structuredContent": { "message": "Job not found for id \"job-does-not-exist\"." },
+  "isError": true
+}

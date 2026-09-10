@@ -1,0 +1,15 @@
+{
+  "content": [
+    { "type": "text", "text": "{\"jobs\":[{\"id\":\"job-901\",\"title\":\"Security Analyst\",\"company\":\"Example Corp\"}]}" }
+  ],
+  "structuredContent": {
+    "jobs": [
+      {
+        "id": "job-901",
+        "title": "Security Analyst",
+        "company": "Example Corp"
+      }
+    ]
+  },
+  "isError": false
+}

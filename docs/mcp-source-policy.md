@@ -43,7 +43,7 @@ not approved merely because its server implements MCP.
 - Cached results carry source, attribution, policy version/review date, fetch time, and expiry. The
   manager deterministically purges expired rows and deletes provider-controlled rows on removal.
 
-## Provider decisions (reviewed 2026-08-30)
+## Provider decisions (reviewed 2026-08-30, InfoSec Job Board added 2026-09-10)
 
 | Provider | Decision | Tracking |
 | --- | --- | --- |
@@ -52,6 +52,7 @@ not approved merely because its server implements MCP.
 | JobGPT | Optional API-key spike only after vendor and data-rights evidence | #30 |
 | LoopCV | No production adapter without an aggregator/commercial agreement | #31 |
 | openings-mcp | Never bundle wholesale; audit each upstream provider independently | #32 |
+| InfoSec Job Board | Approved: capped (max 10), credential-free `linked_index` MCP source allowlisting only `search_jobs`/`get_job`. First policy wired into the shipped daemon (`apps/daemon/src/mcp/providers/infosec-job-board.ts`) | #48 |
 
 Reference: MCP authorization specification 2025-06-18 and the provider-specific evidence recorded
 in the linked tickets. Legal review must be repeated when terms or intended processing changes.
