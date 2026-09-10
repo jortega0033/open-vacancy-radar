@@ -101,6 +101,18 @@ describe('filterResults: sponsorOnly', () => {
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
   });
+
+  it('drops a row whose worldwideSponsorMatch is missing entirely, same as an explicit null', () => {
+    // A report written before `worldwideSponsorMatch` existed on `DiscoveryVacancyAudit` has no such
+    // key at all -- `undefined`, not `null` -- once parsed back from JSON. Regression for a bug where
+    // `=== null` let those rows slip through a sponsorOnly filter as if they had a match.
+    const legacyRow = worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' });
+    legacyRow.raw = { ...discoveryVacancy({ key: '1' }) } as DiscoveryVacancyAudit;
+    delete (legacyRow.raw as Partial<DiscoveryVacancyAudit>).worldwideSponsorMatch;
+
+    const filtered = filterResults([legacyRow], { ...DEFAULT_FILTERS, sponsorOnly: true });
+    expect(filtered).toEqual([]);
+  });
 });
 
 describe('countryOptions', () => {
@@ -221,6 +233,17 @@ describe('worldwideVerification', () => {
     expect(
       worldwideVerification(discoveryVacancy({ location: 'Remote (United States)', worldwideSponsorMatch: null })),
     ).toBe(WORLDWIDE_VERIFICATION);
+  });
+
+  it('falls back to WORLDWIDE_VERIFICATION, not a thrown error, when the field is missing entirely', () => {
+    // Regression for a crash: a `latest.json` written before `worldwideSponsorMatch` existed on
+    // `DiscoveryVacancyAudit` has no such key -- `undefined`, not `null` -- and
+    // `hydrateLatestVacancyReport` (electron/main.ts) loads whatever `latest.json` is on disk on
+    // every launch, unconditionally. `=== null` let `undefined` fall through to `match.legalName`,
+    // an uncaught `TypeError` that unmounted the whole renderer before any page ever showed.
+    const legacyVacancy = discoveryVacancy();
+    delete (legacyVacancy as Partial<DiscoveryVacancyAudit>).worldwideSponsorMatch;
+    expect(worldwideVerification(legacyVacancy)).toBe(WORLDWIDE_VERIFICATION);
   });
 
   it('reports a match as possible_sponsor_match, never recognised_sponsor, with a warning tone', () => {

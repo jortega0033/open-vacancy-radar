@@ -105,10 +105,18 @@ export function orNotStated(value: string | null | undefined): string {
  *
  * A match is capped at `possible_sponsor_match`: a name-keyed Wikidata search carries none of the
  * evidence-chain rigor a curated, manually-verified company-mapping would.
+ *
+ * Falls back on a missing field (`undefined`), not just an explicit `null`: a report `latest.json`
+ * written before `worldwideSponsorMatch` existed on `DiscoveryVacancyAudit` has no such key at all,
+ * and `hydrateLatestVacancyReport` (electron/main.ts) loads whatever `latest.json` is on disk
+ * unconditionally on every launch, including one written by an older build. Treating `undefined` as
+ * "no match" here (same as `null`) is what keeps loading that old report a no-op instead of an
+ * uncaught `TypeError` that takes the whole renderer down before any page -- Search included -- ever
+ * mounts.
  */
 export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verification {
   const match = vacancy.worldwideSponsorMatch;
-  if (match === null) return WORLDWIDE_VERIFICATION;
+  if (!match) return WORLDWIDE_VERIFICATION;
 
   return {
     level: 'possible_sponsor_match',
@@ -254,7 +262,10 @@ export function filterResults(
 
     if (filters.source !== 'all' && result.provider !== filters.source) return false;
 
-    if (filters.sponsorOnly && result.raw.worldwideSponsorMatch === null) return false;
+    // `=== null` here would wrongly keep a row from a report written before `worldwideSponsorMatch`
+    // existed (the field is simply absent, i.e. `undefined`, not `null`) even though it carries no
+    // match evidence -- see `worldwideVerification`'s doc comment above for the same gap.
+    if (filters.sponsorOnly && !result.raw.worldwideSponsorMatch) return false;
 
     if (filters.postedWithin !== 'any') {
       // A row with no known posting date cannot satisfy "posted in the last N days". It is dropped
