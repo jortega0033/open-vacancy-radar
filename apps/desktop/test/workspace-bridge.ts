@@ -122,6 +122,10 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     getReport: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),
     getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
+    // Default: subscribes to nothing and hands back an already-good unsubscribe. A test that cares
+    // about progress events overrides this with its own `vi.fn()` that captures the callback (the
+    // same "override only the one you're about" pattern every other capability here follows).
+    onScanProgress: vi.fn(() => () => {}),
     getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     ...overrides,

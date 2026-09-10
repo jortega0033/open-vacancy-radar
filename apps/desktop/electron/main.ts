@@ -32,6 +32,7 @@ import {
   type Database,
   type GlobalRemoteReport,
   type ScanLock,
+  type ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   AGENT_WORKSPACE_ACTIVITY_CHANNEL,
@@ -1495,10 +1496,29 @@ guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestV
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
 
 /**
+ * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
+ * own "one-way push, not a handle channel" rule (issue #252).
+ *
+ * A narrow, typed push: every payload is exactly one engine `ScanProgressEvent` (a source id plus
+ * that source's own freshly discovered rows), never a generic "here is some data" envelope. The
+ * renderer only ever reads this to show provisional, honestly-unscored rows sooner -- it is not a
+ * second source of truth for the scan's outcome, which `vacancy:run-scan`'s own resolved value (or
+ * a `vacancy:get-scan-status` poll, for a page that reattaches mid-scan) still is.
+ */
+const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
+
+/**
  * Shared by the `vacancy:run-scan` IPC handler and the background-scan timer (#195): a
  * `setInterval` callback has no IPC sender, so it cannot go through `guardedIpc` -- this is the
  * body the guard used to wrap directly, factored out so both callers run the identical scan path
  * (same lock, same report bookkeeping) rather than risking two copies drifting apart.
+ *
+ * `onProgress` (#252) pushes each discovery sub-source's own rows to the renderer the moment that
+ * source resolves, well before this whole function's promise settles -- purely an additional,
+ * best-effort notification layered on top of the scan below. The background-scan timer calls this
+ * same function with nobody watching the Search page; pushing progress events nobody is listening
+ * to is harmless (`sendToRenderer` already no-ops once the window is gone), so this is unconditional
+ * rather than gated on "is anyone currently on the Search page".
  */
 async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
@@ -1507,6 +1527,7 @@ async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
         query,
+        onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
       });
       latestVacancyReport = result.report;
       return result.report;

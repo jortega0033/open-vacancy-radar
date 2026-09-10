@@ -24,6 +24,7 @@ import type {
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
+  ScanProgressCallback,
 } from './models.js';
 
 export async function discoverHimalayas(
@@ -150,19 +151,38 @@ export async function discoverJobicy(
   }
 }
 
+/**
+ * `.then`-wraps a sub-source's own promise so `onProgress` fires the instant *that* branch of the
+ * `Promise.all` below resolves, not only once every branch has -- a plumbing change over the
+ * existing parallel discovery, not new discovery logic. `run` itself is returned unchanged, so the
+ * aggregation below sees exactly what it always did.
+ */
+function withProgress(
+  sourceId: string,
+  run: Promise<DiscoveryRun>,
+  onProgress: ScanProgressCallback | undefined,
+): Promise<DiscoveryRun> {
+  if (!onProgress) return run;
+  return run.then((result) => {
+    onProgress({ sourceId, vacancies: result.vacancies });
+    return result;
+  });
+}
+
 export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  onProgress?: ScanProgressCallback,
 ): Promise<DiscoveryRun> {
   const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed] = await Promise.all([
-    discoverHimalayas(http, config),
-    discoverJobicy(http, config),
-    discoverAiDevJobs(http, config),
-    runStructuredDiscovery(http, config),
-    runFeedDiscovery(http, config),
-    runJobtechDiscovery(http, config),
-    runAdditionalDiscovery(http, config),
-    runKeyedDiscovery(http, config),
+    withProgress('himalayas', discoverHimalayas(http, config), onProgress),
+    withProgress('jobicy', discoverJobicy(http, config), onProgress),
+    withProgress('ai_dev_jobs', discoverAiDevJobs(http, config), onProgress),
+    withProgress('structured', runStructuredDiscovery(http, config), onProgress),
+    withProgress('feeds', runFeedDiscovery(http, config), onProgress),
+    withProgress('jobtech', runJobtechDiscovery(http, config), onProgress),
+    withProgress('additional', runAdditionalDiscovery(http, config), onProgress),
+    withProgress('keyed', runKeyedDiscovery(http, config), onProgress),
   ]);
   return {
     sources: [

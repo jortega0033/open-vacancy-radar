@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
@@ -17,6 +17,7 @@ import {
   isWebUrl,
   sortResults,
   sourceOptions,
+  toPartialResults,
   toWorldwideResults,
   type SearchFilters,
   type SearchResult,
@@ -186,6 +187,14 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
 
+  // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
+  // used only while no final report is loaded yet (see `results` below). Reset whenever this page
+  // itself starts a fresh scan; otherwise left to accumulate for as long as the page stays mounted.
+  // A page that (re)mounts mid-scan starts empty here and just waits for the next progress event or
+  // the scan's own completion, rather than replaying rows a previous mount already saw -- see
+  // `onScanProgress`'s own doc comment on `VacancyRadarBridge` for that trade-off.
+  const [partialVacancies, setPartialVacancies] = useState<DiscoveryVacancyAudit[]>([]);
+
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [assistantForKey, setAssistantForKey] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -284,6 +293,27 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   );
 
   /**
+   * Subscribes to `vacancy:scan-progress` for the lifetime of this mount (issue #252), accumulating
+   * each source's freshly discovered rows into `partialVacancies` -- deduplicated on `key`, since a
+   * source can in principle appear more than once across a run's own retries and the same vacancy
+   * must not render twice. Always subscribed, not just while `scanning` is true: this is what lets a
+   * page that (re)mounts onto a scan already in flight pick up the *rest* of that scan's progress
+   * events as they arrive, rather than only its final completion via `waitForScanToFinish`'s poll
+   * (rows from before this mount are not replayed -- see `partialVacancies`'s own doc comment).
+   * Unsubscribing on unmount is what keeps a navigate-away-and-back cycle at exactly one live
+   * listener rather than accumulating one per mount.
+   */
+  useEffect(() => {
+    return window.vacancyRadar.onScanProgress((event) => {
+      setPartialVacancies((current) => {
+        const seen = new Set(current.map((vacancy) => vacancy.key));
+        const additions = event.vacancies.filter((vacancy) => !seen.has(vacancy.key));
+        return additions.length > 0 ? [...current, ...additions] : current;
+      });
+    });
+  }, []);
+
+  /**
    * Polls until a scan this page did not itself start (or lost the race to start) finishes, then
    * refreshes the report. Used both when this page mounts onto an already-running scan -- most
    * often its own, from before the user navigated to another page and back -- and when `runScan`
@@ -308,6 +338,9 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         if (unmountedRef.current) return;
         setWorldwideReport(report);
         hasHydrated.current = true;
+        // The real, final report is now the source of truth (see `results` below); provisional
+        // rows from this run have served their purpose and stop being retained.
+        setPartialVacancies([]);
       } catch {
         // A failed status check just stops reattaching; it does not invent a scan failure for a
         // scan this page never itself started and has no error message for.
@@ -397,10 +430,16 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     };
   }, []);
 
-  const results = useMemo<SearchResult[]>(
-    () => (worldwideReport ? sortResults(toWorldwideResults(worldwideReport)) : []),
-    [worldwideReport],
-  );
+  // While no final report is loaded yet, fall back to whatever `vacancy:scan-progress` has pushed
+  // so far (issue #252) -- honestly unscored, provisional rows shown sooner than the scan's own
+  // promise resolves. The moment a real `GlobalRemoteReport` exists, it is the only source of truth
+  // here: this never merges partial rows into a loaded report, so the final displayed list is
+  // exactly what a non-streaming scan would have shown, byte-for-byte.
+  const results = useMemo<SearchResult[]>(() => {
+    if (worldwideReport) return sortResults(toWorldwideResults(worldwideReport));
+    if (partialVacancies.length > 0) return sortResults(toPartialResults(partialVacancies));
+    return [];
+  }, [worldwideReport, partialVacancies]);
 
   const visible = useMemo(() => filterResults(results, appliedFilters), [results, appliedFilters]);
 
@@ -439,16 +478,26 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const profileNotConfigured = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
   const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
   const hasReport = worldwideReport !== null;
+  // A scan is running and has pushed at least one row, but has not produced its final report yet:
+  // `results` above is showing provisional, not-yet-scored rows rather than the empty/loading state.
+  // Deliberately excludes `profileNotConfigured`'s check (which requires a real report): a
+  // streaming row's null `profileScore` is expected and temporary, never "profile not configured".
+  const isStreamingPartial = !hasReport && partialVacancies.length > 0;
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async () => {
     setScanning(true);
     setScanError(undefined);
     setLoadError(undefined);
+    // A fresh scan this page itself starts has no partial rows yet -- clear whatever an earlier
+    // run (or an earlier mount's now-gone accumulation) left behind, so a rescan's own progress
+    // events build a clean list rather than mixing in a previous run's provisional rows.
+    setPartialVacancies([]);
     try {
       setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
       hasHydrated.current = true;
       setScanning(false);
+      setPartialVacancies([]);
     } catch (error) {
       const message = describeError(error, 'scan failed');
       // The reattachment effect above disables Search while a scan (including one from before
@@ -534,9 +583,10 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   // the latter isn't a number a user can do anything with here (there is no "browse everything"
   // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
   // rather than useful context.
-  const summary = hasReport
-    ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}`
-    : 'No report loaded';
+  const summary =
+    hasReport || isStreamingPartial
+      ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
+      : 'No report loaded';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -573,8 +623,9 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
         {scanning && (
           <div className="alert alert-info alert-soft mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            Scanning live sources: this hits real external APIs and feeds, and can take anywhere
-            from about ten seconds up to a couple of minutes. The app is not frozen.
+            {isStreamingPartial
+              ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
+              : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
           </div>
         )}
         {scanError && (
@@ -613,9 +664,11 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           </div>
           <SearchLoadingSkeleton />
         </>
-      ) : scanning && !hasReport ? (
+      ) : scanning && !hasReport && !isStreamingPartial ? (
+        // Nothing has come back from any source yet -- there is genuinely nothing to show, streamed
+        // or otherwise, so this is still the plain loading state.
         <SearchLoadingSkeleton />
-      ) : !hasReport ? (
+      ) : !hasReport && !isStreamingPartial ? (
         <EmptyState
           illustration={emptySearchIllustration}
           title="No search yet"
