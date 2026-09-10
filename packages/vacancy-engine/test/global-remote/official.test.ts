@@ -47,6 +47,8 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources,
   };

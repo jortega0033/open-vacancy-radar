@@ -320,6 +320,7 @@ export async function runGlobalRemoteScan(
       joobleApiKey: appConfig.keyedDiscovery.joobleApiKey,
       reedApiKey: appConfig.keyedDiscovery.reedApiKey,
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
+      navArbeidsplassenApiKey: appConfig.keyedDiscovery.navArbeidsplassenApiKey,
     },
   };
   const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
@@ -340,7 +341,7 @@ export async function runGlobalRemoteScan(
   // theirs instead of overlapping with it, which is most of the difference between a scan taking
   // a couple of minutes and one taking upwards of ten.
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
-    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile),
+    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile, projectRoot),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),

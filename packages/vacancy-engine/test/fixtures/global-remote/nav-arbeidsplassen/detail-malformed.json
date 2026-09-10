@@ -1,0 +1,16 @@
+{
+  "uuid": "66666666-6666-4666-8666-666666666666",
+  "sistEndret": "2026-08-20T09:00:00Z",
+  "status": "ACTIVE",
+  "ad_content": {
+    "uuid": "66666666-6666-4666-8666-666666666666",
+    "published": "2026-08-15T08:00:00Z",
+    "expires": "2099-01-01T00:00:00Z",
+    "updated": "2026-08-20T09:00:00Z",
+    "workLocations": [],
+    "contactList": [],
+    "title": "Frontend Developer",
+    "occupationCategories": [],
+    "categoryList": []
+  }
+}
