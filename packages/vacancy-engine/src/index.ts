@@ -11,6 +11,17 @@ export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/adv
 
 export { runGlobalRemoteScan, type GlobalRemoteScanResult } from './pipeline/global-remote.js';
 export { readGlobalRemoteReport } from './global-remote/report.js';
+export {
+  generateGapReportHtml,
+  generateGapReportText,
+} from './global-remote/gap-report.js';
+export {
+  aggregateGapRecords,
+  classifyFailure,
+  detectAtsProviderFromError,
+  redactUrl,
+  recordFromSourceAudit,
+} from './global-remote/source-gap-telemetry.js';
 export { runSponsorSync } from './pipeline/sponsors.js';
 export {
   candidateProfileSchema,
@@ -19,7 +30,7 @@ export {
   type CandidateProfile,
 } from './candidate/profile.js';
 
-export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit } from './global-remote/models.js';
+export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit, GapTelemetryReport } from './global-remote/models.js';
 export {
   descriptionShingleSimilarity,
   findCrossCompanyDuplicateGroups,
