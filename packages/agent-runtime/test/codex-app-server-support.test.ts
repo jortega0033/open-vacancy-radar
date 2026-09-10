@@ -48,8 +48,8 @@ describe('CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS: pinned against upstrea
     // Upstream AgentDock's own app-server-support.ts constant (23 methods, commit 8d0d9ef,
     // cross-verified against its normalizer.ts's own KNOWN_NOTIFICATION_METHODS set), hardcoded
     // here so a future edit to this repo's list that silently drops a method upstream still sends
-    // -- or silently re-adds account/rateLimits/updated or a remote-control/MCP-server-lifecycle
-    // method that's deliberately excluded -- fails this test instead of drifting unnoticed.
+    // -- or silently excludes a remote-control/MCP-server-lifecycle method that's deliberately
+    // excluded -- fails this test instead of drifting unnoticed.
     const upstreamFullList = new Set([
       'remoteControl/status/changed',
       'warning',
@@ -77,9 +77,8 @@ describe('CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS: pinned against upstrea
     ]);
     // Deliberately excluded: this transport never pairs with a remote-control client or
     // configures MCP servers, so these two genuinely cannot fire (see app-server-support.ts's own
-    // doc comment). account/rateLimits/updated is separately deferred (#221) until this repo has
-    // a usage.rate_limits event.
-    const deliberatelyExcluded = new Set(['remoteControl/status/changed', 'mcpServer/startupStatus/updated', 'account/rateLimits/updated']);
+    // doc comment).
+    const deliberatelyExcluded = new Set(['remoteControl/status/changed', 'mcpServer/startupStatus/updated']);
     const expected = new Set([...upstreamFullList].filter((method) => !deliberatelyExcluded.has(method)));
     expect(new Set(CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS)).toEqual(expected);
   });

@@ -56,8 +56,8 @@ describe('redaction exhaustiveness', () => {
     expect([...REDACTED_V1_EVENT_TYPES].sort()).toEqual(eventTypesFromSchema());
   });
 
-  it('declares all eleven v1 event types', () => {
-    expect(eventTypesFromSchema()).toHaveLength(11);
+  it('declares all twelve v1 event types', () => {
+    expect(eventTypesFromSchema()).toHaveLength(12);
   });
 
   it('produces a schema-valid persisted record for every declared event type', () => {
@@ -69,10 +69,11 @@ describe('redaction exhaustiveness', () => {
       { type: 'tool.started', toolName: 'Bash', toolCallId: 'c1', input: { cmd: 'ls' }, sequence: 4, timestamp: 't' },
       { type: 'tool.completed', toolName: 'Bash', toolCallId: 'c1', result: 'output', isError: false, sequence: 5, timestamp: 't' },
       { type: 'usage', inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cost: 0.5, sequence: 6, timestamp: 't' },
-      { type: 'error', code: 'E_BAD', message: 'went wrong', recoverable: true, sequence: 7, timestamp: 't' },
-      { type: 'session.completed', providerSessionId: 'p', sequence: 8, timestamp: 't' },
-      { type: 'session.failed', message: 'fatal', sequence: 9, timestamp: 't' },
-      { type: 'session.cancelled', sequence: 10, timestamp: 't' },
+      { type: 'usage.rate_limits', limitId: 'limit-1', limitName: 'API Limit', primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 }, sequence: 7, timestamp: 't' },
+      { type: 'error', code: 'E_BAD', message: 'went wrong', recoverable: true, sequence: 8, timestamp: 't' },
+      { type: 'session.completed', providerSessionId: 'p', sequence: 9, timestamp: 't' },
+      { type: 'session.failed', message: 'fatal', sequence: 10, timestamp: 't' },
+      { type: 'session.cancelled', sequence: 11, timestamp: 't' },
     ];
 
     expect(samples.map((sample) => sample.type).sort()).toEqual(eventTypesFromSchema());
