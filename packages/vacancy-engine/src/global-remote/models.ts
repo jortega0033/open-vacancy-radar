@@ -68,6 +68,8 @@ export const globalRemoteConfigSchema = z.object({
     /** Empty means worldwide/no country filter: the key is omitted from the request entirely. */
     remooteCountry: z.string().trim().max(100).default(''),
     remooteLimit: z.number().int().min(1).max(10).default(10),
+    /** Bounded page budget for AI Dev Jobs; each page is requested at the documented 50-row max. */
+    aiDevJobsMaxPages: z.number().int().min(1).max(10).default(2),
     museEnabled: z.boolean().default(false),
     museMaxPages: z.number().int().min(1).max(10).default(6),
     adzunaAppId: z.string().default(''),
@@ -149,6 +151,7 @@ export type DiscoveryProvider =
   | 'devitjobs_uk'
   | 'dice'
   | 'remoote'
+  | 'ai_dev_jobs'
   | 'the_muse'
   | 'jobspresso'
   | 'remote_frontend_jobs'

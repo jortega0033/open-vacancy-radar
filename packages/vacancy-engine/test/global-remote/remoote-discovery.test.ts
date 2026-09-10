@@ -45,6 +45,7 @@ function profile(): GlobalRemoteConfig {
       remooteRoleTitle: 'frontend',
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
+      aiDevJobsMaxPages: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',

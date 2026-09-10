@@ -25,6 +25,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       remooteRoleTitle: '',
       remooteCountry: '',
       remooteLimit: 10,
+      aiDevJobsMaxPages: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',

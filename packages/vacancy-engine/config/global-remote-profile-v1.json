@@ -18,6 +18,7 @@
     "remooteRoleTitle": "",
     "remooteCountry": "",
     "remooteLimit": 10,
+    "aiDevJobsMaxPages": 5,
     "museEnabled": true,
     "museMaxPages": 6
   },
