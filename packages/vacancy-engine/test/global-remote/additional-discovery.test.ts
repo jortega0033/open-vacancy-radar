@@ -40,6 +40,8 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources: [],
   };
