@@ -68,4 +68,17 @@ describe('validateRenderedResumePdf', () => {
     const result = await validateRenderedResumePdf(realPdfContaining(['Someone Else']), RESUME);
     expect(result.reasons.length).toBeGreaterThan(1);
   });
+
+  it('passes for a real Node Buffer, not only a plain Uint8Array (#156)', async () => {
+    // `webContents.printToPDF()` -- `printHtmlToPdf`'s own real caller -- resolves to a real Node
+    // `Buffer`, not a plain `Uint8Array`, and `unpdf`'s `extractText` rejects a `Buffer` outright
+    // even though `Buffer` is itself a `Uint8Array` subclass. Every other test in this file happens
+    // to pass a plain `Uint8Array` (`new Uint8Array(doc.output('arraybuffer'))`), so this exact gap
+    // was invisible here and only surfaced against a real running Electron process (#156's export
+    // action, the first caller to ever exercise this function with a real `printToPDF` `Buffer`).
+    const buffer = Buffer.from(realPdfContaining(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']));
+    expect(buffer).toBeInstanceOf(Buffer);
+    const result = await validateRenderedResumePdf(buffer, RESUME);
+    expect(result).toEqual({ ok: true, reasons: [] });
+  });
 });

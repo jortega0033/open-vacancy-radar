@@ -1,7 +1,15 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, goto, test } from './fixtures.js';
 
 const SAMPLE_CV_PATH = fileURLToPath(new URL('./fixtures/sample-cv.txt', import.meta.url));
+
+/** Magic bytes for each exported format, the same check the ticket's own QA pass used to confirm
+ * Letters' export produces a real, non-empty file rather than a stub. */
+const PDF_MAGIC = Buffer.from('%PDF');
+const DOCX_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04": the ZIP local-file header.
 
 test.describe('CV library', () => {
   test('adds a manual profile, edits it, and deletes it', async ({ window }) => {
@@ -87,5 +95,85 @@ test.describe('CV library', () => {
 
     await expect(secondRow.getByText('Default', { exact: true })).toBeVisible();
     await expect(firstRow.getByRole('button', { name: /set as default/i })).toBeVisible();
+  });
+
+  test('exports a CV to PDF and DOCX with the default app-authored template (#156)', async ({
+    window,
+    electronApp,
+  }) => {
+    await window.evaluate(() =>
+      self.workspace.createCvDocument({
+        name: 'Frontend CV — Netherlands',
+        kind: 'manual',
+        targetRole: 'Senior Frontend Engineer',
+        profile: {
+          title: 'Senior Frontend Engineer',
+          location: 'Amsterdam, Netherlands',
+          skills: ['TypeScript', 'React', 'Accessibility'],
+          summary: 'Frontend engineer with eight years building design systems.',
+        },
+      }),
+    );
+
+    await goto(window, 'CV');
+    const row = window.getByRole('row', { name: /Frontend CV — Netherlands/ });
+    await expect(row).toBeVisible();
+
+    // `workspace:cv-documents:export` drives a real native save dialog in the main process, which
+    // Playwright cannot click through directly, so it is stubbed exactly like the CV upload picker
+    // above and like `letters.spec.ts`'s own export test -- to a real path in a throwaway directory
+    // this test owns and cleans up itself. PDF and DOCX each get their own throwaway directory
+    // (rather than sharing one): writing a second file to a directory Windows/AV just finished
+    // scanning the first write in was an observed source of flaky ENOENT errors in this exact test,
+    // unrelated to the export handler itself -- a fresh directory per format sidesteps that.
+    const pdfDir = mkdtempSync(join(tmpdir(), 'ovr-e2e-cv-export-pdf-'));
+    const docxDir = mkdtempSync(join(tmpdir(), 'ovr-e2e-cv-export-docx-'));
+    try {
+      // PDF first.
+      const pdfPath = join(pdfDir, 'resume.pdf');
+      await electronApp.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = async () => ({ canceled: false, filePath });
+      }, pdfPath);
+
+      // The Export menu is a daisyUI CSS-`:focus`-driven dropdown (`CvLibraryTable.tsx`'s
+      // `dropdown dropdown-end`), the same kind `letters.spec.ts` already drives: the menu item is
+      // waited on explicitly rather than clicked immediately after the toggle, since a click
+      // dispatched before the dropdown's focus state has settled would otherwise be a flaky
+      // "not visible" timeout instead of a deterministic pass.
+      await row.getByRole('button', { name: /^export$/i }).click();
+      const pdfOption = row.getByRole('button', { name: /pdf \(\.pdf\)/i });
+      await expect(pdfOption).toBeVisible();
+      await pdfOption.click();
+      await expect(row.getByText('Exported', { exact: true })).toBeVisible();
+
+      // `workspace:cv-documents:export`'s own handler already ran this exact PDF through
+      // `validateRenderedResumePdf` before ever reaching the save dialog (see main.ts), which
+      // confirms the rendered text actually contains this CV's own title -- not re-asserted here
+      // via a raw-byte substring search, since a real PDF's content streams are typically
+      // Flate-compressed and would not contain readable text at the byte level regardless of
+      // whether rendering worked correctly.
+      const pdfBytes = readFileSync(pdfPath);
+      expect(pdfBytes.byteLength).toBeGreaterThan(0);
+      expect(pdfBytes.subarray(0, 4)).toEqual(PDF_MAGIC);
+
+      // Then DOCX, against the same row.
+      const docxPath = join(docxDir, 'resume.docx');
+      await electronApp.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = async () => ({ canceled: false, filePath });
+      }, docxPath);
+
+      await row.getByRole('button', { name: /^export$/i }).click();
+      const docxOption = row.getByRole('button', { name: /word \(\.docx\)/i });
+      await expect(docxOption).toBeVisible();
+      await docxOption.click();
+      await expect(row.getByText('Exported', { exact: true })).toBeVisible();
+
+      const docxBytes = readFileSync(docxPath);
+      expect(docxBytes.byteLength).toBeGreaterThan(0);
+      expect(docxBytes.subarray(0, 4)).toEqual(DOCX_MAGIC);
+    } finally {
+      rmSync(pdfDir, { recursive: true, force: true });
+      rmSync(docxDir, { recursive: true, force: true });
+    }
   });
 });

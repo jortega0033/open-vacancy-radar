@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { CvDocumentRecord } from '../../window.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
 import { ConfirmDialog, EmptyState } from '../shell/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
+
+/** How long the "Exported" confirmation stays up next to a row, matching `TailorCv`'s own
+ * copy-feedback window. */
+const EXPORT_FEEDBACK_MS = 2_000;
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
 
@@ -37,6 +41,16 @@ export function CvLibraryPage() {
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
+
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportedId, setExportedId] = useState<string | null>(null);
+  const exportedTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(
+    () => () => {
+      if (exportedTimeoutRef.current !== undefined) clearTimeout(exportedTimeoutRef.current);
+    },
+    [],
+  );
 
   /** Used after a successful upload, where the save flow only reports back a new id, not a row. */
   const reloadDocuments = useCallback(async () => {
@@ -93,6 +107,31 @@ export function CvLibraryPage() {
       setDocuments(refreshed);
     } catch (err) {
       setActionError(describeError(err, 'could not set this CV as default'));
+    }
+  }, []);
+
+  /** #156: exports one CV entry to PDF/DOCX via the native save dialog. `{ saved: false }` means
+   * the user cancelled that dialog, not a failure, so it is treated as a silent no-op rather than
+   * an error -- the same distinction `LetterGenerator`'s own export handler makes. */
+  const handleExport = useCallback(async (doc: CvDocumentRecord, format: CvExportFormat) => {
+    if (exportedTimeoutRef.current !== undefined) clearTimeout(exportedTimeoutRef.current);
+    setActionError(undefined);
+    setExportingId(doc.id);
+    // Cleared synchronously, not left to the pending timeout above: without this, a second export
+    // started while a previous "Exported" badge is still showing would leave that stale badge
+    // visible for the whole new export's duration, misrepresenting a run that has not finished yet
+    // as already complete.
+    setExportedId(null);
+    try {
+      const result = await window.workspace.exportCvDocument(doc.id, format);
+      if (result.saved) {
+        setExportedId(doc.id);
+        exportedTimeoutRef.current = setTimeout(() => setExportedId(null), EXPORT_FEEDBACK_MS);
+      }
+    } catch (err) {
+      setActionError(describeError(err, 'could not export this CV'));
+    } finally {
+      setExportingId(null);
     }
   }, []);
 
@@ -162,6 +201,9 @@ export function CvLibraryPage() {
             onEdit={openEditDrawer}
             onSetDefault={(doc) => void handleSetDefault(doc)}
             onDelete={requestDelete}
+            onExport={(doc, format) => void handleExport(doc, format)}
+            exportingId={exportingId}
+            exportedId={exportedId}
           />
         </div>
       )}

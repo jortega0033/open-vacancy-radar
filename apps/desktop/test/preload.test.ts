@@ -231,6 +231,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'updateCvDocument',
     'deleteCvDocument',
     'setDefaultCvDocument',
+    'exportCvDocument',
     'listLetters',
     'createLetter',
     'updateLetter',
@@ -244,7 +245,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'revokeAutomationGrant',
   ];
 
-  it('exposes exactly the twenty-seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the twenty-eight documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -302,6 +303,20 @@ describe('electron/preload.ts: workspace bridge', () => {
     api = await loadPreload('workspace');
     await (api.setDefaultCvDocument as (id: string) => Promise<unknown>)('cv-3');
     expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:set-default', { id: 'cv-3' });
+  });
+
+  it('exportCvDocument (#156) sends an { id, format } envelope to workspace:cv-documents:export', async () => {
+    invoke.mockResolvedValue({ saved: true, path: 'C:/Users/someone/Downloads/resume.pdf' });
+    const api = await loadPreload('workspace');
+    const result = await (api.exportCvDocument as (id: string, format: string) => Promise<unknown>)('cv-1', 'pdf');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:export', { id: 'cv-1', format: 'pdf' });
+    expect(result).toEqual({ saved: true, path: 'C:/Users/someone/Downloads/resume.pdf' });
+
+    invoke.mockReset();
+    invoke.mockResolvedValue({ saved: false });
+    const api2 = await loadPreload('workspace');
+    await (api2.exportCvDocument as (id: string, format: string) => Promise<unknown>)('cv-2', 'docx');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:export', { id: 'cv-2', format: 'docx' });
   });
 
   it('defaults the applications filter to "all" instead of sending undefined', async () => {
@@ -484,6 +499,10 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'updateCvDocument',
     'deleteCvDocument',
     'setDefaultCvDocument',
+    // Added by issue #156, same reasoning as #202/#203 below: `workspace` legitimately grows here
+    // (a manual CV export action, alongside the CV library verbs it belongs next to), so the
+    // literal is updated rather than left blocking real growth.
+    'exportCvDocument',
     'listLetters',
     'createLetter',
     'updateLetter',

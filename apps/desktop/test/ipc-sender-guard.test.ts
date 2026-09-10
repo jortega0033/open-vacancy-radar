@@ -105,8 +105,11 @@ function preloadInvokeChannels(): string[] {
  * `vacancy:get-nl-report` / `vacancy:run-nl-scan` with it: a floor exists to catch channels
  * silently falling out of the guarded registrar, not to keep counting channels that were
  * deliberately deleted along with the feature they served.
+ *
+ * Raised from 44 to 45 by #156: `workspace:cv-documents:export`, the manual CV Library export
+ * action's new guarded channel.
  */
-const REGISTRATIONS_AT_ADI_16 = 44;
+const REGISTRATIONS_AT_ADI_16 = 45;
 
 describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', () => {
   it('has no direct registration on ipcMain anywhere under electron/', () => {
