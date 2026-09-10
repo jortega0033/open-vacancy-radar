@@ -31,6 +31,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',
