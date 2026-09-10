@@ -510,9 +510,11 @@ a base URL, an absolute path) can't ride along. There is no `remote` module, no
 `eval`, and no path by which the renderer
 can execute an arbitrary shell command, read an arbitrary file, or reach any daemon route this
 bridge doesn't explicitly expose. The page's `Content-Security-Policy` is
-`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'`: no
-`unsafe-eval`, and `connect-src` is just same-origin now that the renderer makes no network calls
-of its own.
+`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+connect-src 'self'`: no `unsafe-eval`, `connect-src` is just same-origin now that the renderer
+makes no network calls of its own, and `img-src` allows same-origin images plus `data:` URIs
+specifically (not a broader `img-src *`) so that in-app images such as the application-review
+screenshot can render.
 
 ## Reporting a vulnerability
 
