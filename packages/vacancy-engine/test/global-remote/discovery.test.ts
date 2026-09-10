@@ -40,6 +40,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
       navArbeidsplassenApiKey: '',
       navArbeidsplassenMaxPages: 1,
       ...overrides,
@@ -170,7 +171,7 @@ describe('runGlobalRemoteDiscovery gap telemetry wiring', () => {
     // handling and turned into a `status: 'error'` DiscoverySourceAudit.
     const http = new FixtureHttpClient(new Map());
 
-    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), projectRoot);
+    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
 
     const failedSources = result.sources.filter((source) => source.status !== 'success');
     expect(failedSources.length).toBeGreaterThan(0);
@@ -186,10 +187,10 @@ describe('runGlobalRemoteDiscovery gap telemetry wiring', () => {
     projectRoot = await mkdtemp(path.join(tmpdir(), 'ovr-gap-telemetry-'));
     const http = new FixtureHttpClient(new Map());
 
-    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), projectRoot);
+    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
     const afterFirstRun = await loadGapRecords(projectRoot);
 
-    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), projectRoot);
+    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
     const afterSecondRun = await loadGapRecords(projectRoot);
 
     expect(afterSecondRun.length).toBe(afterFirstRun.length * 2);
