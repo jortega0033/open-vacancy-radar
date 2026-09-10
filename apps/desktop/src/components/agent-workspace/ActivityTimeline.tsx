@@ -195,38 +195,9 @@ function TimelineRow({ item, toolNamesByAlias }: RowProps) {
       );
 
     case 'usage.rate_limits':
-      return (
-        <>
-          <RowHeading label="Rate limits" at={item.at} />
-          <p className="text-sm text-base-content/70">
-            {item.limitName === undefined ? 'API rate limit' : item.limitName}
-            {item.primary === undefined && item.secondary === undefined ? (
-              <span> — no limit data available</span>
-            ) : (
-              <>
-                {item.primary !== undefined && (
-                  <span>
-                    {' '}
-                    · {item.primary.usedPercent}% of primary window
-                    {item.primary.windowDurationMins !== undefined && (
-                      <span> ({item.primary.windowDurationMins}-min window)</span>
-                    )}
-                  </span>
-                )}
-                {item.secondary !== undefined && (
-                  <span>
-                    {' '}
-                    · {item.secondary.usedPercent}% of secondary window
-                    {item.secondary.windowDurationMins !== undefined && (
-                      <span> ({item.secondary.windowDurationMins}-min window)</span>
-                    )}
-                  </span>
-                )}
-              </>
-            )}
-          </p>
-        </>
-      );
+      // Intentionally not rendered: ADI-25 (#239) adds this event for future use, but its
+      // Non-goals explicitly exclude a desktop UI surfacing it until a UI need is scoped.
+      return null;
 
     case 'error':
       return (
