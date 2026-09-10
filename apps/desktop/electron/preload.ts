@@ -297,6 +297,9 @@ const workspaceApi: WorkspaceBridge = {
   setDefaultCvDocument(id) {
     return ipcRenderer.invoke('workspace:cv-documents:set-default', { id });
   },
+  exportCvDocument(id, format) {
+    return ipcRenderer.invoke('workspace:cv-documents:export', { id, format });
+  },
 
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');

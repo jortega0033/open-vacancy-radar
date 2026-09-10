@@ -200,6 +200,15 @@ describe('CV documents', () => {
     expect(workspace.listCvDocuments(db)[0]?.text).toBe('Angular. TypeScript. 8 years.');
     expect(cv.kind).toBe('uploaded');
   });
+
+  it('getCvDocument (#156) reads back a single row by id', () => {
+    const cv = workspace.createCvDocument(db, { ...CV, targetRole: 'Frontend Engineer' });
+    expect(workspace.getCvDocument(db, cv.id)).toEqual(cv);
+  });
+
+  it('getCvDocument throws WorkspaceNotFoundError for a missing id, the same as update/delete', () => {
+    expect(() => workspace.getCvDocument(db, 'no-such-id')).toThrow(WorkspaceNotFoundError);
+  });
 });
 
 describe('letters', () => {

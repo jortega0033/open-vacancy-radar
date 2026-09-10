@@ -225,6 +225,8 @@ export type {
   CvDocumentInput,
   CvDocumentPatch,
   CvDocumentRecord,
+  CvExportFormat,
+  CvExportResult,
   CvKind,
   CvProfile,
   DeleteResult,

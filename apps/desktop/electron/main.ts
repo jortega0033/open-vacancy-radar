@@ -84,6 +84,7 @@ import {
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
+import type { CvExportResult } from './workspace/types.js';
 import {
   parseApplicationAttemptPatch,
   parseApplicationFilter,
@@ -91,6 +92,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvExportInput,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -100,6 +102,11 @@ import {
   parseSavedJobPatch,
   parseSettingsPatch,
 } from './workspace/validate.js';
+import { printHtmlToPdf } from './application-artifact-staging.js';
+import { cvDocumentToTailoredResume, sanitizeCvExportFileName } from './cv-export.js';
+import { renderResumeDocx } from './resume-docx.js';
+import { renderResumeHtml } from './resume-html.js';
+import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1748,6 +1755,59 @@ guardedIpc.handle('workspace:cv-documents:delete', async (_event, input: unknown
 guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
   workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
 );
+
+/**
+ * #156: the manual "export my CV as PDF/DOCX with the default app-authored template" action.
+ * Reuses the same rendering machinery #199 built for the unattended auto-apply pipeline
+ * (`resume-html.ts`/`resume-docx.ts`/`resume-pdf-validation.ts`/`printHtmlToPdf`) rather than a
+ * second implementation of either the template or the PDF step, and reads the candidate's name
+ * from the Search page's own candidate profile (the one place in this app that is real,
+ * user-entered identity data) rather than inventing one -- see `cv-export.ts`'s doc comment.
+ *
+ * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
+ * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
+ * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
+ * `BrowserWindow` that only this process has.
+ */
+guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { id, format } = parseCvExportInput(input);
+  const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
+  if (!mainWindow) return { saved: false };
+
+  // A fresh install ships with no search profile configured (#156's own "no default bias" stance
+  // extends here too): rather than blocking the export, the resume simply renders with no name.
+  let candidate: CandidateProfile | null;
+  try {
+    candidate = await loadCandidateProfile(await candidateProfilePath());
+  } catch {
+    candidate = null;
+  }
+  const resume = cvDocumentToTailoredResume(doc, candidate);
+
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export CV',
+    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
+});
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 

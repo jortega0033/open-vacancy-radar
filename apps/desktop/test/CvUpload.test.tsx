@@ -24,7 +24,7 @@ describe('CvUpload', () => {
     });
     const onCvChange = vi.fn();
 
-    render(<CvUpload cv={null} onCvChange={onCvChange} />);
+    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() =>
@@ -32,16 +32,30 @@ describe('CvUpload', () => {
     );
     expect(bridges.cv.selectAndRead).toHaveBeenCalledTimes(1);
 
-    render(<CvUpload cv={{ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }} onCvChange={onCvChange} />);
+    render(
+      <CvUpload
+        cv={{ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }}
+        onCvChange={onCvChange}
+        providerLabel="Claude Code"
+      />,
+    );
     expect(await screen.findByText(/jake-cv\.pdf/)).toBeInTheDocument();
     expect(screen.getByText(/1,234 characters/)).toBeInTheDocument();
+  });
+
+  it("names the actually-configured provider, not a hardcoded Claude Code, in the CLI disclosure", async () => {
+    installBridges();
+    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Codex" />);
+
+    expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
   });
 
   it('treats a cancelled dialog as a no-op: no CV change, no error banner', async () => {
     installBridges({ cv: { selectAndRead: vi.fn().mockResolvedValue(null) } });
     const onCvChange = vi.fn();
 
-    render(<CvUpload cv={null} onCvChange={onCvChange} />);
+    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() => expect(screen.queryByText(/reading and extracting/i)).not.toBeInTheDocument());
@@ -62,7 +76,7 @@ describe('CvUpload', () => {
       },
     });
 
-    render(<CvUpload cv={null} onCvChange={vi.fn()} />);
+    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Claude Code" />);
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     const alert = await screen.findByRole('alert');
@@ -72,7 +86,13 @@ describe('CvUpload', () => {
 
   it('can show and hide the extracted text so the user can verify the PDF parsed sensibly', async () => {
     installBridges();
-    render(<CvUpload cv={{ fileName: 'cv.md', text: 'Frontend architect, Angular.' }} onCvChange={vi.fn()} />);
+    render(
+      <CvUpload
+        cv={{ fileName: 'cv.md', text: 'Frontend architect, Angular.' }}
+        onCvChange={vi.fn()}
+        providerLabel="Claude Code"
+      />,
+    );
 
     expect(screen.queryByText('Frontend architect, Angular.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /show extracted text/i }));

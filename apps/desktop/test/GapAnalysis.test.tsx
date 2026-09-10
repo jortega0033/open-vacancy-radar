@@ -25,6 +25,18 @@ describe('GapAnalysis', () => {
     expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeEnabled();
   });
 
+  it("shows the actually-configured provider in the 'starting' status, not a hardcoded Claude Code", async () => {
+    installBridges({
+      // Never resolves, so the run stays in the 'starting' state deterministically.
+      agentDock: { createSession: vi.fn(() => new Promise<never>(() => {})) },
+    });
+    render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} provider="codex" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+
+    expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
+  });
+
   it('streams the analysis: shows a working state, accumulates chunks, then settles on completion', async () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} model="sonnet" />);

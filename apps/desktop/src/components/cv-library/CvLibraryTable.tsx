@@ -1,4 +1,4 @@
-import type { CvDocumentRecord } from '../../window.js';
+import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
 import { CV_KIND_LABEL, cvParseStatus, formatCvDate, type ParseStatusTone } from './cv-profile.js';
 
 export interface CvLibraryTableProps {
@@ -6,6 +6,15 @@ export interface CvLibraryTableProps {
   onEdit: (doc: CvDocumentRecord) => void;
   onSetDefault: (doc: CvDocumentRecord) => void;
   onDelete: (doc: CvDocumentRecord) => void;
+  /** #156. */
+  onExport: (doc: CvDocumentRecord, format: CvExportFormat) => void;
+  /** The CV currently being exported, if any: disables that row's Export control and shows a
+   * spinner in its place, the same "one export in flight at a time, per row" affordance
+   * `LetterGenerator`'s own export dropdown uses. */
+  exportingId: string | null;
+  /** The CV whose export just finished successfully, if any -- cleared by the page after a short
+   * delay, the same transient-feedback pattern `TailorCv`'s "Copied" uses. */
+  exportedId: string | null;
 }
 
 const PARSE_STATUS_CLASS: Record<ParseStatusTone, string> = {
@@ -21,7 +30,15 @@ const PARSE_STATUS_CLASS: Record<ParseStatusTone, string> = {
  * the explicit Edit action, matching the click-to-edit-reopens-the-drawer requirement without
  * removing the row-action convention `SavedJobsTable`/`ApplicationsTable` already use.
  */
-export function CvLibraryTable({ documents, onEdit, onSetDefault, onDelete }: CvLibraryTableProps) {
+export function CvLibraryTable({
+  documents,
+  onEdit,
+  onSetDefault,
+  onDelete,
+  onExport,
+  exportingId,
+  exportedId,
+}: CvLibraryTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="table">
@@ -76,6 +93,41 @@ export function CvLibraryTable({ documents, onEdit, onSetDefault, onDelete }: Cv
                   )}
                 </td>
                 <td className="text-right whitespace-nowrap">
+                  {exportedId === doc.id && (
+                    <span className="mr-2 text-xs text-success" role="status">
+                      Exported
+                    </span>
+                  )}
+                  <div className="dropdown dropdown-end inline-block">
+                    <button
+                      tabIndex={0}
+                      className="btn btn-ghost btn-xs"
+                      type="button"
+                      disabled={exportingId === doc.id}
+                    >
+                      {exportingId === doc.id && (
+                        <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                      )}
+                      Export
+                    </button>
+                    <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-40 border border-base-300 p-2 shadow">
+                      <li>
+                        {/* `blur()` on click: a daisyUI CSS-`:focus-within` dropdown otherwise stays
+                            open indefinitely once a descendant (this button) holds focus, since
+                            focus never leaves the wrapping `.dropdown` div on its own. Without this,
+                            a second Export click on the same row is silently swallowed by the
+                            still-open dropdown intercepting the click. */}
+                        <button type="button" onClick={(e) => { e.currentTarget.blur(); onExport(doc, 'pdf'); }}>
+                          PDF (.pdf)
+                        </button>
+                      </li>
+                      <li>
+                        <button type="button" onClick={(e) => { e.currentTarget.blur(); onExport(doc, 'docx'); }}>
+                          Word (.docx)
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
                   <button className="btn btn-ghost btn-xs" type="button" onClick={() => onEdit(doc)}>
                     Edit
                   </button>

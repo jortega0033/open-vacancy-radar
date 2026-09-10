@@ -263,4 +263,32 @@ describe('worldwideVerification', () => {
     expect(verification.note).toContain('Acme Technologies B.V.');
     expect(verification.note).toContain('01234567');
   });
+
+  it('falls back to WORLDWIDE_VERIFICATION, rather than crashing, when worldwideSponsorMatch is entirely absent', () => {
+    // Regression test: a report persisted by an older engine version can predate this field, so a
+    // vacancy hydrated from disk can carry `worldwideSponsorMatch: undefined` (the property simply
+    // never set) rather than the `null` the current type promises. Reading `match.legalName` off
+    // that `undefined` used to throw `TypeError: Cannot read properties of undefined (reading
+    // 'legalName')`, which had no error boundary above it and took the whole Search page down to a
+    // blank white screen on every launch that happened to hydrate such a report.
+    const vacancy = discoveryVacancy();
+    delete (vacancy as { worldwideSponsorMatch?: unknown }).worldwideSponsorMatch;
+
+    expect(worldwideVerification(vacancy)).toBe(WORLDWIDE_VERIFICATION);
+  });
+
+  it('falls back to WORLDWIDE_VERIFICATION for a match object missing legalName or kvkNumber', () => {
+    // Same schema-drift concern as above, one level down: a half-populated match object (rather
+    // than an entirely absent one) must not crash either.
+    expect(
+      worldwideVerification(
+        discoveryVacancy({ worldwideSponsorMatch: { legalName: '', kvkNumber: '01234567' } }),
+      ),
+    ).toBe(WORLDWIDE_VERIFICATION);
+    expect(
+      worldwideVerification(
+        discoveryVacancy({ worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '' } }),
+      ),
+    ).toBe(WORLDWIDE_VERIFICATION);
+  });
 });

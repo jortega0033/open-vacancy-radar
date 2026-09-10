@@ -46,11 +46,15 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
   } as SearchResult;
 }
 
-function renderDetail(result: SearchResult, overrides: { onGenerateLetter?: () => void } = {}) {
+function renderDetail(
+  result: SearchResult,
+  overrides: { onGenerateLetter?: () => void; providerLabel?: string } = {},
+) {
   render(
     <VacancyDetail
       result={result}
       defaultCvName={null}
+      providerLabel={overrides.providerLabel ?? 'Claude Code'}
       saveState="idle"
       onSave={vi.fn()}
       onGenerateLetter={overrides.onGenerateLetter ?? vi.fn()}
@@ -82,5 +86,12 @@ describe('VacancyDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
 
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the actually-configured provider in the CV match card, not a hardcoded Claude Code", () => {
+    renderDetail(worldwideResult(), { providerLabel: 'Codex' });
+
+    expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
   });
 });

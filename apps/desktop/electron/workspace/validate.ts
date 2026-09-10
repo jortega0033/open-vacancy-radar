@@ -31,6 +31,7 @@ import type {
   AppSettingsPatch,
   CvDocumentInput,
   CvDocumentPatch,
+  CvExportFormat,
   CvKind,
   CvProfile,
   DefaultAiProvider,
@@ -173,6 +174,7 @@ export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
 ];
 export const APPLICATION_FILTERS: readonly ApplicationFilter[] = ['all', 'active', 'archived'];
 export const CV_KINDS: readonly CvKind[] = ['uploaded', 'manual'];
+export const CV_EXPORT_FORMATS: readonly CvExportFormat[] = ['pdf', 'docx'];
 export const LETTER_TYPES: readonly LetterType[] = [
   'motivation_letter',
   'cover_letter',
@@ -350,6 +352,12 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
   // `workspace:cv-documents:set-default`, which demotes the previous default in the same
   // transaction. Allowing it here would let the library end up with two defaults, or none.
   return out;
+}
+
+/** `{ id, format }` envelope for `workspace:cv-documents:export` (#156). */
+export function parseCvExportInput(value: unknown): { id: string; format: CvExportFormat } {
+  const input = asRecord(value, 'export request');
+  return { id: parseId(input.id), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
 }
 
 // ------------------------------------------------------------------------------- letters

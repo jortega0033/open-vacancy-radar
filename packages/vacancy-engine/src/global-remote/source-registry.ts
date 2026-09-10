@@ -72,6 +72,9 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
   const jobspipe = config.discovery.jobspipeApiKey.trim().length > 0
     ? active('jobspipe', 'JobsPipe Search API', 'https://docs.jobspipe.dev/api-reference/jobs-search', 'api', 'jobspipe')
     : gated('jobspipe', 'JobsPipe Search API', 'https://docs.jobspipe.dev/api-reference/jobs-search', 'jobspipe', 'JOBSPIPE_API_KEY (credit-metered)');
+  const navArbeidsplassen = config.discovery.navArbeidsplassenApiKey.trim().length > 0
+    ? active('nav_arbeidsplassen', 'NAV Arbeidsplassen Public Job Feed', 'https://arbeidsplassen.nav.no/vilkar-api', 'api', 'nav_arbeidsplassen', 'full_ingestion')
+    : gated('nav_arbeidsplassen', 'NAV Arbeidsplassen Public Job Feed', 'https://arbeidsplassen.nav.no/vilkar-api', 'nav_arbeidsplassen', 'NAV_ARBEIDSPLASSEN_API_KEY (free consumer registration)');
 
   return [
     active('himalayas', 'Himalayas Remote Jobs API', 'https://himalayas.app/docs/remote-jobs-api', 'api', 'himalayas', 'full_ingestion'),
@@ -95,16 +98,23 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     active('dice', 'Dice MCP Job Search', 'https://www.dice.com/career-advice/how-to-connect-the-dice-mcp-server-to-your-ai-assistant', 'mcp', 'dice'),
     active('remoote', 'Remoote Agent Jobs API', 'https://remoote.app/agents', 'api', 'remoote'),
     active('ai_dev_jobs', 'AI Dev Jobs Public REST API', 'https://aidevboard.com/docs', 'api', 'ai_dev_jobs'),
+    active('taiwan_jobs', 'Taiwan Jobs (台灣就業通) Official WebService', 'https://data.gov.tw/en/datasets/44062', 'structured', 'taiwan_jobs'),
     active('jobspresso', 'Jobspresso Job Feed', 'https://jobspresso.co/?feed=job_feed', 'rss', 'jobspresso'),
     active('remote_frontend_jobs', 'Remote Frontend Jobs RSS', 'https://www.remotefrontendjobs.com/feed.xml', 'rss', 'remote_frontend_jobs'),
     active('un_careers', 'United Nations Careers RSS', 'https://careers.un.org/jobfeed?language=en', 'rss', 'un_careers'),
     active('jobtech_sweden', 'Arbetsförmedlingen JobSearch API', 'https://jobsearch.api.jobtechdev.se/', 'api', 'jobtech_sweden', 'full_ingestion'),
     active('workable_global', 'Workable all-customer XML feed', 'https://www.workable.com/boards/workable.xml', 'structured', 'workable_global', 'full_ingestion'),
+    active('ats_roster_greenhouse', 'Greenhouse company roster (kalil0321/ats-scrapers)', 'https://storage.stapply.ai/jobhive/v1/greenhouse/companies.csv', 'structured', 'ats_roster_greenhouse', 'full_ingestion'),
+    active('ats_roster_lever', 'Lever company roster (kalil0321/ats-scrapers)', 'https://storage.stapply.ai/jobhive/v1/lever/companies.csv', 'structured', 'ats_roster_lever', 'full_ingestion'),
+    active('ats_roster_ashby', 'Ashby company roster (kalil0321/ats-scrapers)', 'https://storage.stapply.ai/jobhive/v1/ashby/companies.csv', 'structured', 'ats_roster_ashby', 'full_ingestion'),
+    active('ats_roster_recruitee', 'Recruitee company roster (kalil0321/ats-scrapers)', 'https://storage.stapply.ai/jobhive/v1/recruitee/companies.csv', 'structured', 'ats_roster_recruitee', 'full_ingestion'),
+    active('ats_roster_personio', 'Personio company roster (kalil0321/ats-scrapers)', 'https://storage.stapply.ai/jobhive/v1/personio/companies.csv', 'structured', 'ats_roster_personio', 'full_ingestion'),
     muse,
     adzuna,
     jooble,
     reed,
     jobspipe,
+    navArbeidsplassen,
     entry({ id: 'careeronestop', name: 'CareerOneStop Jobs API', url: 'https://api.careeronestop.org/api-explorer/home/index/JobSearchV2_GetJobsByKeywordAndOnetCode', transport: 'api', state: 'configuration_required', provider: null, reason: 'Requires an approved user id and bearer token; no adapter implemented yet pending live-verified contract.' }),
     entry({ id: 'usajobs', name: 'USAJOBS Search API', url: 'https://developer.usajobs.gov/api-reference/get-api-search', transport: 'api', state: 'configuration_required', provider: null, reason: 'Requires a registered email and API key; most federal roles are unlikely to meet outside-US eligibility, so no adapter has been implemented yet.' }),
     entry({ id: 'careerjet', name: 'Careerjet Publisher API', url: 'https://www.careerjet.com/partners/api/', transport: 'api', state: 'partner_required', provider: null, reason: 'Publisher approval and partner credentials are required.' }),

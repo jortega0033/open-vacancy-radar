@@ -108,7 +108,15 @@ export function orNotStated(value: string | null | undefined): string {
  */
 export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verification {
   const match = vacancy.worldwideSponsorMatch;
-  if (match === null) return WORLDWIDE_VERIFICATION;
+  // `!= null` (not `=== null`) on purpose: a report persisted by an older engine version can
+  // predate this field entirely, so `worldwideSponsorMatch` may come back `undefined` from disk
+  // rather than the `null` the current type promises -- a stale report is exactly what a real dev
+  // launch can hydrate (apps/desktop/electron/resolve-vacancy-engine-paths.ts's dev-mode data root
+  // is not scoped per launch). The stored JSON is trusted, untyped data at this boundary; treating
+  // a malformed or half-populated match as "no match" (rather than crashing on `match.legalName`
+  // of `undefined`) matches this module's own rule above: absence of verification renders as
+  // absent, never as a negative result -- and never as a crash either.
+  if (match == null || !match.legalName || !match.kvkNumber) return WORLDWIDE_VERIFICATION;
 
   return {
     level: 'possible_sponsor_match',

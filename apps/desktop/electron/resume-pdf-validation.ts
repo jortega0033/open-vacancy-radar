@@ -32,7 +32,15 @@ export async function validateRenderedResumePdf(
   let text: string;
   try {
     const { extractPdfText } = await import('./cv-text.js');
-    text = await extractPdfText(pdfBytes);
+    // `Uint8Array.from(...)`, not `pdfBytes` passed through: `printHtmlToPdf`'s caller hands this a
+    // real Node `Buffer` (what `webContents.printToPDF()` resolves to), and unpdf's `extractText`
+    // rejects a `Buffer` outright ("Please provide binary data as `Uint8Array`, rather than
+    // `Buffer`") even though `Buffer` is itself a `Uint8Array` subclass -- the same reason
+    // `cv-text.ts`'s own `readCvFile` already wraps its PDF bytes the same way before calling this.
+    // Without this, every call here with a real `Buffer` failed this exact validation, always, for
+    // any caller -- #199's own staging path never actually exercised it in a running Electron
+    // process before #156 wired the first manual UI trigger to it and caught this.
+    text = await extractPdfText(Uint8Array.from(pdfBytes));
   } catch {
     return { ok: false, reasons: ['the rendered PDF text could not be read back at all -- it may have rendered as an image, not real text'] };
   }

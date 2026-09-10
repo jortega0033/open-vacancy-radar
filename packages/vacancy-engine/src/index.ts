@@ -15,6 +15,19 @@ export {
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
 export { readGlobalRemoteReport } from './global-remote/report.js';
+export {
+  generateGapReportHtml,
+  generateGapReportText,
+} from './global-remote/gap-report.js';
+export {
+  aggregateGapRecords,
+  classifyFailure,
+  detectAtsProviderFromError,
+  loadGapRecords,
+  recordDiscoveryGapTelemetry,
+  redactUrl,
+  recordFromSourceAudit,
+} from './global-remote/source-gap-telemetry.js';
 export { runSponsorSync } from './pipeline/sponsors.js';
 export {
   candidateProfileSchema,
@@ -29,6 +42,7 @@ export type {
   OfficialVacancyAudit,
   ScanProgressEvent,
   ScanProgressCallback,
+  GapTelemetryReport,
 } from './global-remote/models.js';
 export {
   descriptionShingleSimilarity,

@@ -17,9 +17,12 @@ import type { CvDocument } from './types.js';
 export interface CvUploadProps {
   cv: CvDocument | null;
   onCvChange(cv: CvDocument | null): void;
+  /** Display name of the CLI the loaded text is actually sent to, e.g. "Claude Code" or "Codex"
+   * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
+  providerLabel: string;
 }
 
-export function CvUpload({ cv, onCvChange }: CvUploadProps) {
+export function CvUpload({ cv, onCvChange, providerLabel }: CvUploadProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [showText, setShowText] = useState(false);
@@ -47,7 +50,7 @@ export function CvUpload({ cv, onCvChange }: CvUploadProps) {
         <div className="card-title text-base font-bold">Your CV</div>
         <p className="text-sm text-base-content/60">
           PDF, plain text or Markdown. The file is read on this machine and its text is only sent to
-          your own Claude Code CLI.
+          your own {providerLabel} CLI.
         </p>
 
         <div className="flex flex-wrap items-center gap-2">

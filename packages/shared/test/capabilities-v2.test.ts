@@ -7,6 +7,8 @@ import {
   MODEL_SELECT_CAPABILITY_ID,
   opaqueExtensionListSchema,
   parseOpaqueExtensions,
+  providerModelCatalogV2ResponseSchema,
+  providerModelV2Schema,
   utf8ByteLength,
   validateJsonBounds,
   OPAQUE_JSON_BOUNDS,
@@ -169,5 +171,73 @@ describe('unknown extensions remain parseable but inactive', () => {
   it('reports an unrelated extension id as inactive, even one this build just parsed successfully', () => {
     const [parsed] = parseOpaqueExtensions([{ id: 'ext.acme.turbo', constraints: { kind: 'opaque', value: {} } }]);
     expect(isCapabilityExtensionActive(parsed!.id)).toBe(false);
+  });
+});
+
+/**
+ * ADI-22a. `providerModelCatalogV2ResponseSchema` is asserted against with `.parse()` throughout,
+ * never `toMatchObject`: the acceptance criterion this exists to satisfy is specifically that a
+ * bound gets caught at runtime rather than merely matching a handful of named fields -- upstream's
+ * own `pageSize`-outside-`catalogConstraintsSchema`'s-bound bug (see this ticket, #256) is exactly
+ * the shape of mistake `toMatchObject` would never have caught.
+ */
+describe('providerModelV2Schema / providerModelCatalogV2ResponseSchema (ADI-22a)', () => {
+  it('parses a well-formed model entry', () => {
+    const model = { id: 'gpt-5-codex', displayName: 'GPT-5 Codex', isDefault: true };
+    expect(providerModelV2Schema.parse(model)).toEqual(model);
+  });
+
+  it('rejects an unknown field on a model entry rather than stripping it', () => {
+    expect(
+      providerModelV2Schema.safeParse({ id: 'gpt-5-codex', displayName: 'GPT-5 Codex', isDefault: true, extra: 1 }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an empty id or displayName', () => {
+    expect(providerModelV2Schema.safeParse({ id: '', displayName: 'GPT-5 Codex', isDefault: true }).success).toBe(false);
+    expect(providerModelV2Schema.safeParse({ id: 'gpt-5-codex', displayName: '', isDefault: true }).success).toBe(false);
+  });
+
+  it('rejects an id or displayName over the 256-character bound', () => {
+    const over = 'x'.repeat(257);
+    expect(providerModelV2Schema.safeParse({ id: over, displayName: 'ok', isDefault: true }).success).toBe(false);
+    expect(providerModelV2Schema.safeParse({ id: 'ok', displayName: over, isDefault: true }).success).toBe(false);
+  });
+
+  it('parses a real GET /v2/providers/:providerId/models response shape end to end', () => {
+    const response = {
+      schemaVersion: 1,
+      providerId: 'codex',
+      models: [
+        { id: 'gpt-5-codex', displayName: 'GPT-5 Codex', isDefault: true },
+        { id: 'gpt-5-mini', displayName: 'GPT-5 Mini', isDefault: false },
+      ],
+    };
+    expect(providerModelCatalogV2ResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it('accepts an empty models array -- the shape a provider with no live catalog returns', () => {
+    const response = { schemaVersion: 1, providerId: 'claude', models: [] };
+    expect(providerModelCatalogV2ResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it('rejects a providerId outside PROVIDER_IDS', () => {
+    expect(
+      providerModelCatalogV2ResponseSchema.safeParse({ schemaVersion: 1, providerId: 'not-a-real-provider', models: [] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects a schemaVersion other than 1', () => {
+    expect(
+      providerModelCatalogV2ResponseSchema.safeParse({ schemaVersion: 2, providerId: 'codex', models: [] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown top-level field rather than stripping it', () => {
+    expect(
+      providerModelCatalogV2ResponseSchema.safeParse({ schemaVersion: 1, providerId: 'codex', models: [], extra: true })
+        .success,
+    ).toBe(false);
   });
 });
