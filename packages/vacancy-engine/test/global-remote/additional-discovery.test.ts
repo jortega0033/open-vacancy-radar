@@ -31,6 +31,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -168,8 +169,9 @@ describe('Additional public and configuration-gated discovery', () => {
         : source.ingestionMode === 'disabled',
     )).toBe(true);
     // +5 since issue #251: one active `full_ingestion` registry entry per in-scope ATS roster
-    // provider (greenhouse/lever/ashby/recruitee/personio), see source-registry.ts.
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(31);
+    // provider (greenhouse/lever/ashby/recruitee/personio), on top of the 27 active as of Taiwan
+    // Jobs (#44) and NAV Arbeidsplassen (#42), see source-registry.ts.
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(32);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',

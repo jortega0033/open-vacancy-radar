@@ -28,6 +28,7 @@ function config(atsRosterConcurrency = 4): GlobalRemoteConfig {
       remooteCountry: '',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',

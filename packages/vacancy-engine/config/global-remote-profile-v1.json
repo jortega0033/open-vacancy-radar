@@ -19,6 +19,7 @@
     "remooteCountry": "",
     "remooteLimit": 10,
     "aiDevJobsMaxPages": 5,
+    "taiwanJobsMaxCities": 22,
     "museEnabled": true,
     "museMaxPages": 6,
     "navArbeidsplassenMaxPages": 3
