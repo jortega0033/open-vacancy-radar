@@ -285,3 +285,27 @@ export type GlobalRemoteReport = {
   methodology: string[];
   attribution: { name: string; url: string }[];
 };
+
+export type FailureCategory =
+  | 'unsupported_ats'
+  | 'blocked'
+  | 'malformed'
+  | 'empty'
+  | 'transient';
+
+export type GapRecord = {
+  timestamp: string;
+  category: FailureCategory;
+  detectedProvider: string | null;
+  redactedUrl: string;
+  httpStatus: number | null;
+  failureReason: string;
+};
+
+export type GapTelemetryReport = {
+  generatedAt: string;
+  totalRecords: number;
+  records: GapRecord[];
+  aggregatedByProvider: Record<string, number>;
+  aggregatedByCategory: Record<FailureCategory, number>;
+};
