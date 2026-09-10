@@ -197,6 +197,24 @@ export function isoPostedAtFromDdMmYyyy(value: string | null): string | null {
   return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
 }
 
+/**
+ * For a source reporting a bare `yyyyMMdd` date with no separators (e.g. Taiwan Jobs' `TRANDATE`
+ * update date and `STOP_DATE` application deadline). Parses the three numeric parts explicitly,
+ * the same way `isoPostedAtFromDdMmYyyy` does, since an unbroken 8-digit run has no separator to
+ * anchor `new Date()`'s parsing to the right field order.
+ */
+export function isoPostedAtFromYyyyMmDd(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{4})(\d{2})(\d{2})$/u.exec(value);
+  if (match === null) return null;
+  const [, year, monthText, dayText] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
 /** For sources reporting the posting date as a unix timestamp in seconds (e.g. arbeitnow, himalayas). */
 export function isoPostedAtFromUnixSeconds(value: number | null): string | null {
   if (value === null) return null;
