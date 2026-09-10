@@ -123,6 +123,25 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     cost: z.number().optional(),
   }),
   agentEventBaseSchema.extend({
+    type: z.literal('usage.rate_limits'),
+    limitId: z.string().optional(),
+    limitName: z.string().optional(),
+    primary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
+    secondary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
+  }),
+  agentEventBaseSchema.extend({
     type: z.literal('error'),
     code: z.string().optional(),
     message: z.string(),

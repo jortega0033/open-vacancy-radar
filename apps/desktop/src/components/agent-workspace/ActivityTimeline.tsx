@@ -194,6 +194,11 @@ function TimelineRow({ item, toolNamesByAlias }: RowProps) {
         </>
       );
 
+    case 'usage.rate_limits':
+      // Intentionally not rendered: ADI-25 (#239) adds this event for future use, but its
+      // Non-goals explicitly exclude a desktop UI surfacing it until a UI need is scoped.
+      return null;
+
     case 'error':
       return (
         <>
