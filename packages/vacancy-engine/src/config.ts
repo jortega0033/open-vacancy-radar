@@ -43,6 +43,7 @@ const environmentSchema = z
     JOOBLE_API_KEY: z.string().optional().default(''),
     REED_API_KEY: z.string().optional().default(''),
     JOBSPIPE_API_KEY: z.string().optional().default(''),
+    NAV_ARBEIDSPLASSEN_API_KEY: z.string().optional().default(''),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
     REPORT_MIN_SCORE: z.coerce.number().int().min(70).max(100).default(70),
     MAX_POSTING_AGE_DAYS: z.coerce.number().int().min(30).max(730).default(365),
@@ -91,6 +92,7 @@ export type AppConfig = {
     joobleApiKey: string;
     reedApiKey: string;
     jobspipeApiKey: string;
+    navArbeidsplassenApiKey: string;
   };
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   reportMinScore: number;
@@ -146,6 +148,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env, project
       joobleApiKey: parsed.JOOBLE_API_KEY,
       reedApiKey: parsed.REED_API_KEY,
       jobspipeApiKey: parsed.JOBSPIPE_API_KEY,
+      navArbeidsplassenApiKey: parsed.NAV_ARBEIDSPLASSEN_API_KEY,
     },
     logLevel: parsed.LOG_LEVEL,
     reportMinScore: parsed.REPORT_MIN_SCORE,

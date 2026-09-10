@@ -34,6 +34,8 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
       ...overrides,
     },
     officialSources: [],

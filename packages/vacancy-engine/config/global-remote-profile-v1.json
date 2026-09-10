@@ -20,7 +20,8 @@
     "remooteLimit": 10,
     "aiDevJobsMaxPages": 5,
     "museEnabled": true,
-    "museMaxPages": 6
+    "museMaxPages": 6,
+    "navArbeidsplassenMaxPages": 3
   },
   "officialSources": []
 }
