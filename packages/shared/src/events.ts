@@ -25,6 +25,13 @@ export type AgentEvent =
       cachedInputTokens?: number;
       cost?: number;
     }
+  | {
+      type: 'usage.rate_limits';
+      limitId?: string;
+      limitName?: string;
+      primary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+      secondary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+    }
   | { type: 'error'; code?: string; message: string; recoverable: boolean }
   | { type: 'session.completed'; providerSessionId?: string }
   | { type: 'session.failed'; message: string }
