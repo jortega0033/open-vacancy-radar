@@ -321,6 +321,7 @@ export async function runGlobalRemoteScan(
       joobleApiKey: appConfig.keyedDiscovery.joobleApiKey,
       reedApiKey: appConfig.keyedDiscovery.reedApiKey,
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
+      navArbeidsplassenApiKey: appConfig.keyedDiscovery.navArbeidsplassenApiKey,
     },
   };
   const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
@@ -347,7 +348,9 @@ export async function runGlobalRemoteScan(
   // roster in that branch is fine because `atsRoster` is never read again when discovery is reused.
   const atsRoster = reuseDiscovery ? [] : await loadAtsRoster(projectRoot);
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
-    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile, atsRoster),
+    reuseDiscovery
+      ? loadPreviousDiscovery(projectRoot)
+      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),

@@ -36,6 +36,8 @@ function config(atsRosterConcurrency = 4): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
       atsRosterConcurrency,
     },
     officialSources: [],

@@ -48,6 +48,8 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
       reedApiKey: '',
       jobspipeApiKey: '',
       atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources,
   };

@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { AtsHttpResponse } from '../../src/ats/http.js';
 import { runKeyedDiscovery } from '../../src/global-remote/keyed-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import {
+  NAV_ARBEIDSPLASSEN_FEED_URL,
+  navArbeidsplassenEntryUrl,
+} from '../../src/global-remote/nav-arbeidsplassen-discovery.js';
 import { FixtureHttpClient, jsonPostFixtureKey } from '../ats/helpers.js';
 
 function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): GlobalRemoteConfig {
@@ -36,6 +40,8 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       reedApiKey: '',
       jobspipeApiKey: '',
       atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
       ...overrides,
     },
     officialSources: [],
@@ -168,5 +174,67 @@ describe('keyed discovery sources (configuration-required until a project key is
       .toMatchObject({ status: 'blocked', requests: 1, listings: 0 });
     expect(result.sources.find((source) => source.provider === 'reed'))
       .toMatchObject({ status: 'success', listings: 0 });
+  });
+
+  it('only runs NAV Arbeidsplassen once its bearer token is configured', async () => {
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const feedBody = JSON.stringify({
+      version: 'https://jsonfeed.org/version/1',
+      title: 'Arbeidsplassen.no - Stillingsannonser',
+      home_page_url: 'https://arbeidsplassen.nav.no',
+      feed_url: NAV_ARBEIDSPLASSEN_FEED_URL,
+      description: 'Offentlig feed av stillingsannonser fra Arbeidsplassen.no',
+      next_url: null,
+      id: '22222222-0000-4000-8000-000000000001',
+      next_id: null,
+      items: [{
+        id: uuid,
+        url: `https://arbeidsplassen.nav.no/stillinger/stilling/${uuid}`,
+        title: 'Frontend Developer',
+        content_text: 'Frontend Developer at Nordic Product AS',
+        date_modified: '2026-08-20T09:00:00Z',
+        _feed_entry: { uuid, status: 'ACTIVE', title: 'Frontend Developer', businessName: 'Nordic Product AS', municipal: 'Oslo', sistEndret: '2026-08-20T09:00:00Z' },
+      }],
+    });
+    const detailBody = JSON.stringify({
+      uuid,
+      sistEndret: '2026-08-20T09:00:00Z',
+      status: 'ACTIVE',
+      ad_content: {
+        uuid,
+        published: '2026-08-15T08:00:00Z',
+        expires: '2099-01-01T00:00:00Z',
+        updated: '2026-08-20T09:00:00Z',
+        workLocations: [{ country: 'Norway', city: 'Oslo', municipal: 'Oslo', county: 'Oslo' }],
+        contactList: [{ name: 'Kari Nordmann', email: 'kari@example.invalid', phone: '12345678', role: 'Recruiter' }],
+        title: 'Frontend Developer',
+        description: 'Build UI in Oslo.',
+        applicationUrl: 'https://nordicproduct.example/apply',
+        occupationCategories: [],
+        categoryList: [],
+        link: `https://arbeidsplassen.nav.no/stillinger/stilling/${uuid}`,
+        employer: { name: 'Nordic Product AS' },
+        engagementtype: 'Fast',
+        extent: 'Heltid',
+      },
+    });
+
+    const noKey = await runKeyedDiscovery(new FixtureHttpClient(new Map()), config());
+    expect(noKey.sources.find((source) => source.provider === 'nav_arbeidsplassen')).toBeUndefined();
+
+    const routes = new Map<string, string | AtsHttpResponse>([
+      [NAV_ARBEIDSPLASSEN_FEED_URL, feedBody],
+      [navArbeidsplassenEntryUrl(uuid), detailBody],
+    ]);
+    const withKey = await runKeyedDiscovery(
+      new FixtureHttpClient(routes),
+      config({ navArbeidsplassenApiKey: 'test-nav-key', navArbeidsplassenMaxPages: 1 }),
+    );
+
+    expect(withKey.sources.find((source) => source.provider === 'nav_arbeidsplassen'))
+      .toMatchObject({ status: 'success', listings: 1 });
+    expect(withKey.vacancies.find((vacancy) => vacancy.provider === 'nav_arbeidsplassen'))
+      .toMatchObject({ company: 'Nordic Product AS', location: 'Oslo, Norway, Europe' });
+    expect(JSON.stringify(withKey)).not.toContain('Kari Nordmann');
   });
 });

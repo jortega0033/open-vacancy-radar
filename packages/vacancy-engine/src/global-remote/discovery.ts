@@ -5,8 +5,10 @@ import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runAtsRosterDiscovery } from './ats-roster-discovery.js';
 import type { AtsRosterEntry } from '../companies/ats-roster-source.js';
 import { runFeedDiscovery } from './feed-discovery.js';
+import { writeGapTelemetryReport } from './gap-report.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
 import { runKeyedDiscovery } from './keyed-discovery.js';
+import { recordDiscoveryGapTelemetry } from './source-gap-telemetry.js';
 import {
   discoveryAudit,
   httpUrl,
@@ -152,10 +154,24 @@ export async function discoverJobicy(
   }
 }
 
+/**
+ * @param projectRoot When given, this run's per-source failures are fed into source-gap telemetry
+ *   (`recordDiscoveryGapTelemetry`) and the aggregated report is written to disk
+ *   (`writeGapTelemetryReport`) under this run's `reports/global-remote` directory -- issue #9's
+ *   "during discovery" requirement. Omitted by tests that exercise this function directly against a
+ *   `FixtureHttpClient` with no real project directory to write into, and by any other caller that
+ *   only wants this run's `DiscoveryRun` without touching disk.
+ *
+ *   Telemetry persistence is best-effort: a disk error here (a read-only `reports/` directory, for
+ *   instance) must never fail the discovery run itself over a diagnostics side-channel, so failures
+ *   are swallowed rather than propagated -- the same tolerance `applyWorldwideSponsorMatches` in
+ *   pipeline/global-remote.ts applies to its own best-effort enrichment.
+ */
 export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
   atsRoster: readonly AtsRosterEntry[] = [],
+  projectRoot?: string,
 ): Promise<DiscoveryRun> {
   const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
     await Promise.all([
@@ -169,28 +185,35 @@ export async function runGlobalRemoteDiscovery(
       runKeyedDiscovery(http, config),
       runAtsRosterDiscovery(http, config, atsRoster),
     ]);
-  return {
-    sources: [
-      ...himalayas.sources,
-      ...jobicy.sources,
-      ...aiDevJobs.sources,
-      ...structured.sources,
-      ...feeds.sources,
-      ...jobtech.sources,
-      ...additional.sources,
-      ...keyed.sources,
-      ...atsRosterScan.sources,
-    ],
-    vacancies: [
-      ...himalayas.vacancies,
-      ...jobicy.vacancies,
-      ...aiDevJobs.vacancies,
-      ...structured.vacancies,
-      ...feeds.vacancies,
-      ...jobtech.vacancies,
-      ...additional.vacancies,
-      ...keyed.vacancies,
-      ...atsRosterScan.vacancies,
-    ],
-  };
+  const sources = [
+    ...himalayas.sources,
+    ...jobicy.sources,
+    ...aiDevJobs.sources,
+    ...structured.sources,
+    ...feeds.sources,
+    ...jobtech.sources,
+    ...additional.sources,
+    ...keyed.sources,
+    ...atsRosterScan.sources,
+  ];
+  const vacancies = [
+    ...himalayas.vacancies,
+    ...jobicy.vacancies,
+    ...aiDevJobs.vacancies,
+    ...structured.vacancies,
+    ...feeds.vacancies,
+    ...jobtech.vacancies,
+    ...additional.vacancies,
+    ...keyed.vacancies,
+    ...atsRosterScan.vacancies,
+  ];
+  if (projectRoot !== undefined) {
+    try {
+      const gapReport = await recordDiscoveryGapTelemetry(sources, projectRoot);
+      await writeGapTelemetryReport(gapReport, projectRoot);
+    } catch {
+      // Best-effort local diagnostics -- see the `projectRoot` doc comment above.
+    }
+  }
+  return { sources, vacancies };
 }

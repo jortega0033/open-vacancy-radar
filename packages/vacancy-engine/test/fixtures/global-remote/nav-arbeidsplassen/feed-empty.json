@@ -1,0 +1,11 @@
+{
+  "version": "https://jsonfeed.org/version/1",
+  "title": "Arbeidsplassen.no - Stillingsannonser",
+  "home_page_url": "https://arbeidsplassen.nav.no",
+  "feed_url": "https://pam-stilling-feed.nav.no/api/v1/feed",
+  "description": "Offentlig feed av stillingsannonser fra Arbeidsplassen.no",
+  "next_url": null,
+  "id": "22222222-0000-4000-8000-000000000009",
+  "next_id": null,
+  "items": []
+}

@@ -54,6 +54,8 @@ const config: GlobalRemoteConfig = {
     reedApiKey: '',
     jobspipeApiKey: '',
     atsRosterConcurrency: 1,
+    navArbeidsplassenApiKey: '',
+    navArbeidsplassenMaxPages: 1,
   },
   officialSources: [],
 };
