@@ -109,11 +109,15 @@ export function CvLibraryPage() {
     setDeleteTarget(null);
     try {
       await window.workspace.deleteCvDocument(doc.id);
-      setDocuments((prev) => (prev ?? []).filter((row) => row.id !== doc.id));
+      // Not a local filter: deleting the default CV promotes another remaining one to default on
+      // the backend (see `deleteCvDocument` in `electron/workspace/repository.ts`), and only a
+      // refetch picks that promotion up. Filtering the deleted row out of the already-loaded list
+      // would leave every remaining CV looking non-default until the next reload.
+      await reloadDocuments();
     } catch (err) {
       setActionError(describeError(err, 'could not delete this CV'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, reloadDocuments]);
 
   const isLoading = documents === null;
   const hasAnyDocuments = (documents?.length ?? 0) > 0;

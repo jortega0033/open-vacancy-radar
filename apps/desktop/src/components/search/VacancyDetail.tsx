@@ -43,6 +43,9 @@ export interface VacancyDetailProps {
   result: SearchResult;
   /** Name of the CV marked default in the workspace library, or null when there is none. */
   defaultCvName: string | null;
+  /** Display name of the CLI the gap analysis actually runs through, e.g. "Claude Code" or "Codex"
+   * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
+  providerLabel: string;
   saveState: SaveState;
   saveError?: string;
   onSave: () => void;
@@ -66,6 +69,7 @@ export interface VacancyDetailProps {
 export function VacancyDetail({
   result,
   defaultCvName,
+  providerLabel,
   saveState,
   saveError,
   onSave,
@@ -141,7 +145,7 @@ export function VacancyDetail({
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">
               No score here compares this vacancy to your CV. Run the gap analysis to compare it
               against {defaultCvName ? `your default CV (${defaultCvName})` : 'a CV you load'} using
-              your own Claude Code CLI.
+              your own {providerLabel} CLI.
             </p>
             <button className="btn btn-outline btn-xs mt-auto self-start" type="button" onClick={onToggleAssistant}>
               Analyse against my CV

@@ -82,7 +82,7 @@ export function CvAssistant({ vacancy, model: pinnedModel }: CvAssistantProps) {
         </div>
       )}
 
-      <CvUpload cv={cv} onCvChange={setCv} />
+      <CvUpload cv={cv} onCvChange={setCv} providerLabel={providerLabel} />
 
       {/* The upload above stays usable for a single unsaved gap analysis; this is the opt-in
           "keep this one" path into the CV library. Keyed by file name + length so replacing the

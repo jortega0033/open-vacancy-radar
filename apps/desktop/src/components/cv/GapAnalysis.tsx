@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { SavedJobRecord } from '../../window.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiOutput } from './AiOutput.js';
 import { findSavedJobForVacancy, saveGapAnalysis } from './gap-analysis-store.js';
 import { buildGapAnalysisPrompt } from './prompts.js';
@@ -146,6 +147,7 @@ export function GapAnalysis({ cv, vacancy, model, provider, savedJobId }: GapAna
           label="gap analysis result"
           idleHint="No analysis yet."
           busyLabel="Analysing your CV against this vacancy…"
+          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
       </div>
     </div>
