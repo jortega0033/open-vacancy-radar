@@ -78,6 +78,14 @@ export const globalRemoteConfigSchema = z.object({
     joobleApiKey: z.string().default(''),
     reedApiKey: z.string().default(''),
     jobspipeApiKey: z.string().default(''),
+    /** NAV Arbeidsplassen consumer bearer token (free, self-service registration; see
+     * https://arbeidsplassen.nav.no/vilkar-api). Empty means the source stays
+     * `configuration_required` and is never called. */
+    navArbeidsplassenApiKey: z.string().default(''),
+    /** Bounded feed-page walk budget for one run, mirroring `aiDevJobsMaxPages`: this pipeline is a
+     * stateless one-shot scan (see `runGlobalRemoteScan`) with no persisted cross-run cursor, so
+     * each run re-walks the feed from its first page up to this many pages. */
+    navArbeidsplassenMaxPages: z.number().int().min(1).max(10).default(3),
   }),
   officialSources: z.array(globalRemoteSourceSchema),
 });
@@ -161,7 +169,8 @@ export type DiscoveryProvider =
   | 'adzuna'
   | 'jooble'
   | 'reed'
-  | 'jobspipe';
+  | 'jobspipe'
+  | 'nav_arbeidsplassen';
 
 export type DiscoveryVacancyAudit = {
   key: string;
