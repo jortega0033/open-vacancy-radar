@@ -6,6 +6,7 @@ import {
   countryOptions,
   isStalePosting,
   sortResults,
+  toPartialResults,
   worldwideVerification,
   WORLDWIDE_VERIFICATION,
   type SearchResult,
@@ -58,6 +59,33 @@ function worldwideResult(overrides: { key: string; location: string | null }): S
     lead: { title: 'Frontend Engineer', company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
   };
 }
+
+describe('toPartialResults (issue #252)', () => {
+  it('converts a discovery row to a row with no official cross-reference and an honest "not available" verification', () => {
+    const [result] = toPartialResults([discoveryVacancy({ key: 'streamed-1', title: 'Streamed Role' })]);
+
+    expect(result).toMatchObject({ key: 'streamed-1', title: 'Streamed Role', official: null });
+    expect(result!.verification).toEqual(WORLDWIDE_VERIFICATION);
+  });
+
+  it('never invents a profile score or sponsor match for a row that has not been enriched yet', () => {
+    const [result] = toPartialResults([
+      discoveryVacancy({ profileScore: null, worldwideSponsorMatch: null }),
+    ]);
+
+    expect(result!.profileScore).toBeNull();
+    expect(result!.raw.worldwideSponsorMatch).toBeNull();
+  });
+
+  it('produces one row per input vacancy, in the given order, unlike toWorldwideResults it never needs a report to run against', () => {
+    const results = toPartialResults([
+      discoveryVacancy({ key: 'a', title: 'Role A' }),
+      discoveryVacancy({ key: 'b', title: 'Role B' }),
+    ]);
+
+    expect(results.map((r) => r.key)).toEqual(['a', 'b']);
+  });
+});
 
 describe('filterResults: country filter', () => {
   it('applies no filter when country is "all", the default', () => {

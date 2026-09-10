@@ -20,6 +20,7 @@ import {
   type GlobalRemoteDecision,
   type GlobalRemoteReport,
   type OfficialVacancyAudit,
+  type ScanProgressCallback,
 } from '../global-remote/models.js';
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
 import { scoreWorldwideVacancy } from '../filtering/index.js';
@@ -221,6 +222,18 @@ export type GlobalRemoteScanOptions = {
    * Ignored when empty/whitespace-only, which keeps the static default.
    */
   query?: string;
+  /**
+   * Fired once per discovery sub-source (and the Workable global source) as it resolves, well
+   * before the whole scan's own promise settles -- see `ScanProgressEvent`'s doc comment for the
+   * exact contract. Purely an observability hook layered on top of the existing parallel `await`s
+   * below: omitting it changes nothing about what a scan does or what its final `GlobalRemoteReport`
+   * contains, so every existing non-streaming caller (the CLI, `officialOnly`/`offlineReclassify`
+   * reclassification runs, tests) is unaffected. Never fires for `official`, since an official-source
+   * audit row never becomes its own row in the desktop UI's results list (it is only ever attached,
+   * by URL, to a discovery row that already exists) and never fires at all when `reuseDiscovery`
+   * applies, since no new discovery ran to report progress on.
+   */
+  onProgress?: ScanProgressCallback;
 };
 
 async function loadPreviousDiscovery(projectRoot: string): Promise<{
@@ -350,11 +363,16 @@ export async function runGlobalRemoteScan(
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
-      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot),
+      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, options.onProgress),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),
-    reuseDiscovery ? Promise.resolve(null) : runWorkableGlobalDiscovery(safeClient, profile, projectRoot),
+    reuseDiscovery
+      ? Promise.resolve(null)
+      : runWorkableGlobalDiscovery(safeClient, profile, projectRoot).then((result) => {
+          options.onProgress?.({ sourceId: 'workable_global', vacancies: result.vacancies });
+          return result;
+        }),
   ]);
   const discovery =
     workableGlobal === null

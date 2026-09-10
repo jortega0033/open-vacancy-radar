@@ -12,7 +12,11 @@ import {
   type ProviderId,
   type ProviderStatus,
 } from '@agent-dock/shared';
-import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  CandidateProfile,
+  GlobalRemoteReport,
+  ScanProgressEvent,
+} from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
 import type {
@@ -86,6 +90,16 @@ export interface VacancyRadarBridge {
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /**
+   * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
+   * own freshly discovered rows, pushed the moment that source resolves rather than only once the
+   * whole scan finishes -- mirroring `agentDock.onSessionEvent`'s push pattern. Fires for *any* scan
+   * in this process, not just one this window started, the same as `getScanStatus` already reflects
+   * a scan the page did not itself start. Returns an unsubscribe function; call it on unmount so a
+   * remounted Search page (navigate away and back) ends up with exactly one live listener, never
+   * zero or two.
+   */
+  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
@@ -203,6 +217,16 @@ const vacancyApi: VacancyRadarBridge = {
   },
   getScanStatus() {
     return ipcRenderer.invoke('vacancy:get-scan-status');
+  },
+  onScanProgress(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const p = payload as { sourceId?: unknown; vacancies?: unknown } | null;
+      if (p && typeof p.sourceId === 'string' && Array.isArray(p.vacancies)) {
+        callback({ sourceId: p.sourceId, vacancies: p.vacancies as ScanProgressEvent['vacancies'] });
+      }
+    };
+    ipcRenderer.on('vacancy:scan-progress', listener);
+    return () => ipcRenderer.removeListener('vacancy:scan-progress', listener);
   },
   getSearchProfile() {
     return ipcRenderer.invoke('vacancy:get-search-profile');

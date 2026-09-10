@@ -240,6 +240,27 @@ export type DiscoveryRun = {
   vacancies: DiscoveryVacancyAudit[];
 };
 
+/**
+ * Fired once per discovery sub-source (and the Workable "all customers" global source) as it
+ * resolves inside `runGlobalRemoteScan`'s underlying parallel `Promise.all`s -- see
+ * `runGlobalRemoteDiscovery` and `runGlobalRemoteScan` for the exact call sites. `vacancies` is
+ * only that one source's own contribution, not a running total: a consumer that wants a growing
+ * list accumulates across calls itself (see the desktop app's `SearchPage.tsx`).
+ *
+ * Never the trigger for scoring or sponsor-matching, which still only run once, after every source
+ * has finished discovering -- a listener always sees a source's raw discovery rows exactly as fresh
+ * discovery produced them, with `profileScore: null` and `worldwideSponsorMatch: null`, before
+ * either enrichment step has had a chance to touch them. That is intentional, not a bug: partial
+ * rows are meant to read as "found, not yet scored", never as a real-looking (and possibly wrong)
+ * score or sponsor match.
+ */
+export type ScanProgressEvent = {
+  sourceId: string;
+  vacancies: DiscoveryVacancyAudit[];
+};
+
+export type ScanProgressCallback = (event: ScanProgressEvent) => void;
+
 export type SourceRegistryState =
   | 'active'
   | 'configuration_required'

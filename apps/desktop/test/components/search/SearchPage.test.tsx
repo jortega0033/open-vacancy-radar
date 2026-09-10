@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { SearchPage } from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
 import { installBridges } from '../../cv-bridges.js';
@@ -88,6 +88,38 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
     ...overrides,
   });
+}
+
+/**
+ * A `vacancyRadar` bridge whose `onScanProgress` is a real, minimal pub/sub instead of the default
+ * no-op stub: `emit(event)` delivers to every currently-subscribed `SearchPage`, and
+ * `listenerCount()`/`unsubscribeFns` let a test assert exactly one live subscription per mount
+ * (issue #252's "does not break or duplicate the progress subscription" acceptance criterion).
+ */
+function installProgressCapturingBridge(overrides: Partial<VacancyRadarBridge> = {}): {
+  bridge: VacancyRadarBridge;
+  emit: (event: ScanProgressEvent) => void;
+  listenerCount: () => number;
+  unsubscribeFns: ReturnType<typeof vi.fn>[];
+} {
+  const listeners: Array<(event: ScanProgressEvent) => void> = [];
+  const unsubscribeFns: ReturnType<typeof vi.fn>[] = [];
+  const onScanProgress = vi.fn((callback: (event: ScanProgressEvent) => void) => {
+    listeners.push(callback);
+    const unsubscribe = vi.fn(() => {
+      const index = listeners.indexOf(callback);
+      if (index >= 0) listeners.splice(index, 1);
+    });
+    unsubscribeFns.push(unsubscribe);
+    return unsubscribe;
+  });
+  const bridge = installAllBridges({ onScanProgress, ...overrides });
+  return {
+    bridge,
+    emit: (event) => listeners.forEach((listener) => listener(event)),
+    listenerCount: () => listeners.length,
+    unsubscribeFns,
+  };
 }
 
 afterEach(() => {
@@ -416,6 +448,95 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0));
     expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
+  });
+
+  describe('progressive search results (issue #252)', () => {
+    it('shows a vacancy pushed via vacancy:scan-progress before the scan promise resolves, and the final report replaces it exactly', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+        resolveScan = resolve;
+      });
+      const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      // Provably before `runScan`'s own promise resolves: nothing has resolved it yet.
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'streamed-1', title: 'Streamed Frontend Role', profileScore: null })],
+      });
+
+      await waitFor(() => expect(screen.getAllByText('Streamed Frontend Role').length).toBeGreaterThan(0));
+      // Honest "not yet scored" state, not a real-looking match percentage.
+      expect(screen.getByText(/showing vacancies as each source finishes/i)).toBeInTheDocument();
+
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Developer' })]));
+
+      await waitFor(() => expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0));
+      // The final, non-streaming list is exactly what loaded -- no partial-only row survives.
+      expect(screen.queryByText('Streamed Frontend Role')).not.toBeInTheDocument();
+      expect(screen.queryByText(/showing vacancies as each source finishes/i)).not.toBeInTheDocument();
+    });
+
+    it('subscribes exactly once per mount and unsubscribes on unmount, so navigating away and back never duplicates the listener', async () => {
+      const { bridge, listenerCount, unsubscribeFns } = installProgressCapturingBridge();
+
+      const { unmount } = render(<SearchPage />);
+      await waitFor(() => expect(bridge.onScanProgress).toHaveBeenCalledTimes(1));
+      expect(listenerCount()).toBe(1);
+
+      unmount();
+      expect(unsubscribeFns[0]).toHaveBeenCalledTimes(1);
+      expect(listenerCount()).toBe(0);
+
+      // Navigate back: a second mount subscribes its own listener, never stacking onto the first.
+      render(<SearchPage />);
+      await waitFor(() => expect(bridge.onScanProgress).toHaveBeenCalledTimes(2));
+      expect(listenerCount()).toBe(1);
+    });
+
+    it('reattaching to a scan already in flight also picks up its next progress event, not just its eventual completion', async () => {
+      const getScanStatus = vi.fn().mockResolvedValue({ scanning: true });
+      const { emit } = installProgressCapturingBridge({ getReport: vi.fn().mockResolvedValue(null), getScanStatus });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      emit({
+        sourceId: 'jobicy',
+        vacancies: [makeWorldwideVacancy({ key: 'reattached-1', title: 'Reattached Streamed Role' })],
+      });
+
+      await waitFor(() => expect(screen.getAllByText('Reattached Streamed Role').length).toBeGreaterThan(0));
+    });
+
+    it('does not stream partial rows into an already-loaded report while a rescan is in flight (dims the existing list instead)', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
+      const { emit } = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
+        runScan: vi.fn().mockReturnValue(scanPromise),
+      });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'mid-rescan-1', title: 'Mid Rescan Streamed Role' })],
+      });
+
+      // The existing (real, already-scored) report keeps showing rather than being pre-empted by an
+      // honest-but-unscored partial row -- streaming only fills the "nothing loaded at all yet" gap.
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+      expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
+    });
   });
 
   it('surfaces a scan failure without losing the page', async () => {

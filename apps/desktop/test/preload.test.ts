@@ -162,10 +162,18 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the six documented capability functions and nothing else', async () => {
+  it('exposes exactly the seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
-      ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'].sort(),
+      [
+        'getReport',
+        'getStatus',
+        'runScan',
+        'getScanStatus',
+        'onScanProgress',
+        'getSearchProfile',
+        'saveSearchProfile',
+      ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -210,6 +218,46 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     const api = await loadPreload('vacancyRadar');
     await (api.runScan as (query?: string) => Promise<unknown>)('frontend engineer');
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
+  });
+
+  it('onScanProgress subscribes to vacancy:scan-progress and forwards a well-formed payload', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const received: unknown[] = [];
+    (api.onScanProgress as (cb: (event: unknown) => void) => () => void)((event) => received.push(event));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+    const vacancies = [{ key: 'himalayas:1', title: 'Frontend Engineer' }];
+    listener?.({}, { sourceId: 'himalayas', vacancies });
+
+    expect(received).toEqual([{ sourceId: 'himalayas', vacancies }]);
+  });
+
+  it('onScanProgress drops a malformed payload instead of forwarding it', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const received: unknown[] = [];
+    (api.onScanProgress as (cb: (event: unknown) => void) => () => void)((event) => received.push(event));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    listener?.({}, { sourceId: 'himalayas' }); // vacancies missing
+    listener?.({}, { vacancies: [] }); // sourceId missing
+    listener?.({}, null);
+
+    expect(received).toEqual([]);
+  });
+
+  it('onScanProgress returns an unsubscribe function that removes exactly its own listener', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const unsubscribe = (api.onScanProgress as (cb: (event: unknown) => void) => () => void)(() => {});
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1];
+    unsubscribe();
+
+    expect(removeListener).toHaveBeenCalledWith('vacancy:scan-progress', listener);
   });
 });
 
@@ -481,7 +529,18 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'setMcpCredential',
     'removeMcpProvider',
   ],
-  vacancyRadar: ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'],
+  // Added by issue #252, same reasoning as `workspace`'s own #202/#203 comment below:
+  // `onScanProgress` is a legitimate widening of this namespace for progressive search results,
+  // not something ADI-06/07 touched, so the literal grows here rather than blocking real growth.
+  vacancyRadar: [
+    'getReport',
+    'getStatus',
+    'runScan',
+    'getScanStatus',
+    'onScanProgress',
+    'getSearchProfile',
+    'saveSearchProfile',
+  ],
   workspace: [
     'getSettings',
     'updateSettings',

@@ -1,5 +1,9 @@
 import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
-import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  CandidateProfile,
+  GlobalRemoteReport,
+  ScanProgressEvent,
+} from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
@@ -37,6 +41,13 @@ export interface VacancyRadarBridge {
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /**
+   * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
+   * own freshly discovered rows, pushed the moment that source resolves rather than only once the
+   * whole scan finishes. Fires for any scan in this process, not just one this window started.
+   * Returns an unsubscribe function; call it on unmount.
+   */
+  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;

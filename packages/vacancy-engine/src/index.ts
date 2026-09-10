@@ -9,7 +9,11 @@ export { createLogger } from './logger.js';
 export { createDatabaseClient, migrateDatabase, type Database, type DatabaseClient } from './db/client.js';
 export { createScanLock, withScanAdvisoryTryLock, type ScanLock } from './db/advisory-lock.js';
 
-export { runGlobalRemoteScan, type GlobalRemoteScanResult } from './pipeline/global-remote.js';
+export {
+  runGlobalRemoteScan,
+  type GlobalRemoteScanOptions,
+  type GlobalRemoteScanResult,
+} from './pipeline/global-remote.js';
 export { readGlobalRemoteReport } from './global-remote/report.js';
 export {
   generateGapReportHtml,
@@ -32,7 +36,14 @@ export {
   type CandidateProfile,
 } from './candidate/profile.js';
 
-export type { GlobalRemoteReport, DiscoveryVacancyAudit, OfficialVacancyAudit, GapTelemetryReport } from './global-remote/models.js';
+export type {
+  GlobalRemoteReport,
+  DiscoveryVacancyAudit,
+  OfficialVacancyAudit,
+  ScanProgressEvent,
+  ScanProgressCallback,
+  GapTelemetryReport,
+} from './global-remote/models.js';
 export {
   descriptionShingleSimilarity,
   findCrossCompanyDuplicateGroups,

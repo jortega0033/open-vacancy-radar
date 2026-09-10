@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { discoverHimalayas, discoverJobicy, runGlobalRemoteDiscovery } from '../../src/global-remote/discovery.js';
-import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import type { GlobalRemoteConfig, ScanProgressEvent } from '../../src/global-remote/models.js';
 import { loadGapRecords } from '../../src/global-remote/source-gap-telemetry.js';
 import { FixtureHttpClient } from '../ats/helpers.js';
 
@@ -146,6 +146,89 @@ describe('discoverJobicy', () => {
     expect(result.vacancies).toEqual([
       expect.objectContaining({ provider: 'jobicy', postedAt: '2026-08-31T20:08:43.000Z' }),
     ]);
+  });
+});
+
+describe('runGlobalRemoteDiscovery progress callback (issue #252)', () => {
+  /**
+   * Proves the exact acceptance criterion "at least one vacancy becomes visible before the scan's
+   * own promise resolves" at the engine layer, with real ordering instead of a timing-dependent
+   * `setTimeout`: himalayas resolves immediately, jobicy is held open on a deferred this test
+   * controls, and every other one of the eight sub-sources has no fixture route registered at all,
+   * which is not an error here -- each adapter catches its own network/parse failures internally
+   * (see `sourceFailure` throughout global-remote/*.ts) and reports a `'blocked'`/`'error'` status
+   * rather than rejecting, the same as a real unreachable source would.
+   */
+  it('reports a fast source before a still-pending one, strictly before the aggregate promise settles', async () => {
+    let releaseJobicy: () => void = () => {};
+    const jobicyGate = new Promise<void>((resolve) => {
+      releaseJobicy = resolve;
+    });
+
+    const routes = new Map<string, string | (() => Promise<string>)>([
+      [
+        'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+        JSON.stringify({ jobs: [], totalCount: 0 }),
+      ],
+      [
+        'https://jobicy.com/api/v2/remote-jobs?count=1',
+        async () => {
+          await jobicyGate;
+          return JSON.stringify({ jobs: [] });
+        },
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const progress: ScanProgressEvent[] = [];
+    const done = runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], undefined, (event) => {
+      progress.push(event);
+    });
+
+    // Flush pending microtasks so every source that resolves without waiting on the jobicy gate
+    // (himalayas, plus every other source failing fast on its own missing fixture route) has
+    // already reported, while jobicy provably has not.
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+    expect(progress.map((event) => event.sourceId)).toContain('himalayas');
+    expect(progress.map((event) => event.sourceId)).not.toContain('jobicy');
+
+    releaseJobicy();
+    const result = await done;
+
+    const sourceIds = progress.map((event) => event.sourceId);
+    expect(sourceIds).toContain('jobicy');
+    expect(sourceIds.indexOf('himalayas')).toBeLessThan(sourceIds.indexOf('jobicy'));
+    // Every progress event's own `sourceId` shows up exactly once, and only once, across the whole
+    // discovery run -- the callback is not fired again on some later, unrelated resolution.
+    expect(new Set(sourceIds).size).toBe(sourceIds.length);
+    expect(sourceIds.sort()).toEqual(
+      [
+        'additional', 'ai_dev_jobs', 'ats_roster', 'feeds', 'himalayas', 'jobicy', 'jobtech',
+        'keyed', 'structured', 'taiwan_jobs',
+      ].sort(),
+    );
+
+    // Unchanged aggregate contract: `onProgress` is purely an observability hook layered on top,
+    // never a second source of truth for the final result.
+    expect(result.sources.length).toBeGreaterThan(0);
+  });
+
+  it('never calls onProgress when none is supplied (existing non-streaming callers unaffected)', async () => {
+    const http = new FixtureHttpClient(
+      new Map([
+        [
+          'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+          JSON.stringify({ jobs: [], totalCount: 0 }),
+        ],
+        ['https://jobicy.com/api/v2/remote-jobs?count=1', JSON.stringify({ jobs: [] })],
+      ]),
+    );
+
+    // No third argument at all: the pre-existing call shape every non-streaming caller still uses.
+    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }));
+
+    expect(result.sources.length).toBeGreaterThan(0);
   });
 });
 

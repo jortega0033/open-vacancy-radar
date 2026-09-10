@@ -147,13 +147,16 @@ export function isWebUrl(value: string): boolean {
   }
 }
 
-export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
-  const officialByUrl = new Map<string, OfficialVacancyAudit>();
-  for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
-
-  return report.discoveryAudit.map((vacancy) => ({
+/**
+ * The `SearchResult` row for one discovery vacancy, given whatever official-source cross-reference
+ * (if any) this run found for its exact URL. Shared by `toWorldwideResults` (a finished scan, real
+ * `official` lookups) and `toPartialResults` (a still-running scan, `official` always null -- see
+ * that function's own doc comment for why).
+ */
+function toSearchResult(vacancy: DiscoveryVacancyAudit, official: OfficialVacancyAudit | null): SearchResult {
+  return {
     raw: vacancy,
-    official: officialByUrl.get(vacancy.url) ?? null,
+    official,
     key: vacancy.key,
     title: vacancy.title,
     company: vacancy.company,
@@ -180,7 +183,30 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
       salaryPeriod: vacancy.salaryPeriod,
       advertisedMinimum: vacancy.advertisedMinimum,
     },
-  }));
+  };
+}
+
+export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
+  const officialByUrl = new Map<string, OfficialVacancyAudit>();
+  for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
+
+  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null));
+}
+
+/**
+ * Streaming/provisional counterpart to `toWorldwideResults` (issue #252): converts the discovery
+ * rows a scan has pushed so far, while it is still running and no final `GlobalRemoteReport` exists
+ * yet. `official` is always null -- the official-source audit this run will eventually produce
+ * doesn't exist yet either (`runOfficialGlobalRemoteSources` runs independently of, and is never
+ * awaited by, the discovery progress events this converts), so every partial row's verification
+ * reads the same honest "not available" state `worldwideVerification` already gives any row with no
+ * sponsor match. `profileScore` is whatever the raw `DiscoveryVacancyAudit` carries, which is always
+ * null here too: scoring and sponsor-matching only ever run once, after discovery has fully
+ * finished (see `runGlobalRemoteScan`), so a partial row is never mislabelled with a real-looking
+ * score it was not actually given.
+ */
+export function toPartialResults(vacancies: readonly DiscoveryVacancyAudit[]): SearchResult[] {
+  return vacancies.map((vacancy) => toSearchResult(vacancy, null));
 }
 
 export type PostedWithin = 'any' | '1' | '7' | '30';
