@@ -20,6 +20,12 @@ export {
   type CodexAppServerModel,
   type CodexContinuationEvidence,
 } from './scope-evidence.js';
-export { probeCodexAppServerScope, type CodexAppServerScopeProbeOptions } from './scope-probe.js';
+export {
+  probeCodexAppServerScope,
+  withCodexAppServerRpc,
+  type CodexAppServerProbeOptions,
+  type CodexAppServerScopeProbeOptions,
+} from './scope-probe.js';
+export { probeCodexModelCatalog } from './model-catalog.js';
 export { CodexAppServerNormalizer } from './normalizer.js';
 export { createCodexAppServerTransport, type CodexAppServerTransportOptions } from './transport.js';
