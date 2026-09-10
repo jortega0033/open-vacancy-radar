@@ -85,6 +85,11 @@ export const globalRemoteConfigSchema = z.object({
     joobleApiKey: z.string().default(''),
     reedApiKey: z.string().default(''),
     jobspipeApiKey: z.string().default(''),
+    /** Bounded worker pool for the imported ATS company roster scan (see
+     * `global-remote/ats-roster-discovery.ts`); each company is one to a few requests, and the
+     * roster can hold thousands of entries, so this only bounds how many `listVacancies` calls are
+     * in flight at once, on top of the shared HTTP client's own concurrency limits. */
+    atsRosterConcurrency: z.number().int().min(1).max(50).default(8),
     /** NAV Arbeidsplassen consumer bearer token (free, self-service registration; see
      * https://arbeidsplassen.nav.no/vilkar-api). Empty means the source stays
      * `configuration_required` and is never called. */
@@ -178,6 +183,11 @@ export type DiscoveryProvider =
   | 'jooble'
   | 'reed'
   | 'jobspipe'
+  | 'ats_roster_greenhouse'
+  | 'ats_roster_lever'
+  | 'ats_roster_ashby'
+  | 'ats_roster_recruitee'
+  | 'ats_roster_personio'
   | 'nav_arbeidsplassen';
 
 export type DiscoveryVacancyAudit = {

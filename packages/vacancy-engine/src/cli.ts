@@ -11,6 +11,7 @@ import {
 } from './db/advisory-lock.js';
 import { createDatabaseClient, migrateDatabase } from './db/client.js';
 import { createLogger } from './logger.js';
+import { runAtsRosterImport } from './pipeline/ats-roster-import.js';
 import { runGlobalRemoteScan } from './pipeline/global-remote.js';
 import { runSponsorSync } from './pipeline/sponsors.js';
 
@@ -50,6 +51,15 @@ async function main(): Promise<void> {
           await runSponsorSync(database.db, config, logger);
         });
         break;
+      case 'ats-roster:import':
+        await runExclusiveCommand(scanLock, logger, command, async () => {
+          const result = await runAtsRosterImport(database.db, config, logger, process.cwd());
+          logger.info(
+            { file: result.file, totalEntries: result.totalEntries, providers: result.providers },
+            'ATS roster import completed',
+          );
+        });
+        break;
       case 'global-remote:scan':
         await runExclusiveCommand(scanLock, logger, command, async () => {
           const result = await runGlobalRemoteScan(database.db, config, logger, process.cwd(), {
@@ -72,7 +82,7 @@ async function main(): Promise<void> {
         break;
       default:
         throw new Error(
-          `Unknown command: ${command ?? '(missing)'}. Available: db:migrate, sponsors:sync, global-remote:scan`,
+          `Unknown command: ${command ?? '(missing)'}. Available: db:migrate, sponsors:sync, ats-roster:import, global-remote:scan`,
         );
     }
   } finally {

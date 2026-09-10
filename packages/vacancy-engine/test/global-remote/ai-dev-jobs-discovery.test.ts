@@ -52,6 +52,7 @@ function profile(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Glob
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
       navArbeidsplassenApiKey: '',
       navArbeidsplassenMaxPages: 1,
       ...overrides,

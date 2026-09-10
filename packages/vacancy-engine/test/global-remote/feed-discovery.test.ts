@@ -54,6 +54,7 @@ const config: GlobalRemoteConfig = {
     joobleApiKey: '',
     reedApiKey: '',
     jobspipeApiKey: '',
+    atsRosterConcurrency: 1,
     navArbeidsplassenApiKey: '',
     navArbeidsplassenMaxPages: 1,
   },
