@@ -70,6 +70,13 @@ export const globalRemoteConfigSchema = z.object({
     remooteLimit: z.number().int().min(1).max(10).default(10),
     /** Bounded page budget for AI Dev Jobs; each page is requested at the documented 50-row max. */
     aiDevJobsMaxPages: z.number().int().min(1).max(10).default(2),
+    /**
+     * Bounded partition budget for Taiwan Jobs: how many of the 22 documented county/city codes
+     * (see `TAIWAN_JOBS_CITY_CODES`) are queried per run, each at the documented 1,000-record max.
+     * Defaults to all 22 -- every region of Taiwan is covered equally by default, never a subset
+     * that would favor some counties/cities over others.
+     */
+    taiwanJobsMaxCities: z.number().int().min(1).max(22).default(22),
     museEnabled: z.boolean().default(false),
     museMaxPages: z.number().int().min(1).max(10).default(6),
     adzunaAppId: z.string().default(''),
@@ -152,6 +159,7 @@ export type DiscoveryProvider =
   | 'dice'
   | 'remoote'
   | 'ai_dev_jobs'
+  | 'taiwan_jobs'
   | 'the_muse'
   | 'jobspresso'
   | 'remote_frontend_jobs'

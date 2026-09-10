@@ -5,6 +5,7 @@ import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runFeedDiscovery } from './feed-discovery.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
 import { runKeyedDiscovery } from './keyed-discovery.js';
+import { discoverTaiwanJobs } from './taiwan-jobs-discovery.js';
 import {
   discoveryAudit,
   httpUrl,
@@ -154,21 +155,24 @@ export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed] = await Promise.all([
-    discoverHimalayas(http, config),
-    discoverJobicy(http, config),
-    discoverAiDevJobs(http, config),
-    runStructuredDiscovery(http, config),
-    runFeedDiscovery(http, config),
-    runJobtechDiscovery(http, config),
-    runAdditionalDiscovery(http, config),
-    runKeyedDiscovery(http, config),
-  ]);
+  const [himalayas, jobicy, aiDevJobs, taiwanJobs, structured, feeds, jobtech, additional, keyed] =
+    await Promise.all([
+      discoverHimalayas(http, config),
+      discoverJobicy(http, config),
+      discoverAiDevJobs(http, config),
+      discoverTaiwanJobs(http, config),
+      runStructuredDiscovery(http, config),
+      runFeedDiscovery(http, config),
+      runJobtechDiscovery(http, config),
+      runAdditionalDiscovery(http, config),
+      runKeyedDiscovery(http, config),
+    ]);
   return {
     sources: [
       ...himalayas.sources,
       ...jobicy.sources,
       ...aiDevJobs.sources,
+      ...taiwanJobs.sources,
       ...structured.sources,
       ...feeds.sources,
       ...jobtech.sources,
@@ -179,6 +183,7 @@ export async function runGlobalRemoteDiscovery(
       ...himalayas.vacancies,
       ...jobicy.vacancies,
       ...aiDevJobs.vacancies,
+      ...taiwanJobs.vacancies,
       ...structured.vacancies,
       ...feeds.vacancies,
       ...jobtech.vacancies,
