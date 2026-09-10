@@ -11,6 +11,9 @@ import type { ProviderCapabilities } from '@agent-dock/shared';
  * - usage: `turn.completed.usage` normalizes to a `usage` event (parser.ts)
  * - thinking: `reasoning` items normalize to thinking.delta (parser.ts): only present when Codex's
  *   own reasoning-effort/model configuration surfaces them; absent otherwise
+ * - modelCatalog (ADI-22a): `CodexProvider.fetchModelCatalog()` (adapter.ts) wraps the same live
+ *   `model/list` RPC and `parseCodexModelCatalog` parser `app-server/transport.ts` already uses
+ *   before every real session -- see `app-server/model-catalog.ts`.
  */
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
   resume: true,
@@ -18,4 +21,5 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   tools: true,
   usage: true,
   thinking: true,
+  modelCatalog: true,
 };

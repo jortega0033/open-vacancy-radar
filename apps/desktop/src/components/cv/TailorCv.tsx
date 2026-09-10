@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiOutput } from './AiOutput.js';
 import { buildCvTailorPrompt } from './prompts.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
@@ -115,6 +116,7 @@ export function TailorCv({ cv, vacancy, model, provider }: TailorCvProps) {
           label="tailored CV draft"
           idleHint="No draft yet."
           busyLabel="Tailoring your CV for this vacancy…"
+          providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
       </div>
     </div>

@@ -7,10 +7,17 @@
       (that would require the daemon to answer CORS preflight requests, which it deliberately
       never does — see SECURITY.md). All daemon calls go through the Electron main process
       via IPC (electron/main.ts + electron/preload.ts), which isn't subject to this CSP at all.
+
+      img-src is explicitly 'self' plus data: (not omitted, and not the broader `img-src *`):
+      without an explicit img-src, the browser falls back to default-src 'self', which blocks
+      every `data:` URI image -- including ApplicationReviewSwipeCard's live application-page
+      review screenshot (`<img src="data:image/png;base64,...">`), the one screen where a person
+      is relying on actually seeing the image before approving an auto-fill submission. `data:`
+      is scoped to img-src only, not added anywhere else in this policy.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Open Vacancy Radar</title>
