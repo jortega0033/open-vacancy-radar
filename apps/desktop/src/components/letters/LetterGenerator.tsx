@@ -10,6 +10,7 @@ import type {
   LetterType,
   SavedJobRecord,
 } from '../../window.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
@@ -649,8 +650,8 @@ export function LetterGenerator({
               </p>
             )}
             <p className="text-xs text-base-content/50">
-              Generated on your own Claude Code CLI through AgentDock. Nothing is sent to a
-              letter-writing service.
+              Generated on your own {PROVIDER_LABEL[provider]} CLI through AgentDock. Nothing is
+              sent to a letter-writing service.
             </p>
           </div>
         </div>
@@ -777,6 +778,7 @@ export function LetterGenerator({
             label="letter being generated"
             idleHint="No document yet."
             busyLabel={`Writing a ${typeLabel.toLowerCase()} for this vacancy…`}
+            providerLabel={PROVIDER_LABEL[provider]}
           />
         )}
 
