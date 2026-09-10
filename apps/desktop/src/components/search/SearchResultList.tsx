@@ -109,8 +109,19 @@ export function SearchResultList({
   pageCount,
   onPageChange,
 }: SearchResultListProps) {
+  // `flex-1` below `lg`, `flex-none` from `lg` up. `SearchPage` stacks this pane above
+  // `VacancyDetail` in a column flex below `lg` -- and the app's own default window is 1000px wide,
+  // narrower than `lg`'s 1024px, so that stacked layout is what a user gets out of the box.
+  // `VacancyDetail` is `flex-1`, i.e. `flex: 1 1 0%` (a flex basis of zero), while this pane used to
+  // be `flex: 0 1 auto`, basing itself on its own page-of-25-rows-tall content. That left the column
+  // with no free space to distribute, so the detail pane stayed at its zero basis: it rendered at
+  // zero height, below the bottom of a `<main>` that does not itself scroll, which made the entire
+  // detail view -- "Save job", "Generate Letter", the verification cards -- invisible and
+  // unclickable. Matching `VacancyDetail`'s `flex-1` gives the two panes an even split of the column
+  // instead, each scrolling internally. `lg:flex-none` restores `flex: 0 0 auto` from `lg` up, so
+  // the side-by-side layout's `lg:w-2/5`/`lg:min-w-80`/`lg:max-w-md` sizing is entirely unchanged.
   return (
-    <div className="flex min-h-0 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
+    <div className="flex min-h-0 flex-1 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:flex-none lg:border-r">
       <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 px-4 py-2 text-xs text-base-content/60">
         {summary}
       </div>
