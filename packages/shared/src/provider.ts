@@ -46,6 +46,13 @@ export interface ProviderCapabilities {
   usage?: boolean;
   /** Does the adapter surface CLI-exposed reasoning as `thinking.delta` (only when the CLI itself makes it public)? */
   thinking?: boolean;
+  /**
+   * Does the adapter implement `AgentProvider.fetchModelCatalog()` (ADI-22a,
+   * `packages/agent-runtime/src/types.ts`) -- a live, RPC/SDK-backed model catalog, not the static
+   * `availableModels` array on this same status? Codex's app-server transport is the first (and,
+   * in this ticket, only) implementation; Claude's stays absent until #144.
+   */
+  modelCatalog?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 
