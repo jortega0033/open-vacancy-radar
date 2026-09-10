@@ -6,6 +6,10 @@
  * for discovery-time diagnostics and CI fixtures.
  */
 
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import type { DiscoverySourceAudit, FailureCategory, GapRecord, GapTelemetryReport } from './models.js';
 
 /**
@@ -189,4 +193,74 @@ export function aggregateGapRecords(records: GapRecord[]): GapTelemetryReport {
     ),
     aggregatedByCategory,
   };
+}
+
+/**
+ * Where accumulated gap records persist between scans, mirroring the `reports/global-remote`
+ * convention `report.ts` already uses for the rest of a scan's local diagnostic output -- this is
+ * the same directory `writeGlobalRemoteReport` writes `latest.json`/`latest.html` into, so a single
+ * `.gitignore`d output directory holds all of a scan's local diagnostics.
+ */
+function gapTelemetryRecordsFile(projectRoot: string): string {
+  const output = path.resolve(projectRoot, 'reports', 'global-remote');
+  const relative = path.relative(projectRoot, output);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Gap telemetry path must remain inside the project root');
+  }
+  return path.join(output, 'gap-telemetry.json');
+}
+
+/**
+ * Reads back whatever `saveGapRecords` last persisted. Returns an empty array for every failure
+ * mode (no telemetry has ever been recorded yet, the file was deleted, the JSON is truncated or
+ * corrupt) -- all three mean "no prior gap history", which a first scan or a freshly cleaned
+ * `reports/` directory hits as an expected, not exceptional, case (mirrors `readGlobalRemoteReport`
+ * in report.ts).
+ */
+export async function loadGapRecords(projectRoot: string): Promise<GapRecord[]> {
+  try {
+    const parsed = JSON.parse(await readFile(gapTelemetryRecordsFile(projectRoot), 'utf8')) as unknown;
+    return Array.isArray(parsed) ? (parsed as GapRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Atomic write (temp file + rename), matching the pattern `report.ts`'s `writeGlobalRemoteReport` uses. */
+export async function saveGapRecords(projectRoot: string, records: readonly GapRecord[]): Promise<void> {
+  const file = gapTelemetryRecordsFile(projectRoot);
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+/**
+ * Wires source-gap telemetry into a live discovery run. Turns this run's non-`success`
+ * `DiscoverySourceAudit` entries into `GapRecord`s (`recordFromSourceAudit`), merges them with
+ * whatever `gap-telemetry.json` already holds from prior scans -- so gaps aggregate "across
+ * repeated scans" per issue #9 rather than resetting every run -- bounds and persists the merged
+ * set (`aggregateGapRecords` already caps storage at 1000 records), and returns the up-to-date
+ * aggregated report so a caller can render it (see `gap-report.ts`) without a second disk read.
+ *
+ * Call this with the sources from a real discovery run (`runGlobalRemoteDiscovery`), never with
+ * sources reused from a previous report's cached discovery (`loadPreviousDiscovery` in
+ * pipeline/global-remote.ts) -- those didn't make a new request, so replaying them here would
+ * double-count the same historical failure on every offline/official-only rerun.
+ */
+export async function recordDiscoveryGapTelemetry(
+  sources: readonly DiscoverySourceAudit[],
+  projectRoot: string,
+): Promise<GapTelemetryReport> {
+  const newRecords = sources
+    .map((source) => recordFromSourceAudit(source))
+    .filter((gapRecord): gapRecord is GapRecord => gapRecord !== null);
+  const previousRecords = await loadGapRecords(projectRoot);
+  const report = aggregateGapRecords([...previousRecords, ...newRecords]);
+  await saveGapRecords(projectRoot, report.records);
+  return report;
 }

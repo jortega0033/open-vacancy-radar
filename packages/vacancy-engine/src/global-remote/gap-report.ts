@@ -3,6 +3,10 @@
  * showing unsupported ATS coverage gaps and discovery failure patterns.
  */
 
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import type { GapTelemetryReport } from './models.js';
 
 /**
@@ -275,4 +279,42 @@ export function generateGapReportText(report: GapTelemetryReport): string {
   lines.push('Report intended for internal diagnostics and CI fixture verification.');
 
   return lines.join('\n');
+}
+
+export type GapTelemetryReportFiles = {
+  html: string;
+  text: string;
+};
+
+/**
+ * Writes the rendered HTML and plain-text gap reports to disk, alongside the raw
+ * `gap-telemetry.json` records `source-gap-telemetry.ts` already persists -- same
+ * `reports/global-remote` directory `report.ts`'s `writeGlobalRemoteReport` uses for the rest of a
+ * scan's local diagnostic output, so this is a bounded report file suitable for local diagnostics
+ * and CI fixtures (issue #9), not a new UI surface or IPC route.
+ */
+export async function writeGapTelemetryReport(
+  report: GapTelemetryReport,
+  projectRoot: string,
+): Promise<GapTelemetryReportFiles> {
+  const output = path.resolve(projectRoot, 'reports', 'global-remote');
+  const relative = path.relative(projectRoot, output);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Gap telemetry report path must remain inside the project root');
+  }
+  await mkdir(output, { recursive: true });
+  const html = path.join(output, 'gap-report.html');
+  const text = path.join(output, 'gap-report.txt');
+  const suffix = `.tmp-${process.pid}-${randomUUID()}`;
+  const files: [string, string, string][] = [
+    [html, `${html}${suffix}`, generateGapReportHtml(report)],
+    [text, `${text}${suffix}`, generateGapReportText(report)],
+  ];
+  try {
+    await Promise.all(files.map(([, temporary, contents]) => writeFile(temporary, contents, 'utf8')));
+    await Promise.all(files.map(([target, temporary]) => rename(temporary, target)));
+  } finally {
+    await Promise.all(files.map(([, temporary]) => rm(temporary, { force: true })));
+  }
+  return { html, text };
 }

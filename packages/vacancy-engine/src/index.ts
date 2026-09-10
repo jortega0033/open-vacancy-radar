@@ -19,6 +19,8 @@ export {
   aggregateGapRecords,
   classifyFailure,
   detectAtsProviderFromError,
+  loadGapRecords,
+  recordDiscoveryGapTelemetry,
   redactUrl,
   recordFromSourceAudit,
 } from './global-remote/source-gap-telemetry.js';
