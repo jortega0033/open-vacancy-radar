@@ -39,6 +39,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
     },
     officialSources: [],
   };
@@ -164,7 +165,9 @@ describe('Additional public and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(26);
+    // +5 since issue #251: one active `full_ingestion` registry entry per in-scope ATS roster
+    // provider (greenhouse/lever/ashby/recruitee/personio), see source-registry.ts.
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(31);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',

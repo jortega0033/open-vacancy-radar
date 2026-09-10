@@ -47,6 +47,7 @@ function config(officialSources: GlobalRemoteConfig['officialSources']): GlobalR
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
     },
     officialSources,
   };

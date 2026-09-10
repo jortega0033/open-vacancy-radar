@@ -39,6 +39,7 @@ const config: GlobalRemoteConfig = {
     joobleApiKey: '',
     reedApiKey: '',
     jobspipeApiKey: '',
+    atsRosterConcurrency: 1,
   },
   officialSources: [],
 };

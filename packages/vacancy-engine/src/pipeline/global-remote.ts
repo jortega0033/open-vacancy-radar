@@ -6,6 +6,7 @@ import type { Logger } from 'pino';
 
 import type { AtsHttpClient } from '../ats/http.js';
 import { loadCandidateProfile, type CandidateProfile } from '../candidate/profile.js';
+import { loadAtsRoster } from '../companies/ats-roster-repository.js';
 import { resolveWorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/client.js';
@@ -339,8 +340,14 @@ export async function runGlobalRemoteScan(
   // of the three; running it after the other two used to add its own full duration on top of
   // theirs instead of overlapping with it, which is most of the difference between a scan taking
   // a couple of minutes and one taking upwards of ten.
+  // Loaded here, not inside `runGlobalRemoteDiscovery`, so the roster scan's own signature stays
+  // `(http, config, roster)` like every other discovery function's `(http, config)` -- no discovery
+  // function reads the filesystem directly. Skipped entirely when reusing a prior run's discovery
+  // output, matching `reuseDiscovery`'s existing "no new discovery-feed requests" contract; an empty
+  // roster in that branch is fine because `atsRoster` is never read again when discovery is reused.
+  const atsRoster = reuseDiscovery ? [] : await loadAtsRoster(projectRoot);
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
-    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile),
+    reuseDiscovery ? loadPreviousDiscovery(projectRoot) : runGlobalRemoteDiscovery(http, profile, atsRoster),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile)
       : runOfficialGlobalRemoteSources(http, profile),

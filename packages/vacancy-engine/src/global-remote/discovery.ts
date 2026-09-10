@@ -2,6 +2,8 @@ import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
 import { discoverAiDevJobs } from './ai-dev-jobs-discovery.js';
 import { runAdditionalDiscovery } from './additional-discovery.js';
+import { runAtsRosterDiscovery } from './ats-roster-discovery.js';
+import type { AtsRosterEntry } from '../companies/ats-roster-source.js';
 import { runFeedDiscovery } from './feed-discovery.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
 import { runKeyedDiscovery } from './keyed-discovery.js';
@@ -153,17 +155,20 @@ export async function discoverJobicy(
 export async function runGlobalRemoteDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  atsRoster: readonly AtsRosterEntry[] = [],
 ): Promise<DiscoveryRun> {
-  const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed] = await Promise.all([
-    discoverHimalayas(http, config),
-    discoverJobicy(http, config),
-    discoverAiDevJobs(http, config),
-    runStructuredDiscovery(http, config),
-    runFeedDiscovery(http, config),
-    runJobtechDiscovery(http, config),
-    runAdditionalDiscovery(http, config),
-    runKeyedDiscovery(http, config),
-  ]);
+  const [himalayas, jobicy, aiDevJobs, structured, feeds, jobtech, additional, keyed, atsRosterScan] =
+    await Promise.all([
+      discoverHimalayas(http, config),
+      discoverJobicy(http, config),
+      discoverAiDevJobs(http, config),
+      runStructuredDiscovery(http, config),
+      runFeedDiscovery(http, config),
+      runJobtechDiscovery(http, config),
+      runAdditionalDiscovery(http, config),
+      runKeyedDiscovery(http, config),
+      runAtsRosterDiscovery(http, config, atsRoster),
+    ]);
   return {
     sources: [
       ...himalayas.sources,
@@ -174,6 +179,7 @@ export async function runGlobalRemoteDiscovery(
       ...jobtech.sources,
       ...additional.sources,
       ...keyed.sources,
+      ...atsRosterScan.sources,
     ],
     vacancies: [
       ...himalayas.vacancies,
@@ -184,6 +190,7 @@ export async function runGlobalRemoteDiscovery(
       ...jobtech.vacancies,
       ...additional.vacancies,
       ...keyed.vacancies,
+      ...atsRosterScan.vacancies,
     ],
   };
 }

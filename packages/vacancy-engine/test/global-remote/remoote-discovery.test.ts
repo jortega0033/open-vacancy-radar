@@ -54,6 +54,7 @@ function profile(): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
     },
     officialSources: [],
   };
