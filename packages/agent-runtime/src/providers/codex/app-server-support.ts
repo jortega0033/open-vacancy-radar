@@ -57,11 +57,9 @@ export const CODEX_APP_SERVER_INCOMING_REQUEST_METHODS = Object.freeze([
  * `forbidden_method` the first time an entirely ordinary turn used a facet of the protocol nobody
  * thought to allowlist. That failure mode (a real, successful-looking session dying on a method this
  * repo simply doesn't act on) is worse than allowlisting and ignoring a few extra notifications, so
- * this matches upstream's own full incoming-notification list except `account/rateLimits/updated`
- * (tracked separately in #221, deliberately deferred until this repo has a `usage.rate_limits`
- * event) and `remoteControl/status/changed`/`mcpServer/startupStatus/updated` (this transport never
- * pairs with a remote-control client or configures MCP servers, so these two genuinely cannot
- * fire). `warning` and `serverRequest/resolved` are deliberately kept, not excluded: the vendored
+ * this matches upstream's own full incoming-notification list except `remoteControl/status/changed`/
+ * `mcpServer/startupStatus/updated` (this transport never pairs with a remote-control client or
+ * configures MCP servers, so these two genuinely cannot fire). `warning` and `serverRequest/resolved` are deliberately kept, not excluded: the vendored
  * schema shows `warning`'s `threadId` is optional -- it is a general-purpose caveat channel, not
  * something tied to remote control or MCP, so a normal single-turn session can legitimately receive
  * one -- and `serverRequest/resolved` is plausibly the server's own confirmation that one of the
@@ -74,6 +72,7 @@ export const CODEX_APP_SERVER_INCOMING_REQUEST_METHODS = Object.freeze([
  * separate failure notification needs allowlisting for that.
  */
 export const CODEX_APP_SERVER_INCOMING_NOTIFICATION_METHODS = Object.freeze([
+  'account/rateLimits/updated',
   'thread/started',
   'thread/status/changed',
   'thread/tokenUsage/updated',
