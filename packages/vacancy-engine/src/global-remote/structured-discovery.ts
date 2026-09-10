@@ -21,6 +21,42 @@ import type {
   GlobalRemoteConfig,
 } from './models.js';
 
+/**
+ * FreeHire umbrella discovery integration: hardened structured adapter for remote job aggregation.
+ *
+ * ## Contract and Reliability (issue #6 hardening)
+ *
+ * **Rate limiting:** FreeHire rate limit responses (HTTP 429) are detected by `sourceFailure()`
+ * and marked as 'blocked', never 'error'. This status prevents user-facing retry loops while
+ * allowing parallel discovery to continue without cascading failures.
+ *
+ * **Bounded responses:** When FreeHire returns fewer results than the total available (meta.total
+ * > data.length), the response is marked as 'partial' status and includes the count mismatch in
+ * the error message. Callers MUST NOT treat partial results as definitive. Partial status prevents
+ * the UI from reporting incomplete coverage as exhaustive search results.
+ *
+ * **Outage behavior:** FreeHire failures (malformed response, server error, timeout) are caught
+ * and reported as 'error' status without blocking direct-ATS scanning. The adapter ensures that
+ * FreeHire discovery failing never cascades to prevent local ATS results from being obtained.
+ * This is critical for reliability: FreeHire is a secondary aggregator, not a primary path.
+ *
+ * **Direct ATS attribution:** Jobs found via FreeHire always point to the original ATS host
+ * (Ashby, Greenhouse, Lever, etc.), never to an intermediate aggregator. This preserves
+ * attribution visibility for diagnostics and ensures CVs reach the correct hiring system.
+ *
+ * **Deduplication:** Duplicate jobs discovered locally and via FreeHire converge using the
+ * `discoveryAudit()` key strategy, which combines provider name, job slug, and URL. The global
+ * remote scan's deduplication logic ensures duplicates are merged before evaluation.
+ *
+ * **Caching:** HTTP caching policy is delegated to the AtsHttpClient (passed in options).
+ * The adapter declares no explicit cache control; the crawler layer makes cache decisions
+ * based on response headers and per-source retry policy.
+ *
+ * **User-agent policy:** The adapter sends all requests through `http.get()`, which applies
+ * a user-agent identifying the client (Open Vacancy Radar). FreeHire's API documentation
+ * does not restrict user-agent patterns.
+ */
+
 const FREEHIRE_ATS_HOSTS = [
   'ashbyhq.com',
   'bamboohr.com',
@@ -41,6 +77,12 @@ const FREEHIRE_ATS_HOSTS = [
   'workable.com',
 ] as const;
 
+/**
+ * Filters a job URL to ensure it points directly to a known ATS system, not an aggregator.
+ * FreeHire provides URLs that may link to intermediate job boards; this function ensures we
+ * only accept direct ATS URLs for attribution transparency and to reach the correct hiring system.
+ * Non-ATS URLs are silently skipped during job ingestion.
+ */
 function directAtsUrl(value: unknown): string | null {
   const url = httpUrl(value);
   if (url === null) return null;
