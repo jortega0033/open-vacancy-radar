@@ -37,8 +37,14 @@ export function stagedArtifactPath(storageRoot: string, attemptId: string, conte
  * only the caller's own app-owned HTML (`resume-html.ts`'s output), never remote job-posting
  * content: that stays confined to the text-only generation session per #196's trust-domain design
  * and never reaches this function at all.
+ *
+ * Exported (not module-private) since #156: the manual CV Library export action
+ * (`main.ts`'s `workspace:cv-documents:export` handler) needs exactly this same HTML-to-PDF step,
+ * just followed by a native save dialog instead of this module's own artifact-table registration.
+ * Reusing the function rather than a second copy of the `BrowserWindow`/`printToPDF` dance keeps
+ * there being exactly one place that ever renders app-owned HTML into a PDF.
  */
-async function printHtmlToPdf(html: string): Promise<Buffer> {
+export async function printHtmlToPdf(html: string): Promise<Buffer> {
   const win = new BrowserWindow({
     show: false,
     webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false },

@@ -281,6 +281,16 @@ export function listCvDocuments(db: WorkspaceDb): CvDocumentRecord[] {
     .map(toCvDocument);
 }
 
+/** Single-row lookup (#156's export action): every other CV verb so far only ever needed the
+ * whole list or an id-plus-patch, so this is the first one-row read. Throws the same
+ * `WorkspaceNotFoundError` `updateCvDocument`/`deleteCvDocument` throw for a missing id, rather
+ * than returning `undefined`, so the export handler does not need its own "no such CV" branch. */
+export function getCvDocument(db: WorkspaceDb, id: string): CvDocumentRecord {
+  const row = db.select().from(cvDocuments).where(eq(cvDocuments.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('CV document', id);
+  return toCvDocument(row);
+}
+
 export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDocumentRecord {
   return db.transaction((tx) => {
     const existingCount = tx.select({ id: cvDocuments.id }).from(cvDocuments).all().length;

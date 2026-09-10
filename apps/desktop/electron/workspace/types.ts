@@ -164,6 +164,21 @@ export interface CvDocumentInput {
 
 export type CvDocumentPatch = Partial<Omit<CvDocumentInput, 'kind'>>;
 
+/** #156: the two formats the manual CV Library export action offers, matching what the existing
+ * Letters export already supports (`letters/export.ts`'s `exportDocx`/`exportPdf`) minus markdown,
+ * which the ticket's own scope narrows to PDF/DOCX for a resume. */
+export type CvExportFormat = 'pdf' | 'docx';
+
+/** Mirrors `SaveFileResult` (`window.d.ts`/`preload.ts`'s `system.saveFile`): `{ saved: false }`
+ * means the user cancelled the native save dialog, not a failure -- the caller must not treat it
+ * as an error. Named separately (not reused) because this bridge's own key-set test
+ * (`preload.test.ts`) pins `workspace` and `system` as independent namespaces with no shared type
+ * import between them. */
+export interface CvExportResult {
+  saved: boolean;
+  path?: string;
+}
+
 export interface LetterRecord {
   id: string;
   title: string;
@@ -448,4 +463,15 @@ export interface WorkspaceBridge {
    */
   listAutomationGrants(): Promise<AutomationGrantRecord[]>;
   revokeAutomationGrant(id: string): Promise<AutomationGrantRecord>;
+
+  /**
+   * #156: renders one CV Library entry into the app's default resume template and writes it to a
+   * user-chosen path via the native save dialog, exactly the "manual export with a default
+   * app-authored template" action the ticket asks for. Unlike `system.saveFile` (which only ever
+   * writes bytes the renderer already built), the actual document content is produced entirely in
+   * the main process -- PDF rendering needs a real `BrowserWindow` -- so this one capability both
+   * renders and saves, rather than being split across two calls the way Letters' export is.
+   * `{ saved: false }` means the user cancelled the dialog, not a failure.
+   */
+  exportCvDocument(id: string, format: CvExportFormat): Promise<CvExportResult>;
 }

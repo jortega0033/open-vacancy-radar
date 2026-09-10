@@ -11,6 +11,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvExportInput,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -243,6 +244,23 @@ describe('workspace letter/CV patches', () => {
   it('requires an explicit CV kind: there is no sensible default between uploaded and manual', () => {
     expect(() => parseCvDocumentInput({ name: 'CV' })).toThrow(/"kind" must be one of/);
     expect(parseCvDocumentInput({ name: 'CV', kind: 'uploaded' }).kind).toBe('uploaded');
+  });
+});
+
+describe('workspace CV export request (#156)', () => {
+  it('accepts a valid { id, format } export request for each supported format', () => {
+    expect(parseCvExportInput({ id: 'cv-1', format: 'pdf' })).toEqual({ id: 'cv-1', format: 'pdf' });
+    expect(parseCvExportInput({ id: 'cv-1', format: 'docx' })).toEqual({ id: 'cv-1', format: 'docx' });
+  });
+
+  it('rejects a format outside the supported set, dropping neither markdown nor a bogus value silently', () => {
+    expect(() => parseCvExportInput({ id: 'cv-1', format: 'md' })).toThrow(/"format" must be one of/);
+    expect(() => parseCvExportInput({ id: 'cv-1', format: 'exe' })).toThrow(/"format" must be one of/);
+  });
+
+  it('requires a non-empty id, the same as every other id-taking verb', () => {
+    expect(() => parseCvExportInput({ format: 'pdf' })).toThrow(/"id" must be a string/);
+    expect(() => parseCvExportInput({ id: '', format: 'pdf' })).toThrow(/"id" is required/);
   });
 });
 
