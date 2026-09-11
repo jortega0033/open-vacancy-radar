@@ -162,7 +162,7 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the nine documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -173,6 +173,8 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
         'onScanProgress',
         'getSearchProfile',
         'saveSearchProfile',
+        'getAtsRosterStatus',
+        'refreshAtsRoster',
       ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
@@ -258,6 +260,25 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     unsubscribe();
 
     expect(removeListener).toHaveBeenCalledWith('vacancy:scan-progress', listener);
+  });
+
+  it('getAtsRosterStatus invokes only vacancy:ats-roster:get-status, no arguments', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('vacancyRadar');
+    const status = await (api.getAtsRosterStatus as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:ats-roster:get-status');
+    expect(status).toBeNull();
+  });
+
+  it('refreshAtsRoster invokes only vacancy:ats-roster:refresh, no arguments, and returns whatever main sent', async () => {
+    const result = { file: 'ats-roster-v1.json', importedAt: '2026-09-11T00:00:00.000Z', totalEntries: 3, providers: [] };
+    invoke.mockResolvedValue(result);
+    const api = await loadPreload('vacancyRadar');
+    const received = await (api.refreshAtsRoster as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:ats-roster:refresh');
+    expect(received).toEqual(result);
   });
 });
 
@@ -532,6 +553,9 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   // Added by issue #252, same reasoning as `workspace`'s own #202/#203 comment below:
   // `onScanProgress` is a legitimate widening of this namespace for progressive search results,
   // not something ADI-06/07 touched, so the literal grows here rather than blocking real growth.
+  //
+  // `getAtsRosterStatus`/`refreshAtsRoster` added wiring up issue #251/#264's ATS-roster import
+  // trigger (the manual "Refresh company roster" Settings action), same reasoning again.
   vacancyRadar: [
     'getReport',
     'getStatus',
@@ -540,6 +564,8 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'onScanProgress',
     'getSearchProfile',
     'saveSearchProfile',
+    'getAtsRosterStatus',
+    'refreshAtsRoster',
   ],
   workspace: [
     'getSettings',

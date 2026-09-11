@@ -129,6 +129,10 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
     onScanProgress: vi.fn(() => () => {}),
     getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    // Default: not imported yet, mirroring a fresh checkout/userData directory. A test that cares
+    // about a populated roster overrides this with its own resolved status.
+    getAtsRosterStatus: vi.fn().mockResolvedValue(null),
+    refreshAtsRoster: vi.fn(),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;
