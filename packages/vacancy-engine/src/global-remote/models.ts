@@ -311,6 +311,21 @@ export type GlobalRemoteReport = {
     activeRegistrySources: number;
     gatedRegistrySources: number;
     manualOrProhibitedRegistrySources: number;
+    /**
+     * The best-effort IND sponsor cross-check's own coverage for this run, in the same spirit as
+     * `discoverySources`' per-source request/listing counts: a bounded enrichment has to report
+     * what it did *not* reach, not just what it found. See `applyWorldwideSponsorMatches`.
+     *
+     * Optional only because a report persisted by an engine version from before that check was
+     * bounded carries none of these fields; a run of this engine always writes all five.
+     */
+    sponsorMatchEligibleRows?: number;
+    sponsorMatchEligibleCompanies?: number;
+    /** Resolved for this report, whether from an earlier scan's persisted lookup or freshly. */
+    sponsorMatchResolvedCompanies?: number;
+    /** The subset of the above that cost this run a Wikidata request. */
+    sponsorMatchLookedUpCompanies?: number;
+    sponsorMatchUnverifiedCompanies?: number;
   };
   sourceRegistry: SourceRegistryEntry[];
   discoverySources: DiscoverySourceAudit[];

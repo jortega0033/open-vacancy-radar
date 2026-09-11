@@ -90,6 +90,20 @@ function registryRows(sources: readonly SourceRegistryEntry[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+/**
+ * "Checked / eligible" for the bounded IND sponsor cross-check, or "Not reported" for a report
+ * written before that check carried coverage numbers. Never collapsed to a bare count of matches:
+ * how many employers went unchecked is the part a reader cannot otherwise infer, and reading an
+ * unchecked employer as an unmatched one is exactly the wrong conclusion (see
+ * `applyWorldwideSponsorMatches`).
+ */
+function sponsorMatchCoverage(stats: GlobalRemoteReport['statistics']): string {
+  const checked = stats.sponsorMatchResolvedCompanies;
+  const eligible = stats.sponsorMatchEligibleCompanies;
+  if (checked === undefined || eligible === undefined) return 'Not reported';
+  return `${checked.toLocaleString('en-US')}/${eligible.toLocaleString('en-US')}`;
+}
+
 export function renderGlobalRemoteHtml(report: GlobalRemoteReport): string {
   const stats = report.statistics;
   return `<!doctype html>
@@ -108,6 +122,7 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
   <div class="card"><div class="number">${stats.discoveryUniqueListings}</div>unique discovery listings</div>
   <div class="card"><div class="number">${stats.officialRequests}</div>official requests</div>
   <div class="card"><div class="number">${stats.activeRegistrySources}/${stats.registrySources}</div>active / registered sources</div>
+  <div class="card"><div class="number">${sponsorMatchCoverage(stats)}</div>Netherlands employers sponsor-checked</div>
 </div>
 <h2>Strict matches</h2>${officialRows(report.strictMatches)}
 <h2>Manual confirmation queue</h2>${officialRows(report.manualReview)}

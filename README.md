@@ -24,7 +24,9 @@ For any vacancy that normalizes to a Netherlands location, a best-effort check a
 up the employer by name against the IND's official recognised-sponsor register. This is a
 name-keyed, unverified lookup, not a curated evidence chain, so a match is always reported as a
 "possible sponsor match" rather than a confirmed one -- confirm the legal entity yourself before
-relying on sponsorship.
+relying on sponsorship. Like every discovery source, it runs on a bounded budget: one scan resolves
+a capped number of distinct employers against Wikidata rather than one lookup per listing, and any
+employer it did not reach is reported as unchecked, never as unmatched.
 
 The pipeline is deterministic-first: official ATS APIs and structured feeds before plain HTTP,
 before JSON-LD, before HTML parsing, with a narrowly-scoped headless-browser fallback only where
