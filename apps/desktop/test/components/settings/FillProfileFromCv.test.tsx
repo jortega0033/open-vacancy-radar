@@ -31,6 +31,19 @@ const CV: CvDocumentRecord = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
 
+const PARSED_CV: CvDocumentRecord = {
+  ...CV,
+  profile: {
+    title: 'Senior Frontend Engineer',
+    years: '8',
+    location: '',
+    languages: 'English',
+    skills: ['Angular', 'TypeScript'],
+    summary: 'Frontend specialist',
+    auth: '',
+  },
+};
+
 /**
  * A profile where every field this feature must NOT touch already holds a value the user typed.
  * Any test that saves and finds one of these missing from the patch has caught the exact regression
@@ -82,6 +95,29 @@ afterEach(() => {
 });
 
 describe('FillProfileFromCvDrawer', () => {
+  it('offers the default CV parsed profile for review without changing the existing profile silently', async () => {
+    installBridges();
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([PARSED_CV]) });
+    const onApply = vi.fn().mockResolvedValue(undefined);
+
+    render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={onApply} onClose={vi.fn()} />);
+
+    const panel = await waitFor(() => {
+      const found = dialog();
+      expect(found.getByRole('button', { name: 'Use parsed values' })).toBeInTheDocument();
+      return found;
+    });
+    fireEvent.click(panel.getByRole('button', { name: 'Use parsed values' }));
+
+    expect(panel.getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer');
+    expect(panel.getByLabelText('Years of experience')).toHaveValue(8);
+    expect(panel.getByLabelText('Professional language')).toHaveValue('English');
+    expect(panel.getByLabelText('Strongest skills')).toHaveValue('Angular, TypeScript');
+    expect(panel.getByLabelText('Location')).toHaveValue('Utrecht');
+    expect(panel.getByLabelText('Additional skills')).toHaveValue('Jest');
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
   it('lists only CVs with extracted text, preselecting the default one', async () => {
     installBridges();
     installWorkspaceBridge({

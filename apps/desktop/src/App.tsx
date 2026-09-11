@@ -225,7 +225,12 @@ export function App() {
             <ErrorBanner className="mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</ErrorBanner>
           )}
 
-          {nav === 'search' && <SearchPage onGenerateLetter={handleGenerateLetter} />}
+          {nav === 'search' && (
+            <SearchPage
+              onGenerateLetter={handleGenerateLetter}
+              onOpenSearchProfile={() => handleNavigate('settings')}
+            />
+          )}
           {nav === 'saved' && <SavedJobsPage onSavedJobsChanged={refreshCounts} />}
           {nav === 'applications' && <ApplicationsPage onApplicationsChanged={refreshCounts} />}
           {nav === 'cv' && <CvLibraryPage />}
