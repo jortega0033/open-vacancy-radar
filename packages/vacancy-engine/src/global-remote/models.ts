@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { WorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
+import type { WorkEligibilityEvidence } from '../eligibility/models.js';
 
 const reviewAnswerSchema = z.enum(['yes', 'no', 'uncertain']);
 
@@ -34,6 +35,14 @@ export const globalRemoteSourceSchema = z.object({
     outsideUsEligible: reviewAnswerSchema,
     minimumAnnualBaseUsd: z.number().nonnegative().nullable(),
     salaryAppliesOutsideUs: reviewAnswerSchema,
+    /**
+     * The one language the reviewer recorded as mandatory for this vacancy, or empty for "the
+     * posting states none" (issue #280). Empty by default, so a profile written before this field
+     * existed still parses and still gates nothing: no language, and therefore no country or
+     * market, is assumed on anybody's behalf. A *preferred* language is deliberately not
+     * representable here, because a preferred language never gates a vacancy.
+     */
+    mandatoryLanguage: z.string().default(''),
     notes: z.array(z.string()),
   }),
 });
@@ -111,7 +120,9 @@ export const globalRemoteDecisionSchema = z.enum([
   'company_confirmation',
   'salary_unknown',
   'salary_below_threshold',
+  'language_confirmation',
   'excluded_location',
+  'excluded_language',
   'excluded_not_remote',
   'excluded_not_us_market',
   'excluded_role',
@@ -147,6 +158,7 @@ export type DiscoveryDecision =
   | 'salary_unverified'
   | 'salary_below_threshold'
   | 'location_restricted'
+  | 'language_mismatch'
   | 'non_vacancy'
   | 'role_mismatch';
 
@@ -223,6 +235,20 @@ export type DiscoveryVacancyAudit = {
    * at most, matching this path's much weaker evidence chain than the Netherlands pipeline's.
    */
   worldwideSponsorMatch: WorldwideSponsorMatch | null;
+  /**
+   * Evidence-backed yes/no/unknown answers for work country, mandatory language, visa sponsorship
+   * and Employer of Record, each carrying its source, scope and freshness, plus the candidate's own
+   * relocation willingness kept separate from the employer's relocation offer and a caption for any
+   * geographic salary assumption (issue #280). See `eligibility/models.ts`.
+   *
+   * Null until `applyWorkEligibilityEvidence` runs after discovery, exactly like `profileScore`:
+   * a partial row reads as "found, not yet assessed" rather than carrying real-looking answers it
+   * was never given. Optional (rather than always present) for the same reason
+   * `GlobalRemoteReport.statistics`' sponsor-match counters are: a report persisted by an engine
+   * version from before this field existed carries none of it, and reading such a row must not
+   * crash.
+   */
+  eligibility?: WorkEligibilityEvidence | null;
 };
 
 export type DiscoverySourceAudit = {

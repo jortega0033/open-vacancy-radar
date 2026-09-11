@@ -14,6 +14,7 @@ const review = {
   outsideUsEligible: 'uncertain' as const,
   minimumAnnualBaseUsd: null,
   salaryAppliesOutsideUs: 'uncertain' as const,
+  mandatoryLanguage: '',
   notes: [],
 };
 
