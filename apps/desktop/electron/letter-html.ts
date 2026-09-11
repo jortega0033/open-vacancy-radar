@@ -26,23 +26,38 @@ function paragraphs(body: string): string[] {
     .filter((paragraph) => paragraph.length > 0);
 }
 
+export interface LetterRenderOptions {
+  /** #276: whose letter this is. A letter that never names its sender cannot be told apart from
+   * anyone else's letter once it is a finished PDF, which is exactly the "wrong document attached"
+   * case the shared acceptance contract has to be able to catch. Omitted for a letter the caller
+   * has no candidate name for; the contract then simply has one fewer identity signal. */
+  candidateName?: string;
+}
+
 /** Renders one generated letter into a complete, standalone HTML document ready for
  * `webContents.loadURL('data:text/html,...')` + `printToPDF`. */
-export function renderLetterHtml(title: string, body: string): string {
+export function renderLetterHtml(title: string, body: string, options: LetterRenderOptions = {}): string {
   const paragraphHtml = paragraphs(body)
     .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
     .join('');
+  const requestedName = options.candidateName?.trim() ?? '';
+  // A generated letter often signs itself off already; adding a second copy underneath would read
+  // as a template bug to the person receiving it.
+  const candidateName = requestedName.length > 0 && !body.includes(requestedName) ? requestedName : '';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>${escapeHtml(title || 'Letter')}</title>
 <style>
 @page { margin: 56px 64px; }
-body { font: 11.5pt/1.6 Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; }
+/* Same reason as resume-html.ts: an unbreakable run must wrap rather than print off the page. */
+body { font: 11.5pt/1.6 Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; overflow-wrap: anywhere; }
 h1 { font-size: 15pt; margin: 0 0 18px; }
 p { margin: 0 0 14px; }
+.signature { margin-top: 20px; }
 </style></head>
 <body>
 ${title ? `<h1>${escapeHtml(title)}</h1>` : ''}
 ${paragraphHtml}
+${candidateName ? `<p class="signature">${escapeHtml(candidateName)}</p>` : ''}
 </body></html>`;
 }

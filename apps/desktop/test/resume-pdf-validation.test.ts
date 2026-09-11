@@ -7,10 +7,13 @@ import { validateRenderedResumePdf } from '../electron/resume-pdf-validation.js'
  * Builds real, genuinely-extractable PDF bytes (via `jsPDF`, already a dependency for the existing
  * interactive letter export) containing exactly the given lines -- a stand-in for what Electron's
  * `printToPDF` produces from `resume-html.ts`'s template, so this suite can prove
- * `validateRenderedResumePdf`'s extraction logic against real PDF bytes rather than a mock. It does
- * not prove `resume-html.ts`'s specific HTML renders correctly through `printToPDF` itself -- that
- * step needs a real Electron process and is left to code review, the same way this codebase's other
- * Electron-API-only glue (`main.ts`'s `Tray`/`BrowserWindow` construction) already is.
+ * `validateRenderedResumePdf`'s extraction logic against real PDF bytes rather than a mock.
+ *
+ * This file stays focused on the resume-shaped entry point and the reasons it reports. Since #276
+ * the checks themselves live in the shared document acceptance contract, covered by
+ * `document-acceptance.test.ts` (every finding, against controlled fixtures) and
+ * `e2e/document-acceptance.spec.ts` (this app's own templates through a real Electron
+ * `printToPDF`, which needs a real Electron process and so runs in the Playwright suite).
  */
 function realPdfContaining(lines: string[]): Uint8Array {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -43,7 +46,7 @@ describe('validateRenderedResumePdf', () => {
   it('passes when the rendered text contains the candidate name and every employer/role', async () => {
     const pdf = realPdfContaining(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']);
     const result = await validateRenderedResumePdf(pdf, RESUME);
-    expect(result).toEqual({ ok: true, reasons: [] });
+    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
   });
 
   it('fails on a PDF with no extractable text at all', async () => {
@@ -56,7 +59,9 @@ describe('validateRenderedResumePdf', () => {
     const pdf = realPdfContaining(['Someone Else', 'Senior Frontend Engineer, Redwood Software']);
     const result = await validateRenderedResumePdf(pdf, RESUME);
     expect(result.ok).toBe(false);
-    expect(result.reasons.join(' ')).toMatch(/candidate name is missing/);
+    // Since #276 this is reported as a document-identity failure rather than one more missing
+    // string: a finished CV carrying someone else's name is the wrong file, not an incomplete one.
+    expect(result.reasons.join(' ')).toMatch(/candidate name "Jamie Rivera" is missing/);
   });
 
   it('fails when an employer is missing from the rendered text -- the template-dropped-a-section case', async () => {
@@ -82,6 +87,6 @@ describe('validateRenderedResumePdf', () => {
     const buffer = Buffer.from(realPdfContaining(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']));
     expect(buffer).toBeInstanceOf(Buffer);
     const result = await validateRenderedResumePdf(buffer, RESUME);
-    expect(result).toEqual({ ok: true, reasons: [] });
+    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
   });
 });
