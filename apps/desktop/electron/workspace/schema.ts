@@ -162,6 +162,14 @@ export const applicationAttempts = sqliteTable('application_attempts', {
       'skipped',
       'failed',
       'submission_unknown',
+      /**
+       * A person told the app they completed this application themselves (#271). Deliberately NOT
+       * `submitted`: that checkpoint now means "this app observed a real receipt", and collapsing
+       * the two would make the evidence-backed state unfalsifiable. Equally deliberately not
+       * `failed` -- #271's fourth acceptance case is that the *absence* of a confirmation email is
+       * not evidence of anything, so nothing may ever downgrade this on silence alone.
+       */
+      'user_reported',
     ],
   })
     .notNull()
@@ -245,6 +253,58 @@ export const applicationArtifacts = sqliteTable('application_artifacts', {
    * writes one yet; never a path the renderer supplies (see #196 §6.2's "nothing renderer-supplied"
    * rule) -- only ever written by the main-process code that staged the file. */
   storagePath: text('storage_path').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * The durable evidence record behind every submission-outcome claim this app makes (#271).
+ *
+ * Before this table, "submitted" was a single enum value on the attempt with nothing standing
+ * behind it: a click that returned was recorded as a delivered application, and there was no way,
+ * afterwards, to ask *why* the app believed that. Every row here answers exactly that question for
+ * one observation, and rows are append-only in practice -- a later observation adds a row, it never
+ * rewrites an earlier one, so a reconciliation is visible as the second record rather than as a
+ * silently changed first one.
+ *
+ * Deliberately separate from `applicationAttempts.checkpoint`: the checkpoint is the attempt's
+ * current *stage*, this is the *evidence*, and #271's scope explicitly asks for stage, delivery
+ * evidence and hiring outcome to stay separate rather than being collapsed into one status.
+ *
+ * `onDelete: 'cascade'` for the same reason artifacts cascade: a receipt has no meaning
+ * independent of the attempt it belongs to.
+ */
+export const applicationSubmissionReceipts = sqliteTable('application_submission_receipts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  /** What this one observation established. `unknown` rows are kept, not discarded: "we looked and
+   * could not tell" is exactly the fact a person needs to see, and is what a later delayed receipt
+   * reconciles against. */
+  outcome: text('outcome', { enum: ['submitted', 'rejected', 'unknown', 'user_reported'] }).notNull(),
+  /** Where the claim came from. `page_observation` is the post-click observer; `delayed_receipt`
+   * is an out-of-band acknowledgement that arrived later; `user_reported` is a person's own
+   * statement, which is never machine evidence of delivery and is recorded as its own source so it
+   * can never be mistaken for one. */
+  source: text('source', { enum: ['page_observation', 'delayed_receipt', 'user_reported'] }).notNull(),
+  /** The URL this attempt was actually submitted to -- #271 requires a `submitted` record to name
+   * its destination, not just its attempt. Recorded for every outcome, not only the successful one. */
+  destination: text('destination').notNull().default(''),
+  /** What kind of proof this row rests on. `none` is the honest answer for a rejection or an
+   * unresolved observation, and is never allowed to coexist with `outcome: 'submitted'` (enforced
+   * in `repository.ts`, which is where every write to this table goes through). */
+  evidenceKind: text('evidence_kind', {
+    enum: ['confirmation_page', 'receipt_reference', 'delivery_receipt', 'user_statement', 'none'],
+  }).notNull(),
+  /** The matched confirmation text, receipt identifier, or the person's own note. Bounded by the
+   * executor package before it ever reaches here. Untrusted third-party page text: display data
+   * only, never parsed for control flow. */
+  evidenceReference: text('evidence_reference').notNull().default(''),
+  /** A short human-readable account of what was observed, for the attempt drawer. */
+  detail: text('detail').notNull().default(''),
+  /** When the observation itself happened -- distinct from `createdAt`, which is when it was
+   * written down. A delayed receipt is observed long after the click but written immediately. */
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 

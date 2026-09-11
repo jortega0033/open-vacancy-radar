@@ -25,6 +25,8 @@ const workspaceMock = vi.hoisted(() => ({
   listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string }>),
   updateApplicationAttempt: vi.fn(),
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
+  createApplicationSubmissionReceipt: vi.fn((_db: unknown, input: Record<string, unknown>) => ({ id: 'receipt-1', ...input })),
+  listApplicationSubmissionReceipts: vi.fn(() => [] as unknown[]),
   // Mirrors the real class's constructor: application-review-session.ts imports this from the
   // same mocked module and does `err instanceof WorkspaceNotFoundError`, which only works if both
   // sides resolve to the identical class reference.
@@ -70,21 +72,54 @@ const SUBMIT_TREE: CdpDomNode = {
   children: [...TREE.children!, { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 9, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 10, nodeValue: 'Submit Application' }] }],
 };
 
-function fakeView(tree: CdpDomNode = TREE) {
+/** A confirmation page, with the application form gone and a receipt reference printed: the one
+ * thing #271 accepts as evidence that a submission actually landed. */
+const CONFIRMATION_TREE: CdpDomNode = {
+  nodeName: 'BODY',
+  nodeType: 1,
+  backendNodeId: 1,
+  children: [
+    { nodeName: 'H1', nodeType: 1, backendNodeId: 20, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 21, nodeValue: 'Your application has been submitted' }] },
+    { nodeName: 'P', nodeType: 1, backendNodeId: 22, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 23, nodeValue: 'Application reference: FIXTURE-2026-000123' }] },
+  ],
+};
+
+/** The same form, re-rendered by the page's own handler with a required-field error still on it:
+ * the exact shape of #271's bug, where the click resolves normally and nothing was submitted. */
+const REQUIRED_ERROR_TREE: CdpDomNode = {
+  nodeName: 'BODY',
+  nodeType: 1,
+  backendNodeId: 1,
+  children: [
+    { nodeName: 'DIV', nodeType: 1, backendNodeId: 30, attributes: ['class', 'field-error'], children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 31, nodeValue: 'Full name is required' }] },
+    ...SUBMIT_TREE.children!,
+  ],
+};
+
+/**
+ * `afterSubmitTree`, when given, is what `DOM.getDocument` starts returning once a real click has
+ * been dispatched -- the fixture equivalent of a page reacting to its own submit button. Without
+ * it the page never changes, which is itself a case worth testing.
+ */
+function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNode; readFailsAfterSubmit?: boolean } = {}) {
+  let clicked = false;
   const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     switch (method) {
       case 'Page.navigate':
         return {};
       case 'DOM.getDocument':
-        return { root: tree };
+        if (clicked && options.readFailsAfterSubmit) throw new Error('the renderer went away');
+        return { root: clicked && options.afterSubmitTree ? options.afterSubmitTree : tree };
       case 'Page.captureScreenshot':
         return { data: 'ZmFrZS1zY3JlZW5zaG90' };
       case 'DOM.getBoxModel':
         return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
+      case 'Input.dispatchMouseEvent':
+        clicked = true;
+        return {};
       case 'DOM.focus':
       case 'Input.insertText':
       case 'Input.dispatchKeyEvent':
-      case 'Input.dispatchMouseEvent':
         return {};
       default:
         throw new Error(`unexpected CDP method in test: ${method} ${JSON.stringify(params)}`);
@@ -146,6 +181,8 @@ beforeEach(() => {
   workspaceMock.listApplicationArtifacts.mockReset().mockReturnValue([]);
   workspaceMock.updateApplicationAttempt.mockReset();
   workspaceMock.findActiveAutomationGrant.mockReset().mockReturnValue(undefined);
+  workspaceMock.createApplicationSubmissionReceipt.mockReset().mockImplementation((_db: unknown, input: Record<string, unknown>) => ({ id: 'receipt-1', ...input }));
+  workspaceMock.listApplicationSubmissionReceipts.mockReset().mockReturnValue([]);
   notifyAutomaticSubmission.mockReset();
   extractPdfText.mockReset().mockResolvedValue('');
 });
@@ -351,9 +388,9 @@ describe('application-review-session', () => {
       expect(result).toEqual({ ok: false, reason: 'source_cv_not_found', detail: expect.any(String) });
     });
 
-    it('fills, reviews, confirms, and submits for real against the fixture -- the happy path #202 exists for', async () => {
+    it('fills, reviews, confirms, and submits for real against the fixture -- the happy path #202 exists for, now requiring a receipt (#271)', async () => {
       const { openApplicationReview, submitApplicationReview } = await importSession();
-      const view = fakeView(SUBMIT_TREE);
+      const view = fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE });
       createApplicationView.mockImplementation(() => view);
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
@@ -376,6 +413,246 @@ describe('application-review-session', () => {
       });
       const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
       expect(calledMethods).toContain('Input.dispatchMouseEvent'); // the real submit click
+    });
+
+    /**
+     * #271's five acceptance cases, at the level that actually writes the checkpoint and the
+     * durable evidence row. Every one of them runs against a hand-built fixture page; nothing in
+     * this file can reach a real employer's form.
+     */
+    describe('submission receipts (#271)', () => {
+      function readyToSubmit() {
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+        workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+        extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+      }
+
+      it('acceptance 1: a click that returns but leaves a required-field error never becomes submitted', async () => {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: REQUIRED_ERROR_TREE }));
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        readyToSubmit();
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toMatchObject({ ok: false, reason: 'submission_rejected' });
+        expect(result.detail).toContain('Full name is required');
+        // The one assertion this whole ticket is about.
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitted' }));
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, {
+          checkpoint: 'needs_user',
+          checkpointDetail: expect.stringContaining('Full name is required'),
+        });
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
+          FAKE_DB,
+          expect.objectContaining({ attemptId: ATTEMPT_ID, outcome: 'rejected', evidenceKind: 'none' }),
+        );
+      });
+
+      it('acceptance 2: a matching confirmation page records submitted with attempt, destination, timestamp and evidence reference', async () => {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE }));
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        readyToSubmit();
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toEqual({ ok: true });
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(FAKE_DB, {
+          attemptId: ATTEMPT_ID,
+          outcome: 'submitted',
+          source: 'page_observation',
+          destination: FIXTURE_URL,
+          evidenceKind: 'confirmation_page',
+          evidenceReference: expect.stringContaining('Your application has been submitted'),
+          detail: expect.any(String),
+          observedAt: expect.any(String),
+        });
+        // The checkpoint's own submittedAt is the observation's timestamp, not a second clock read.
+        const receipt = workspaceMock.createApplicationSubmissionReceipt.mock.calls[0]![1] as { observedAt: string };
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(
+          FAKE_DB,
+          ATTEMPT_ID,
+          expect.objectContaining({ checkpoint: 'submitted', submittedAt: receipt.observedAt }),
+        );
+      });
+
+      it('acceptance 3: navigation loss after the click records submission_unknown, with the attempt kept out of a blind retry', async () => {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { readFailsAfterSubmit: true }));
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        readyToSubmit();
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toMatchObject({ ok: false, reason: 'submission_unknown' });
+        expect(result.detail).toContain('the renderer went away');
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenNthCalledWith(2, FAKE_DB, ATTEMPT_ID, {
+          checkpoint: 'submission_unknown',
+          checkpointDetail: expect.stringContaining('the renderer went away'),
+          submittedAt: expect.any(String),
+        });
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
+          FAKE_DB,
+          expect.objectContaining({ outcome: 'unknown', destination: FIXTURE_URL }),
+        );
+      });
+
+      it('acceptance 3: a second submit on an attempt left at submission_unknown is refused, never blindly re-clicked', async () => {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        const view = fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE });
+        createApplicationView.mockImplementation(() => view);
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown' })));
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toMatchObject({ ok: false, reason: 'submission_outcome_unresolved' });
+        const clicks = view.transport.sendCommand.mock.calls.filter(([method]) => method === 'Input.dispatchMouseEvent');
+        expect(clicks).toHaveLength(0); // nothing reached the page at all
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      });
+
+      it('acceptance 3: an automatic fire is refused for an attempt sitting on submission_unknown', async () => {
+        const { openApplicationReview, fireDueAutomaticSubmissions } = await importSession();
+        createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE }));
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        const scheduledAt = '2026-02-01T12:03:00.000Z';
+        const unresolved = withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown', scheduledAutomaticSubmitAt: scheduledAt }));
+        workspaceMock.getApplicationAttempt.mockReturnValue(unresolved);
+        workspaceMock.listApplicationAttempts.mockReturnValue([unresolved]);
+
+        const fired = await fireDueAutomaticSubmissions(FAKE_DB, '2026-02-01T12:05:00.000Z');
+
+        expect(fired[0]?.result).toMatchObject({ ok: false, reason: 'already_submitted' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitting' }));
+      });
+
+      it('acceptance 4: a user-reported completion stays user_reported and never becomes submitted', async () => {
+        const { recordUserReportedSubmission } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown' })));
+
+        const result = recordUserReportedSubmission(FAKE_DB, ATTEMPT_ID, 'I finished this one in the browser myself.');
+
+        expect(result).toEqual({ ok: true });
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, {
+          checkpoint: 'user_reported',
+          checkpointDetail: 'I finished this one in the browser myself.',
+        });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitted' }));
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
+          FAKE_DB,
+          expect.objectContaining({ outcome: 'user_reported', source: 'user_reported', evidenceKind: 'user_statement' }),
+        );
+      });
+
+      it('acceptance 4: nothing downgrades a user-reported attempt on the absence of a confirmation', async () => {
+        // The explicit statement of "no email does not mean failed": reconciliation is the only
+        // thing that ever revisits an outcome, and it refuses to touch this state at all -- in
+        // either direction.
+        const { reconcileSubmissionOutcome } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'user_reported' })));
+
+        const result = reconcileSubmissionOutcome(FAKE_DB, ATTEMPT_ID, { status: 404, body: 'no such application' });
+
+        expect(result).toMatchObject({ ok: false, reason: 'outcome_already_resolved' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      });
+
+      it('acceptance 4: a person\'s report can never overwrite an already-observed submission', async () => {
+        const { recordUserReportedSubmission } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submitted' })));
+
+        const result = recordUserReportedSubmission(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toMatchObject({ ok: false, reason: 'already_observed' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      });
+
+      it('acceptance 5: an HTTP success carrying an application-error payload is not accepted as delivery', async () => {
+        const { reconcileSubmissionOutcome } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown' })));
+
+        const result = reconcileSubmissionOutcome(FAKE_DB, ATTEMPT_ID, {
+          status: 200,
+          body: JSON.stringify({ success: false, errors: [{ field: 'workAuthorization', message: 'unanswered' }] }),
+        });
+
+        expect(result).toMatchObject({ ok: false, reason: 'application_error_payload' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
+          FAKE_DB,
+          expect.objectContaining({ outcome: 'rejected', source: 'delayed_receipt' }),
+        );
+      });
+
+      it('acceptance 5: a delayed receipt reconciles an unresolved outcome into submitted, with its own evidence row', async () => {
+        const { reconcileSubmissionOutcome } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(
+          withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown', submittedAt: '2026-02-01T12:00:00.000Z' })),
+        );
+
+        const result = reconcileSubmissionOutcome(
+          FAKE_DB,
+          ATTEMPT_ID,
+          { status: 202, body: JSON.stringify({ confirmationNumber: 'FIXTURE-9001' }) },
+          '2026-02-02T09:00:00.000Z',
+        );
+
+        expect(result).toEqual({ ok: true });
+        expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
+          FAKE_DB,
+          expect.objectContaining({
+            outcome: 'submitted',
+            source: 'delayed_receipt',
+            evidenceKind: 'delivery_receipt',
+            evidenceReference: expect.stringContaining('FIXTURE-9001'),
+            observedAt: '2026-02-02T09:00:00.000Z',
+          }),
+        );
+        // The original submit time is kept: the receipt confirms when it was *seen*, not when the
+        // application was sent.
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(
+          FAKE_DB,
+          ATTEMPT_ID,
+          expect.objectContaining({ checkpoint: 'submitted', submittedAt: '2026-02-01T12:00:00.000Z' }),
+        );
+      });
+
+      it('acceptance 5: a delayed acknowledgement with nothing conclusive in it leaves the attempt unresolved', async () => {
+        const { reconcileSubmissionOutcome } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'submission_unknown' })));
+
+        const result = reconcileSubmissionOutcome(FAKE_DB, ATTEMPT_ID, { status: 200, body: JSON.stringify({ queued: true }) });
+
+        expect(result).toMatchObject({ ok: false, reason: 'no_delivery_evidence' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      });
+
+      it('reconciliation never overwrites an attempt whose outcome was already established', async () => {
+        const { reconcileSubmissionOutcome } = await importSession();
+        workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ checkpoint: 'needs_user' })));
+
+        const result = reconcileSubmissionOutcome(FAKE_DB, ATTEMPT_ID, { status: 200, body: JSON.stringify({ applicationId: 'fixture-1' }) });
+
+        expect(result).toMatchObject({ ok: false, reason: 'outcome_already_resolved' });
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      });
+
+      it('a failed evidence write never takes down an established submission outcome', async () => {
+        const { openApplicationReview, submitApplicationReview } = await importSession();
+        createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE }));
+        await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+        readyToSubmit();
+        workspaceMock.createApplicationSubmissionReceipt.mockImplementation(() => {
+          throw new Error('database is locked');
+        });
+
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+        expect(result).toEqual({ ok: true });
+        expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitted' }));
+      });
     });
 
     it('lands on submission_unknown, never a silent retry or drop, when the submit click itself fails ambiguously', async () => {
@@ -620,7 +897,9 @@ describe('application-review-session', () => {
         evaluateAndScheduleAutomaticSubmission,
         fireDueAutomaticSubmissions,
       } = await importSession();
-      const view = fakeView(SUBMIT_TREE);
+      // The fixture page answers the automatic click with a real confirmation, so this end-to-end
+      // path still reaches `submitted` under #271's receipt requirement.
+      const view = fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE });
       createApplicationView.mockImplementation(() => view);
       const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: AUTOMATION_POLICY_ID, targetUrl: FIXTURE_URL });
       const matchingHash = computeExpectedFormStructureHash(opened.snapshot.fields);
@@ -715,9 +994,9 @@ describe('application-review-session', () => {
       const ATTEMPT_C = '33333333-3333-4333-8333-333333333333'; // Acme Corp again -- blocked by A's own fire in this batch
 
       const views = new Map([
-        [ATTEMPT_A, fakeView(SUBMIT_TREE)],
-        [ATTEMPT_B, fakeView(SUBMIT_TREE)],
-        [ATTEMPT_C, fakeView(SUBMIT_TREE)],
+        [ATTEMPT_A, fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE })],
+        [ATTEMPT_B, fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE })],
+        [ATTEMPT_C, fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE })],
       ]);
       createApplicationView.mockImplementation((attemptId: string) => views.get(attemptId)!);
       let matchingHash = '';

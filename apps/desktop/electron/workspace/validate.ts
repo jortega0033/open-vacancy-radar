@@ -409,6 +409,7 @@ export const APPLICATION_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpo
   'skipped',
   'failed',
   'submission_unknown',
+  'user_reported',
 ];
 
 export function parseApplicationAttemptInput(value: unknown): ApplicationAttemptInput {

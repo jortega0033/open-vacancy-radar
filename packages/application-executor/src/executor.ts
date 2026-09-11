@@ -1,11 +1,19 @@
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
-import { extractSnapshotFields, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
+import { extractSnapshotFields, extractSubmissionSignals, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
 import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
+import { classifySubmissionOutcome, type ObservedResponse, type SubmissionOutcomeReport } from './submission-receipt.js';
 import { resolveSubmitControl } from './submit-control.js';
 import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
 
 const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
 const EMPTY_SNAPSHOT_RETRY_DELAY_MS = 100;
+
+/** How long `observeSubmissionOutcome` will keep re-reading the page for a receipt before giving
+ * up and reporting `unknown`. Bounded on purpose (#271 asks for a *bounded* observer): a real
+ * confirmation lands in a second or two, and an observer that waited indefinitely would turn every
+ * slow page into a hung attempt rather than an honest "outcome not established". */
+export const SUBMISSION_OBSERVE_TIMEOUT_MS = 15_000;
+export const SUBMISSION_OBSERVE_POLL_INTERVAL_MS = 250;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,6 +78,11 @@ export class ApplicationExecutor {
   #generation = 0;
   #currentSnapshot: FormSnapshot | undefined;
   #nodeIds: FieldNodeMap = new Map();
+  /** The page's own visible text as it stood immediately before the one real submit click, and
+   * nothing else. `observeSubmissionOutcome` compares against it so a confirmation phrase that was
+   * already on the page before the click can never be mistaken for evidence that the click did
+   * something (#271). `undefined` until `submit()` has actually clicked. */
+  #preSubmitPageText: string | undefined;
 
   constructor(
     private readonly transport: CdpTransport,
@@ -305,6 +318,11 @@ export class ApplicationExecutor {
    * application should be sent. By the time `submit()` is called, that decision must already have
    * been made -- this method only guards against clicking the *wrong* control once that decision
    * has been made, not whether the decision to submit at all was a sound one.
+   *
+   * Returning from this method means the click was dispatched, and nothing more than that (#271).
+   * It is emphatically NOT a statement that the application was accepted: the page's own handler
+   * can re-render the same form with a required-field error and still resolve this promise
+   * normally. `observeSubmissionOutcome()` is what answers that separate question.
    */
   async submit(controlRef: string): Promise<void> {
     this.requireAction('submit');
@@ -317,7 +335,93 @@ export class ApplicationExecutor {
       throw new ExecutorPolicyError('submit', `controlRef ${controlRef} is not the sole resolved submit control for the current snapshot`);
     }
     const backendNodeId = this.nodeIdFor('submit', controlRef);
+
+    // The pre-click baseline for `observeSubmissionOutcome`, read *after* every refusal above has
+    // already passed, so nothing here can turn a clean pre-click refusal into a click. Failing to
+    // read it is deliberately not fatal: this is an observation aid, and letting it throw would
+    // turn a page whose DOM read hiccuped into a `submission_unknown` for an attempt that never
+    // actually clicked anything. An unreadable baseline just means no phrase can be discounted as
+    // pre-existing, which withholds evidence rather than inventing it.
+    try {
+      this.#preSubmitPageText = extractSubmissionSignals((await this.send('DOM.getDocument', { depth: -1, pierce: true }) as { root: CdpDomNode }).root).text;
+    } catch {
+      this.#preSubmitPageText = '';
+    }
+
     await this.clickAt(backendNodeId);
+  }
+
+  /**
+   * The bounded, deterministic submission-outcome observer #271 asks for: after the click, re-read
+   * the page (allowlisted `DOM.getDocument` only -- the `Network` domain is denied outright, see
+   * `cdp-allowlist.ts`) until one of three things is established, or the budget runs out.
+   *
+   *  - `submitted`, only on real positive evidence: a confirmation the page was not already
+   *    showing before the click, or a printed receipt reference, or an application identifier in a
+   *    response the *host* layer observed and passed in. Never on "the click didn't throw".
+   *  - `rejected`, when the form is flagging field errors or the observed response carries an
+   *    application-level error -- including one delivered over an HTTP success.
+   *  - `unknown`, for everything else: the budget elapsed with nothing conclusive, the page could
+   *    no longer be read at all (navigation loss, a crashed renderer), or the form is simply still
+   *    standing with nothing to say. The caller records this as the existing `submission_unknown`
+   *    checkpoint rather than guessing in either direction.
+   *
+   * Read-only: it mints no refs, touches no node map, and never clicks anything, so calling it can
+   * never produce a second submission. It also never re-clicks on an inconclusive read -- retrying
+   * a submit is exactly the blind retry `submission_unknown` exists to prevent.
+   */
+  async observeSubmissionOutcome(
+    options: { timeoutMs?: number; pollIntervalMs?: number; response?: ObservedResponse } = {},
+  ): Promise<SubmissionOutcomeReport> {
+    if (this.#preSubmitPageText === undefined) {
+      throw new ExecutorPolicyError('observeSubmissionOutcome', 'there is nothing to observe: submit() was never called on this executor');
+    }
+    const baselineText = this.#preSubmitPageText;
+    const timeoutMs = Math.max(0, options.timeoutMs ?? SUBMISSION_OBSERVE_TIMEOUT_MS);
+    const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? SUBMISSION_OBSERVE_POLL_INTERVAL_MS);
+    const deadline = Date.now() + timeoutMs;
+
+    for (;;) {
+      let signals: ReturnType<typeof extractSubmissionSignals>;
+      try {
+        const document = (await this.send('DOM.getDocument', { depth: -1, pierce: true })) as { root: CdpDomNode };
+        signals = extractSubmissionSignals(document.root);
+      } catch (err) {
+        // The page stopped being readable after a real click was already dispatched. That is the
+        // genuinely ambiguous case -- the submission may well have gone through on the way out.
+        return {
+          outcome: 'unknown',
+          reason: 'navigation_lost',
+          detail: `the page could not be read after the submit click: ${err instanceof Error ? err.message : String(err)}`,
+          observedAt: new Date().toISOString(),
+        };
+      }
+
+      const report = classifySubmissionOutcome(
+        {
+          text: signals.text,
+          baselineText,
+          formStillPresent: signals.formStillPresent,
+          errorMarkers: signals.errorMarkers,
+          ...(options.response ? { response: options.response } : {}),
+        },
+        new Date().toISOString(),
+      );
+      if (report.outcome !== 'unknown') return report;
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return {
+          outcome: 'unknown',
+          reason: 'observation_timeout',
+          // Carries the last read's own account of what it saw, so an inconclusive outcome still
+          // says something specific rather than only "nothing happened".
+          detail: `no submission receipt was observed within ${timeoutMs}ms: ${report.detail}`,
+          observedAt: new Date().toISOString(),
+        };
+      }
+      await sleep(Math.min(pollIntervalMs, remaining));
+    }
   }
 
   /** A pure state transition -- no CDP call. Surfaces the live view to the user and stops the

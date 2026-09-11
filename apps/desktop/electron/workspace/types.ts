@@ -222,7 +222,14 @@ export type ApplicationAttemptCheckpoint =
   | 'needs_user'
   | 'skipped'
   | 'failed'
-  | 'submission_unknown';
+  | 'submission_unknown'
+  /**
+   * A person told the app they completed this application themselves (#271). Kept strictly
+   * distinct from `submitted`, which since #271 means "this app observed a real receipt": folding
+   * a person's own statement into the evidence-backed value would make that value unfalsifiable.
+   * Never downgraded to `failed` by the absence of a confirmation email -- silence is not evidence.
+   */
+  | 'user_reported';
 
 /** Checkpoints for which a dedup check refuses a second concurrent attempt at the same vacancy.
  * `submission_unknown` is deliberately included even though it is not really "still in progress":
@@ -230,7 +237,12 @@ export type ApplicationAttemptCheckpoint =
  * attempt at that exact vacancy risks a second real submission on top of one that already
  * succeeded. Per #198's own framing, the realistic way to resolve that is asking the user --
  * which here means the user has to pass `force: true`, the same escape hatch as any other
- * deliberate re-attempt, not that this checkpoint is silently treated as safely closed out. */
+ * deliberate re-attempt, not that this checkpoint is silently treated as safely closed out.
+ *
+ * `user_reported` is deliberately absent, exactly like `submitted`: both mean this vacancy has
+ * been applied to and nothing is still in flight, so a genuinely later re-application is allowed
+ * without `force` -- unlike `submission_unknown`, where a second attempt risks doubling up on one
+ * that already succeeded. */
 export const NON_TERMINAL_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
   'queued',
   'reading_jd',
@@ -336,6 +348,53 @@ export interface ApplicationArtifactInput {
   byteSize: number;
   contentHash: string;
   storagePath?: string;
+}
+
+/** #271. `user_reported` exists here as well as on the checkpoint enum because a receipt row
+ * records *one observation*, and "a person said they did this by hand" is one of the observations
+ * worth keeping -- recorded as its own outcome so it is never counted as observed delivery. */
+export type SubmissionReceiptOutcome = 'submitted' | 'rejected' | 'unknown' | 'user_reported';
+
+export type SubmissionReceiptSource = 'page_observation' | 'delayed_receipt' | 'user_reported';
+
+export type SubmissionReceiptEvidenceKind =
+  | 'confirmation_page'
+  | 'receipt_reference'
+  | 'delivery_receipt'
+  | 'user_statement'
+  | 'none';
+
+/**
+ * One durable record of what was actually observed about an attempt's delivery (#271). See
+ * `schema.ts`'s own comment on the table for why this is separate from the attempt's checkpoint.
+ * `evidenceReference` is untrusted third-party page text: display it, never act on it.
+ */
+export interface ApplicationSubmissionReceiptRecord {
+  id: string;
+  attemptId: string;
+  outcome: SubmissionReceiptOutcome;
+  source: SubmissionReceiptSource;
+  destination: string;
+  evidenceKind: SubmissionReceiptEvidenceKind;
+  evidenceReference: string;
+  detail: string;
+  /** ISO-8601 */
+  observedAt: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+export interface ApplicationSubmissionReceiptInput {
+  attemptId: string;
+  outcome: SubmissionReceiptOutcome;
+  source: SubmissionReceiptSource;
+  destination?: string;
+  evidenceKind: SubmissionReceiptEvidenceKind;
+  evidenceReference?: string;
+  detail?: string;
+  /** ISO-8601. Defaults to now, but the observer passes its own observation timestamp so the
+   * record carries when the evidence was seen, not when the row happened to be written. */
+  observedAt?: string;
 }
 
 /** An explicit grant of automatic-submission authority for one compiled target policy (#203). See

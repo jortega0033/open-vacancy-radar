@@ -12,7 +12,17 @@
 
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import type { WorkspaceDb } from './client.js';
-import { appSettings, applicationArtifacts, applicationAttempts, applications, automationGrants, cvDocuments, letters, savedJobs } from './schema.js';
+import {
+  appSettings,
+  applicationArtifacts,
+  applicationAttempts,
+  applicationSubmissionReceipts,
+  applications,
+  automationGrants,
+  cvDocuments,
+  letters,
+  savedJobs,
+} from './schema.js';
 import {
   NON_TERMINAL_ATTEMPT_CHECKPOINTS,
   type ApplicationArtifactInput,
@@ -20,6 +30,8 @@ import {
   type ApplicationAttemptInput,
   type ApplicationAttemptPatch,
   type ApplicationAttemptRecord,
+  type ApplicationSubmissionReceiptInput,
+  type ApplicationSubmissionReceiptRecord,
   type ApplicationFilter,
   type ApplicationInput,
   type ApplicationPatch,
@@ -658,6 +670,107 @@ export function createApplicationArtifact(db: WorkspaceDb, input: ApplicationArt
       .all();
     if (!row) throw new Error('failed to insert application artifact');
     return toApplicationArtifact(row);
+  });
+}
+
+// --------------------------------------------------- application submission receipts (#271)
+
+type ApplicationSubmissionReceiptRow = typeof applicationSubmissionReceipts.$inferSelect;
+
+/** A quota, not a product limit anyone should ever meet, mirroring `APPLICATION_ARTIFACT_QUOTA`'s
+ * reasoning: one attempt accumulates one post-click observation plus, at most, a handful of later
+ * reconciliations. A number far past that means something is writing in a loop. */
+export const APPLICATION_SUBMISSION_RECEIPT_QUOTA = { maxPerAttempt: 50 } as const;
+
+export class ApplicationSubmissionReceiptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApplicationSubmissionReceiptError';
+  }
+}
+
+function toApplicationSubmissionReceipt(row: ApplicationSubmissionReceiptRow): ApplicationSubmissionReceiptRecord {
+  return {
+    id: row.id,
+    attemptId: row.attemptId,
+    outcome: row.outcome,
+    source: row.source,
+    destination: row.destination,
+    evidenceKind: row.evidenceKind,
+    evidenceReference: row.evidenceReference,
+    detail: row.detail,
+    observedAt: iso(row.observedAt),
+    createdAt: iso(row.createdAt),
+  };
+}
+
+/** Oldest first: these read as a timeline (what was observed at the click, then what reconciled it
+ * later), and a timeline that starts at the end is not one. */
+export function listApplicationSubmissionReceipts(db: WorkspaceDb, attemptId: string): ApplicationSubmissionReceiptRecord[] {
+  return db
+    .select()
+    .from(applicationSubmissionReceipts)
+    .where(eq(applicationSubmissionReceipts.attemptId, attemptId))
+    .orderBy(asc(applicationSubmissionReceipts.observedAt), asc(applicationSubmissionReceipts.createdAt))
+    .all()
+    .map(toApplicationSubmissionReceipt);
+}
+
+/**
+ * Writes one observation (#271). The one invariant enforced here, rather than left to callers:
+ * **a `submitted` row must carry real evidence.** `evidenceKind: 'none'`, or an empty
+ * `evidenceReference`, is refused outright for that outcome -- the whole point of this table is
+ * that a claim of delivery is checkable afterwards, and a claim with nothing behind it is exactly
+ * the bug #271 exists to fix, just relocated into a database row.
+ *
+ * `user_reported` is likewise required to say so in its own `source`/`evidenceKind`, so no query
+ * over this table can ever mistake a person's statement for an observed receipt.
+ */
+export function createApplicationSubmissionReceipt(
+  db: WorkspaceDb,
+  input: ApplicationSubmissionReceiptInput,
+): ApplicationSubmissionReceiptRecord {
+  if (input.outcome === 'submitted' && (input.evidenceKind === 'none' || !input.evidenceReference?.trim())) {
+    throw new ApplicationSubmissionReceiptError('a "submitted" receipt must carry a real evidence kind and reference');
+  }
+  if (input.outcome === 'user_reported' && (input.source !== 'user_reported' || input.evidenceKind !== 'user_statement')) {
+    throw new ApplicationSubmissionReceiptError('a "user_reported" receipt must record its source as the person who reported it');
+  }
+  if (input.source === 'user_reported' && input.outcome !== 'user_reported') {
+    throw new ApplicationSubmissionReceiptError('a person\'s own statement is never recorded as an observed outcome');
+  }
+
+  return db.transaction((tx) => {
+    const attempt = tx.select({ id: applicationAttempts.id }).from(applicationAttempts).where(eq(applicationAttempts.id, input.attemptId)).get();
+    if (!attempt) throw new WorkspaceNotFoundError('application attempt', input.attemptId);
+
+    const existing = tx
+      .select({ id: applicationSubmissionReceipts.id })
+      .from(applicationSubmissionReceipts)
+      .where(eq(applicationSubmissionReceipts.attemptId, input.attemptId))
+      .all();
+    if (existing.length + 1 > APPLICATION_SUBMISSION_RECEIPT_QUOTA.maxPerAttempt) {
+      throw new ApplicationSubmissionReceiptError(
+        `an attempt may have at most ${APPLICATION_SUBMISSION_RECEIPT_QUOTA.maxPerAttempt} submission receipts`,
+      );
+    }
+
+    const [row] = tx
+      .insert(applicationSubmissionReceipts)
+      .values({
+        attemptId: input.attemptId,
+        outcome: input.outcome,
+        source: input.source,
+        destination: input.destination ?? '',
+        evidenceKind: input.evidenceKind,
+        evidenceReference: input.evidenceReference ?? '',
+        detail: input.detail ?? '',
+        observedAt: input.observedAt ? new Date(input.observedAt) : new Date(),
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application submission receipt');
+    return toApplicationSubmissionReceipt(row);
   });
 }
 
