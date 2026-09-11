@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import type { CvSourceDocument } from './cv-source-schema.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -64,6 +65,22 @@ export const cvDocuments = sqliteTable('cv_documents', {
     summary: string;
     auth: string;
   }>(),
+  /**
+   * #274: the reviewed full structured source CV -- real employers with their own dates and
+   * engagement type, education, the candidate's corrected contact details and links, and project
+   * records with the candidate's pins and configured count limit. See `cv-source-schema.ts` for
+   * the shape and for why each of those is a separate field rather than prose.
+   *
+   * Nullable, and null is the normal state for every row that predates this column: a CV whose
+   * source has never been extracted and reviewed has no structured source, and saying so is the
+   * point. Export falls back to the flat `profile` mapping for those rather than inventing the
+   * sections they do not have.
+   *
+   * A JSON column rather than four join tables (experience/education/projects/links), following
+   * `profile`'s existing precedent: this value is only ever read and written whole, for one CV at a
+   * time, and nothing queries, orders or joins across it in SQL.
+   */
+  sourceCv: text('source_cv', { mode: 'json' }).$type<CvSourceDocument>(),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),

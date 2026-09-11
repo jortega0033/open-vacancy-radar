@@ -28,6 +28,16 @@ function headingParagraph(text: string): Paragraph {
   return new Paragraph({ text, heading: HeadingLevel.HEADING_2, spacing: { before: 240, after: 80 } });
 }
 
+function noteParagraph(text: string): Paragraph {
+  return new Paragraph({ children: [new TextRun({ text, color: '555555', size: 19 })] });
+}
+
+/** Mirrors `resume-html.ts`'s `engagementNote` exactly (#274): same rule, same words, other target. */
+function engagementNoteText(entry: TailoredResume['experience'][number]): string {
+  if (entry.engagement !== 'client_engagement') return '';
+  return entry.client.trim().length > 0 ? `client engagement: ${entry.client}` : 'client engagement';
+}
+
 function experienceParagraphs(resume: TailoredResume): Paragraph[] {
   if (resume.experience.length === 0) return [];
   const out: Paragraph[] = [headingParagraph('Experience')];
@@ -42,9 +52,36 @@ function experienceParagraphs(resume: TailoredResume): Paragraph[] {
         ],
       }),
     );
+    const engagement = engagementNoteText(entry);
+    if (engagement) out.push(noteParagraph(engagement));
     for (const bullet of entry.bullets) {
       out.push(new Paragraph({ text: bullet, bullet: { level: 0 } }));
     }
+  }
+  return out;
+}
+
+function projectParagraphs(resume: TailoredResume): Paragraph[] {
+  if (resume.projects.length === 0) return [];
+  const out: Paragraph[] = [headingParagraph('Projects')];
+  for (const project of resume.projects) {
+    out.push(
+      new Paragraph({
+        spacing: { before: 120 },
+        children: [
+          new TextRun({ text: project.name, bold: true }),
+          ...(project.dates ? [new TextRun({ text: `\t${project.dates}`, color: '555555' })] : []),
+        ],
+      }),
+    );
+    const context = [project.role, project.organization].filter((part) => part.trim().length > 0).join(', ');
+    if (context) out.push(noteParagraph(context));
+    if (project.description.trim().length > 0) out.push(new Paragraph({ text: project.description }));
+    const meta = [
+      project.technologies.length > 0 ? project.technologies.join(', ') : '',
+      project.links.length > 0 ? project.links.join(CONTACT_SEPARATOR) : '',
+    ].filter((part) => part.length > 0);
+    if (meta.length > 0) out.push(noteParagraph(meta.join(CONTACT_SEPARATOR)));
   }
   return out;
 }
@@ -99,6 +136,7 @@ export async function renderResumeDocx(resume: TailoredResume): Promise<Buffer> 
             : []),
           ...summaryParagraphs(resume),
           ...experienceParagraphs(resume),
+          ...projectParagraphs(resume),
           ...skillsParagraphs(resume),
           ...educationParagraphs(resume),
         ],

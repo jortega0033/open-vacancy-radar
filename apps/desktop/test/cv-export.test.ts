@@ -18,6 +18,7 @@ const CV: CvDocumentRecord = {
     summary: 'Frontend engineer with eight years building design systems.',
     auth: 'EU citizen, no sponsorship needed',
   },
+  source: null,
   isDefault: true,
   uploadedAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',

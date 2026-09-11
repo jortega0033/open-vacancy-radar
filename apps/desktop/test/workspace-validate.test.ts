@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { CV_PROFILE_LIMITS } from '../electron/workspace/cv-profile-schema.js';
+import { CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from '../electron/workspace/cv-source-schema.js';
 import {
   LIMITS,
+  parseCvSource,
   parseApplicationArtifactInput,
   parseApplicationAttemptInput,
   parseApplicationAttemptPatch,
@@ -375,5 +377,119 @@ describe('workspace application artifacts (#198)', () => {
     expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, kind: 'video' })).toThrow(
       /"kind" must be one of/,
     );
+  });
+});
+
+
+describe('workspace structured source CV (#274)', () => {
+  it('returns null for an absent source rather than an empty-but-present record', () => {
+    expect(parseCvSource(null)).toBeNull();
+    expect(parseCvSource(undefined)).toBeNull();
+  });
+
+  it('drops properties the caller was never granted', () => {
+    const parsed = parseCvSource({
+      contact: { name: 'Jamie Rivera', nickname: 'JR' },
+      summary: 'Eight years of frontend work.',
+      id: 'cv-9',
+      isDefault: true,
+    });
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed?.contact ?? {})).toEqual([
+      'name',
+      'title',
+      'location',
+      'email',
+      'phone',
+      'links',
+    ]);
+    expect('id' in (parsed ?? {})).toBe(false);
+    expect('isDefault' in (parsed ?? {})).toBe(false);
+  });
+
+  it('never takes a review timestamp from the caller: the main process stamps that itself', () => {
+    expect(parseCvSource({ reviewedAt: '2020-01-01T00:00:00.000Z' })?.reviewedAt).toBe('');
+  });
+
+  it('blanks the end client on a direct-employment record', () => {
+    const parsed = parseCvSource({
+      experience: [{ company: 'Redwood Software', title: 'Engineer', engagement: 'employment', client: 'Northwind Retail' }],
+    });
+    expect(parsed?.experience[0]?.client).toBe('');
+  });
+
+  it('keeps the end client on a client engagement', () => {
+    const parsed = parseCvSource({
+      experience: [
+        { company: 'Beacon Consultancy', title: 'Consultant', engagement: 'client_engagement', client: 'Northwind Retail' },
+      ],
+    });
+    expect(parsed?.experience[0]?.engagement).toBe('client_engagement');
+    expect(parsed?.experience[0]?.client).toBe('Northwind Retail');
+  });
+
+  it('rejects an engagement value that is neither', () => {
+    expect(() => parseCvSource({ experience: [{ company: 'X', title: 'Y', engagement: 'freelance' }] })).toThrow(
+      /"source.experience\[0\].engagement" must be one of/,
+    );
+  });
+
+  it('drops a stale incompleteness reason once the record says it is complete', () => {
+    const parsed = parseCvSource({ complete: true, incompleteReason: 'only the first 200,000 characters were read' });
+    expect(parsed?.incompleteReason).toBe('');
+  });
+
+  it('keeps the reason while the record is incomplete', () => {
+    const parsed = parseCvSource({ complete: false, incompleteReason: 'the CV was cut short' });
+    expect(parsed?.complete).toBe(false);
+    expect(parsed?.incompleteReason).toBe('the CV was cut short');
+  });
+
+  it('bounds every array', () => {
+    expect(() =>
+      parseCvSource({ projects: Array.from({ length: CV_SOURCE_LIMITS.projectEntries + 1 }, () => ({ name: 'p' })) }),
+    ).toThrow(/"source.projects" must have at most/);
+    expect(() =>
+      parseCvSource({ experience: Array.from({ length: CV_SOURCE_LIMITS.experienceEntries + 1 }, () => ({ company: 'c' })) }),
+    ).toThrow(/"source.experience" must have at most/);
+    expect(() =>
+      parseCvSource({ contact: { links: Array.from({ length: CV_SOURCE_LIMITS.links + 1 }, () => 'l') } }),
+    ).toThrow(/"source.contact.links" must have at most/);
+  });
+
+  it('bounds every string', () => {
+    expect(() => parseCvSource({ summary: 'x'.repeat(CV_SOURCE_LIMITS.summary + 1) })).toThrow(
+      /"source.summary" must be at most/,
+    );
+    expect(() => parseCvSource({ projects: [{ name: 'x'.repeat(CV_SOURCE_LIMITS.shortField + 1) }] })).toThrow(
+      /"source.projects\[0\].name" must be at most/,
+    );
+  });
+
+  it('defaults the project count to no cap at all', () => {
+    expect(parseCvSource({})?.maxProjects).toBe(PROJECTS_UNLIMITED);
+  });
+
+  it('rejects a project count that is not a sane non-negative integer', () => {
+    expect(() => parseCvSource({ maxProjects: -1 })).toThrow(/"source.maxProjects" must be a non-negative integer/);
+    expect(() => parseCvSource({ maxProjects: 1.5 })).toThrow(/"source.maxProjects" must be a non-negative integer/);
+    expect(() => parseCvSource({ maxProjects: CV_SOURCE_LIMITS.maxProjectsSetting + 1 })).toThrow(
+      /"source.maxProjects" must be at most/,
+    );
+  });
+
+  it('assigns a project id when the caller supplies none, so a pin has something stable to hang on', () => {
+    expect(parseCvSource({ projects: [{ name: 'Aurora Design System' }] })?.projects[0]?.id).toBe('project-1');
+  });
+
+  it('reaches the CV document parsers, in both create and patch form', () => {
+    const created = parseCvDocumentInput({
+      name: 'Frontend CV',
+      kind: 'uploaded',
+      source: { contact: { name: 'Jamie Rivera' } },
+    });
+    expect(created.source?.contact.name).toBe('Jamie Rivera');
+    expect(parseCvDocumentPatch({ source: null }).source).toBeNull();
+    expect('source' in parseCvDocumentPatch({ name: 'Frontend CV' })).toBe(false);
   });
 });

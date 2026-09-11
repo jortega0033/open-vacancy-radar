@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import type { CvDocumentRecord, CvProfile } from '../../window.js';
-import { buildCvParsePrompt } from '../cv/prompts.js';
+import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
+import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-source-schema.js';
+import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
+import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
+import { CvSourceReview } from './CvSourceReview.js';
 
 /**
  * Everything the drawer can change (deliberately not `CvDocumentInput`/`CvDocumentPatch`
@@ -16,6 +19,12 @@ export interface CvDrawerSubmitPayload {
   name: string;
   targetRole: string;
   profile: CvProfile;
+  /**
+   * #274's reviewed structured source CV, present only once one has been read out of this CV's
+   * text. Saving the drawer is the review: the main process stamps `reviewedAt` on arrival, which
+   * is what lets an export trust that a person actually confirmed these records.
+   */
+  source?: CvSourceDocument | null;
 }
 
 export interface CvDrawerProps {
@@ -69,15 +78,27 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState<string>();
+  const [source, setSource] = useState<CvSourceDocument | null>(() => record?.source ?? null);
+  const [sourceError, setSourceError] = useState<string>();
 
   const isEdit = mode === 'edit';
   const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
+  // Only the gaps saving cannot close: "not reviewed yet" is what this drawer's own Save button
+  // fixes, so listing it here would report a blocker the next click removes.
+  const sourceGaps = source ? describeCvSourceContentGaps(source) : [];
 
   // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
   // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
+
+  // A second, separate run for #274's full source-CV extraction. Deliberately not folded into the
+  // one above: they answer different questions (seven summary fields vs. the whole document as
+  // records), they read different amounts of the CV, and a failure of one must not discard the
+  // other's result while the user is part-way through a review.
+  const sourceRun = useAgentRun({ chunkSeparator: '' });
+  const sourceAppliedRef = useRef(false);
 
   // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
   // through: the persisted `default_provider` setting, not a hardcoded provider. A failure here
@@ -122,15 +143,31 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     }
   }, [parseRun.status, parseRun.text]);
 
+  // Same "apply exactly once, never auto-save" rule as the profile parse above: the extracted
+  // records land in the review panel for the candidate to correct and confirm, and only reach the
+  // database when they press Save.
+  useEffect(() => {
+    if (sourceRun.status !== 'completed' || sourceAppliedRef.current || !record) return;
+    sourceAppliedRef.current = true;
+    try {
+      setSource(parseSourceCvResponse(sourceRun.text, record.text));
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : 'could not read the AI response');
+    }
+  }, [sourceRun.status, sourceRun.text, record]);
+
   // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
   // it's still running, otherwise the daemon session keeps running unobserved until it times out.
   // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
   // this must run its cleanup only on actual unmount, reading whatever the latest run was.
   const parseRunRef = useRef(parseRun);
   parseRunRef.current = parseRun;
+  const sourceRunRef = useRef(sourceRun);
+  sourceRunRef.current = sourceRun;
   useEffect(() => {
     return () => {
       if (parseRunRef.current.isBusy) void parseRunRef.current.cancel();
+      if (sourceRunRef.current.isBusy) void sourceRunRef.current.cancel();
     };
   }, []);
 
@@ -139,6 +176,13 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     parseAppliedRef.current = false;
     setParseError(undefined);
     void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
+  }
+
+  function handleReadSourceCv() {
+    if (!record || !canParseWithAi) return;
+    sourceAppliedRef.current = false;
+    setSourceError(undefined);
+    void sourceRun.start(buildSourceCvPrompt(record.name, record.text), { provider });
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -162,6 +206,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
         summary: form.summary.trim(),
         auth: form.auth.trim(),
       },
+      ...(source ? { source } : {}),
     };
 
     setSubmitting(true);
@@ -234,6 +279,43 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                   </p>
                 )}
               </div>
+            )}
+
+            {canParseWithAi && (
+              <div className="rounded-box border border-base-300 bg-base-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleReadSourceCv}
+                    disabled={submitting || sourceRun.isBusy}
+                  >
+                    {sourceRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                    {source ? 'Read the CV again' : 'Read the full CV into records'}
+                  </button>
+                  {sourceRun.isBusy && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void sourceRun.cancel()}>
+                      Stop
+                    </button>
+                  )}
+                  <span className="text-xs text-base-content/60">
+                    Keeps your real employers, dates, contact details, links and projects so exports and tailoring
+                    can use them.
+                  </span>
+                </div>
+                {(sourceError ?? (sourceRun.status === 'failed' ? sourceRun.error : undefined)) && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {sourceError ?? sourceRun.error}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {source && <CvSourceReview source={source} disabled={submitting} onChange={setSource} />}
+            {source && sourceGaps.length > 0 && (
+              <p className="text-xs text-warning" role="status">
+                Saved, this CV still cannot be exported: {sourceGaps.join('; ')}.
+              </p>
             )}
 
             <label className="block">

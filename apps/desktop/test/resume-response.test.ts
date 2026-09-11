@@ -13,7 +13,25 @@ const VALID = {
   },
   summary: 'Frontend engineer with eight years building design systems.',
   experience: [
-    { company: 'Redwood Software', title: 'Senior Frontend Engineer', dates: '2021-Present', bullets: ['Led the design system rewrite.'] },
+    {
+      company: 'Redwood Software',
+      title: 'Senior Frontend Engineer',
+      dates: '2021-Present',
+      engagement: 'employment',
+      client: '',
+      bullets: ['Led the design system rewrite.'],
+    },
+  ],
+  projects: [
+    {
+      name: 'Aurora Design System',
+      role: 'Lead',
+      dates: '2022',
+      organization: 'Redwood Software',
+      description: 'An accessible component library.',
+      technologies: ['TypeScript'],
+      links: [],
+    },
   ],
   skills: ['TypeScript', 'React'],
   education: [{ institution: 'TU Delft', credential: 'BSc Computer Science', dates: '2014-2018' }],
@@ -51,11 +69,41 @@ describe('toTailoredResume', () => {
     expect(result.education).toEqual(VALID.education);
   });
 
+  it('drops a project with no name: an unnamed project cannot be matched back to the source CV (#274)', () => {
+    const result = toTailoredResume({
+      ...VALID,
+      projects: [VALID.projects[0], { description: 'Something impressive.' }, 'not an object'],
+    });
+    expect(result.projects).toEqual(VALID.projects);
+  });
+
+  it('reads anything but the exact client_engagement marker as direct employment (#274)', () => {
+    const result = toTailoredResume({
+      ...VALID,
+      experience: [{ company: 'Beacon Consultancy', title: 'Consultant', engagement: 'contract', client: 'Northwind Retail' }],
+    });
+    expect(result.experience[0]?.engagement).toBe('employment');
+    // A client on a record that is not a client engagement is dropped, never carried through.
+    expect(result.experience[0]?.client).toBe('');
+  });
+
+  it('keeps a real client engagement with its end client (#274)', () => {
+    const result = toTailoredResume({
+      ...VALID,
+      experience: [
+        { company: 'Beacon Consultancy', title: 'Consultant', engagement: 'client_engagement', client: 'Northwind Retail' },
+      ],
+    });
+    expect(result.experience[0]?.engagement).toBe('client_engagement');
+    expect(result.experience[0]?.client).toBe('Northwind Retail');
+  });
+
   it('never invents a value: a field the response omits stays empty, not filled with a placeholder', () => {
     const result = toTailoredResume({
       contact: { name: 'Jamie Rivera' },
       summary: '',
       experience: [],
+      projects: [],
       skills: [],
       education: [],
     });

@@ -107,7 +107,7 @@ import {
   parseSettingsPatch,
 } from './workspace/validate.js';
 import { printHtmlToPdf } from './application-artifact-staging.js';
-import { cvDocumentToTailoredResume, sanitizeCvExportFileName } from './cv-export.js';
+import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
@@ -1817,6 +1817,14 @@ guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown
   const { id, format } = parseCvExportInput(input);
   const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
   if (!mainWindow) return { saved: false };
+
+  // #274: a CV whose structured source was never read to the end must not produce a document that
+  // looks complete. Refused here, before anything is rendered, with the reasons the user needs to
+  // fix it -- never quietly exported minus whatever came after the limit.
+  const blockers = describeCvExportBlockers(doc);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be exported yet: ${blockers.join('; ')}`);
+  }
 
   // A fresh install ships with no search profile configured (#156's own "no default bias" stance
   // extends here too): rather than blocking the export, the resume simply renders with no name.

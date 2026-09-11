@@ -58,6 +58,18 @@ export async function validateRenderedResumePdf(
     if (entry.title && !text.includes(entry.title)) {
       reasons.push(`role "${entry.title}" is missing from the rendered text`);
     }
+    // #274: an engagement whose end client never reached the page reads as direct employment at
+    // the agency, which is a different (and wrong) claim about the candidate's history.
+    if (entry.engagement === 'client_engagement' && entry.client && !text.includes(entry.client)) {
+      reasons.push(`client "${entry.client}" is missing from the rendered text`);
+    }
+  }
+  // #274's own acceptance case: a selected project silently absent from the finished document is
+  // exactly the "looks complete, lost evidence" failure this validation exists to catch.
+  for (const project of resume.projects) {
+    if (project.name && !text.includes(project.name)) {
+      reasons.push(`project "${project.name}" is missing from the rendered text`);
+    }
   }
 
   return { ok: reasons.length === 0, reasons };

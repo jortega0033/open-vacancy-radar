@@ -12,11 +12,14 @@ const RESUME: TailoredResume = {
     links: ['https://github.com/example'],
   },
   summary: 'Frontend engineer with eight years building design systems.',
+  projects: [],
   experience: [
     {
       company: 'Redwood Software',
       title: 'Senior Frontend Engineer',
       dates: '2021 - Present',
+      engagement: 'employment',
+      client: '',
       bullets: ['Led the design system rewrite.', 'Mentored three junior engineers.'],
     },
   ],
@@ -40,6 +43,7 @@ describe('renderResumeDocx', () => {
       contact: { name: '', title: '', location: '', email: '', phone: '', links: [] },
       summary: '',
       experience: [],
+      projects: [],
       skills: [],
       education: [],
     });
@@ -52,7 +56,7 @@ describe('renderResumeDocx', () => {
       ...RESUME,
       experience: [
         RESUME.experience[0]!,
-        { company: 'Acme Corp', title: 'Frontend Engineer', dates: '2018 - 2021', bullets: [] },
+        { company: 'Acme Corp', title: 'Frontend Engineer', dates: '2018 - 2021', engagement: 'employment', client: '', bullets: [] },
       ],
     };
     const buffer = await renderResumeDocx(twoJobs);
