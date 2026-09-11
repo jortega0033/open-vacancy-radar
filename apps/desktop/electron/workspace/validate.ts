@@ -32,9 +32,11 @@ import type {
   ApplicationAttemptCheckpoint,
   ApplicationAttemptInput,
   ApplicationAttemptPatch,
+  ApplicationCompletionEvidence,
   ApplicationFilter,
   ApplicationInput,
   ApplicationPatch,
+  ApplicationReapplyRequest,
   ApplicationStatus,
   AppSettingsPatch,
   CvDocumentInput,
@@ -563,7 +565,22 @@ export const APPLICATION_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpo
   'skipped',
   'failed',
   'submission_unknown',
+  'user_reported',
 ];
+
+/** The only completion evidence a renderer-originated patch may assert (#275): see
+ * `parseApplicationAttemptPatch` for why `receipt_confirmed` is not reachable from this side. */
+export const RENDERER_COMPLETION_EVIDENCE: readonly ApplicationCompletionEvidence[] = ['user_reported'];
+
+/** #275's reapply request. Both fields are required and the reason is bounded like any other
+ * free text: this is a durable record of a decision, so "present but empty" is not a reapply. */
+function parseApplicationReapply(value: unknown): ApplicationReapplyRequest {
+  const input = asRecord(value, '"reapply"');
+  return {
+    supersedesAttemptId: requiredNonEmpty(input.supersedesAttemptId, 'supersedesAttemptId', LIMITS.short),
+    reason: requiredNonEmpty(input.reason, 'reason', LIMITS.checkpointDetail),
+  };
+}
 
 export function parseApplicationAttemptInput(value: unknown): ApplicationAttemptInput {
   const input = asRecord(value, 'application attempt');
@@ -571,6 +588,7 @@ export function parseApplicationAttemptInput(value: unknown): ApplicationAttempt
     applicationId: nullableStr(input.applicationId, 'applicationId', LIMITS.short),
     vacancyKey: nullableStr(input.vacancyKey, 'vacancyKey', LIMITS.short),
     canonicalUrl: input.canonicalUrl === undefined ? '' : str(input.canonicalUrl, 'canonicalUrl', LIMITS.short),
+    requisitionId: nullableStr(input.requisitionId, 'requisitionId', LIMITS.short),
     company: requiredNonEmpty(input.company, 'company', LIMITS.short),
     role: requiredNonEmpty(input.role, 'role', LIMITS.short),
     sourceCvId: nullableStr(input.sourceCvId, 'sourceCvId', LIMITS.short),
@@ -584,6 +602,7 @@ export function parseApplicationAttemptInput(value: unknown): ApplicationAttempt
     checkpointDetail:
       input.checkpointDetail === undefined ? '' : str(input.checkpointDetail, 'checkpointDetail', LIMITS.checkpointDetail),
     force: input.force === undefined ? false : bool(input.force, 'force'),
+    ...(input.reapply === undefined ? {} : { reapply: parseApplicationReapply(input.reapply) }),
   };
 }
 
@@ -595,6 +614,29 @@ export function parseApplicationAttemptPatch(value: unknown): ApplicationAttempt
   patch(input, out, 'checkpoint', (v) => oneOf(v, 'checkpoint', APPLICATION_ATTEMPT_CHECKPOINTS));
   patch(input, out, 'checkpointDetail', (v) => str(v, 'checkpointDetail', LIMITS.checkpointDetail));
   patch(input, out, 'submittedAt', (v) => nullableIsoDate(v, 'submittedAt'));
+  /**
+   * #275's completion evidence, restricted at this boundary to `user_reported` -- and defaulted to
+   * it whenever the renderer moves an attempt to a completed checkpoint without saying.
+   *
+   * The renderer is the user. What arrives here is a person telling the app an application is
+   * done, which is exactly and only `user_reported`; it has no way to observe a confirmation page
+   * or a receipt, so it must not be able to claim `receipt_confirmed` and have a later audit read
+   * a self-report as delivery evidence. Main-process submission code writes that value directly
+   * through the repository, which is not on the other side of this boundary.
+   *
+   * The default covers `user_reported` as well as `submitted` since #271 split the two. A renderer
+   * patch to either is the same act -- a person asserting completion -- and both now suppress a
+   * duplicate under #275's lookup, so both must carry the evidence type that says where the claim
+   * came from. Defaulting only `submitted`, as this did when #275 was written against a codebase
+   * that had no `user_reported` checkpoint, would have left the checkpoint a person is actually
+   * steered to with null evidence, indistinguishable from a pre-migration legacy row.
+   */
+  patch(input, out, 'completionEvidence', (v) =>
+    v === null ? null : oneOf(v, 'completionEvidence', RENDERER_COMPLETION_EVIDENCE),
+  );
+  if (out.completionEvidence === undefined && (out.checkpoint === 'submitted' || out.checkpoint === 'user_reported')) {
+    out.completionEvidence = 'user_reported';
+  }
   return out;
 }
 

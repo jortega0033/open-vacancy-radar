@@ -4,12 +4,15 @@ import type { BrowserWindow } from 'electron';
 import {
   ApplicationExecutor,
   ExecutorPolicyError,
+  classifyDelayedReceipt,
   isActionAllowed,
   isNavigationAllowed,
   resolveSubmitControl,
   validateFieldMap,
   type ApplicationTargetPolicy,
   type FormSnapshot,
+  type ObservedResponse,
+  type SubmissionOutcomeReport,
 } from '@agent-dock/application-executor';
 import { listOwnedArtifactIds, resolveUploadArtifact, type UploadReadyArtifact } from './application-artifact-upload.js';
 import { createApplicationView, type ApplicationView } from './application-view.js';
@@ -27,7 +30,7 @@ import { notifyAutomaticSubmission } from './automatic-submission-notify.js';
 import * as workspace from './workspace/repository.js';
 import { WorkspaceNotFoundError } from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
-import type { ApplicationAttemptRecord } from './workspace/types.js';
+import type { ApplicationAttemptRecord, ApplicationSubmissionReceiptInput } from './workspace/types.js';
 import type {
   ApplicationAttachmentResult,
   ApplyApplicationFieldMapInput,
@@ -51,6 +54,10 @@ import type {
 interface ActiveReview {
   view: ApplicationView;
   executor: ApplicationExecutor;
+  /** The URL this review was opened against -- the "destination" every submission receipt records
+   * (#271). Kept from the open call rather than re-read from the live page: what a receipt has to
+   * name is where this app deliberately sent the application, not wherever the page ended up. */
+  targetUrl: string;
   /** The same compiled policy the executor was constructed with. Kept here too so the artifact
    * resolution in `applyApplicationFieldMap` can check a candidate upload against this target's own
    * constraints *before* calling `attach`, without re-resolving a policy id and risking the two
@@ -83,7 +90,7 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     (url) => console.warn('[application-executor] blocked an off-policy navigation', { attemptId: input.attemptId, policyId: policy.id, url }),
   );
   const executor = new ApplicationExecutor(view.transport, policy);
-  activeReviews.set(input.attemptId, { view, executor, policy });
+  activeReviews.set(input.attemptId, { view, executor, targetUrl: input.targetUrl, policy });
 
   try {
     await executor.openTarget(input.targetUrl);
@@ -281,6 +288,14 @@ export type SubmitApplicationReviewRefusalReason =
   | 'artifact_read_failed'
   | 'artifact_bytes_changed'
   | 'submit_refused'
+  /** The click landed, and the form (or the endpoint) answered by refusing it (#271). Distinct
+   * from `submission_unknown`: this is a *known* non-delivery, and the attempt goes to
+   * `needs_user` rather than being left ambiguous. */
+  | 'submission_rejected'
+  /** A previous submit on this attempt ended on `submission_unknown` and has not been reconciled.
+   * Refused rather than retried: a blind second click risks a duplicate application on top of one
+   * that may already have gone through (#271's third acceptance case). */
+  | 'submission_outcome_unresolved'
   | 'submission_unknown';
 
 export interface SubmitApplicationReviewResult {
@@ -340,6 +355,15 @@ function computeFormStructureHash(snapshot: FormSnapshot): string {
  * `submission_unknown`. Any other error (a real CDP/network failure once the click was actually
  * attempted) is genuinely ambiguous and lands on `submission_unknown`, per #202's own acceptance
  * criteria: "never silently retries or silently drops."
+ *
+ * 4. **The click is not the outcome (#271).** Until this slice, a click that returned was written
+ *    down as `submitted` on the next line. It no longer is: `executor.observeSubmissionOutcome()`
+ *    re-reads the page under a bounded budget and only a real receipt -- a confirmation the page
+ *    was not already showing, a printed reference, or an application identifier in an observed
+ *    response -- produces `submitted`, together with a durable evidence row naming the attempt,
+ *    the destination, the timestamp and the evidence itself. A form that came back flagging errors
+ *    produces `needs_user`; anything inconclusive produces the existing `submission_unknown`, which
+ *    this function now also refuses to blindly re-click on a later call.
  */
 export async function submitApplicationReview(
   db: WorkspaceDb,
@@ -376,8 +400,19 @@ export async function submitApplicationReview(
     }
 
     const attempt = workspace.getApplicationAttempt(db, attemptId);
-    if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+    if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting' || attempt.checkpoint === 'user_reported') {
       return { ok: false, reason: 'already_submitted', detail: `attempt ${attemptId} already reached checkpoint "${attempt.checkpoint}"` };
+    }
+    // #271: an unresolved outcome is the one state where a retry is actively dangerous -- the
+    // previous click may well have delivered, so clicking again risks a second real application at
+    // the same employer. Resolving it takes either a delayed receipt (`reconcileSubmissionOutcome`)
+    // or a person's own statement (`recordUserReportedSubmission`), never another blind click.
+    if (attempt.checkpoint === 'submission_unknown') {
+      return {
+        ok: false,
+        reason: 'submission_outcome_unresolved',
+        detail: `attempt ${attemptId} has an unresolved earlier submission and will not be blindly retried`,
+      };
     }
 
     let currentSourceCvContentHash = attempt.sourceCvContentHash;
@@ -445,16 +480,266 @@ export async function submitApplicationReview(
       return { ok: false, reason: 'submission_unknown', detail };
     }
 
-    workspace.updateApplicationAttempt(db, attemptId, {
-      checkpoint: 'submitted',
-      submittedAt: new Date().toISOString(),
-      submissionMode: mode,
-      formStructureHash: computeFormStructureHash(snapshot),
+    // #271: the click landed. That is all it means. What actually happened is a separate question
+    // with three honest answers, and only one of them is `submitted`.
+    let report: SubmissionOutcomeReport;
+    try {
+      report = await active.executor.observeSubmissionOutcome();
+    } catch (err) {
+      // The observer itself failed (a policy refusal, a transport that is gone). The click already
+      // happened, so this is ambiguous, never a success and never a clean refusal.
+      report = {
+        outcome: 'unknown',
+        reason: 'observation_failed',
+        detail: `the submission outcome could not be observed: ${err instanceof Error ? err.message : String(err)}`,
+        observedAt: new Date().toISOString(),
+      };
+    }
+
+    if (report.outcome === 'submitted') {
+      recordSubmissionReceipt(db, {
+        attemptId,
+        outcome: 'submitted',
+        source: 'page_observation',
+        destination: active.targetUrl,
+        evidenceKind: report.evidence.kind,
+        evidenceReference: report.evidence.reference,
+        detail: report.detail,
+        observedAt: report.observedAt,
+      });
+      workspace.updateApplicationAttempt(db, attemptId, {
+        checkpoint: 'submitted',
+        submittedAt: report.observedAt,
+        submissionMode: mode,
+        formStructureHash: computeFormStructureHash(snapshot),
+        // #275's completion evidence, and the one place in the app entitled to assert it. #275
+        // landed this column with nothing able to write `receipt_confirmed` honestly, because the
+        // observation that could justify it is #271's and did not exist yet. It does now: this
+        // branch is reached only when `observeSubmissionOutcome()` returned `submitted`, which it
+        // does only on a confirmation genuinely new since before the click, or a receipt
+        // identifier. The receipt row written just above is the durable evidence; this column is
+        // the same fact denormalized onto the attempt so #275's completed-application lookup is a
+        // plain column read and does not have to join evidence to answer "has this been applied to?".
+        completionEvidence: 'receipt_confirmed',
+      });
+      return { ok: true };
+    }
+
+    if (report.outcome === 'rejected') {
+      recordSubmissionReceipt(db, {
+        attemptId,
+        outcome: 'rejected',
+        source: 'page_observation',
+        destination: active.targetUrl,
+        evidenceKind: 'none',
+        detail: report.detail,
+        observedAt: report.observedAt,
+      });
+      // `needs_user`, not `failed`: the application still exists and is still fillable, it just has
+      // something unresolved on it that a person has to look at. Not `ready` either -- that would
+      // let the automatic path pick it straight back up and click again into the same refusal.
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: report.detail });
+      return { ok: false, reason: 'submission_rejected', detail: report.detail };
+    }
+
+    recordSubmissionReceipt(db, {
+      attemptId,
+      outcome: 'unknown',
+      source: 'page_observation',
+      destination: active.targetUrl,
+      evidenceKind: 'none',
+      detail: report.detail,
+      observedAt: report.observedAt,
     });
-    return { ok: true };
+    // `submittedAt` is set here too, matching `schema.ts`'s own comment on the column: it marks the
+    // moment a real, possibly-irreversible submit action was attempted, which is exactly what
+    // happened, regardless of whether it landed.
+    workspace.updateApplicationAttempt(db, attemptId, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: report.detail,
+      submittedAt: report.observedAt,
+    });
+    return { ok: false, reason: 'submission_unknown', detail: report.detail };
   } finally {
     submittingAttemptIds.delete(attemptId);
   }
+}
+
+/**
+ * Writes one durable observation and never lets doing so break the submission path (#271). A
+ * failed *evidence* write must not turn an established outcome into a thrown error the automatic
+ * caller would treat as a crash -- the checkpoint update immediately after this call is what the
+ * user-visible state depends on, and it has to happen either way.
+ */
+function recordSubmissionReceipt(db: WorkspaceDb, input: ApplicationSubmissionReceiptInput): void {
+  try {
+    workspace.createApplicationSubmissionReceipt(db, input);
+  } catch (err) {
+    console.warn('[application-executor] failed to record a submission receipt', {
+      attemptId: input.attemptId,
+      outcome: input.outcome,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export type RecordUserReportedSubmissionRefusalReason = 'already_observed' | 'attempt_not_found';
+
+export interface RecordUserReportedSubmissionResult {
+  ok: boolean;
+  reason?: RecordUserReportedSubmissionRefusalReason;
+  detail?: string;
+}
+
+/**
+ * #271's fourth acceptance case: a person finished this application themselves (in the live view,
+ * in another tab, by email) and says so.
+ *
+ * That lands on its own checkpoint, `user_reported`, and its own receipt outcome -- never on
+ * `submitted`. The distinction is the entire point: `submitted` since #271 means "this app
+ * observed a receipt", and a value that can also be produced by someone simply asserting it is a
+ * value no one can rely on later.
+ *
+ * Just as importantly, nothing anywhere ever moves this state backwards on silence. There is no
+ * code path that reads "no confirmation email arrived" as failure, here or in
+ * `reconcileSubmissionOutcome` below, because the absence of a receipt is not evidence of
+ * non-delivery any more than it is evidence of delivery.
+ *
+ * Refuses outright for an attempt that already has a machine-observed `submitted` outcome: a
+ * person's statement must not overwrite real evidence in either direction.
+ */
+export function recordUserReportedSubmission(
+  db: WorkspaceDb,
+  attemptId: string,
+  statement = '',
+  now: string = new Date().toISOString(),
+): RecordUserReportedSubmissionResult {
+  let attempt: ApplicationAttemptRecord;
+  try {
+    attempt = workspace.getApplicationAttempt(db, attemptId);
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) return { ok: false, reason: 'attempt_not_found', detail: err.message };
+    throw err;
+  }
+
+  if (attempt.checkpoint === 'submitted') {
+    return {
+      ok: false,
+      reason: 'already_observed',
+      detail: `attempt ${attemptId} already has an observed submission receipt; a report cannot overwrite it`,
+    };
+  }
+
+  const detail = statement.trim() || 'reported as applied by the user';
+  workspace.createApplicationSubmissionReceipt(db, {
+    attemptId,
+    outcome: 'user_reported',
+    source: 'user_reported',
+    destination: activeReviews.get(attemptId)?.targetUrl ?? attempt.canonicalUrl,
+    evidenceKind: 'user_statement',
+    evidenceReference: detail,
+    detail,
+    observedAt: now,
+  });
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: 'user_reported',
+    checkpointDetail: detail,
+    // #275's other completion-evidence value, written here for the same reason the observer writes
+    // `receipt_confirmed`: this attempt is now a completed application to its requisition, and
+    // #275's lookup must suppress a duplicate for it just as hard as for an observed one, while
+    // still being able to say *which* kind of completion it was. Recording the checkpoint without
+    // this would leave the lookup unable to tell a person's report from an unrecorded legacy row.
+    completionEvidence: 'user_reported',
+  });
+  return { ok: true };
+}
+
+export type ReconcileSubmissionOutcomeRefusalReason =
+  | 'attempt_not_found'
+  | 'outcome_already_resolved'
+  | 'no_delivery_evidence'
+  | 'application_error_payload';
+
+export interface ReconcileSubmissionOutcomeResult {
+  ok: boolean;
+  reason?: ReconcileSubmissionOutcomeRefusalReason;
+  detail?: string;
+}
+
+/**
+ * The delayed half of #271's fifth acceptance case: an acknowledgement that arrives after the
+ * post-click observation window has already closed and the attempt is sitting on
+ * `submission_unknown`.
+ *
+ * One direction only. This function can move an unresolved attempt to `submitted`, and it can do
+ * nothing else: it never marks anything failed, never touches an attempt whose outcome is already
+ * resolved (a `submitted`, `user_reported` or `needs_user` attempt is left exactly as it is), and
+ * never accepts a transport-level success as delivery -- a `200 OK` carrying an application-error
+ * payload is recorded as a rejection receipt and the checkpoint stays unresolved, because a late
+ * error payload is evidence that *this* response was not a receipt, not proof that nothing was
+ * ever delivered.
+ *
+ * `response` is supplied by whatever observed it; this module does not fetch anything, and the
+ * executor package structurally cannot (its CDP allowlist denies the whole network domain).
+ */
+export function reconcileSubmissionOutcome(
+  db: WorkspaceDb,
+  attemptId: string,
+  response: ObservedResponse,
+  now: string = new Date().toISOString(),
+): ReconcileSubmissionOutcomeResult {
+  let attempt: ApplicationAttemptRecord;
+  try {
+    attempt = workspace.getApplicationAttempt(db, attemptId);
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) return { ok: false, reason: 'attempt_not_found', detail: err.message };
+    throw err;
+  }
+
+  if (attempt.checkpoint !== 'submission_unknown') {
+    return {
+      ok: false,
+      reason: 'outcome_already_resolved',
+      detail: `attempt ${attemptId} is at checkpoint "${attempt.checkpoint}", which reconciliation never overwrites`,
+    };
+  }
+
+  const report = classifyDelayedReceipt(response, now);
+  const destination = activeReviews.get(attemptId)?.targetUrl ?? attempt.canonicalUrl;
+
+  if (report.outcome === 'submitted') {
+    recordSubmissionReceipt(db, {
+      attemptId,
+      outcome: 'submitted',
+      source: 'delayed_receipt',
+      destination,
+      evidenceKind: report.evidence.kind,
+      evidenceReference: report.evidence.reference,
+      detail: report.detail,
+      observedAt: report.observedAt,
+    });
+    workspace.updateApplicationAttempt(db, attemptId, {
+      checkpoint: 'submitted',
+      checkpointDetail: report.detail,
+      submittedAt: attempt.submittedAt ?? report.observedAt,
+    });
+    return { ok: true };
+  }
+
+  recordSubmissionReceipt(db, {
+    attemptId,
+    outcome: report.outcome === 'rejected' ? 'rejected' : 'unknown',
+    source: 'delayed_receipt',
+    destination,
+    evidenceKind: 'none',
+    detail: report.detail,
+    observedAt: report.observedAt,
+  });
+  return {
+    ok: false,
+    reason: report.outcome === 'rejected' ? 'application_error_payload' : 'no_delivery_evidence',
+    detail: report.detail,
+  };
 }
 
 /** Real time between an attempt being cleared for automatic submission and the submit action
@@ -496,7 +781,15 @@ async function checkAutomaticSubmissionEligibility(db: WorkspaceDb, attemptId: s
   if (!active) return { ok: false, reason: 'no_open_review' };
 
   const attempt = workspace.getApplicationAttempt(db, attemptId);
-  if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+  // `submission_unknown` and `user_reported` are here alongside the two original states (#271): an
+  // unresolved earlier submit may already have delivered, and a person who says they applied by
+  // hand has not asked for a second, unattended application on top of it.
+  if (
+    attempt.checkpoint === 'submitted' ||
+    attempt.checkpoint === 'submitting' ||
+    attempt.checkpoint === 'submission_unknown' ||
+    attempt.checkpoint === 'user_reported'
+  ) {
     return { ok: false, reason: 'already_submitted' };
   }
 
