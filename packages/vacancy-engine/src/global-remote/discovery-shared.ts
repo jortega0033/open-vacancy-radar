@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import { decodeFeedEntities } from '../ats/shared.js';
+import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import { annualizedMinimumUsd, classifyDiscoveryVacancy } from './evaluation.js';
 import type {
   DiscoverySourceAudit,
@@ -75,6 +76,10 @@ export function discoveryAudit(
     | 'postedAt'
     | 'profileScore'
     | 'worldwideSponsorMatch'
+    | 'identity'
+    | 'sourceUrl'
+    | 'applyUrl'
+    | 'sources'
   > & {
     raw: unknown;
     minimumAnnualBaseUsd: number | null;
@@ -95,12 +100,27 @@ export function discoveryAudit(
     minimumAnnualBaseUsd: input.minimumAnnualBaseUsd,
     ...(input.description === undefined ? {} : { description: input.description }),
   });
+  // Issue #278: every discovery source computes its canonical identity and apply-URL evidence
+  // through this one shared constructor, rather than each of the ~30 call sites in global-remote/*.ts
+  // doing it themselves -- the same reasoning `annualizedMinimumUsd`/`classifyDiscoveryVacancy`
+  // above already follow.
+  const identity = vacancyIdentityFor({
+    url: input.url,
+    company: input.company,
+    title: input.title,
+    location: input.location,
+  });
+  const applyUrl = resolveApplyUrl(identity, input.url);
   return {
     key: input.key,
     provider: input.provider,
     company: input.company,
     title: input.title,
     url: input.url,
+    sourceUrl: input.url,
+    identity,
+    applyUrl,
+    sources: [{ provider: input.provider, key: input.key, url: input.url }],
     location: input.location,
     employmentType: input.employmentType,
     currency: input.currency,
