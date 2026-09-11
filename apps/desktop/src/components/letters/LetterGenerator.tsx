@@ -52,6 +52,8 @@ export interface LetterGeneratorProps {
   onSaved?: (letter: LetterRecord) => void;
   /** Rendered as a "Back to library" affordance when supplied. */
   onClose?: () => void;
+  /** Return to the vacancy that opened this generator. */
+  onBackToVacancy?: () => void;
 }
 
 /**
@@ -77,6 +79,7 @@ export function LetterGenerator({
   model,
   onSaved,
   onClose,
+  onBackToVacancy,
 }: LetterGeneratorProps) {
   const run = useAgentRun();
 
@@ -743,6 +746,11 @@ export function LetterGenerator({
           {onClose && (
             <button className="btn btn-ghost" type="button" onClick={onClose}>
               Back to library
+            </button>
+          )}
+          {vacancy && onBackToVacancy && (
+            <button className="btn btn-ghost" type="button" onClick={onBackToVacancy}>
+              Back to {vacancy.title}
             </button>
           )}
         </div>

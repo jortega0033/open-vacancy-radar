@@ -162,11 +162,12 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the nine documented capability functions and nothing else', async () => {
+  it('exposes exactly the ten documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
       [
         'getReport',
+        'getReportSummary',
         'getStatus',
         'runScan',
         'getScanStatus',
@@ -196,6 +197,14 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     const report = await (api.getReport as () => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledWith('vacancy:get-report');
     expect(report).toBeNull();
+  });
+
+  it('getReportSummary invokes only vacancy:get-report-summary and returns whatever the main process sent', async () => {
+    invoke.mockResolvedValue({ runId: 'run-1', generatedAt: '2026-09-11T12:00:00.000Z', vacancyCount: 20_000 });
+    const api = await loadPreload('vacancyRadar');
+    const summary = await (api.getReportSummary as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledWith('vacancy:get-report-summary');
+    expect(summary).toEqual({ runId: 'run-1', generatedAt: '2026-09-11T12:00:00.000Z', vacancyCount: 20_000 });
   });
 
   it('runScan forwards blank input to main so the scan guard can reject it before discovery', async () => {
@@ -556,8 +565,11 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   //
   // `getAtsRosterStatus`/`refreshAtsRoster` added wiring up issue #251/#264's ATS-roster import
   // trigger (the manual "Refresh company roster" Settings action), same reasoning again.
+  // `getReportSummary` is a cheap metadata read for foreground resume: Search can avoid pulling
+  // a 20k-row report over IPC when the stored report has not changed.
   vacancyRadar: [
     'getReport',
+    'getReportSummary',
     'getStatus',
     'runScan',
     'getScanStatus',

@@ -39,6 +39,7 @@ export interface LettersPageProps {
    * sidebar, not this handoff -- never replays a stale vacancy.
    */
   onVacancyConsumed?: () => void;
+  onBackToVacancy?: (vacancy: SelectedVacancy) => void;
 }
 
 /**
@@ -64,6 +65,7 @@ export function LettersPage({
   onLettersChanged,
   openOnGenerator = false,
   onVacancyConsumed,
+  onBackToVacancy,
 }: LettersPageProps) {
   // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
   // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
@@ -175,6 +177,9 @@ export function LettersPage({
             {...(model ? { model } : {})}
             onSaved={handleSaved}
             onClose={openLibrary}
+            {...(handoffVacancy && onBackToVacancy
+              ? { onBackToVacancy: () => onBackToVacancy(handoffVacancy) }
+              : {})}
           />
         )}
       </div>

@@ -1694,6 +1694,15 @@ guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; erro
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number } | null =>
+  latestVacancyReport
+    ? {
+        runId: latestVacancyReport.runId,
+        generatedAt: latestVacancyReport.generatedAt,
+        vacancyCount: latestVacancyReport.discoveryAudit.length,
+      }
+    : null,
+);
 
 /**
  * Lets a (re)mounted Search page notice a scan already in flight -- most often its own, started

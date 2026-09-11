@@ -116,8 +116,16 @@ describe('LettersPage', () => {
   it('with openOnGenerator, opens directly on the Generator tab pre-selected on the handoff vacancy and reports it consumed', async () => {
     setup();
     const onVacancyConsumed = vi.fn();
+    const onBackToVacancy = vi.fn();
 
-    render(<LettersPage vacancy={LETTER_VACANCY} openOnGenerator onVacancyConsumed={onVacancyConsumed} />);
+    render(
+      <LettersPage
+        vacancy={LETTER_VACANCY}
+        openOnGenerator
+        onVacancyConsumed={onVacancyConsumed}
+        onBackToVacancy={onBackToVacancy}
+      />,
+    );
 
     // Straight to the Generator, not the library-first default this page otherwise always opens on.
     expect(await screen.findByRole('textbox', { name: /letter title/i })).toBeInTheDocument();
@@ -128,6 +136,9 @@ describe('LettersPage', () => {
     expect(screen.getByText(LETTER_VACANCY.title)).toBeInTheDocument();
 
     await waitFor(() => expect(onVacancyConsumed).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: `Back to ${LETTER_VACANCY.title}` }));
+    expect(onBackToVacancy).toHaveBeenCalledWith(LETTER_VACANCY);
   });
 
   it('a vacancy without openOnGenerator still opens on the Library, exactly as before -- openOnGenerator is what changed, not passing `vacancy` alone', async () => {
