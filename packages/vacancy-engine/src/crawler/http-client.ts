@@ -42,7 +42,18 @@ export type SafeHttpClientDependencies = {
   /** Constructor-owned decoded-body ceiling for exceptional streamed transfers. */
   maxStreamResponseBytes?: number;
   onCacheError?: (error: unknown, operation: CacheErrorOperation, safeUrl: string) => void;
-  onNetworkRequest?: (safeUrl: string) => void;
+  /**
+   * Fired immediately before every real network fetch this client makes -- once per redirect hop
+   * and once per bounded retry, never for a domain-cooldown deferral that resolved without a fetch
+   * (see `#networkHop`'s `deferred` branch, which returns before this ever fires). `retryIndex` is
+   * this attempt's position in `#executeWithRetries`' retry loop (0 for the first attempt of a
+   * logical request, 1+ for a retry after a 429/5xx/timeout) -- it does not advance across redirect
+   * hops within one attempt, so a caller can tell "this was a genuine retry" from "this was a
+   * same-attempt redirect" without re-deriving retry bookkeeping of its own. A caller that only
+   * needs the URL (the existing logging use in pipeline/global-remote.ts and pipeline/sponsors.ts)
+   * can ignore the second parameter entirely.
+   */
+  onNetworkRequest?: (safeUrl: string, meta: { retryIndex: number }) => void;
 };
 
 export type SafeHttpClientOptions = SafeHttpClientDependencies & {
@@ -831,7 +842,7 @@ export class SafeHttpClient {
 
         const operation = (async (): Promise<HopResult<TBody>> => {
           try {
-            this.#onNetworkRequest?.(redactUrl(url));
+            this.#onNetworkRequest?.(redactUrl(url), { retryIndex });
           } catch {
             // Telemetry must not make a source request fail.
           }

@@ -4,7 +4,13 @@ import path from 'node:path';
 
 import type { SafeHttpClient } from '../crawler/http-client.js';
 import { CrawlerHttpError, isCrawlerHttpError } from '../crawler/errors.js';
-import { discoveryAudit } from './discovery-shared.js';
+import {
+  attributeStreamNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+  type NetworkAttemptCounters,
+} from './discovery-attribution.js';
+import { completeAudit, discoveryAudit, incompleteAudit } from './discovery-shared.js';
 import type {
   DiscoveryRun,
   DiscoverySourceAudit,
@@ -213,6 +219,7 @@ function discoveryRun(
   minimumAnnualBaseUsd: number | null,
   requests: number,
   extraWarnings: readonly string[] = [],
+  counters: NetworkAttemptCounters = newNetworkAttemptCounters(),
 ): DiscoveryRun {
   const warnings = [...resultWarnings(result), ...extraWarnings];
   const source: DiscoverySourceAudit = {
@@ -223,6 +230,11 @@ function discoveryRun(
     listings: result.records.length,
     status: warnings.length === 0 ? 'success' : 'partial',
     error: warnings.length === 0 ? null : warnings.join('; '),
+    ...networkAttemptFields(counters),
+    // A parse-level warning (a share of invalid jobs, a snapshot persistence failure) is never a
+    // stopped-early scan of the feed itself -- the whole streamed document was always read to the
+    // end, whether fresh from the network or reused from a valid snapshot/cache.
+    ...completeAudit(),
   };
   return {
     sources: [source],
@@ -240,6 +252,7 @@ function failedRun(
   error: unknown,
   errorMessage = failureMessage(error),
   requests = 1,
+  counters: NetworkAttemptCounters = newNetworkAttemptCounters(),
 ): DiscoveryRun {
   const blocked = isCrawlerHttpError(error) && ['blocked', 'rate_limited'].includes(error.category);
   return {
@@ -252,6 +265,8 @@ function failedRun(
         listings: 0,
         status: blocked ? 'blocked' : 'error',
         error: errorMessage,
+        ...networkAttemptFields(counters),
+        ...incompleteAudit(errorMessage),
       },
     ],
     vacancies: [],
@@ -392,9 +407,15 @@ export async function runWorkableGlobalDiscovery(
     priorAttempt?.blockedStatus ?? null,
   );
 
+  // Wrapping only from here on, not at the top of this function, deliberately mirrors when a
+  // network attempt can actually occur: the three `discoveryRun`/`failedRun` calls above this point
+  // (fresh cache, deferred-retry guard) never call `streamGet` at all, so `counters` staying at its
+  // default zero for those is the accurate answer, not a fallback.
+  const counters = newNetworkAttemptCounters();
+  const streamHttp = attributeStreamNetworkRequests(http, counters);
   const parser = createWorkableFeedParser({ maxRetainedRecords });
   try {
-    const response = await http.streamGet(WORKABLE_ALL_CUSTOMER_FEED_URL, {
+    const response = await streamHttp.streamGet(WORKABLE_ALL_CUSTOMER_FEED_URL, {
       headers: conditionalHeaders(previous),
       allowedOrigins: ['https://www.workable.com'],
       timeoutMs,
@@ -428,6 +449,7 @@ export async function runWorkableGlobalDiscovery(
         config.minimumAnnualBaseUsd,
         1,
         persisted ? [] : ['parsed snapshot refresh could not be persisted'],
+        counters,
       );
     }
 
@@ -461,6 +483,7 @@ export async function runWorkableGlobalDiscovery(
       config.minimumAnnualBaseUsd,
       1,
       persisted ? [] : ['parsed snapshot could not be persisted'],
+      counters,
     );
   } catch (error) {
     const serverRetryAfterMs = isCrawlerHttpError(error) ? error.retryAfterMs : undefined;
@@ -493,13 +516,21 @@ export async function runWorkableGlobalDiscovery(
         [failureMessage(error), 'stale vacancies withheld after legal access block', ...guardWarning].join(
           '; ',
         ),
+        1,
+        counters,
       );
     }
     if (previous !== null && isUsableStale(previous, now, maxStaleAgeMs)) {
-      return discoveryRun(previous.result, config.minimumAnnualBaseUsd, 1, [
-        `stale parsed snapshot reused from ${previous.fetchedAt} after ${failureMessage(error)}`,
-        ...guardWarning,
-      ]);
+      return discoveryRun(
+        previous.result,
+        config.minimumAnnualBaseUsd,
+        1,
+        [
+          `stale parsed snapshot reused from ${previous.fetchedAt} after ${failureMessage(error)}`,
+          ...guardWarning,
+        ],
+        counters,
+      );
     }
     if (previous !== null) {
       return failedRun(
@@ -508,8 +539,10 @@ export async function runWorkableGlobalDiscovery(
           `parsed snapshot from ${previous.fetchedAt} exceeded the stale limit after ${failureMessage(error)}`,
           ...guardWarning,
         ].join('; '),
+        1,
+        counters,
       );
     }
-    return failedRun(error, [failureMessage(error), ...guardWarning].join('; '));
+    return failedRun(error, [failureMessage(error), ...guardWarning].join('; '), 1, counters);
   }
 }

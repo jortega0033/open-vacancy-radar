@@ -11,6 +11,7 @@ import type {
   DiscoveryProvider,
   DiscoveryVacancyAudit,
   GlobalRemoteReport,
+  ScanProgressEvent,
 } from '../../src/global-remote/models.js';
 import { renderGlobalRemoteHtml } from '../../src/global-remote/report.js';
 import {
@@ -26,6 +27,7 @@ import {
   applyWorldwideSponsorMatches,
   planWorldwideSponsorMatches,
   resolveRoleQuery,
+  trackProgressiveRows,
   uniqueDiscovery,
 } from '../../src/pipeline/global-remote.js';
 import { FixtureHttpClient } from '../ats/helpers.js';
@@ -140,6 +142,11 @@ describe('global remote discovery aggregation', () => {
           listings: 1,
           status: 'partial',
           error: 'stale snapshot from 2026-08-30T10:00:00.000Z <unsafe>',
+          networkAttempts: 0,
+          retries: 0,
+          complete: false,
+          completenessReason: 'stale snapshot from 2026-08-30T10:00:00.000Z <unsafe>',
+          continuationCursor: null,
         },
       ],
       strictMatches: [],
@@ -165,6 +172,79 @@ describe('global remote discovery aggregation', () => {
     expect(html).toContain('2026-08-30T10:00:00.000Z');
     expect(html).toContain('&lt;unsafe&gt;');
     expect(html).not.toContain('<unsafe>');
+    // issue #279: the report surfaces network attempts/retries and completeness separately from
+    // the pre-existing status/requests columns.
+    expect(html).toContain('Network attempts / coverage');
+    expect(html).toContain('incomplete');
+  });
+});
+
+describe('issue #279 acceptance: the summary distinguishes provisional progressive rows from confirmed coverage', () => {
+  describe('trackProgressiveRows', () => {
+    it('returns a no-op tracker (count stays 0, no wrapping) when no onProgress listener is given', () => {
+      const tracker = trackProgressiveRows(undefined);
+
+      expect(tracker.onProgress).toBeUndefined();
+      expect(tracker.count()).toBe(0);
+    });
+
+    it('tallies every row across every progress event without altering what the listener receives', () => {
+      const seen: ScanProgressEvent[] = [];
+      const tracker = trackProgressiveRows((event) => seen.push(event));
+
+      tracker.onProgress?.({
+        sourceId: 'himalayas',
+        vacancies: [
+          vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer'),
+          vacancy('himalayas', 'himalayas:2', 'https://example.test/2', 'Backend Engineer'),
+        ],
+      });
+      tracker.onProgress?.({
+        sourceId: 'jobicy',
+        vacancies: [vacancy('jobicy', 'jobicy:1', 'https://example.test/3', 'Platform Engineer')],
+      });
+
+      expect(tracker.count()).toBe(3);
+      expect(seen.map((event) => event.sourceId)).toEqual(['himalayas', 'jobicy']);
+      expect(seen[0]?.vacancies).toHaveLength(2);
+    });
+
+    it('is purely additive: the same row shown provisionally more than once (e.g. re-emitted across a page walk) is tallied every time it was shown, not deduplicated by this counter', () => {
+      const row = vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer');
+      const tracker = trackProgressiveRows(() => undefined);
+
+      tracker.onProgress?.({ sourceId: 'himalayas', vacancies: [row] });
+      tracker.onProgress?.({ sourceId: 'himalayas', vacancies: [row] });
+
+      // This counter answers "how many rows were shown provisionally", not "how many distinct
+      // rows" -- that distinct, deduplicated count is `discoveryUniqueListings` below, computed
+      // completely independently by `uniqueDiscovery` over the final merged result.
+      expect(tracker.count()).toBe(2);
+    });
+  });
+
+  describe('confirmed coverage never double-counts a row that was also shown provisionally', () => {
+    it('uniqueDiscovery collapses a row to one confirmed listing no matter how many progress events mentioned its key', () => {
+      const row = vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer');
+      const progressiveRowTracker = trackProgressiveRows(() => undefined);
+
+      // Simulates the same row being shown provisionally three times (three progress events, as a
+      // page walk re-confirms it) before the final merged discovery list -- which contains that row
+      // only once, since `runGlobalRemoteDiscovery` accumulates each source's own rows once, not
+      // once per progress event fired for it.
+      progressiveRowTracker.onProgress?.({ sourceId: 'himalayas', vacancies: [row] });
+      progressiveRowTracker.onProgress?.({ sourceId: 'himalayas', vacancies: [row] });
+      progressiveRowTracker.onProgress?.({ sourceId: 'himalayas', vacancies: [row] });
+      const finalMergedDiscovery = [row];
+
+      const confirmed = uniqueDiscovery(finalMergedDiscovery);
+
+      expect(progressiveRowTracker.count()).toBe(3);
+      expect(confirmed).toHaveLength(1);
+      // The two counts measure different things and neither is derived from the other -- a high
+      // provisional count from a slow, chatty source must never inflate the confirmed total.
+      expect(confirmed.length).not.toBe(progressiveRowTracker.count());
+    });
   });
 });
 

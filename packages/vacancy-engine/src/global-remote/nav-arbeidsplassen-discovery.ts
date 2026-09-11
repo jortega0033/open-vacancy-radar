@@ -1,8 +1,15 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
   httpUrl,
+  incompleteAudit,
   isoPostedAt,
   record,
   sourceFailure,
@@ -203,6 +210,8 @@ export async function runNavArbeidsplassenDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const apiKey = config.discovery.navArbeidsplassenApiKey;
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
@@ -210,6 +219,9 @@ export async function runNavArbeidsplassenDiscovery(
   let detailFailures = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  // The feed's own `next_url`, carried through so a capped run leaves a real continuation marker
+  // rather than a synthesized page number -- this source paginates by opaque cursor, not page index.
+  let continuationCursor: string | null = null;
   let lastUrl = NAV_ARBEIDSPLASSEN_FEED_URL;
   try {
     let pageUrl: string | null = NAV_ARBEIDSPLASSEN_FEED_URL;
@@ -265,6 +277,7 @@ export async function runNavArbeidsplassenDiscovery(
 
       if (page === config.discovery.navArbeidsplassenMaxPages && outcome.nextUrl !== null) {
         status = 'partial';
+        continuationCursor = outcome.nextUrl;
         errorMessage = `Stopped at the configured ${config.discovery.navArbeidsplassenMaxPages}-page limit.`;
       }
       pageUrl = outcome.nextUrl;
@@ -277,6 +290,7 @@ export async function runNavArbeidsplassenDiscovery(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -287,6 +301,8 @@ export async function runNavArbeidsplassenDiscovery(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };

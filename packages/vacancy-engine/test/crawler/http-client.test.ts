@@ -449,6 +449,99 @@ describe('SafeHttpClient retries and status categorization', () => {
   });
 });
 
+describe('SafeHttpClient onNetworkRequest retry metadata', () => {
+  it('reports retryIndex 0 for a single clean attempt', async () => {
+    const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('ok'))));
+    const attempts: { retryIndex: number }[] = [];
+    const client = createClient({
+      fetchFn,
+      onNetworkRequest: (_url, meta) => attempts.push(meta),
+    });
+
+    await client.get('https://jobs.example.com/feed');
+
+    expect(attempts).toEqual([{ retryIndex: 0 }]);
+  });
+
+  it('increments retryIndex once per bounded retry -- a 429 followed by success is retryIndex [0, 1]', async () => {
+    const statuses = [429, 200];
+    const fetchFn = vi.fn(
+      asFetch(() => Promise.resolve(new Response('ok', { status: statuses.shift() ?? 500 }))),
+    );
+    const attempts: { retryIndex: number }[] = [];
+    const client = createClient({
+      fetchFn,
+      maxRetries: 2,
+      baseRetryDelayMs: 10,
+      sleep: () => Promise.resolve(),
+      onNetworkRequest: (_url, meta) => attempts.push(meta),
+    });
+
+    const response = await client.get('https://jobs.example.com/feed');
+
+    expect(response.status).toBe(200);
+    expect(attempts).toEqual([{ retryIndex: 0 }, { retryIndex: 1 }]);
+  });
+
+  it('reports one retryIndex per attempt through to exhaustion, never firing for a domain-cooldown deferral with no fetch', async () => {
+    const fetchFn = vi.fn(
+      asFetch(() => Promise.resolve(new Response(null, { status: 503 }))),
+    );
+    const attempts: { retryIndex: number }[] = [];
+    const client = createClient({
+      fetchFn,
+      maxRetries: 3,
+      baseRetryDelayMs: 10,
+      sleep: () => Promise.resolve(),
+      onNetworkRequest: (_url, meta) => attempts.push(meta),
+    });
+
+    await expect(client.get('https://jobs.example.com/feed')).rejects.toMatchObject({
+      category: 'http_error',
+    });
+    // Every attempt actually reached the network exactly once (`fetchFn` call count matches the
+    // number of `onNetworkRequest` firings 1:1), and retryIndex counts 0..maxRetries -- a real
+    // network attempt for every one of the 4 tries (1 initial + 3 retries), not merely 4 calls to a
+    // shared counter that could have silently skipped or duplicated one.
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+    expect(attempts).toEqual([{ retryIndex: 0 }, { retryIndex: 1 }, { retryIndex: 2 }, { retryIndex: 3 }]);
+  });
+
+  it('does not fire onNetworkRequest for a redirect hop that is skipped due to a shared domain cooldown', async () => {
+    // A 429 sets a domain cooldown; a second concurrent request to the same host is deferred
+    // without ever reaching `fetch` while the cooldown is active, and therefore never fires
+    // `onNetworkRequest` for that deferred cycle -- see `#networkHop`'s `deferred` branch.
+    let callCount = 0;
+    const fetchFn = vi.fn(
+      asFetch(() => {
+        callCount += 1;
+        if (callCount === 1) {
+          return Promise.resolve(
+            new Response(null, { status: 429, headers: { 'retry-after': '1' } }),
+          );
+        }
+        return Promise.resolve(new Response('ok'));
+      }),
+    );
+    const attempts: { retryIndex: number }[] = [];
+    const client = createClient({
+      fetchFn,
+      globalConcurrency: 3,
+      perDomainConcurrency: 1,
+      maxRetries: 2,
+      timeoutMs: 5_000,
+      sleep: () => Promise.resolve(),
+      onNetworkRequest: (_url, meta) => attempts.push(meta),
+    });
+
+    await client.get('https://jobs.example.com/first');
+
+    // Every firing corresponds to a real `fetch` call -- no firing was skipped and none was
+    // duplicated for the deferred cooldown wait.
+    expect(attempts.length).toBe(fetchFn.mock.calls.length);
+  });
+});
+
 describe('SafeHttpClient resource bounds and caching', () => {
   it('continues uncached when a cache read never settles', async () => {
     const fetchFn = vi.fn(asFetch(() => Promise.resolve(new Response('network'))));

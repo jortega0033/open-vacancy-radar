@@ -3,7 +3,14 @@ import { SaxesParser } from 'saxes';
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
+  incompleteAudit,
   isoPostedAtFromYyyyMmDd,
   sourceFailure,
   stringValue,
@@ -361,14 +368,20 @@ export async function discoverTaiwanJobs(
   const cityCodes = TAIWAN_JOBS_CITY_CODES.slice(0, config.discovery.taiwanJobsMaxCities);
 
   for (const [cityCode, cityName] of cityCodes) {
+    // Fresh counters per partition, matching one row per partition (`sources.push` below): a
+    // city's own attempts (and retries) must never be folded into another city's row even though
+    // every partition in this loop shares the same `http`.
+    const counters = newNetworkAttemptCounters();
+    const partitionHttp = attributeNetworkRequests(http, counters);
     const url = taiwanJobsUrl(cityCode);
     let requests = 0;
     let listings = 0;
     let status: DiscoverySourceAudit['status'] = 'success';
     let errorMessage: string | null = null;
+    let complete = true;
     try {
       requests += 1;
-      const response = await http.get(url.toString());
+      const response = await partitionHttp.get(url.toString());
       requireSuccessfulResponse('taiwan_jobs', response);
       let rows: TaiwanJobRow[];
       try {
@@ -386,6 +399,7 @@ export async function discoverTaiwanJobs(
       // complete, per the ticket's acceptance criteria.
       if (rows.length >= TAIWAN_JOBS_MAX_RECORDS_PER_PARTITION) {
         status = 'partial';
+        complete = false;
         errorMessage = `Reached the documented ${TAIWAN_JOBS_MAX_RECORDS_PER_PARTITION.toLocaleString('en-US')}-record cap for ${cityName} (city=${cityCode}); this partition may have more unseen vacancies.`;
       }
       for (const row of rows) {
@@ -403,6 +417,7 @@ export async function discoverTaiwanJobs(
       const failure = sourceFailure(error);
       status = failure.status;
       errorMessage = failure.error;
+      complete = false;
     }
     sources.push({
       id: `taiwan_jobs:city-${cityCode}`,
@@ -412,6 +427,11 @@ export async function discoverTaiwanJobs(
       listings,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      // No API-level offset/cursor exists to carry (see the module doc comment: the WebService has
+      // no `offset`/`page` parameter at all, which is exactly why this source partitions by city in
+      // the first place) -- `complete`/`completenessReason` alone document the gap.
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete')),
     });
   }
   return { sources, vacancies };

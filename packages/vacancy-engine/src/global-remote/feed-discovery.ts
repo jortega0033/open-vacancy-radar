@@ -4,10 +4,17 @@ import type { AtsHttpClient, AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import { htmlToText } from '../ats/shared.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   isoPostedAtFromMmDdYyyyPrefix,
   isoPostedAtFromUnixSeconds,
@@ -162,6 +169,8 @@ async function discoverRss(
     normalize(item: RssItem): DiscoveryVacancyAudit | null;
   },
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   try {
     const parsed = parseRss(await http.get(options.url), options.provider);
     let invalidCount = parsed.invalidCount;
@@ -173,6 +182,9 @@ async function discoverRss(
       }
       return [normalized];
     });
+    // A dropped item is a data-quality gap in the feed itself, not a stopped-early scan: the whole
+    // RSS document was read and every item in it was considered, so this is `complete: true` even
+    // when `status` is `'partial'` for the dropped-item warning.
     return {
       sources: [{
         id: options.id,
@@ -184,6 +196,8 @@ async function discoverRss(
         error: invalidCount > 0
           ? `Dropped ${invalidCount} malformed or unsupported RSS item(s).`
           : null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
       }],
       vacancies,
     };
@@ -196,6 +210,7 @@ async function discoverRss(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -531,6 +546,8 @@ async function discoverWorkingNomads(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://www.workingnomads.com/api/exposed_jobs/';
   try {
     const response = await http.get(url);
@@ -568,12 +585,30 @@ async function discoverWorkingNomads(
       })];
     });
     return {
-      sources: [{ id: 'working_nomads:public-feed', provider: 'working_nomads', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'working_nomads:public-feed',
+        provider: 'working_nomads',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'working_nomads:public-feed', provider: 'working_nomads', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'working_nomads:public-feed',
+        provider: 'working_nomads',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -583,11 +618,15 @@ async function discoverRemoteFirstJobs(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let complete = true;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://remotefirstjobs.com/api/search-jobs?page=0';
   try {
     for (let page = 0; page < config.discovery.remoteFirstMaxPages; page += 1) {
@@ -628,6 +667,8 @@ async function discoverRemoteFirstJobs(
       if (root.jobs.length < 100) break;
       if (page + 1 === config.discovery.remoteFirstMaxPages) {
         status = 'partial';
+        complete = false;
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.remoteFirstMaxPages}-page limit.`;
       }
     }
@@ -635,6 +676,8 @@ async function discoverRemoteFirstJobs(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -645,6 +688,8 @@ async function discoverRemoteFirstJobs(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };
@@ -654,11 +699,15 @@ async function discoverJobRemotely(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let complete = true;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://jobremotely.io/api/v1/jobs';
   const pageSize = 50;
   try {
@@ -708,6 +757,8 @@ async function discoverJobRemotely(
       if (data.jobs.length < pageSize || (pages !== null && page >= pages)) break;
       if (page === config.discovery.jobRemotelyMaxPages) {
         status = 'partial';
+        complete = false;
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.jobRemotelyMaxPages}-page limit.`;
       }
     }
@@ -715,6 +766,8 @@ async function discoverJobRemotely(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -725,6 +778,8 @@ async function discoverJobRemotely(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };
@@ -734,6 +789,8 @@ async function discoverRemoteOk(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://remoteok.com/api';
   try {
     const response = await http.get(url);
@@ -778,6 +835,8 @@ async function discoverRemoteOk(
         listings: vacancies.length,
         status: 'success',
         error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
       }],
       vacancies,
     };
@@ -790,6 +849,7 @@ async function discoverRemoteOk(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -800,11 +860,15 @@ async function discoverArbeitnow(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let complete = true;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://www.arbeitnow.com/api/job-board-api?page=1';
   try {
     for (let page = 1; page <= config.discovery.arbeitnowMaxPages; page += 1) {
@@ -849,9 +913,14 @@ async function discoverArbeitnow(
         }));
       }
       const links = record(root.links);
-      if (httpUrl(links?.next) === null) break;
+      const nextUrl = httpUrl(links?.next);
+      if (nextUrl === null) break;
       if (page === config.discovery.arbeitnowMaxPages) {
         status = 'partial';
+        complete = false;
+        // arbeitnow's own paging link, not a synthesized page number -- the most literal
+        // "remaining-work evidence" available for this source.
+        continuationCursor = nextUrl;
         errorMessage = `Stopped at the configured ${config.discovery.arbeitnowMaxPages}-page limit.`;
       }
     }
@@ -859,6 +928,8 @@ async function discoverArbeitnow(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -869,6 +940,8 @@ async function discoverArbeitnow(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };

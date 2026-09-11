@@ -410,4 +410,75 @@ describe('Workable global discovery', () => {
     expect(guarded.sources[0]?.error).toContain('2026-09-02T10:00:00.000Z');
     expect(streamGet).toHaveBeenCalledOnce();
   });
+
+  it('issue #279 acceptance: cancellation -- an onChunk-cancelled stream counts its one attempt and reports incomplete coverage', async () => {
+    // Mirrors how a real `SafeHttpClient.streamGet` behaves when a consumer's `onChunk` throws
+    // mid-transfer (see crawler/http-client.test.ts's "cancels the body, propagates a parser error,
+    // and releases the scheduler slot"): the stream is torn down and the whole call rejects with the
+    // consumer's own cause, after exactly one real attempt -- never retried, since a consumer
+    // cancellation is not one of the transient statuses `SafeHttpClient` retries.
+    const snapshotPath = await temporarySnapshot();
+    const consumerCancelled = new Error('viewer closed the scan before the feed finished streaming');
+    const streamGet = vi.fn(async (_url, options) => {
+      // A well-formed opening fragment, so `parser.write` (called synchronously inside the
+      // production `onChunk`) does not itself throw first and mask the cancellation under test.
+      await options.onChunk(encoder.encode('<source>'), new AbortController().signal);
+      throw consumerCancelled;
+    }) satisfies SafeHttpClient['streamGet'];
+
+    const result = await runWorkableGlobalDiscovery(
+      { streamGet },
+      { minimumAnnualBaseUsd: 100_000 },
+      process.cwd(),
+      { snapshotPath, now: () => new Date('2026-08-30T10:00:00.000Z') },
+    );
+
+    expect(streamGet).toHaveBeenCalledOnce();
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        provider: 'workable_global',
+        status: 'error',
+        listings: 0,
+        requests: 1,
+        complete: false,
+        // A plain consumer-thrown error (not a `CrawlerHttpError`/`WorkableFeedParseError`) falls
+        // back to `failedRun`'s generic message, same as `error` -- see `failureMessage`. The point
+        // under test is that a cancelled stream is still reported `complete: false` with *a* reason
+        // at all, not the exact wording.
+        completenessReason: expect.any(String),
+      }),
+    ]);
+    expect(result.sources[0]?.error).toBe('Workable feed retrieval failed');
+    expect(result.vacancies).toEqual([]);
+  });
+
+  it('issue #279 acceptance: timeout -- a request that never resolves is reported incomplete, not a silent hang', async () => {
+    const snapshotPath = await temporarySnapshot();
+    const streamGet = vi.fn(
+      () =>
+        Promise.reject(
+          new CrawlerHttpError({
+            category: 'timeout',
+            code: 'request_timeout',
+            url: WORKABLE_ALL_CUSTOMER_FEED_URL,
+            detail: 'Request timed out after 900000ms',
+          }),
+        ),
+    ) satisfies SafeHttpClient['streamGet'];
+
+    const result = await runWorkableGlobalDiscovery(
+      { streamGet },
+      { minimumAnnualBaseUsd: 100_000 },
+      process.cwd(),
+      { snapshotPath, now: () => new Date('2026-08-30T10:00:00.000Z') },
+    );
+
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        status: 'error',
+        requests: 1,
+        complete: false,
+      }),
+    ]);
+  });
 });

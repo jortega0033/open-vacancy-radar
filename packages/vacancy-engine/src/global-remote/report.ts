@@ -93,15 +93,30 @@ function discoveryRows(vacancies: readonly DiscoveryVacancyAudit[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+/**
+ * Attempts/coverage cell for one source row (issue #279): distinguishes logical requests from the
+ * actual network attempts `SafeHttpClient` made underneath (including retries), and reports whether
+ * this source's own coverage is definitively complete for this run -- separately from `status`,
+ * which only ever describes whether the request(s) succeeded, not how much of the source was seen.
+ */
+function attemptsCell(source: DiscoverySourceAudit): string {
+  const retrySuffix = source.retries > 0 ? ` <small>(${source.retries} retried)</small>` : '';
+  const coverage = source.complete
+    ? 'complete'
+    : `incomplete${source.completenessReason === null ? '' : `: ${escapeHtml(source.completenessReason)}`}`;
+  return `${source.networkAttempts.toLocaleString('en-US')} attempt(s)${retrySuffix}<br><small>${coverage}</small>`;
+}
+
 function discoverySourceRows(sources: readonly DiscoverySourceAudit[]): string {
   if (sources.length === 0) return '<p>No discovery sources were recorded.</p>';
-  return `<table><thead><tr><th>Discovery source</th><th>Status</th><th>Requests / listings</th><th>Detail</th></tr></thead><tbody>${sources
+  return `<table><thead><tr><th>Discovery source</th><th>Status</th><th>Requests / listings</th><th>Network attempts / coverage</th><th>Detail</th></tr></thead><tbody>${sources
     .map(
       (source) => `
     <tr>
       <td>${link(source.url, source.provider)}<br><small>${escapeHtml(source.id)}</small></td>
       <td><code>${escapeHtml(source.status)}</code></td>
       <td>${source.requests.toLocaleString('en-US')} / ${source.listings.toLocaleString('en-US')}</td>
+      <td>${attemptsCell(source)}</td>
       <td>${source.error === null ? 'None.' : escapeHtml(source.error)}</td>
     </tr>`,
     )

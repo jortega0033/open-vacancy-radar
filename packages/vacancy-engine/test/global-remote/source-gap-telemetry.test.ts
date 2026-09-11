@@ -145,6 +145,11 @@ describe('source-gap-telemetry', () => {
         listings: 42,
         status: 'success',
         error: null,
+        networkAttempts: 5,
+        retries: 0,
+        complete: true,
+        completenessReason: null,
+        continuationCursor: null,
       };
       const result = recordFromSourceAudit(audit);
       expect(result).toBeNull();
@@ -159,6 +164,11 @@ describe('source-gap-telemetry', () => {
         listings: 0,
         status: 'error',
         error: 'BambooHR integration not supported',
+        networkAttempts: 1,
+        retries: 0,
+        complete: false,
+        completenessReason: 'BambooHR integration not supported',
+        continuationCursor: null,
       };
       const result = recordFromSourceAudit(audit);
       expect(result).not.toBeNull();
@@ -176,6 +186,11 @@ describe('source-gap-telemetry', () => {
         listings: 0,
         status: 'blocked',
         error: 'HTTP 429: Rate limited',
+        networkAttempts: 1,
+        retries: 0,
+        complete: false,
+        completenessReason: 'HTTP 429: Rate limited',
+        continuationCursor: null,
       };
       const result = recordFromSourceAudit(audit);
       expect(result).not.toBeNull();
@@ -191,6 +206,11 @@ describe('source-gap-telemetry', () => {
         listings: 0,
         status: 'error',
         error: 'Connection timeout',
+        networkAttempts: 1,
+        retries: 0,
+        complete: false,
+        completenessReason: 'Connection timeout',
+        continuationCursor: null,
       };
       const result = recordFromSourceAudit(audit);
       expect(result?.timestamp).toBeDefined();
