@@ -144,12 +144,12 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeDisabled();
     expect(screen.getByText(/existing reports remain available to browse and filter/i)).toBeInTheDocument();
 
     enterSearchQuery('   ');
-    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
@@ -165,7 +165,7 @@ describe('SearchPage', () => {
 
     enterSearchQuery('   ');
     expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run new scan' })).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
@@ -203,7 +203,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
     // Search itself is blocked while reattached to that scan -- no way to double-trigger it.
-    expect(screen.getByRole('button', { name: 'Search' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run scan' })).toBeDisabled();
     expect(bridge.runScan).not.toHaveBeenCalled();
 
     vi.mocked(bridge.getReport).mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
@@ -233,7 +233,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Role');
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
 
     await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
     expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
@@ -351,7 +351,7 @@ describe('SearchPage', () => {
     expect(screen.queryByText('Frontend Engineer')).not.toBeInTheDocument();
   });
 
-  it('clicking Search always runs a fresh scan, even with a report already loaded (no separate dead "Search" vs. "Rescan" split)', async () => {
+  it('clicking Run new scan refreshes external sources while a report is already loaded', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
       runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })])),
@@ -361,18 +361,38 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Role');
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
   });
 
-  it('does not filter the list while typing; only applies once Search is clicked', async () => {
+  it('does not start a fresh scan when Enter is pressed against an already-loaded report', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    enterSearchQuery('Remote');
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      key: 'Enter',
+      code: 'Enter',
+    });
+    expect(bridge.runScan).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
+  });
+
+  it('filters the loaded report while typing without starting a fresh scan', async () => {
     const bothVacancies = makeWorldwideReport([
       makeWorldwideVacancy(),
       makeWorldwideVacancy({ key: 'ww-2', title: 'Frontend Developer', company: 'Freeday' }),
     ]);
-    installAllBridges({
+    const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(bothVacancies),
       runScan: vi.fn().mockResolvedValue(bothVacancies),
     });
@@ -385,14 +405,32 @@ describe('SearchPage', () => {
       target: { value: 'Remote' },
     });
 
-    // Still both rows: typing alone must not narrow the list.
     expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
     await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
-    expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
+    expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  it('applies secondary filters locally without starting a fresh scan', async () => {
+    const bothVacancies = makeWorldwideReport([
+      makeWorldwideVacancy(),
+      makeWorldwideVacancy({ key: 'ww-2', provider: 'dice', title: 'Dice Frontend Role' }),
+    ]);
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(bothVacancies),
+      runScan: vi.fn().mockResolvedValue(bothVacancies),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Dice Frontend Role').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
+      target: { value: 'dice' },
+    });
+
+    await waitFor(() => expect(screen.queryByText('Remote Frontend Engineer')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Dice Frontend Role').length).toBeGreaterThan(0);
+    expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
   it('forwards the typed role/keyword to the scan itself, not just the local filter', async () => {
@@ -407,7 +445,7 @@ describe('SearchPage', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       target: { value: 'backend engineer' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith('backend engineer'));
   });
@@ -428,7 +466,6 @@ describe('SearchPage', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
       target: { value: 'Remote' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
@@ -613,7 +650,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Reattached Streamed Role').length).toBeGreaterThan(0));
     });
 
-    it('does not stream partial rows into an already-loaded report while a rescan is in flight (dims the existing list instead)', async () => {
+    it('keeps the saved report visible during a rescan and reports incoming live progress separately', async () => {
       const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
       const { emit } = installProgressCapturingBridge({
         getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
@@ -624,7 +661,7 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
 
       enterSearchQuery('Role');
-      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
       await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
 
       emit({
@@ -635,6 +672,7 @@ describe('SearchPage', () => {
       // The existing (real, already-scored) report keeps showing rather than being pre-empted by an
       // honest-but-unscored partial row -- streaming only fills the "nothing loaded at all yet" gap.
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+      expect(screen.getByText(/1 live vacancy has arrived so far/i)).toBeInTheDocument();
       expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
     });
   });

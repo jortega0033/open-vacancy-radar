@@ -538,6 +538,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
   const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
   const hasReport = worldwideReport !== null;
+  const liveProgressCount = partialVacancies.length;
   // A scan is running and has pushed at least one row, but has not produced its final report yet:
   // `results` above is showing provisional, not-yet-scored rows rather than the empty/loading state.
   // Deliberately excludes `profileNotConfigured`'s check (which requires a real report): a
@@ -594,11 +595,8 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
     void runScan(query);
   }, [currentProfileScanQuery, filters, runScan]);
 
-  // "Search" commits the draft filters (so the list reflects exactly what the form currently
-  // shows) and goes to get fresh data, whether or not a report already exists -- there is
-  // deliberately no separate "just filter" vs. "rescan" action any more (the two used to be
-  // different buttons, one of which did nothing once a report was loaded, which read as a dead
-  // control rather than a real second action).
+  // A deliberate upstream refresh: typing and dropdown changes filter the loaded report live, while
+  // this action goes back to external sources and swaps the report only when the scan finishes.
   const handleSearch = useCallback(() => {
     setAppliedFilters(filters);
     void runScan();
@@ -607,6 +605,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
     setFilters((current) => ({ ...current, ...patch }));
+    setAppliedFilters((current) => ({ ...current, ...patch }));
   }, []);
 
   /** The filter bar's country selector: a plain, instant, client-side filter over whatever is
@@ -680,6 +679,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
         employmentTypes={employmentTypes}
         busy={busy}
         salaryNote={SALARY_NOTE}
+        hasReport={hasReport}
       />
 
       <div className="flex-none">
@@ -705,7 +705,9 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
         {scanning && (
           <div className="alert alert-info mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            {isStreamingPartial
+            {hasReport
+              ? `Scanning live sources in the background. The list below is your saved report filtered locally${liveProgressCount > 0 ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when the scan finishes.`
+              : isStreamingPartial
               ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
               : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
           </div>
