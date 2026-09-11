@@ -89,9 +89,9 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
-import { requiredScanQuery } from './vacancy-scan-query.js';
+import { requiredScanQuery, scheduledScanQueryFromProfile } from './vacancy-scan-query.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
-import { createScanGuard } from './scan-guard.js';
+import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { confirmWorkspaceGrant } from './workspace-confirm.js';
 import {
@@ -1804,7 +1804,20 @@ function scheduleBackgroundScanTick(): void {
   setInterval(() => {
     if (!autoScanEnabled) return;
     if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
-    console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
+    void candidateProfilePath()
+      .then((path) => loadCandidateProfile(path))
+      .then((profile) => {
+        const query = scheduledScanQueryFromProfile(profile);
+        if (query === null) {
+          console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
+          return null;
+        }
+        return runVacancyScan(query);
+      })
+      .catch((error: unknown) => {
+        if (isExpectedScanBusyError(error)) return;
+        console.error('[background-scan] scheduled scan failed', error);
+      });
   }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
 }
 

@@ -1,14 +1,35 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
-import { requiredScanQuery } from '../electron/vacancy-scan-query.js';
+import { requiredScanQuery, scheduledScanQueryFromProfile } from '../electron/vacancy-scan-query.js';
 
 const ELECTRON_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'electron');
 
 function source(file: string): string {
   return readFileSync(join(ELECTRON_DIR, file), 'utf8');
 }
+
+const EMPTY_PROFILE: CandidateProfile = {
+  profileVersion: 'test',
+  candidateName: '',
+  currentRole: '',
+  location: '',
+  experienceYears: 0,
+  strongestSkills: [],
+  additionalSkills: [],
+  targetRoles: [],
+  consideredRoles: [],
+  excludedRoleFamilies: [],
+  constraints: {
+    professionalLanguage: '',
+    dutchRequired: false,
+    primaryCountry: '',
+    allowRemoteEuSupportingNetherlands: false,
+    minimumMonthlyBaseEur: 0,
+  },
+};
 
 describe('requiredScanQuery', () => {
   it('rejects blank, whitespace-only, and non-string values', () => {
@@ -22,8 +43,45 @@ describe('requiredScanQuery', () => {
   });
 
   it('guards the IPC argument before main process scan setup can initialize the engine', () => {
-    expect(source('main.ts')).toContain(
-      "guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>\n  runVacancyScan(requiredScanQuery(query)),\n);",
+    expect(source('main.ts')).toMatch(
+      /guardedIpc\.handle\(\s*'vacancy:run-scan'[\s\S]*runVacancyScan\(requiredScanQuery\(query\)\)/,
+    );
+  });
+});
+
+describe('scheduledScanQueryFromProfile', () => {
+  it('uses the first saved target role as the upstream narrowing signal', () => {
+    expect(
+      scheduledScanQueryFromProfile({
+        ...EMPTY_PROFILE,
+        targetRoles: ['  Frontend Engineer  ', 'Backend Engineer'],
+        strongestSkills: ['React'],
+      }),
+    ).toBe('Frontend Engineer');
+  });
+
+  it('falls back to the first saved strongest skill when no target role is set', () => {
+    expect(
+      scheduledScanQueryFromProfile({
+        ...EMPTY_PROFILE,
+        strongestSkills: ['  TypeScript  ', 'React'],
+      }),
+    ).toBe('TypeScript');
+  });
+
+  it('skips safely when the saved profile has no role or keyword', () => {
+    expect(
+      scheduledScanQueryFromProfile({
+        ...EMPTY_PROFILE,
+        currentRole: 'Staff Engineer',
+        consideredRoles: ['Engineering Manager'],
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps scheduled scans wired when a saved role or keyword exists', () => {
+    expect(source('main.ts')).toMatch(
+      /scheduledScanQueryFromProfile\(profile\)[\s\S]*runVacancyScan\(query\)[\s\S]*isExpectedScanBusyError\(error\)/,
     );
   });
 });
