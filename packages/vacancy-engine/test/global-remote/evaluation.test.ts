@@ -26,6 +26,7 @@ function reviewedSource(overrides: Partial<GlobalRemoteSource['review']> = {}): 
       outsideUsEligible: 'yes',
       minimumAnnualBaseUsd: 150_000,
       salaryAppliesOutsideUs: 'yes',
+      mandatoryLanguage: '',
       notes: [],
       ...overrides,
     },
@@ -108,5 +109,147 @@ describe('global remote deterministic evaluation', () => {
       contentHash: nearMiss.reviewedContentHash,
       minimumAnnualBaseUsd: 100_000,
     })).toMatchObject({ decision: 'salary_below_threshold' });
+  });
+});
+
+/**
+ * Issue #280, acceptance check 3: an explicit mandatory-language requirement is enforced against
+ * the configured candidate constraints in every applicable pipeline. This file covers two of the
+ * three (the discovery classifier and the official-source review); the worldwide deterministic
+ * scorer is covered in `test/filtering/worldwide-relevance.test.ts`, and the post-discovery pass
+ * that applies the same gate to every discovery source at once in
+ * `test/pipeline/global-remote.test.ts`.
+ */
+describe('mandatory-language enforcement in the discovery classifier', () => {
+  const description = `Senior Frontend Engineer
+    Build and own our customer-facing web application.
+    Requirements
+    Strong Angular and TypeScript experience.
+    Fluency in German is required, as all client communication is in German.`;
+
+  it('routes a vacancy whose mandatory language the candidate lacks to language_mismatch', () => {
+    const classification = classifyDiscoveryVacancy({
+      title: 'Senior Frontend Engineer',
+      location: 'Worldwide',
+      annualizedMinimumUsd: 150_000,
+      minimumAnnualBaseUsd: 100_000,
+      description,
+      candidateLanguages: ['English'],
+    });
+
+    expect(classification.decision).toBe('language_mismatch');
+    expect(classification.reasons.join(' ')).toContain('German');
+  });
+
+  it('keeps the vacancy a review candidate when the candidate has the language', () => {
+    expect(
+      classifyDiscoveryVacancy({
+        title: 'Senior Frontend Engineer',
+        location: 'Worldwide',
+        annualizedMinimumUsd: 150_000,
+        minimumAnnualBaseUsd: 100_000,
+        description,
+        candidateLanguages: ['English', 'German'],
+      }),
+    ).toMatchObject({ decision: 'official_review_candidate' });
+  });
+
+  it('gates nothing when no candidate language is configured, and nothing on a preferred language', () => {
+    expect(
+      classifyDiscoveryVacancy({
+        title: 'Senior Frontend Engineer',
+        location: 'Worldwide',
+        annualizedMinimumUsd: 150_000,
+        minimumAnnualBaseUsd: 100_000,
+        description,
+        candidateLanguages: [],
+      }),
+    ).toMatchObject({ decision: 'official_review_candidate' });
+
+    expect(
+      classifyDiscoveryVacancy({
+        title: 'Senior Frontend Engineer',
+        location: 'Worldwide',
+        annualizedMinimumUsd: 150_000,
+        minimumAnnualBaseUsd: 100_000,
+        description: 'Requirements\nAngular experience.\nNice to have\nGerman is a plus.',
+        candidateLanguages: ['English'],
+      }),
+    ).toMatchObject({ decision: 'official_review_candidate' });
+  });
+
+  it('reports the role mismatch first, so a gated language never hides a different exclusion', () => {
+    expect(
+      classifyDiscoveryVacancy({
+        title: 'Senior Backend Engineer',
+        location: 'Worldwide',
+        annualizedMinimumUsd: 150_000,
+        minimumAnnualBaseUsd: 100_000,
+        description,
+        candidateLanguages: ['English'],
+      }),
+    ).toMatchObject({ decision: 'role_mismatch' });
+  });
+});
+
+describe('mandatory-language enforcement in the official-source review', () => {
+  it('excludes a reviewed mandatory language the candidate does not have', () => {
+    const source = reviewedSource({ mandatoryLanguage: 'German' });
+
+    expect(
+      evaluateOfficialReview({
+        source,
+        state: 'active',
+        currentTitle: source.expectedTitle,
+        contentHash: source.reviewedContentHash,
+        minimumAnnualBaseUsd: 100_000,
+        candidateLanguages: ['English'],
+      }),
+    ).toMatchObject({ decision: 'excluded_language' });
+  });
+
+  it('routes a reviewed mandatory language to confirmation when there is nothing to check it against', () => {
+    const source = reviewedSource({ mandatoryLanguage: 'German' });
+
+    expect(
+      evaluateOfficialReview({
+        source,
+        state: 'active',
+        currentTitle: source.expectedTitle,
+        contentHash: source.reviewedContentHash,
+        minimumAnnualBaseUsd: 100_000,
+        candidateLanguages: [],
+      }),
+    ).toMatchObject({ decision: 'language_confirmation' });
+  });
+
+  it('still reaches a strict match when the candidate has the reviewed mandatory language', () => {
+    const source = reviewedSource({ mandatoryLanguage: 'Nederlands' });
+
+    expect(
+      evaluateOfficialReview({
+        source,
+        state: 'active',
+        currentTitle: source.expectedTitle,
+        contentHash: source.reviewedContentHash,
+        minimumAnnualBaseUsd: 100_000,
+        candidateLanguages: ['English', 'Dutch'],
+      }),
+    ).toMatchObject({ decision: 'strict_match' });
+  });
+
+  it('leaves an empty reviewed mandatory language gating nothing', () => {
+    const source = reviewedSource();
+
+    expect(
+      evaluateOfficialReview({
+        source,
+        state: 'active',
+        currentTitle: source.expectedTitle,
+        contentHash: source.reviewedContentHash,
+        minimumAnnualBaseUsd: 100_000,
+        candidateLanguages: ['English'],
+      }),
+    ).toMatchObject({ decision: 'strict_match' });
   });
 });

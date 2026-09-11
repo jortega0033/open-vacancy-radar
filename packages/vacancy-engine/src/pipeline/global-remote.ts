@@ -18,8 +18,11 @@ import {
 } from '../companies/worldwide-sponsor-match.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db/client.js';
+import { assessWorkEligibility } from '../eligibility/evidence.js';
+import { candidateWorkLanguages } from '../eligibility/language.js';
+import { normalizeCountry } from '../geo/countries.js';
 import { runGlobalRemoteDiscovery } from '../global-remote/discovery.js';
-import { evaluateOfficialReview } from '../global-remote/evaluation.js';
+import { evaluateOfficialReview, mandatoryLanguageGate } from '../global-remote/evaluation.js';
 import {
   globalRemoteConfigSchema,
   type DiscoveryVacancyAudit,
@@ -46,15 +49,27 @@ const MANUAL_DECISIONS = new Set<GlobalRemoteDecision>([
   'location_confirmation',
   'remote_confirmation',
   'company_confirmation',
+  'language_confirmation',
   'salary_unknown',
   'changed_since_review',
 ]);
 const EXCLUDED_DECISIONS = new Set<GlobalRemoteDecision>([
   'excluded_location',
+  'excluded_language',
   'excluded_not_remote',
   'excluded_not_us_market',
   'excluded_role',
   'inactive',
+]);
+
+/**
+ * The discovery decisions the post-discovery language gate is allowed to overwrite: rows still in
+ * play. A row already excluded for another reason keeps the first reason it was given, so a reader
+ * is never told a vacancy was dropped for its language when it was really dropped for its title.
+ */
+const LANGUAGE_GATE_APPLICABLE_DECISIONS = new Set<DiscoveryVacancyAudit['decision']>([
+  'official_review_candidate',
+  'salary_unverified',
 ]);
 
 async function loadGlobalRemoteConfig(projectRoot: string): Promise<GlobalRemoteConfig> {
@@ -144,6 +159,61 @@ export function applyWorldwideProfileScores(
     profileScore:
       scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd)?.deterministicScore ?? null,
   }));
+}
+
+/**
+ * Attaches the work-eligibility evidence record to every discovered row, and applies the one gate
+ * that evidence can produce, after discovery for the same reason `applyWorldwideProfileScores`
+ * runs here: the answers need the candidate profile, which no individual discovery source has.
+ *
+ * Running it once over the merged row list, rather than inside each of the ~30 discovery sources,
+ * is also what makes the mandatory-language gate hold for *every* source instead of the handful
+ * that might have remembered to pass the profile down (issue #280).
+ *
+ * Country is read in exactly one direction here: the vacancy's own stated restriction is compared
+ * against the country the candidate configured for themselves. Nothing is included, excluded,
+ * ranked or ordered by which country a vacancy is in, and an unconfigured profile leaves every
+ * answer `unknown` rather than falling back to a default country, language or market.
+ */
+export function applyWorkEligibilityEvidence(
+  vacancies: readonly DiscoveryVacancyAudit[],
+  profile: CandidateProfile,
+  now: Date = new Date(),
+): DiscoveryVacancyAudit[] {
+  const candidateLanguages = candidateWorkLanguages(profile);
+  const candidateWorkCountry = normalizeCountry(profile.constraints.primaryCountry);
+  const relocationWilling = profile.constraints.relocationWilling ?? null;
+
+  return vacancies.map((vacancy) => {
+    const eligibility = assessWorkEligibility(
+      {
+        description: vacancy.description,
+        location: vacancy.location,
+        candidateWorkCountry,
+        candidateLanguages,
+        candidateRelocationWilling: relocationWilling,
+        employerRegisterMatch:
+          vacancy.worldwideSponsorMatch === null
+            ? null
+            : {
+                register: 'IND recognised sponsor register',
+                legalName: vacancy.worldwideSponsorMatch.legalName,
+                observedAt: null,
+              },
+        currency: vacancy.currency,
+        salaryPeriod: vacancy.salaryPeriod,
+        advertisedMinimum: vacancy.advertisedMinimum,
+        observedAt: vacancy.postedAt,
+      },
+      now,
+    );
+    const gate = LANGUAGE_GATE_APPLICABLE_DECISIONS.has(vacancy.decision)
+      ? mandatoryLanguageGate({ description: vacancy.description, candidateLanguages })
+      : null;
+    return gate === null
+      ? { ...vacancy, eligibility }
+      : { ...vacancy, eligibility, decision: gate.decision, reasons: gate.reasons };
+  });
 }
 
 /**
@@ -546,6 +616,7 @@ async function loadPreviousDiscovery(projectRoot: string): Promise<{
 async function loadPreviousOfficial(
   projectRoot: string,
   profile: GlobalRemoteConfig,
+  candidateLanguages: readonly string[],
 ): Promise<{ audits: OfficialVacancyAudit[]; requestCount: number }> {
   const file = path.resolve(projectRoot, 'reports', 'global-remote', 'latest.json');
   const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<GlobalRemoteReport>;
@@ -580,6 +651,7 @@ async function loadPreviousOfficial(
       currentTitle: prior.title,
       contentHash: prior.contentHash,
       minimumAnnualBaseUsd: profile.minimumAnnualBaseUsd,
+      candidateLanguages,
     });
     return {
       ...prior,
@@ -652,13 +724,18 @@ export async function runGlobalRemoteScan(
   // output, matching `reuseDiscovery`'s existing "no new discovery-feed requests" contract; an empty
   // roster in that branch is fine because `atsRoster` is never read again when discovery is reused.
   const atsRoster = reuseDiscovery ? [] : await loadAtsRoster(projectRoot);
+  // Loaded before the scan rather than after it: the official-source pipeline enforces the same
+  // mandatory-language gate the discovery pipeline does, so it needs the candidate's configured
+  // languages while it is running, not once every row already has a decision (issue #280).
+  const candidateProfile = await loadCandidateProfile(candidateProfilePathFor(projectRoot));
+  const candidateLanguages = candidateWorkLanguages(candidateProfile);
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
       : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, options.onProgress),
     options.offlineReclassify
-      ? loadPreviousOfficial(projectRoot, profile)
-      : runOfficialGlobalRemoteSources(http, profile),
+      ? loadPreviousOfficial(projectRoot, profile, candidateLanguages)
+      : runOfficialGlobalRemoteSources(http, profile, candidateLanguages),
     reuseDiscovery
       ? Promise.resolve(null)
       : runWorkableGlobalDiscovery(safeClient, profile, projectRoot).then((result) => {
@@ -674,7 +751,6 @@ export async function runGlobalRemoteScan(
           vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
         };
   const discoveryAudit = uniqueDiscovery(discovery.vacancies);
-  const candidateProfile = await loadCandidateProfile(candidateProfilePathFor(projectRoot));
   const scoredDiscoveryAudit = applyWorldwideProfileScores(
     discoveryAudit,
     candidateProfile,
@@ -686,6 +762,13 @@ export async function runGlobalRemoteScan(
     http,
     database,
     logger,
+  );
+  // After the sponsor match, never before it: the evidence record has to be able to report an
+  // employer register hit as employer-scope evidence, and it can only do that once the match is
+  // actually on the row.
+  const assessedDiscoveryAudit = applyWorkEligibilityEvidence(
+    sponsorMatched.vacancies,
+    candidateProfile,
   );
   // The one enrichment step whose cost is not visible from the discovery source audit, and the one
   // that used to make a finished scan look like a hung one -- so its own budget outcome is logged
@@ -747,7 +830,7 @@ export async function runGlobalRemoteScan(
     discoverySources: discovery.sources,
     ...groups,
     officialAudit,
-    discoveryAudit: sponsorMatched.vacancies,
+    discoveryAudit: assessedDiscoveryAudit,
     methodology: [
       'Free remote-job APIs are discovery inputs only; their geography and salary labels never create a strict match.',
       'Current official ATS APIs or normal employer HTML are fetched with bounded concurrency, timeouts, retries, conditional caching, and a descriptive User-Agent.',
@@ -757,6 +840,11 @@ export async function runGlobalRemoteScan(
       'The official Workable all-customer XML is streamed only after normal source scans, parsed incrementally, and cached as a compact hourly snapshot; raw XML is never buffered or persisted.',
       'Dice results are retrieved through Dice’s AI-powered MCP search and are clearly treated as discovery leads requiring official employer verification.',
       'Remoote results come from one capped anonymous REST search, retain only canonical Remoote links, use a five-minute bounded in-memory cache after sanitization, and are never expanded into a bulk export.',
+      'Work-country, mandatory-language, visa-sponsorship and Employer of Record eligibility are recorded per vacancy as yes/no/unknown with the source, scope and freshness of the evidence behind each answer. An absent statement stays unknown and reviewable; it is never read as a yes or a no.',
+      'A remote label is never read as global eligibility. Only an explicit accepted-location statement in the vacancy can answer the work-country question, and an explicit restriction in the same posting always outranks a worldwide banner elsewhere in it.',
+      'Sponsor-register recognition is employer-scope evidence and is never reported as a commitment to sponsor a specific vacancy.',
+      'Candidate-confirmed relocation willingness and employer-funded relocation or visa support are recorded as two separate facts and are never merged.',
+      'Advertised salaries keep the currency, period and base-versus-total basis their source stated. Where a figure is read for a country other than the one it is benchmarked to, that assumption is labelled on the row rather than folded into the number.',
       `The best-effort IND sponsor cross-check resolves distinct Netherlands-located employers, not individual listings, against Wikidata, which rate-limits anonymous clients. Each scan spends a bounded budget on employers it has not resolved before, persists what it resolves, and stops as soon as the upstream rate limit is reached, so coverage accumulates across scans instead of one scan stalling on all of it.`,
       ...(sponsorMatched.statistics.unverifiedCompanies > 0
         ? [

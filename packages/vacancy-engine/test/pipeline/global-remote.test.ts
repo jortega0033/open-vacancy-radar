@@ -21,6 +21,7 @@ import {
 } from '../../src/db/client.js';
 import { indSponsors } from '../../src/db/schema.js';
 import {
+  applyWorkEligibilityEvidence,
   applyWorldwideProfileScores,
   applyWorldwideSponsorMatches,
   planWorldwideSponsorMatches,
@@ -697,5 +698,267 @@ describe('planWorldwideSponsorMatches', () => {
 
     expect(plan.eligibleRows).toBe(1);
     expect(plan.targets.map((target) => target.rowIndexes)).toEqual([[0]]);
+  });
+});
+
+/**
+ * Issue #280. This is where the mandatory-language gate becomes pipeline-wide rather than
+ * per-source: discovery sources build their rows through `discoveryAudit`, which has no access to
+ * the candidate profile, so this one post-discovery pass applies the same gate to every source's
+ * rows at once and attaches the evidence record that explains each row's eligibility.
+ */
+describe('applyWorkEligibilityEvidence', () => {
+  const NOW = new Date('2026-09-11T12:00:00.000Z');
+
+  function emptyReport(): GlobalRemoteReport {
+    return {
+      runId: 'run-1',
+      generatedAt: '2026-09-11T12:00:00.000Z',
+      profileVersion: 'global-remote-profile-v1',
+      criteria: {
+        role: 'frontend',
+        fullyRemote: true,
+        applicantLocation: 'Worldwide',
+        usCitizenshipRequired: false,
+        minimumAnnualBaseUsd: 100_000,
+        currency: 'USD',
+      },
+      statistics: {
+        discoveryRequests: 0,
+        discoveryListings: 1,
+        discoveryUniqueListings: 1,
+        discoveryOfficialReviewCandidates: 1,
+        officialBoardsOrPagesAttempted: 0,
+        officialRequests: 0,
+        strictMatches: 0,
+        manualReview: 0,
+        nearMisses: 0,
+        excludedOrInactive: 0,
+        blockedOrErrored: 0,
+        registrySources: 0,
+        activeRegistrySources: 0,
+        gatedRegistrySources: 0,
+        manualOrProhibitedRegistrySources: 0,
+      },
+      sourceRegistry: [],
+      discoverySources: [],
+      strictMatches: [],
+      manualReview: [],
+      nearMisses: [],
+      excludedOrInactive: [],
+      blockedOrErrored: [],
+      officialAudit: [],
+      discoveryAudit: [],
+      methodology: [],
+      attribution: [],
+    };
+  }
+
+  const profile: CandidateProfile = {
+    profileVersion: 'candidate-profile-v1',
+    candidateName: 'Test Candidate',
+    currentRole: 'Senior Frontend Engineer',
+    location: 'Netherlands',
+    experienceYears: 10,
+    strongestSkills: ['Angular'],
+    additionalSkills: [],
+    targetRoles: ['Senior Frontend Engineer'],
+    consideredRoles: [],
+    excludedRoleFamilies: [],
+    constraints: {
+      professionalLanguage: 'English',
+      dutchRequired: false,
+      primaryCountry: 'Netherlands',
+      allowRemoteEuSupportingNetherlands: true,
+      minimumMonthlyBaseEur: 6_000,
+      relocationWilling: true,
+    },
+  };
+
+  const US_ONLY_REMOTE = `This is a fully remote role on a distributed team.
+    Compensation
+    The base salary range is benchmarked to the United States market.
+    Eligibility
+    You must be legally authorized to work in the United States.`;
+
+  it('attaches an evidence record to every row, whatever source produced it', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer'),
+        vacancy('jobicy', 'jobicy:1', 'https://example.test/2', 'Frontend Engineer'),
+        vacancy('remotive', 'remotive:1', 'https://example.test/3', 'Frontend Engineer'),
+      ],
+      profile,
+      NOW,
+    );
+
+    expect(assessed).toHaveLength(3);
+    for (const row of assessed) {
+      expect(row.eligibility).not.toBeNull();
+      expect(row.eligibility!.visaSponsorship.answer).toBe('unknown');
+      expect(row.eligibility!.employerOfRecord.answer).toBe('unknown');
+    }
+  });
+
+  it('does not mark a US-only remote vacancy eligible for the configured Netherlands candidate', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer', {
+          location: 'Remote (Anywhere)',
+          description: US_ONLY_REMOTE,
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    expect(assessed[0]!.eligibility!.candidateWorkCountry.answer).toBe('no');
+    expect(assessed[0]!.eligibility!.salaryGeography.assumptionApplied).toBe(true);
+  });
+
+  it('applies the mandatory-language gate to a still-in-play row from any source', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer', {
+          decision: 'official_review_candidate',
+          description: 'Requirements\nFluency in German is required for this role.',
+        }),
+        vacancy('ats_roster_lever', 'lever:1', 'https://example.test/2', 'Frontend Engineer', {
+          decision: 'salary_unverified',
+          description: 'Requirements\nFluency in German is required for this role.',
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    expect(assessed.map((row) => row.decision)).toEqual(['language_mismatch', 'language_mismatch']);
+    expect(assessed[0]!.reasons.join(' ')).toContain('German');
+    expect(assessed[0]!.eligibility!.mandatoryLanguage.answer).toBe('no');
+  });
+
+  it('never overwrites a row that was already excluded for a different reason', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Backend Engineer', {
+          decision: 'role_mismatch',
+          reasons: ['Title is not explicitly frontend-only.'],
+          description: 'Requirements\nFluency in German is required for this role.',
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    expect(assessed[0]!.decision).toBe('role_mismatch');
+    expect(assessed[0]!.reasons).toEqual(['Title is not explicitly frontend-only.']);
+  });
+
+  it('reports an IND sponsor match as employer evidence, never as a sponsorship promise', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('jobicy', 'jobicy:1', 'https://example.test/1', 'Frontend Engineer', {
+          location: 'Amsterdam, Netherlands',
+          description: 'Build our customer portal with a small, senior team.',
+          worldwideSponsorMatch: { legalName: 'Example Technologies B.V.', kvkNumber: '01234567' },
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    const sponsorship = assessed[0]!.eligibility!.visaSponsorship;
+    expect(sponsorship.answer).toBe('unknown');
+    expect(sponsorship.scope).toBe('employer');
+    expect(sponsorship.detail).toContain('Example Technologies B.V.');
+    expect(sponsorship.detail).toContain('not a commitment to sponsor');
+  });
+
+  it('keeps candidate relocation willingness separate from the employer relocation offer', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('jobicy', 'jobicy:1', 'https://example.test/1', 'Frontend Engineer', {
+          description: 'We do not offer relocation assistance for this role.',
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    expect(assessed[0]!.eligibility!.candidateRelocationWillingness.answer).toBe('yes');
+    expect(assessed[0]!.eligibility!.employerRelocationSupport.answer).toBe('no');
+  });
+
+  it('renders every answer, its scope and the salary-geography caption into the report HTML', () => {
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer', {
+          decision: 'official_review_candidate',
+          location: 'Remote (Anywhere)',
+          description: US_ONLY_REMOTE,
+          currency: 'USD',
+          salaryPeriod: 'year',
+          advertisedMinimum: 150_000,
+        }),
+      ],
+      profile,
+      NOW,
+    );
+
+    const html = renderGlobalRemoteHtml({
+      ...emptyReport(),
+      discoveryAudit: assessed,
+    });
+
+    expect(html).toContain('Eligibility evidence');
+    expect(html).toContain('Employer of Record');
+    expect(html).toContain('Candidate relocation willingness');
+    expect(html).toContain('Employer relocation support');
+    // The geographic salary assumption is printed, not folded into the salary column.
+    expect(html).toMatch(/Reading it as Netherlands market pay assumes United States rates/u);
+  });
+
+  it('renders an honest "not assessed" for a report written before this record existed', () => {
+    const html = renderGlobalRemoteHtml({
+      ...emptyReport(),
+      discoveryAudit: [
+        vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer', {
+          decision: 'official_review_candidate',
+        }),
+      ],
+    });
+
+    expect(html).toContain('Not assessed in this report.');
+  });
+
+  it('leaves every answer unknown and gates nothing for an unconfigured profile', () => {
+    const unconfigured: CandidateProfile = {
+      ...profile,
+      constraints: {
+        professionalLanguage: '',
+        dutchRequired: false,
+        primaryCountry: '',
+        allowRemoteEuSupportingNetherlands: false,
+        minimumMonthlyBaseEur: 0,
+      },
+    };
+
+    const assessed = applyWorkEligibilityEvidence(
+      [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Frontend Engineer', {
+          decision: 'official_review_candidate',
+          location: 'Remote (Anywhere)',
+          description: `${US_ONLY_REMOTE}\nRequirements\nFluency in German is required.`,
+        }),
+      ],
+      unconfigured,
+      NOW,
+    );
+
+    const eligibility = assessed[0]!.eligibility!;
+    expect(assessed[0]!.decision).toBe('official_review_candidate');
+    expect(eligibility.candidateWorkCountry.answer).toBe('unknown');
+    expect(eligibility.mandatoryLanguage.answer).toBe('unknown');
+    expect(eligibility.candidateRelocationWillingness.answer).toBe('unknown');
   });
 });

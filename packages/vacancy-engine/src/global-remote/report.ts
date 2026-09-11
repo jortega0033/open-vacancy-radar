@@ -53,15 +53,43 @@ function officialRows(vacancies: readonly OfficialVacancyAudit[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+/**
+ * The work-eligibility evidence for one row (issue #280), or an honest "not assessed" for a row
+ * from a report written before that record existed. Every answer is printed with its scope, so an
+ * employer-scope register hit can never be read off this table as a vacancy-scope promise, and the
+ * geographic salary caption is printed in full rather than folded into the salary column.
+ */
+function eligibilityCell(vacancy: DiscoveryVacancyAudit): string {
+  const eligibility = vacancy.eligibility;
+  if (eligibility === undefined || eligibility === null) {
+    return '<small>Not assessed in this report.</small>';
+  }
+  const rows: [string, { answer: string; scope: string; freshness: string }][] = [
+    ['Work country', eligibility.candidateWorkCountry],
+    ['Mandatory language', eligibility.mandatoryLanguage],
+    ['Visa sponsorship', eligibility.visaSponsorship],
+    ['Employer of Record', eligibility.employerOfRecord],
+    ['Candidate relocation willingness', eligibility.candidateRelocationWillingness],
+    ['Employer relocation support', eligibility.employerRelocationSupport],
+  ];
+  return `<ul>${rows
+    .map(
+      ([label, evidence]) =>
+        `<li>${escapeHtml(label)}: <code>${escapeHtml(evidence.answer)}</code> <small>(${escapeHtml(evidence.scope)}, ${escapeHtml(evidence.freshness)})</small></li>`,
+    )
+    .join('')}</ul><small>${escapeHtml(eligibility.salaryGeography.label)}</small>`;
+}
+
 function discoveryRows(vacancies: readonly DiscoveryVacancyAudit[]): string {
   const candidates = vacancies.filter((vacancy) =>
     !['role_mismatch', 'non_vacancy'].includes(vacancy.decision));
   if (candidates.length === 0) return '<p>No title-matched discovery listings.</p>';
-  return `<table><thead><tr><th>Discovery listing</th><th>Metadata</th><th>Preliminary decision</th></tr></thead><tbody>${candidates.map((vacancy) => `
+  return `<table><thead><tr><th>Discovery listing</th><th>Metadata</th><th>Preliminary decision</th><th>Eligibility evidence</th></tr></thead><tbody>${candidates.map((vacancy) => `
     <tr>
       <td>${link(vacancy.url, vacancy.company)}<br><strong>${escapeHtml(vacancy.title)}</strong><br><small>${escapeHtml(vacancy.provider)}</small></td>
       <td>${escapeHtml(vacancy.location)}<br>${money(vacancy.annualizedMinimumUsd)} USD annualized minimum</td>
       <td><code>${escapeHtml(vacancy.decision)}</code><br>${escapeHtml(vacancy.reasons.join(' '))}</td>
+      <td>${eligibilityCell(vacancy)}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 

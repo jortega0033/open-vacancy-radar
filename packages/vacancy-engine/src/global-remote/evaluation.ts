@@ -1,3 +1,8 @@
+import {
+  candidateCoversLanguage,
+  detectLanguageRequirements,
+  uncoveredMandatoryLanguages,
+} from '../eligibility/language.js';
 import type {
   DiscoveryDecision,
   GlobalRemoteDecision,
@@ -44,12 +49,43 @@ export function isPotentiallyEligibleLocation(location: string): boolean {
   return ELIGIBLE_LOCATION.test(normalized);
 }
 
+/**
+ * The one place a mandatory-language requirement turns into a decision, shared by the discovery
+ * classifier below and by the post-discovery pass in `pipeline/global-remote.ts` (issue #280).
+ * Discovery sources call `classifyDiscoveryVacancy` from inside `discoveryAudit`, which has no
+ * access to the candidate profile, so the pipeline re-applies this one gate afterwards over every
+ * source's rows at once; both paths therefore produce the same decision and the same wording.
+ *
+ * Returns null, and so gates nothing, whenever the candidate has configured no language, whenever
+ * the vacancy carries no description to read, and whenever the language is only *preferred*. A
+ * "nice to have" language has never excluded anybody and does not start here.
+ */
+export function mandatoryLanguageGate(input: {
+  description: string | null | undefined;
+  candidateLanguages: readonly string[];
+}): { decision: 'language_mismatch'; reasons: string[] } | null {
+  const uncovered = uncoveredMandatoryLanguages(
+    detectLanguageRequirements(input.description),
+    input.candidateLanguages,
+  );
+  if (uncovered.length === 0) return null;
+  return {
+    decision: 'language_mismatch',
+    reasons: uncovered.map(
+      (requirement) =>
+        `The vacancy states ${requirement.language} as a mandatory requirement, which the configured candidate languages do not include: "${requirement.quote}"`,
+    ),
+  };
+}
+
 export function classifyDiscoveryVacancy(input: {
   title: string;
   location: string;
   annualizedMinimumUsd: number | null;
   minimumAnnualBaseUsd: number | null;
   description?: string | null;
+  /** Empty (the default) leaves the language gate inert; see `mandatoryLanguageGate`. */
+  candidateLanguages?: readonly string[];
 }): { decision: DiscoveryDecision; reasons: string[] } {
   if (NON_VACANCY.test(`${input.title}\n${input.description ?? ''}`)) {
     return { decision: 'non_vacancy', reasons: ['Listing is a talent pool, general application, or other non-specific vacancy.'] };
@@ -57,6 +93,11 @@ export function classifyDiscoveryVacancy(input: {
   if (!isFrontendOnlyTitle(input.title)) {
     return { decision: 'role_mismatch', reasons: ['Title is not explicitly frontend-only.'] };
   }
+  const languageMismatch = mandatoryLanguageGate({
+    description: input.description,
+    candidateLanguages: input.candidateLanguages ?? [],
+  });
+  if (languageMismatch !== null) return languageMismatch;
   if (!isPotentiallyEligibleLocation(input.location)) {
     return {
       decision: 'location_restricted',
@@ -87,6 +128,8 @@ export function evaluateOfficialReview(input: {
   currentTitle: string;
   contentHash: string | null;
   minimumAnnualBaseUsd: number | null;
+  /** Empty (the default) routes a reviewed mandatory language to confirmation, never to exclusion. */
+  candidateLanguages?: readonly string[];
 }): { decision: GlobalRemoteDecision; reasons: string[] } {
   const { source } = input;
   if (input.state === 'blocked') {
@@ -131,6 +174,26 @@ export function evaluateOfficialReview(input: {
   }
   if (source.review.outsideUsEligible === 'uncertain') {
     return { decision: 'location_confirmation', reasons: ['Netherlands/outside-US eligibility needs confirmation.'] };
+  }
+  const mandatoryLanguage = source.review.mandatoryLanguage.trim();
+  if (mandatoryLanguage.length > 0) {
+    const candidateLanguages = input.candidateLanguages ?? [];
+    if (candidateLanguages.length === 0) {
+      return {
+        decision: 'language_confirmation',
+        reasons: [
+          `The reviewed source records ${mandatoryLanguage} as a mandatory language, and no candidate language is configured to check it against.`,
+        ],
+      };
+    }
+    if (!candidateCoversLanguage(candidateLanguages, mandatoryLanguage)) {
+      return {
+        decision: 'excluded_language',
+        reasons: [
+          `The reviewed source records ${mandatoryLanguage} as a mandatory language, which the configured candidate languages do not include.`,
+        ],
+      };
+    }
   }
   if (source.review.minimumAnnualBaseUsd === null) {
     return { decision: 'salary_unknown', reasons: ['Official source does not advertise a base-pay floor.'] };
