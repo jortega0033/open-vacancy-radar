@@ -75,3 +75,36 @@ export {
 } from './reporting/cross-company-duplicates.js';
 
 export { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './geo/countries.js';
+
+/**
+ * The work-eligibility evidence model (issue #280). A host process reads
+ * `DiscoveryVacancyAudit.eligibility` off a report and needs these types to render it; the
+ * assessor and the language extractor are exported alongside so a host can also assess a vacancy
+ * it holds outside a full scan without reimplementing either.
+ */
+export {
+  assessWorkEligibility,
+  candidateWorkLanguages,
+  canonicalLanguageName,
+  detectLanguageRequirements,
+  detectWorkLocationStatement,
+  evidenceFreshness,
+  parseCandidateLanguages,
+  uncoveredMandatoryLanguages,
+  workEligibilityEvidenceSchema,
+  EVIDENCE_AGING_MAX_DAYS,
+  EVIDENCE_FRESH_MAX_DAYS,
+  type EligibilityAnswer,
+  type EligibilityEvidence,
+  type EmployerRegisterEvidence,
+  type EvidenceFreshness,
+  type EvidenceScope,
+  type EvidenceSource,
+  type LanguageObligation,
+  type LanguageRequirement,
+  type SalaryBasis,
+  type SalaryGeographyEvidence,
+  type WorkEligibilityEvidence,
+  type WorkEligibilityInput,
+  type WorkLocationStatement,
+} from './eligibility/index.js';
