@@ -215,6 +215,90 @@ describe('ApplicationsPage', () => {
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
   });
 
+  describe('onApplicationsChanged (stale sidebar/header counts after mutating without navigating away)', () => {
+    it('fires after creating an application, so the caller can refresh counts without navigating away', async () => {
+      const createApplication = vi
+        .fn()
+        .mockResolvedValue(makeApplication({ id: 'new-1', role: 'New Role', company: 'New Co' }));
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([]), createApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('No applications yet')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'New Role' } });
+      fireEvent.change(within(dialog).getByLabelText('Company *'), { target: { value: 'New Co' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /create application/i }));
+
+      await waitFor(() => expect(createApplication).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not fire for a plain edit, which cannot change the active/archived split', async () => {
+      const app = makeApplication({ id: 'edit-1' });
+      const updateApplication = vi.fn().mockResolvedValue({ ...app, role: 'Staff Frontend Engineer' });
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([app]), updateApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'Staff Frontend Engineer' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+      await waitFor(() => expect(updateApplication).toHaveBeenCalledTimes(1));
+      expect(onApplicationsChanged).not.toHaveBeenCalled();
+    });
+
+    it('fires after archiving and after restoring, since that moves a row in or out of `activeApplications`', async () => {
+      const app = makeApplication({ id: 'arch-1', archived: false });
+      const updateApplication = vi.fn().mockResolvedValue({ ...app, archived: true });
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([app]), updateApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^archive$/i }));
+
+      await waitFor(() => expect(updateApplication).toHaveBeenCalledWith('arch-1', { archived: true }));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it('fires after a delete and again after undoing it', async () => {
+      const app = makeApplication({ id: 'del-1' });
+      const deleteApplication = vi.fn().mockResolvedValue({ deleted: true });
+      const createApplication = vi
+        .fn()
+        .mockResolvedValue(makeApplication({ id: 'recreated-1', role: app.role, company: app.company }));
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([app]),
+        deleteApplication,
+        createApplication,
+      });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      const confirmDialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
+
+      await waitFor(() => expect(deleteApplication).toHaveBeenCalledWith('del-1'));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(await screen.findByRole('button', { name: /undo/i }));
+
+      await waitFor(() => expect(createApplication).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(2));
+    });
+  });
+
   it('surfaces a load error without crashing', async () => {
     installWorkspaceBridge({ listApplications: vi.fn().mockRejectedValue(new Error('database unreachable')) });
 

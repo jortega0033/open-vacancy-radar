@@ -8,6 +8,7 @@ import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
 import { ConfirmDialog } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
+import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
@@ -498,6 +499,14 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             disabled={disabled}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}
+          />
+
+          <AtsRosterSection
+            disabled={disabled}
+            onRefreshed={(result) =>
+              flash({ kind: 'saved', message: `Company roster refreshed: ${result.totalEntries.toLocaleString()} companies` })
+            }
+            onRefreshError={(message) => flash({ kind: 'error', message })}
           />
         </>
       )}

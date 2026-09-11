@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { decodeFeedEntities } from '../ats/shared.js';
 import { annualizedMinimumUsd, classifyDiscoveryVacancy } from './evaluation.js';
 import type {
   DiscoverySourceAudit,
@@ -14,8 +15,18 @@ export function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/**
+ * Every JSON-based discovery source in this package (and every RSS/XML source's non-XML-parsed
+ * fields) reads its `title`/`company`/`description`/etc. strings through this one function, so
+ * decoding HTML entities here -- rather than in each of the ~15 source files that call it -- is
+ * what keeps this a single shared step instead of an ad-hoc copy per source. See
+ * `decodeFeedEntities` (in `../ats/shared.js`, reused here rather than duplicated) for why this is
+ * needed at all and why it's a targeted entity replacement rather than a full markup parse.
+ */
 export function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  if (typeof value !== 'string') return null;
+  const decoded = decodeFeedEntities(value).trim();
+  return decoded.length === 0 ? null : decoded;
 }
 
 export function numberValue(value: unknown): number | null {

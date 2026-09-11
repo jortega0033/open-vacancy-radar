@@ -36,6 +36,23 @@ export {
   type CandidateProfile,
 } from './candidate/profile.js';
 
+/**
+ * The ATS-roster import step (issue #251/#264): re-runnable on a deliberate refresh cadence, never
+ * invoked automatically at scan time (see `pipeline/ats-roster-import.ts`'s own doc comment). A host
+ * process (the desktop app's main process, today) is the one place this can be triggered from
+ * outside the CLI; `readAtsRosterStatus` lets that same host show an honest "last refreshed" status
+ * without loading the full roster across an IPC boundary.
+ */
+export {
+  runAtsRosterImport,
+  type AtsRosterImportResult,
+  type AtsRosterProviderImportResult,
+} from './pipeline/ats-roster-import.js';
+export {
+  readAtsRosterStatus,
+  type AtsRosterStatus,
+} from './companies/ats-roster-repository.js';
+
 export type {
   GlobalRemoteReport,
   DiscoveryVacancyAudit,

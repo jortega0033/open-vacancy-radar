@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
@@ -247,6 +247,54 @@ describe('App', () => {
 
       // Still 5, not reset to 0 and not "Loading…" again -- the last real value survives a failed refresh.
       await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
+    });
+
+    it('QA regression: refreshes the "N active" header and sidebar badge right after creating an application, with no navigation', async () => {
+      const getCounts = vi
+        .fn()
+        // Call 1: the initial mount fetch. Call 2: `handleNavigate`'s own re-sync fired by the
+        // "Applications" click below -- both still see zero, since nothing has been created yet.
+        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0 })
+        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0 })
+        // Call 3 onward: what the create's own refresh (the fix under test) should see.
+        .mockResolvedValue({ savedJobs: 0, activeApplications: 1, letters: 0 });
+      const createApplication = vi.fn().mockResolvedValue({
+        id: 'app-1',
+        savedJobId: null,
+        role: 'New Role',
+        company: 'New Co',
+        location: null,
+        verification: null,
+        status: 'applied',
+        appliedAt: null,
+        nextStep: null,
+        contact: null,
+        cvId: null,
+        letterId: null,
+        notes: '',
+        archived: false,
+      });
+      installWorkspaceBridge({ getCounts, listApplications: vi.fn().mockResolvedValue([]), createApplication });
+
+      render(<App />);
+      fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
+      await waitFor(() => expect(screen.getByText('0 active')).toBeInTheDocument());
+      // `handleNavigate`'s own re-sync already called `getCounts` once more on the way in; let that
+      // settle on the stale "0 active" value before the create below, so the assertion further down
+      // is actually exercising the create's own refresh rather than riding that earlier call.
+      await waitFor(() => expect(getCounts).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'New Role' } });
+      fireEvent.change(within(dialog).getByLabelText('Company *'), { target: { value: 'New Co' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /create application/i }));
+
+      await waitFor(() => expect(createApplication).toHaveBeenCalledTimes(1));
+      // The fix: this refresh happens from the create itself, with no click on the sidebar and no
+      // leaving the Applications page in between.
+      await waitFor(() => expect(screen.getByText('1 active')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Applications' }).textContent).toBe('Applications1');
     });
   });
 

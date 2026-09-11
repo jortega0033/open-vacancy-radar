@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   atsRosterFilePath,
   loadAtsRoster,
+  readAtsRosterStatus,
   writeAtsRoster,
 } from '../../src/companies/ats-roster-repository.js';
 import type { AtsRosterEntry } from '../../src/companies/ats-roster-source.js';
@@ -59,5 +60,28 @@ describe('writeAtsRoster', () => {
 
     expect(file).toBe(atsRosterFilePath(projectRoot));
     expect(file.replaceAll('\\', '/')).toMatch(/\.data\/ats-roster-v1\.json$/u);
+  });
+});
+
+describe('readAtsRosterStatus', () => {
+  it('returns null when the roster has never been imported, rather than throwing', async () => {
+    await expect(readAtsRosterStatus(projectRoot)).resolves.toBeNull();
+  });
+
+  it('reports the summary fields without requiring the caller to load every roster row', async () => {
+    await writeAtsRoster(projectRoot, [entryB, entryA], { greenhouse: 1, lever: 1 }, new Date('2026-01-01T00:00:00.000Z'));
+
+    await expect(readAtsRosterStatus(projectRoot)).resolves.toEqual({
+      importedAt: '2026-01-01T00:00:00.000Z',
+      totalEntries: 2,
+      sourceCounts: { greenhouse: 1, lever: 1 },
+    });
+  });
+
+  it('throws on a corrupted roster file rather than silently reporting no status', async () => {
+    await mkdir(join(projectRoot, '.data'), { recursive: true });
+    await writeFile(join(projectRoot, '.data', 'ats-roster-v1.json'), '{"not":"a roster"}', 'utf8');
+
+    await expect(readAtsRosterStatus(projectRoot)).rejects.toThrow('does not contain a valid status');
   });
 });
