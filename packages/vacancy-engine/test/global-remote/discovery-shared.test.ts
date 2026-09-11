@@ -1,10 +1,67 @@
 import { describe, expect, it } from 'vitest';
 import {
+  discoveryAudit,
   isoPostedAt,
   isoPostedAtFromUnixSeconds,
   parseSalaryText,
   stringValue,
 } from '../../src/global-remote/discovery-shared.js';
+
+describe('discoveryAudit', () => {
+  const baseInput = {
+    key: 'himalayas:abc123',
+    provider: 'himalayas' as const,
+    company: 'Acme Inc.',
+    title: 'Senior Frontend Engineer',
+    location: 'Remote',
+    employmentType: null,
+    currency: null,
+    salaryPeriod: null,
+    advertisedMinimum: null,
+    raw: { id: 'abc123' },
+    minimumAnnualBaseUsd: null,
+  };
+
+  it('sets sourceUrl to the same value as url, and leaves url itself unchanged (issue #278)', () => {
+    const url = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const audit = discoveryAudit({ ...baseInput, url });
+    expect(audit.url).toBe(url);
+    expect(audit.sourceUrl).toBe(url);
+  });
+
+  it('resolves a requisition identity and a verified applyUrl for a recognized direct-ATS URL', () => {
+    const url = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const audit = discoveryAudit({ ...baseInput, url });
+    expect(audit.identity).toEqual({
+      kind: 'requisition',
+      key: 'greenhouse:acme:555000',
+      employerKey: 'greenhouse:acme',
+      requisitionId: '555000',
+    });
+    expect(audit.applyUrl).toMatchObject({ status: 'verified', url });
+  });
+
+  it('resolves an unresolved applyUrl for a generic careers page, and still returns a complete row', () => {
+    const url = 'https://acme.com/careers';
+    const audit = discoveryAudit({ ...baseInput, url });
+    expect(audit.identity?.kind).toBe('semantic');
+    expect(audit.applyUrl).toMatchObject({ status: 'unresolved', url });
+    expect(audit.title).toBe(baseInput.title);
+    expect(audit.company).toBe(baseInput.company);
+  });
+
+  it('records exactly one self-referencing source', () => {
+    const url = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const audit = discoveryAudit({ ...baseInput, url });
+    expect(audit.sources).toEqual([{ provider: 'himalayas', key: baseInput.key, url }]);
+  });
+
+  it('never changes the caller-supplied key, unaffected by identity resolution', () => {
+    const url = 'https://acme.com/careers';
+    const audit = discoveryAudit({ ...baseInput, url });
+    expect(audit.key).toBe(baseInput.key);
+  });
+});
 
 describe('stringValue', () => {
   it('returns null for non-string and empty/whitespace-only values', () => {

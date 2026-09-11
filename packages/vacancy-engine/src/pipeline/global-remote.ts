@@ -32,10 +32,12 @@ import {
   type GlobalRemoteReport,
   type OfficialVacancyAudit,
   type ScanProgressCallback,
+  type VacancySourceReference,
 } from '../global-remote/models.js';
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
 import { scoreWorldwideVacancy } from '../filtering/index.js';
 import { globalRemoteSourceRegistry } from '../global-remote/source-registry.js';
+import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import {
   runWorkableGlobalDiscovery,
   WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
@@ -81,57 +83,99 @@ async function loadGlobalRemoteConfig(projectRoot: string): Promise<GlobalRemote
   return globalRemoteConfigSchema.parse(JSON.parse(await readFile(file, 'utf8')) as unknown);
 }
 
-function canonicalWorkableUrl(value: string): string | null {
-  try {
-    const url = new URL(value);
-    if (
-      url.origin !== 'https://apply.workable.com' ||
-      url.search.length > 0 ||
-      !/^\/j\/[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/u.test(url.pathname)
-    ) {
-      return null;
-    }
-    url.hash = '';
-    return url.href;
-  } catch {
-    return null;
-  }
+/**
+ * Which discovered row's own fields (title, description, location, ...) survive as a merged
+ * group's representation, when more than one discovery row shares one canonical identity (issue
+ * #278). Lower sorts first. `workable_global` keeps rank 0 for exact backward compatibility with
+ * the dedup this replaces (see `uniqueDiscovery`'s own doc comment): its "all customers" feed is
+ * Workable's own authoritative export, and every row surviving a scan used to prefer it whenever a
+ * URL match was found. The `ats_roster_*` providers rank just behind it for the same reason --
+ * `global-remote/ats-roster-discovery.ts` calls this repo's own reviewed ATS parsers directly
+ * (`ats/greenhouse.ts` etc.), the same trust level `global-remote/official.ts` already gives a
+ * curated source, versus an aggregator's own copy of the same listing. Every other provider ties at
+ * the lowest rank and falls back to first-seen order, matching this function's previous behavior.
+ */
+const IDENTITY_MERGE_PRIORITY: Partial<Record<DiscoveryVacancyAudit['provider'], number>> = {
+  workable_global: 0,
+  ats_roster_greenhouse: 1,
+  ats_roster_lever: 1,
+  ats_roster_ashby: 1,
+  ats_roster_recruitee: 1,
+  ats_roster_personio: 1,
+};
+
+function identityMergePriority(provider: DiscoveryVacancyAudit['provider']): number {
+  return IDENTITY_MERGE_PRIORITY[provider] ?? 2;
 }
 
-export function uniqueDiscovery(vacancies: DiscoveryVacancyAudit[]): DiscoveryVacancyAudit[] {
-  const directWorkableUrls = new Set(
-    vacancies
-      .filter((vacancy) => vacancy.provider === 'workable_global')
-      .map((vacancy) => canonicalWorkableUrl(vacancy.url))
-      .filter((url): url is string => url !== null),
+/** A row's own source references, falling back to a single self-reference for a row that predates
+ * `sources` (issue #278) -- e.g. one read back from a `latest.json` written by an older engine
+ * version, or a literal object built by an existing test fixture that never called
+ * `discoveryAudit()`. */
+function ownSourceReferences(vacancy: DiscoveryVacancyAudit): VacancySourceReference[] {
+  return vacancy.sources ?? [{ provider: vacancy.provider, key: vacancy.key, url: vacancy.url }];
+}
+
+/**
+ * Collapses one identity group (every row `uniqueDiscovery` decided is the same underlying
+ * vacancy) into the single row that survives: the highest-priority row's own fields
+ * (`identityMergePriority` above), with every group member's source references merged onto it so
+ * the result carries every source that found this vacancy, not just the one whose content won --
+ * issue #278's "one actionable vacancy carrying both source references" requirement.
+ */
+function mergeIdentityGroup(
+  group: readonly { vacancy: DiscoveryVacancyAudit; index: number }[],
+): DiscoveryVacancyAudit {
+  const ordered = [...group].sort(
+    (left, right) =>
+      identityMergePriority(left.vacancy.provider) - identityMergePriority(right.vacancy.provider) ||
+      left.index - right.index,
   );
-  const prioritized = vacancies
-    .map((vacancy, index) => ({ vacancy, index }))
-    .sort((left, right) => {
-      const leftPriority = left.vacancy.provider === 'workable_global' ? 0 : 1;
-      const rightPriority = right.vacancy.provider === 'workable_global' ? 0 : 1;
-      return leftPriority - rightPriority || left.index - right.index;
-    });
-  const keys = new Set<string>();
-  const retainedWorkableUrls = new Set<string>();
-  const unique: DiscoveryVacancyAudit[] = [];
-  for (const { vacancy } of prioritized) {
-    const workableUrl = canonicalWorkableUrl(vacancy.url);
-    if (
-      keys.has(vacancy.key) ||
-      (workableUrl !== null &&
-        ((vacancy.provider !== 'workable_global' && directWorkableUrls.has(workableUrl)) ||
-          retainedWorkableUrls.has(workableUrl)))
-    ) {
-      continue;
+  const primary = ordered[0]!.vacancy;
+  const sources: VacancySourceReference[] = [];
+  const seen = new Set<string>();
+  for (const { vacancy } of ordered) {
+    for (const reference of ownSourceReferences(vacancy)) {
+      const dedupeKey = `${reference.provider}::${reference.key}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      sources.push(reference);
     }
-    keys.add(vacancy.key);
-    if (vacancy.provider === 'workable_global' && workableUrl !== null) {
-      retainedWorkableUrls.add(workableUrl);
-    }
-    unique.push(vacancy);
   }
-  return unique.sort(
+  // Recomputed here (never trusted off `primary.identity`/`primary.applyUrl`) for the same reason
+  // grouping itself recomputes identity below: a row from an old persisted report, or a hand-built
+  // test fixture, may not carry either field yet, and the merged output must always expose both.
+  const identity = vacancyIdentityFor(primary);
+  const applyUrl = resolveApplyUrl(identity, primary.url);
+  return { ...primary, sourceUrl: primary.sourceUrl ?? primary.url, identity, applyUrl, sources };
+}
+
+/**
+ * Merges discovery rows that resolve to the same canonical job identity (issue #278) into one
+ * actionable vacancy per identity, replacing the previous Workable-URL-only special case with the
+ * general tiered resolver in `vacancies/identity.ts#vacancyIdentityFor`: an employer/ATS-tenant plus
+ * requisition ID first, then a normalized canonical URL for a URL that looks like one specific
+ * posting, and a company-scoped semantic fingerprint only as a last resort. Identity is always
+ * recomputed here from each row's own `url`/`company`/`title`/`location` -- never read off a row's
+ * `identity` field -- so a row that predates that field (an old persisted report, or a hand-built
+ * test fixture) still groups correctly.
+ *
+ * This never drops a row for lacking a verified `applyUrl`: an `unresolved` apply-URL row is exactly
+ * as eligible to survive (on its own, or as the representative of its group) as a `verified` one --
+ * only merging with an identical-identity duplicate removes a row, never an unresolved status by
+ * itself. See `resolveApplyUrl`'s own doc comment for why that distinction matters.
+ */
+export function uniqueDiscovery(vacancies: DiscoveryVacancyAudit[]): DiscoveryVacancyAudit[] {
+  const groups = new Map<string, { vacancy: DiscoveryVacancyAudit; index: number }[]>();
+  vacancies.forEach((vacancy, index) => {
+    const identity = vacancyIdentityFor(vacancy);
+    const groupKey = `${identity.kind}::${identity.key}`;
+    const existing = groups.get(groupKey);
+    if (existing === undefined) groups.set(groupKey, [{ vacancy, index }]);
+    else existing.push({ vacancy, index });
+  });
+  const merged = [...groups.values()].map((group) => mergeIdentityGroup(group));
+  return merged.sort(
     (left, right) =>
       left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
   );
