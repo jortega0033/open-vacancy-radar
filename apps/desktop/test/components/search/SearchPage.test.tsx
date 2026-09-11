@@ -227,16 +227,20 @@ describe('SearchPage', () => {
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
-  it('shows a distinct empty state when the candidate profile has no targets configured', async () => {
+  it('keeps showing vacancies when the candidate profile has no targets configured', async () => {
+    const onOpenSearchProfile = vi.fn();
     installAllBridges({
       getReport: vi
         .fn()
         .mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
     });
 
-    render(<SearchPage />);
+    render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
 
-    await waitFor(() => expect(screen.getByText("Your search profile isn't set up yet")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.getByText(/vacancies were found, but none were scored/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
+    expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
 
   it('seeds the country filter from the persisted default search location on first load', async () => {

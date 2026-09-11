@@ -141,9 +141,10 @@ export interface SearchPageProps {
    * supplied.
    */
   onGenerateLetter?: (vacancy: SelectedVacancy) => void;
+  onOpenSearchProfile?: () => void;
 }
 
-export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
+export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPageProps = {}) {
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
@@ -457,12 +458,12 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   // here: this never merges partial rows into a loaded report, so the final displayed list is
   // exactly what a non-streaming scan would have shown, byte-for-byte.
   const results = useMemo<SearchResult[]>(() => {
-    if (worldwideReport) return sortResults(toWorldwideResults(worldwideReport));
-    if (partialVacancies.length > 0) return sortResults(toPartialResults(partialVacancies));
+    if (worldwideReport) return toWorldwideResults(worldwideReport);
+    if (partialVacancies.length > 0) return toPartialResults(partialVacancies);
     return [];
   }, [worldwideReport, partialVacancies]);
 
-  const visible = useMemo(() => filterResults(results, appliedFilters), [results, appliedFilters]);
+  const visible = useMemo(() => sortResults(filterResults(results, appliedFilters)), [results, appliedFilters]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const pageItems = useMemo(
@@ -710,61 +711,67 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
             </button>
           }
         />
-      ) : profileNotConfigured ? (
-        // Distinct from "No search yet": a scan genuinely ran and found vacancies, but scoring
-        // never ran because the candidate profile has no target roles or strongest skills. Showing
-        // the normal results view here would render "0 of N vacancies" -- indistinguishable from a
-        // real, exhaustive search that found nothing -- rather than the actionable truth.
-        <EmptyState
-          illustration={emptySearchIllustration}
-          title="Your search profile isn't set up yet"
-          description={`${results.length} vacancies were found, but none were scored: the search profile has no target roles or strongest skills configured, so there's nothing to match them against. Fill it in under Settings to see ranked matches.`}
-        />
       ) : (
         // Dimmed, not hidden or disabled, while a rescan is in flight: the results/detail pane
         // still shows the last-known data (real, just about to be replaced), and staying
         // interactive lets someone keep reading/saving from it during a scan that can take up to a
         // couple of minutes, rather than locking the page for that whole time.
-        <div
-          className={`mt-3 flex min-h-0 flex-1 flex-col lg:flex-row ${scanning ? 'opacity-60 transition-opacity' : ''}`}
-        >
-          <SearchResultList
-            results={pageItems}
-            totalCount={results.length}
-            selectedKey={selectedKey}
-            onSelect={handleSelect}
-            savedKeys={savedKeys}
-            summary={summary}
-            page={page}
-            pageCount={pageCount}
-            onPageChange={setPage}
-          />
-
-          {selected ? (
-            <VacancyDetail
-              result={selected}
-              defaultCvName={defaultCvName}
-              providerLabel={PROVIDER_LABEL[defaultProvider]}
-              saveState={saveState}
-              {...(saveError ? { saveError } : {})}
-              onSave={() => void handleSave()}
-              onGenerateLetter={handleGenerateLetter}
-              assistantOpen={assistantForKey === selected.key}
-              onToggleAssistant={() =>
-                setAssistantForKey((current) => (current === selected.key ? null : selected.key))
-              }
-              assistant={<CvAssistant vacancy={toVacancyLead(selected)} />}
-            />
-          ) : (
-            <div className="min-w-0 flex-1">
-              <EmptyState
-                illustration={emptySearchIllustration}
-                title="Select a vacancy"
-                description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
-              />
+        <>
+          {profileNotConfigured && (
+            <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+              <span>
+                {results.length.toLocaleString()} vacancies were found, but none were scored because
+                the search profile has no target roles or strongest skills. You can still browse,
+                save and filter these vacancies; fill the profile under Settings to rank future scans.
+              </span>
+              {onOpenSearchProfile && (
+                <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
+                  Fill search profile
+                </button>
+              )}
             </div>
           )}
-        </div>
+          <div
+            className={`mt-3 flex min-h-0 flex-1 flex-col lg:flex-row ${scanning ? 'opacity-60 transition-opacity' : ''}`}
+          >
+            <SearchResultList
+              results={pageItems}
+              totalCount={results.length}
+              selectedKey={selectedKey}
+              onSelect={handleSelect}
+              savedKeys={savedKeys}
+              summary={summary}
+              page={page}
+              pageCount={pageCount}
+              onPageChange={setPage}
+            />
+
+            {selected ? (
+              <VacancyDetail
+                result={selected}
+                defaultCvName={defaultCvName}
+                providerLabel={PROVIDER_LABEL[defaultProvider]}
+                saveState={saveState}
+                {...(saveError ? { saveError } : {})}
+                onSave={() => void handleSave()}
+                onGenerateLetter={handleGenerateLetter}
+                assistantOpen={assistantForKey === selected.key}
+                onToggleAssistant={() =>
+                  setAssistantForKey((current) => (current === selected.key ? null : selected.key))
+                }
+                assistant={<CvAssistant vacancy={toVacancyLead(selected)} />}
+              />
+            ) : (
+              <div className="min-w-0 flex-1">
+                <EmptyState
+                  illustration={emptySearchIllustration}
+                  title="Select a vacancy"
+                  description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
+                />
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits

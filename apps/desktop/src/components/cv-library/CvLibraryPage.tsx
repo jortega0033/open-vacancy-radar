@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
+import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
@@ -14,6 +15,57 @@ type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+function nonEmpty(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function unique(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+async function fillEmptySearchProfileFieldsFromCv(doc: CvDocumentRecord): Promise<boolean> {
+  if (!('vacancyRadar' in window)) return false;
+  const profile = await window.vacancyRadar.getSearchProfile();
+  const patch: CandidateProfilePatch = {};
+
+  const title = nonEmpty(doc.profile.title);
+  const targetRole = nonEmpty(doc.targetRole) ?? title;
+  const years = Number.parseInt(doc.profile.years.trim(), 10);
+  const language = doc.profile.languages
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  const skills = unique(doc.profile.skills);
+
+  if (!profile.currentRole && title) patch.currentRole = title;
+  if (!profile.location && nonEmpty(doc.profile.location)) patch.location = doc.profile.location.trim();
+  if (profile.experienceYears === 0 && Number.isFinite(years) && years > 0) patch.experienceYears = years;
+  if (!profile.constraints.professionalLanguage && language) {
+    patch.constraints = { professionalLanguage: language };
+  }
+  if (profile.strongestSkills.length === 0 && skills.length > 0) {
+    patch.strongestSkills = skills.slice(0, 10);
+  }
+  if (profile.targetRoles.length === 0 && targetRole) {
+    patch.targetRoles = [targetRole];
+  }
+
+  if (Object.keys(patch).length === 0) return false;
+  await window.vacancyRadar.saveSearchProfile(patch);
+  return true;
 }
 
 /**
@@ -41,6 +93,7 @@ export function CvLibraryPage() {
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
+  const [actionStatus, setActionStatus] = useState<string>();
 
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [exportedId, setExportedId] = useState<string | null>(null);
@@ -100,11 +153,19 @@ export function CvLibraryPage() {
 
   const handleSetDefault = useCallback(async (doc: CvDocumentRecord) => {
     setActionError(undefined);
+    setActionStatus(undefined);
     try {
       // The whole refreshed library, so the previous default's demotion shows up too: see the
       // bridge doc comment on `setDefaultCvDocument` for why re-fetching would be redundant here.
       const refreshed = await window.workspace.setDefaultCvDocument(doc.id);
       setDocuments(refreshed);
+      const promoted = refreshed.find((entry) => entry.id === doc.id) ?? doc;
+      try {
+        const filled = await fillEmptySearchProfileFieldsFromCv(promoted);
+        if (filled) setActionStatus('Search profile filled from the default CV');
+      } catch (err) {
+        setActionError(`Default CV set, but the search profile was not filled: ${describeError(err, 'unknown error')}`);
+      }
     } catch (err) {
       setActionError(describeError(err, 'could not set this CV as default'));
     }
@@ -116,6 +177,7 @@ export function CvLibraryPage() {
   const handleExport = useCallback(async (doc: CvDocumentRecord, format: CvExportFormat) => {
     if (exportedTimeoutRef.current !== undefined) clearTimeout(exportedTimeoutRef.current);
     setActionError(undefined);
+    setActionStatus(undefined);
     setExportingId(doc.id);
     // Cleared synchronously, not left to the pending timeout above: without this, a second export
     // started while a previous "Exported" badge is still showing would leave that stale badge
@@ -137,6 +199,7 @@ export function CvLibraryPage() {
 
   const requestDelete = useCallback((doc: CvDocumentRecord) => {
     setActionError(undefined);
+    setActionStatus(undefined);
     setDeleteTarget(doc);
   }, []);
 
@@ -175,6 +238,11 @@ export function CvLibraryPage() {
 
       {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+      {actionStatus && (
+        <div className="alert alert-success alert-soft mt-4 text-sm" role="status">
+          {actionStatus}
+        </div>
+      )}
 
       {isLoading && !loadError && <PageLoading label="Loading your CV library…" />}
 
