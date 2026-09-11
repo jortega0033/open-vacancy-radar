@@ -104,6 +104,17 @@ describe('classifySubmissionOutcome: acceptance case 2 -- a real confirmation or
     expect(report.outcome).toBe('unknown');
   });
 
+  it('stays fast on a hostile, whitespace-heavy page rather than backtracking through it', () => {
+    // Every gap in the receipt pattern is bounded for this reason: the text being matched is a
+    // third-party page's own content, and the pattern must not become a denial of service on one
+    // built to trip it.
+    const hostile = `Application reference:${' '.repeat(60_000)}!`;
+    const started = Date.now();
+    const report = classifySubmissionOutcome(observation({ text: hostile, baselineText: '', formStillPresent: false }), OBSERVED_AT);
+    expect(report.outcome).toBe('unknown');
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('ignores a short, non-identifier-shaped "reference" rather than treating it as a receipt', () => {
     const report = classifySubmissionOutcome(
       observation({ text: 'Reference: 12 people applied this week', formStillPresent: false }),

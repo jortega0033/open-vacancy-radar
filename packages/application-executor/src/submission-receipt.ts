@@ -122,9 +122,15 @@ const CONFIRMATION_PHRASES: readonly RegExp[] = Object.freeze([
  * A receipt/reference identifier the page (or a response payload) prints for the applicant. The
  * identifier itself must be at least six characters of an id-shaped alphabet: short numbers like
  * "Reference: 3" appear on plenty of pages that have nothing to do with a submission.
+ *
+ * Every gap between the parts is a *bounded* `[ \t]{0,3}`, never `\s*`. Two adjacent unbounded
+ * whitespace quantifiers around an optional group is a polynomial-backtracking shape, and the
+ * string this runs against is a third-party page's own text -- exactly the "uncontrolled data"
+ * case where that matters. `extractSubmissionSignals` already collapses runs of whitespace to a
+ * single space before this sees anything, so three is generous rather than restrictive.
  */
 const RECEIPT_REFERENCE_PATTERN =
-  /\b(?:application|confirmation|reference|receipt)\s*(?:id|number|no\.?|#)?\s*[:#]\s*([A-Za-z0-9][A-Za-z0-9_-]{5,63})\b/;
+  /\b(?:application|confirmation|reference|receipt)[ \t]{0,3}(?:id|number|no\.?|#)?[ \t]{0,3}[:#][ \t]{0,3}([A-Za-z0-9][A-Za-z0-9_-]{5,63})\b/;
 
 /**
  * Wording that means the form itself refused. Deliberately narrow: "invalid" alone is not here
