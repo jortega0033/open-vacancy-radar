@@ -144,6 +144,24 @@ export const applicationAttempts = sqliteTable('application_attempts', {
   /** The actual URL this attempt applies through -- the "canonical job URL" #193 specified,
    * kept separate from `vacancyKey` because a posting can be re-listed at a new URL. */
   canonicalUrl: text('canonical_url').notNull().default(''),
+  /**
+   * #275's requisition identity, derived once at creation by `application-identity.ts` and stored
+   * rather than recomputed, so the completed-application lookup is a plain column comparison.
+   *
+   * `employerKey` is `<ats-provider>:<board>` when the apply URL is a recognised ATS job URL, and
+   * a normalized company name otherwise. It is never matched on alone: two different openings at
+   * one employer share an `employerKey` and must both stay eligible, which is why every completed
+   * lookup requires a non-null `requisitionId` alongside it before it will call two attempts the
+   * same application. Empty on every row written before migration 0012.
+   */
+  employerKey: text('employer_key').notNull().default(''),
+  /** The opening's id as the receiving ATS names it, or null when nothing reliable was derivable
+   * -- in which case `canonicalUrlKey` is the only identity the lookup has to work with. */
+  requisitionId: text('requisition_id'),
+  /** `canonicalUrl` reduced to the parts that identify the posting (no scheme, no `www.`, no
+   * fragment, no tracking parameters, remaining query sorted). The fallback identity, and the
+   * reason the same posting arriving with different `utm_*` tags is still the same posting. */
+  canonicalUrlKey: text('canonical_url_key').notNull().default(''),
   company: text('company').notNull(),
   role: text('role').notNull(),
   /** The CV this attempt was generated from. `on delete set null`, not cascade: deleting the
@@ -222,6 +240,39 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * so counting a manually-reviewed submission against that cap would be wrong -- a person's own
    * review pace is already the rate limit #202 relies on for the manual path. Null until submitted. */
   submissionMode: text('submission_mode', { enum: ['manual', 'automatic'] }),
+  /**
+   * What backs the claim that this attempt was actually completed (#275). Both values suppress a
+   * duplicate equally -- the column exists to preserve *which* one did it, not to rank them:
+   *
+   *  - `user_reported`: a person told the app this application is done. That is the only kind of
+   *    completion a renderer-originated patch can ever assert (see `validate.ts`), because the
+   *    renderer is the user and cannot observe a receipt.
+   *  - `receipt_confirmed`: the submission itself was observed to land -- a confirmation page or an
+   *    unambiguous receipt. Only main-process submission code may record this, and only #271's
+   *    receipt observer can honestly produce it; until that lands nothing writes this value, and a
+   *    `submitted` attempt with a null evidence type means "completed, evidence not recorded".
+   *
+   * Null is not "not completed": the checkpoint alone decides that. Null means the evidence was
+   * never recorded, which is the state every row written before migration 0012 is in.
+   */
+  completionEvidence: text('completion_evidence', { enum: ['user_reported', 'receipt_confirmed'] }),
+  /**
+   * #275's explicit reapply path: the completed attempt this one deliberately supersedes.
+   *
+   * A plain column, not a foreign key. The point of these three fields is to be a durable record
+   * of a decision, and a `set null` on delete (or worse, a cascade) would erase exactly the
+   * provenance an audit of "why was a second application sent to this requisition?" needs. The
+   * predecessor's own document version is snapshotted here for the same reason the attempt
+   * snapshots `sourceCvContentHash` rather than trusting `cvDocuments` to still hold it.
+   */
+  supersedesAttemptId: text('supersedes_attempt_id'),
+  /** Why the user reapplied (a corrected document, an updated CV, an employer asking again).
+   * Required and non-empty on the reapply path; empty on every ordinary attempt. */
+  reapplyReason: text('reapply_reason').notNull().default(''),
+  /** The superseded attempt's `sourceCvContentHash` as it stood when this reapply was created.
+   * With this row's own `sourceCvContentHash` that is both document versions, before and after,
+   * readable without depending on the predecessor row still existing. */
+  reapplyPreviousCvContentHash: text('reapply_previous_cv_content_hash'),
 });
 
 /**

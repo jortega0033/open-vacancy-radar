@@ -376,6 +376,15 @@ export async function submitApplicationReview(
         submittedAt: report.observedAt,
         submissionMode: mode,
         formStructureHash: computeFormStructureHash(snapshot),
+        // #275's completion evidence, and the one place in the app entitled to assert it. #275
+        // landed this column with nothing able to write `receipt_confirmed` honestly, because the
+        // observation that could justify it is #271's and did not exist yet. It does now: this
+        // branch is reached only when `observeSubmissionOutcome()` returned `submitted`, which it
+        // does only on a confirmation genuinely new since before the click, or a receipt
+        // identifier. The receipt row written just above is the durable evidence; this column is
+        // the same fact denormalized onto the attempt so #275's completed-application lookup is a
+        // plain column read and does not have to join evidence to answer "has this been applied to?".
+        completionEvidence: 'receipt_confirmed',
       });
       return { ok: true };
     }

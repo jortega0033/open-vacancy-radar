@@ -2,10 +2,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
 import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
+import * as schema from '../electron/workspace/schema.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
@@ -312,10 +314,21 @@ describe('application attempts (#198)', () => {
     expect(second.checkpoint).toBe('queued');
   });
 
-  it('does not refuse a new attempt once the prior one reached a terminal checkpoint', () => {
+  it('does not refuse a new attempt once the prior one reached a terminal checkpoint that never submitted', () => {
     const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
-    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submitted' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'failed' });
     expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).not.toThrow();
+  });
+
+  it('DOES refuse a new attempt once the prior one reached submitted -- that is #275, not the concurrency guard', () => {
+    // This test used to assert the opposite. A `submitted` attempt is terminal for the concurrency
+    // guard (nothing is still running) but is exactly the case the completed-application lookup
+    // exists to catch, so the refusal now comes from the other guard and names the other error.
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submitted', completionEvidence: 'user_reported' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
   });
 
   it('still refuses while the prior attempt is submission_unknown -- a real submission may already have gone through', () => {
@@ -380,6 +393,283 @@ describe('application attempts (#198)', () => {
       reopened.close();
     }
     close = () => {};
+  });
+});
+
+/**
+ * #275: a completed application must not silently re-enter the queue.
+ *
+ * Every fixture here is synthetic. "Northwind Labs" is a made-up employer and the requisition ids
+ * are invented; only the *host shapes* are real, because the whole point of the requisition
+ * identity is that it is read out of a real ATS apply URL.
+ */
+const GREENHOUSE_JOB = 'https://boards.greenhouse.io/northwindlabs/jobs/4012345';
+const GREENHOUSE_OTHER_JOB = 'https://boards.greenhouse.io/northwindlabs/jobs/4012999';
+
+const NORTHWIND = {
+  company: 'Northwind Labs',
+  role: 'Platform Engineer',
+  sourceCvContentHash: HASH_A,
+  jdSnapshotHash: HASH_B,
+} as const;
+
+/** Takes an attempt all the way to a completed application with the given evidence. */
+function completeAttempt(
+  attemptId: string,
+  completionEvidence: 'user_reported' | 'receipt_confirmed',
+): void {
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: 'submitted',
+    submittedAt: '2026-09-01T09:00:00.000Z',
+    submissionMode: 'manual',
+    completionEvidence,
+  });
+}
+
+function completedRefusal(input: Parameters<typeof workspace.createApplicationAttempt>[1]): workspace.ApplicationAlreadyCompletedError {
+  try {
+    workspace.createApplicationAttempt(db, input);
+  } catch (error) {
+    expect(error).toBeInstanceOf(workspace.ApplicationAlreadyCompletedError);
+    return error as workspace.ApplicationAlreadyCompletedError;
+  }
+  throw new Error('expected the attempt to be refused as an already-completed application');
+}
+
+describe('completed-application dedup (#275)', () => {
+  it('acceptance 1: re-importing an already-submitted vacancy from another source does not create an ordinary new attempt', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    completeAttempt(first.id, 'receipt_confirmed');
+
+    // A second import of the same real requisition: a different report key, a differently spelled
+    // company, an http scheme, a trailing slash and a pile of tracking parameters. Every one of
+    // those defeats #198's `vacancyKey`/raw-URL dedup; none of them changes the requisition.
+    const refusal = completedRefusal({
+      ...NORTHWIND,
+      company: 'Northwind Labs B.V.',
+      vacancyKey: 'sheet-import-77',
+      canonicalUrl: 'http://www.boards.greenhouse.io/northwindlabs/jobs/4012345/?utm_source=weekly-digest&gh_src=abc123',
+    });
+
+    expect(refusal.match.attemptId).toBe(first.id);
+    expect(refusal.match.matchedOn).toBe('requisition');
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+  });
+
+  it('acceptance 1 (fallback): the same posting with no recognisable ATS requisition is still caught by its canonical URL', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: 'https://careers.northwind.invalid/openings/platform-engineer',
+    });
+    completeAttempt(first.id, 'user_reported');
+
+    const refusal = completedRefusal({
+      ...NORTHWIND,
+      vacancyKey: 'sheet-import-77',
+      canonicalUrl: 'https://careers.northwind.invalid/openings/platform-engineer?utm_campaign=jobboard#apply',
+    });
+    expect(refusal.match.matchedOn).toBe('canonical_url');
+  });
+
+  it('acceptance 2: another requisition at the same company stays eligible', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    completeAttempt(first.id, 'receipt_confirmed');
+
+    const second = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      role: 'Staff Platform Engineer',
+      vacancyKey: 'scan-43',
+      canonicalUrl: GREENHOUSE_OTHER_JOB,
+    });
+
+    // Same employer, deliberately distinct requisitions -- exactly what must not be merged.
+    expect(second.employerKey).toBe('greenhouse:northwindlabs');
+    expect(first.employerKey).toBe(second.employerKey);
+    expect(first.requisitionId).toBe('4012345');
+    expect(second.requisitionId).toBe('4012999');
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 3: user-reported and receipt-confirmed completion both suppress duplicates, and each keeps its own evidence type', () => {
+    const reported = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(reported.id, 'user_reported');
+    const confirmed = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB });
+    completeAttempt(confirmed.id, 'receipt_confirmed');
+
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }).match).toMatchObject({
+      attemptId: reported.id,
+      completionEvidence: 'user_reported',
+    });
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }).match).toMatchObject({
+      attemptId: confirmed.id,
+      completionEvidence: 'receipt_confirmed',
+    });
+
+    // Stored, not merely reported through the error: the distinction survives on the row.
+    expect(workspace.getApplicationAttempt(db, reported.id).completionEvidence).toBe('user_reported');
+    expect(workspace.getApplicationAttempt(db, confirmed.id).completionEvidence).toBe('receipt_confirmed');
+  });
+
+  it('acceptance 4: an explicit reapply records its predecessor, its reason and both document versions', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+
+    const reapplied = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      canonicalUrl: GREENHOUSE_JOB,
+      sourceCvContentHash: HASH_C,
+      reapply: { supersedesAttemptId: first.id, reason: 'Corrected CV: the attached file was the wrong version' },
+    });
+
+    expect(reapplied.supersedesAttemptId).toBe(first.id);
+    expect(reapplied.reapplyReason).toBe('Corrected CV: the attached file was the wrong version');
+    // Both document versions readable off the one row: what the superseded attempt carried...
+    expect(reapplied.reapplyPreviousCvContentHash).toBe(HASH_A);
+    // ...and what this one carries.
+    expect(reapplied.sourceCvContentHash).toBe(HASH_C);
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 4: a reapply is refused unless it names a real completed attempt at this requisition, with a reason', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+    const elsewhere = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB });
+    completeAttempt(elsewhere.id, 'user_reported');
+
+    // An empty reason is not a record of anything.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: GREENHOUSE_JOB,
+        reapply: { supersedesAttemptId: first.id, reason: '   ' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    // Naming some other completed attempt must not work as a generic bypass.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: GREENHOUSE_JOB,
+        reapply: { supersedesAttemptId: elsewhere.id, reason: 'Corrected CV' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    // Neither must reapplying against a requisition that has no completed application at all.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: 'https://boards.greenhouse.io/northwindlabs/jobs/4013111',
+        reapply: { supersedesAttemptId: first.id, reason: 'Corrected CV' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 5: submission_unknown is not free to re-queue, and force:true does not get past it', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-42', canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: 'navigation lost after the submit click',
+      submittedAt: '2026-09-01T09:00:00.000Z',
+    });
+
+    // The concurrency guard catches the plain case, as it did before #275.
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-42', canonicalUrl: GREENHOUSE_JOB }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+
+    // ...and `force`, which exists to get past *that* guard, no longer walks straight into a
+    // possible second real submission: the completed-application lookup refuses it separately.
+    const forced = completedRefusal({
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+      force: true,
+    });
+    expect(forced.match.checkpoint).toBe('submission_unknown');
+    expect(forced.match.completionEvidence).toBeNull();
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+  });
+
+  it('acceptance 5: resolving submission_unknown takes reconciliation or a recorded decision, never a bare patch', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: 'the tab closed before a receipt was seen',
+    });
+
+    // Silently downgrading it to `failed` would drop the protection with nothing on the record.
+    expect(() => workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'failed' })).toThrow(
+      workspace.ApplicationCompletionDecisionError,
+    );
+    expect(workspace.getApplicationAttempt(db, first.id).checkpoint).toBe('submission_unknown');
+
+    // The same move with the decision recorded is allowed, and only then is the requisition free.
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'failed',
+      checkpointDetail: 'user confirmed the employer has no record of an application',
+    });
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }),
+    ).not.toThrow();
+  });
+
+  it('acceptance 5: reconciling submission_unknown INTO submitted needs no reason and keeps the protection', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submission_unknown', checkpointDetail: 'timed out' });
+
+    // A receipt turning up later resolves the ambiguity in the direction that protects nothing new.
+    const reconciled = workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submitted',
+      completionEvidence: 'receipt_confirmed',
+    });
+    expect(reconciled.checkpoint).toBe('submitted');
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }).match.completionEvidence).toBe(
+      'receipt_confirmed',
+    );
+  });
+
+  it('exposes the lookup on its own, so a caller can skip a posting instead of catching a refusal', () => {
+    expect(workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toBeUndefined();
+
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+
+    expect(workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toMatchObject({
+      attemptId: first.id,
+      matchedOn: 'requisition',
+      completionEvidence: 'user_reported',
+      submittedAt: '2026-09-01T09:00:00.000Z',
+    });
+    // A different requisition at the same employer is not a match, through this entry point either.
+    expect(
+      workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).toBeUndefined();
+  });
+
+  it('keeps an attempt created before the identity columns existed from matching everything', () => {
+    // Migration 0012 backfills '' / null, which is what a row with no derivable identity also
+    // looks like. Neither may be treated as "matches any posting".
+    const legacy = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(legacy.id, 'user_reported');
+    db.update(schema.applicationAttempts)
+      .set({ employerKey: '', requisitionId: null, canonicalUrlKey: '' })
+      .where(eq(schema.applicationAttempts.id, legacy.id))
+      .run();
+
+    expect(
+      workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).toBeUndefined();
   });
 });
 

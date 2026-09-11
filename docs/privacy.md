@@ -33,6 +33,16 @@ Everything the app stores lives in Electron's per-user application-data director
   causes an application to be sent — as of this stage of the feature, nothing reads a browser,
   fills a form, or submits anything at all; see the auto-apply tracking issues for what each
   later stage adds and when.
+
+  Since #275 each attempt also stores a derived *requisition identity* — the employer and job id
+  read out of the apply URL, plus that URL reduced to the parts that identify the posting — so the
+  app can recognise a vacancy you have already applied to when it turns up again from another
+  source, and refuse to queue a second application for it. These are derived from the job link and
+  the employer name that are already stored on the row next to them; they add no new category of
+  data. Alongside them it stores how a completion is known (you told the app, or a receipt was
+  observed) and, when you deliberately apply again to the same opening, the reason you gave for
+  doing so. That reason is free text you write, kept on the attempt row for as long as the attempt
+  is kept, and it is retained under the same rules as the rest of this table.
 - **Submission receipts** (`workspace.db`, `application_submission_receipts` table — #271): one
   row per observation of what actually happened after a submit action, so a claim that an
   application was delivered can be checked afterwards rather than taken on trust. Each row holds

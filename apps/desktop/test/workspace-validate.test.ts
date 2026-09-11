@@ -335,6 +335,48 @@ describe('workspace application attempts (#198)', () => {
   it('accepts an explicit null to clear submittedAt', () => {
     expect(parseApplicationAttemptPatch({ submittedAt: null })).toEqual({ submittedAt: null });
   });
+
+  it('#275: a renderer-reported completion is user_reported, and cannot claim a receipt', () => {
+    // The renderer is the user. Moving an attempt to `submitted` from this side is a person saying
+    // the application is done, which is exactly `user_reported` and nothing stronger.
+    expect(parseApplicationAttemptPatch({ checkpoint: 'submitted' })).toEqual({
+      checkpoint: 'submitted',
+      completionEvidence: 'user_reported',
+    });
+    expect(parseApplicationAttemptPatch({ checkpoint: 'submitted', completionEvidence: 'user_reported' })).toEqual({
+      checkpoint: 'submitted',
+      completionEvidence: 'user_reported',
+    });
+    expect(() =>
+      parseApplicationAttemptPatch({ checkpoint: 'submitted', completionEvidence: 'receipt_confirmed' }),
+    ).toThrow(/"completionEvidence" must be one of/);
+  });
+
+  it('#275: does not invent completion evidence for a patch that is not a completion', () => {
+    expect(parseApplicationAttemptPatch({ checkpoint: 'skipped' })).toEqual({ checkpoint: 'skipped' });
+    expect(parseApplicationAttemptPatch({ completionEvidence: null })).toEqual({ completionEvidence: null });
+  });
+
+  it('#275: a reapply must name a predecessor and a non-empty reason', () => {
+    const parsed = parseApplicationAttemptInput({
+      company: 'Acme',
+      role: 'Engineer',
+      sourceCvContentHash: HASH,
+      jdSnapshotHash: HASH,
+      reapply: { supersedesAttemptId: 'attempt-1', reason: 'Corrected CV' },
+    });
+    expect(parsed.reapply).toEqual({ supersedesAttemptId: 'attempt-1', reason: 'Corrected CV' });
+
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH,
+        jdSnapshotHash: HASH,
+        reapply: { supersedesAttemptId: 'attempt-1', reason: '' },
+      }),
+    ).toThrow(/"reason"/);
+  });
 });
 
 describe('workspace application artifacts (#198)', () => {
