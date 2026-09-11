@@ -15,10 +15,11 @@ import { SearchResultList } from './SearchResultList.js';
 import { VacancyDetail, type SaveState } from './VacancyDetail.js';
 import {
   DEFAULT_FILTERS,
+  buildSearchResultIndex,
   employmentOptions,
-  filterResults,
+  filterSearchResultIndex,
   isWebUrl,
-  sortResults,
+  sortSearchResultIndex,
   sourceOptions,
   toPartialResults,
   toWorldwideResults,
@@ -464,7 +465,11 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
     return [];
   }, [worldwideReport, partialVacancies]);
 
-  const visible = useMemo(() => sortResults(filterResults(results, appliedFilters)), [results, appliedFilters]);
+  const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
+  const visible = useMemo(
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, appliedFilters)),
+    [resultIndex, appliedFilters],
+  );
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const pageItems = useMemo(

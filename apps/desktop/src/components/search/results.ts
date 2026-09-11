@@ -319,9 +319,24 @@ export function employmentOptions(results: SearchResult[]): string[] {
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 
-function matches(haystack: string | null, needle: string): boolean {
-  if (!needle.trim()) return true;
-  return (haystack ?? '').toLowerCase().includes(needle.trim().toLowerCase());
+export interface SearchResultIndexEntry {
+  result: SearchResult;
+  titleLower: string;
+  companyLower: string;
+  locationLower: string;
+  country: string;
+  postedAtMs: number | null;
+}
+
+export function buildSearchResultIndex(results: SearchResult[]): SearchResultIndexEntry[] {
+  return results.map((result) => ({
+    result,
+    titleLower: result.title.toLowerCase(),
+    companyLower: result.company.toLowerCase(),
+    locationLower: (result.location ?? '').toLowerCase(),
+    country: normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION,
+    postedAtMs: postedAtTimestamp(result.postedAt),
+  }));
 }
 
 /**
@@ -334,35 +349,39 @@ export function filterResults(
   filters: SearchFilters,
   now: Date = new Date(),
 ): SearchResult[] {
-  return results.filter((result) => {
-    if (filters.query.trim()) {
-      const needle = filters.query.trim().toLowerCase();
-      const inTitle = result.title.toLowerCase().includes(needle);
-      const inCompany = result.company.toLowerCase().includes(needle);
-      if (!inTitle && !inCompany) return false;
-    }
+  return filterSearchResultIndex(buildSearchResultIndex(results), filters, now).map((entry) => entry.result);
+}
 
-    if (!matches(result.location, filters.location)) return false;
+export function filterSearchResultIndex(
+  index: SearchResultIndexEntry[],
+  filters: SearchFilters,
+  now: Date = new Date(),
+): SearchResultIndexEntry[] {
+  const query = filters.query.trim().toLowerCase();
+  const location = filters.location.trim().toLowerCase();
+  const maximumAgeMs = filters.postedWithin === 'any' ? null : Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
+  const nowMs = now.getTime();
 
-    if (filters.source !== 'all' && result.provider !== filters.source) return false;
+  return index.filter((entry) => {
+    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query)) return false;
 
-    if (filters.sponsorOnly && result.raw.worldwideSponsorMatch === null) return false;
+    if (location && !entry.locationLower.includes(location)) return false;
 
-    if (filters.postedWithin !== 'any') {
+    if (filters.source !== 'all' && entry.result.provider !== filters.source) return false;
+
+    if (filters.sponsorOnly && entry.result.raw.worldwideSponsorMatch === null) return false;
+
+    if (maximumAgeMs !== null) {
       // A row with no known posting date cannot satisfy "posted in the last N days". It is dropped
       // rather than kept, so the narrowed list means exactly what it says; the filter bar states it.
-      if (!result.postedAt) return false;
-      const posted = new Date(result.postedAt);
-      if (Number.isNaN(posted.valueOf())) return false;
-      const maximumAgeMs = Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
-      if (now.getTime() - posted.getTime() > maximumAgeMs) return false;
+      if (entry.postedAtMs === null) return false;
+      if (nowMs - entry.postedAtMs > maximumAgeMs) return false;
     }
 
-    if (filters.employment !== 'any' && result.employmentType !== filters.employment) return false;
+    if (filters.employment !== 'any' && entry.result.employmentType !== filters.employment) return false;
 
     if (filters.country !== 'all') {
-      const resolved = normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION;
-      if (resolved !== filters.country) return false;
+      if (entry.country !== filters.country) return false;
     }
 
     return true;
@@ -380,24 +399,30 @@ function postedAtTimestamp(value: string | null): number | null {
  * title. A row with no known posting date sorts after every row that has one, never assumed recent.
  */
 export function sortResults(results: SearchResult[]): SearchResult[] {
-  return [...results].sort((left, right) => {
+  return sortSearchResultIndex(buildSearchResultIndex(results));
+}
+
+export function sortSearchResultIndex(index: SearchResultIndexEntry[]): SearchResult[] {
+  return [...index].sort((left, right) => {
+    const leftResult = left.result;
+    const rightResult = right.result;
     if (
-      left.profileScore != null &&
-      right.profileScore != null &&
-      left.profileScore !== right.profileScore
+      leftResult.profileScore != null &&
+      rightResult.profileScore != null &&
+      leftResult.profileScore !== rightResult.profileScore
     ) {
-      return right.profileScore - left.profileScore;
+      return rightResult.profileScore - leftResult.profileScore;
     }
-    const leftPosted = postedAtTimestamp(left.postedAt);
-    const rightPosted = postedAtTimestamp(right.postedAt);
+    const leftPosted = left.postedAtMs;
+    const rightPosted = right.postedAtMs;
     if (leftPosted !== null && rightPosted !== null && leftPosted !== rightPosted) {
       return rightPosted - leftPosted;
     }
     if ((leftPosted === null) !== (rightPosted === null)) {
       return leftPosted === null ? 1 : -1;
     }
-    return left.title.localeCompare(right.title);
-  });
+    return leftResult.title.localeCompare(rightResult.title);
+  }).map((entry) => entry.result);
 }
 
 export function formatDate(value: string | null): string {

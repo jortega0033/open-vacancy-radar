@@ -390,7 +390,7 @@ describe('SearchPage', () => {
   });
 
   it('paginates the results list instead of rendering every row at once', async () => {
-    const manyVacancies = Array.from({ length: 30 }, (_, index) =>
+    const manyVacancies = Array.from({ length: 20_000 }, (_, index) =>
       makeWorldwideVacancy({ key: `ww-${index}`, title: `Frontend Role ${index}` }),
     );
     installAllBridges({
@@ -399,16 +399,16 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
 
-    await waitFor(() => expect(screen.getByText(/^30 vacancies/)).toBeInTheDocument());
-    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/^20000 vacancies/)).toBeInTheDocument(), { timeout: 5_000 });
+    expect(screen.getByText('Page 1 of 800')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(25);
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
-    expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(5);
-    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByText('Page 2 of 800')).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(25);
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
 
   it('surfaces partial worldwide source health and snapshot age', async () => {

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
@@ -10,7 +11,12 @@ export interface SearchResultRowProps {
   saved: boolean;
 }
 
-export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
+export const SearchResultRow = memo(function SearchResultRow({
+  result,
+  selected,
+  onSelect,
+  saved,
+}: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
   const excerpt = descriptionExcerpt(result.description);
   // Verification has the identical "not available" tone on almost every row (the pipeline has no
@@ -91,7 +97,7 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
       </div>
     </button>
   );
-}
+});
 
 export interface SearchResultListProps {
   /** Already sliced to the current page: `page * pageSize` .. `(page + 1) * pageSize`. */
@@ -109,7 +115,7 @@ export interface SearchResultListProps {
   onPageChange: (page: number) => void;
 }
 
-export function SearchResultList({
+export const SearchResultList = memo(function SearchResultList({
   results,
   totalCount,
   selectedKey,
@@ -186,4 +192,4 @@ export function SearchResultList({
       )}
     </div>
   );
-}
+});
