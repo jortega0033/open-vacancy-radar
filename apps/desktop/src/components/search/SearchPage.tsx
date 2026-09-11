@@ -12,7 +12,7 @@ import type { SelectedVacancy } from '../letters/index.js';
 import { EmptyState, ErrorBanner } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
-import { VacancyDetail, type SaveState } from './VacancyDetail.js';
+import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
   DEFAULT_FILTERS,
   buildSearchResultIndex,
@@ -145,6 +145,7 @@ export interface SearchPageProps {
   onGenerateLetter?: (vacancy: SelectedVacancy) => void;
   onOpenSearchProfile?: () => void;
   onSavedJobsChanged?: () => void;
+  onViewApplicationAttempt?: (attemptId: string) => void;
   preferredSelectedKey?: string | null;
 }
 
@@ -152,6 +153,7 @@ export function SearchPage({
   onGenerateLetter,
   onOpenSearchProfile,
   onSavedJobsChanged,
+  onViewApplicationAttempt,
   preferredSelectedKey = null,
 }: SearchPageProps = {}) {
   const [engineState, setEngineState] = useState<EngineState>('checking');
@@ -222,6 +224,8 @@ export function SearchPage({
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
+  const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
   // Which CLI the gap-analysis offer below actually runs through, so its copy names the real
   // provider instead of assuming Claude Code. A failure here just leaves that default in place.
@@ -709,10 +713,39 @@ export function SearchPage({
     onGenerateLetter?.(selectedVacancyFor(selected));
   }, [selected, onGenerateLetter]);
 
+  const handlePrepare = useCallback(async () => {
+    if (!selected || isStreamingPartial) return;
+    const key = selected.key;
+    setPrepareStates((current) => ({ ...current, [key]: 'preparing' }));
+    setPrepareErrors((current) => {
+      const { [key]: _removed, ...rest } = current;
+      return rest;
+    });
+    try {
+      const result = await window.applicationPipeline.startFromVacancy(key);
+      if (!result.ok || !result.attemptId) {
+        throw new Error(result.detail ?? 'could not prepare this application');
+      }
+      setSavedKeys((current) => new Set(current).add(key));
+      setSaveStates((current) => ({ ...current, [key]: 'saved' }));
+      onSavedJobsChanged?.();
+      onViewApplicationAttempt?.(result.attemptId);
+    } catch (error) {
+      setPrepareErrors((current) => ({
+        ...current,
+        [key]: describeError(error, 'could not prepare this application'),
+      }));
+    } finally {
+      setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
+    }
+  }, [isStreamingPartial, onSavedJobsChanged, onViewApplicationAttempt, selected]);
+
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
     : 'idle';
   const saveError = selected ? saveErrors[selected.key] : undefined;
+  const prepareState: PrepareState = selected ? (prepareStates[selected.key] ?? 'idle') : 'idle';
+  const prepareError = selected ? prepareErrors[selected.key] : undefined;
 
   // The count of what is actually shown after filtering, not the raw size of the loaded report:
   // the latter isn't a number a user can do anything with here (there is no "browse everything"
@@ -909,8 +942,12 @@ export function SearchPage({
                 defaultCvName={defaultCvName}
                 providerLabel={PROVIDER_LABEL[defaultProvider]}
                 saveState={saveState}
+                prepareState={prepareState}
+                prepareAvailable={!isStreamingPartial}
                 {...(saveError ? { saveError } : {})}
+                {...(prepareError ? { prepareError } : {})}
                 onSave={() => void handleSave()}
+                onPrepare={() => void handlePrepare()}
                 onGenerateLetter={handleGenerateLetter}
                 assistantOpen={assistantForKey === selected.key}
                 onToggleAssistant={() =>

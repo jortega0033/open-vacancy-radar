@@ -341,6 +341,7 @@ export interface ApplicationAttemptRecord {
   jdSnapshotHash: string;
   jdComplete: boolean;
   workflowVersion: string;
+  tailoringMode: 'ai' | 'original';
   checkpoint: ApplicationAttemptCheckpoint;
   checkpointDetail: string;
   /** ISO-8601 */
@@ -529,6 +530,9 @@ export interface ApplicationArtifactRecord {
   createdAt: string;
 }
 
+/** Renderer-safe artifact metadata. The app-owned absolute storage path never crosses contextBridge. */
+export type ApplicationArtifactSummary = Omit<ApplicationArtifactRecord, 'storagePath'>;
+
 export interface ApplicationArtifactInput {
   attemptId: string;
   kind: ApplicationArtifactKind;
@@ -698,7 +702,7 @@ export interface WorkspaceBridge {
   listApplicationAttempts(): Promise<ApplicationAttemptRecord[]>;
   getApplicationAttempt(id: string): Promise<ApplicationAttemptRecord>;
   updateApplicationAttempt(id: string, patch: ApplicationAttemptPatch): Promise<ApplicationAttemptRecord>;
-  listApplicationArtifacts(attemptId: string): Promise<ApplicationArtifactRecord[]>;
+  listApplicationArtifacts(attemptId: string): Promise<ApplicationArtifactSummary[]>;
 
   /**
    * Read/revoke-only (issue #203): the renderer can see which policies currently have an active

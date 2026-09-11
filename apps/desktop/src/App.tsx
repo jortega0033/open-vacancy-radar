@@ -40,6 +40,7 @@ export function App() {
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
   const [searchSelectedKey, setSearchSelectedKey] = useState<string | null>(null);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
+  const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -114,6 +115,7 @@ export function App() {
     // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
+    setLetterReturnAttemptId(null);
     if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
@@ -130,7 +132,17 @@ export function App() {
   const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
     setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(null);
     setSearchSelectedKey(vacancy.key ?? null);
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(attemptId);
     setNav('letters');
     void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
     void refreshCounts();
@@ -142,11 +154,19 @@ export function App() {
 
   const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
+    if (letterReturnAttemptId) {
+      setApplicationAttemptToOpen(letterReturnAttemptId);
+      setLetterReturnAttemptId(null);
+      setNav('applications');
+      void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
+      void refreshCounts();
+      return;
+    }
     setSearchSelectedKey(vacancy.key ?? null);
     setNav('search');
     void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
     void refreshCounts();
-  }, [refreshCounts]);
+  }, [letterReturnAttemptId, refreshCounts]);
 
   const handleViewApplicationAttempt = useCallback((attemptId: string) => {
     hasNavigatedRef.current = true;
@@ -250,6 +270,7 @@ export function App() {
               onGenerateLetter={handleGenerateLetter}
               onOpenSearchProfile={() => handleNavigate('settings')}
               onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
               preferredSelectedKey={searchSelectedKey}
             />
           )}
@@ -264,6 +285,7 @@ export function App() {
               onApplicationsChanged={refreshCounts}
               focusAttemptId={applicationAttemptToOpen}
               onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
+              onGenerateLetter={handleGenerateApplicationLetter}
             />
           )}
           {nav === 'cv' && <CvLibraryPage />}

@@ -1,6 +1,10 @@
 import type { FieldMapRefusalReason, FormReadiness, FormSnapshot, HandoffReason, ValueProvenance } from '@agent-dock/application-executor';
 import type { ArtifactUploadRefusalReason } from './application-artifact-upload.js';
-import type { AutomaticSubmissionRefusalReason, SubmitApplicationReviewRefusalReason } from './application-review-session.js';
+import type {
+  AutomaticSubmissionRefusalReason,
+  RecordUserReportedSubmissionResult,
+  SubmitApplicationReviewRefusalReason,
+} from './application-review-session.js';
 import type { RequestAutomationGrantRefusalReason } from './automatic-submission-grant.js';
 
 /**
@@ -154,6 +158,15 @@ export interface ScheduleAutomaticSubmissionResult {
   scheduledAutomaticSubmitAt?: string;
 }
 
+export interface SaveApplicationArtifactResult {
+  saved: boolean;
+}
+
+export interface OpenApplicationArtifactResult {
+  opened: boolean;
+  detail?: string;
+}
+
 export interface ApplicationExecutorBridge {
   /** Opens an isolated browser view for `attemptId`, navigates it to `targetUrl` (refused unless
    * `targetUrl`'s origin is in the resolved policy's allowlist), and returns a fresh snapshot, a
@@ -231,4 +244,10 @@ export interface ApplicationExecutorBridge {
   /** Cancels a scheduled automatic submit before it fires. Safe to call for an attempt that was
    * never scheduled at all. */
   cancelScheduledAutomaticSubmission(attemptId: string): Promise<void>;
+  /** Records the person's statement separately from an observed submission receipt. */
+  recordUserReportedSubmission(attemptId: string): Promise<RecordUserReportedSubmissionResult>;
+  /** Saves one attempt-owned staged document through a native Save dialog. */
+  saveArtifact(artifactId: string): Promise<SaveApplicationArtifactResult>;
+  /** Opens one attempt-owned staged document in the OS viewer for complete human review. */
+  openArtifact(artifactId: string): Promise<OpenApplicationArtifactResult>;
 }

@@ -4,10 +4,9 @@
  * here, implemented by `preload.ts`, re-exported by `src/window.d.ts`. Type-only, so nothing here
  * is emitted into the renderer bundle.
  *
- * One method, and its only input is a saved-job id. Everything an application is actually made of
- * -- which URL it goes to, which CV it is built from, what job description it is tailored against
- * -- is resolved in Electron main from this app's own records. There is deliberately no way for the
- * renderer to name any of it.
+ * Entry points accept only app-owned record ids. Everything an application is actually made of is
+ * resolved in Electron main. Recovery methods can choose the recorded tailoring mode, but cannot
+ * supply document content, a URL, or a job description.
  */
 
 export type StartApplicationAttemptRefusal =
@@ -30,6 +29,20 @@ export interface StartApplicationAttemptResult {
   detail?: string;
 }
 
+export interface StartApplicationFromVacancyResult extends StartApplicationAttemptResult {
+  /** The saved-job record resolved or created for the vacancy. */
+  savedJobId?: string;
+  /** True only when this call created the saved-job record. */
+  created?: boolean;
+}
+
+export interface RestartApplicationTailoringResult {
+  ok: boolean;
+  attemptId: string;
+  tailoringMode: 'ai' | 'original';
+  detail?: string;
+}
+
 export interface ApplicationPipelineBridge {
   /**
    * Records an application attempt for one saved job and hands it to the daemon queue. Returns as
@@ -39,4 +52,12 @@ export interface ApplicationPipelineBridge {
    * Never submits anything: this path stops at "ready for you to review".
    */
   start(savedJobId: string): Promise<StartApplicationAttemptResult>;
+  /** Starts the same pipeline directly from a search result. Main resolves every vacancy field. */
+  startFromVacancy(vacancyKey: string): Promise<StartApplicationFromVacancyResult>;
+  /** Retries failed AI tailoring for the same durable attempt. */
+  retryTailoring(attemptId: string): Promise<RestartApplicationTailoringResult>;
+  /** Explicitly prepares the reviewed source CV after AI tailoring failed. */
+  useOriginalCv(attemptId: string): Promise<RestartApplicationTailoringResult>;
+  /** Re-runs a needs-user preparation after the person addresses its blocker. */
+  resume(attemptId: string): Promise<RestartApplicationTailoringResult>;
 }

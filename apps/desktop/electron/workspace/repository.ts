@@ -664,6 +664,7 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     jdSnapshotHash: row.jdSnapshotHash,
     jdComplete: row.jdComplete,
     workflowVersion: row.workflowVersion,
+    tailoringMode: row.tailoringMode,
     checkpoint: row.checkpoint,
     checkpointDetail: row.checkpointDetail,
     createdAt: iso(row.createdAt),
@@ -1017,6 +1018,36 @@ export function recordPreparedApplicationFields(
   return toApplicationAttempt(row);
 }
 
+/** Records the person's explicit recovery choice before a failed tailoring run is queued again.
+ * Kept out of `ApplicationAttemptPatch`: renderer code cannot silently change document provenance. */
+export function restartApplicationTailoring(
+  db: WorkspaceDb,
+  id: string,
+  tailoringMode: ApplicationAttemptRecord['tailoringMode'],
+): ApplicationAttemptRecord {
+  return db.transaction((tx) => {
+    const current = tx
+      .select({ checkpoint: applicationAttempts.checkpoint })
+      .from(applicationAttempts)
+      .where(eq(applicationAttempts.id, id))
+      .get();
+    if (!current) throw new WorkspaceNotFoundError('application attempt', id);
+    if (current.checkpoint !== 'needs_user') {
+      throw new Error('only an application waiting for user input can restart tailoring');
+    }
+
+    tx.delete(applicationArtifacts).where(eq(applicationArtifacts.attemptId, id)).run();
+    const [row] = tx
+      .update(applicationAttempts)
+      .set({ tailoringMode, checkpoint: 'queued', checkpointDetail: '', preparedFields: '', updatedAt: new Date() })
+      .where(eq(applicationAttempts.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+    return toApplicationAttempt(row);
+  });
+}
+
 /** Cascades to the attempt's artifacts via the schema's `on delete cascade`. */
 export function deleteApplicationAttempt(db: WorkspaceDb, id: string): DeleteResult {
   const removed = db
@@ -1067,6 +1098,12 @@ export function listApplicationArtifacts(db: WorkspaceDb, attemptId: string): Ap
     .orderBy(asc(applicationArtifacts.createdAt))
     .all()
     .map(toApplicationArtifact);
+}
+
+export function getApplicationArtifact(db: WorkspaceDb, id: string): ApplicationArtifactRecord {
+  const row = db.select().from(applicationArtifacts).where(eq(applicationArtifacts.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('application artifact', id);
+  return toApplicationArtifact(row);
 }
 
 export function createApplicationArtifact(db: WorkspaceDb, input: ApplicationArtifactInput): ApplicationArtifactRecord {

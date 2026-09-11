@@ -224,7 +224,7 @@ describe('acceptance 1: import -> review -> tailor -> PDF/DOCX keeps projects, d
       ],
       projects: [{ name: 'Checkout Rebuild', role: '', dates: '', organization: '', description: '', technologies: [], links: [] }],
       skills: ['TypeScript'],
-      education: [{ institution: 'TU Delft', credential: 'BSc Computer Science', dates: '' }],
+      education: [{ institution: 'TU Delft', credential: 'BSc Computer Science', dates: 'invented date' }],
     };
 
     const { resume } = reconcileTailoredResumeWithSource(tailored, reviewed);
@@ -234,6 +234,7 @@ describe('acceptance 1: import -> review -> tailor -> PDF/DOCX keeps projects, d
     expect(resume.experience.map((entry) => entry.dates)).toEqual(['Jan 2019 - Feb 2021', 'Mar 2021 - Present']);
     expect(resume.experience.map((entry) => entry.company)).toEqual(['Beacon Consultancy', 'Redwood Software']);
     expect(resume.education.map((entry) => entry.institution)).toEqual(['TU Delft']);
+    expect(resume.education.map((entry) => entry.dates)).toEqual(['2014 - 2018']);
     expect(resume.projects.map((project) => project.name)).toContain('Checkout Rebuild');
     // Re-wording is the point of tailoring, so the model's bullets are kept as written.
     expect(resume.experience[1]?.bullets).toEqual(['Led an accessible design system rewrite.']);

@@ -47,9 +47,11 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
-import { runFieldMapGeneration } from './application-generation-runner.js';
+import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import {
   recoverInterruptedApplicationAttempts,
+  resumeApplicationAttempt,
+  restartApplicationTailoring,
   runNextApplicationAttempt,
   startApplicationAttempt,
   type ApplicationPipelineDeps,
@@ -70,9 +72,11 @@ import {
   showApplicationReviewForHandoff,
   showApplicationReviewHandoff,
   submitApplicationReview,
+  recordUserReportedSubmission,
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { requestAutomationGrant } from './automatic-submission-grant.js';
+import { notifyApplicationPreparation } from './application-preparation-notify.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
@@ -1420,17 +1424,53 @@ guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', 
   cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
 });
 
+guardedIpc.handle('application-executor:record-user-reported-submission', async (_event, input: unknown) => {
+  const db = await ensureWorkspaceDb();
+  const attemptId = parseAttemptId(input);
+  const attempt = workspace.getApplicationAttempt(db, attemptId);
+  const manualState = attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user';
+  const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+  if (!manualState || resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) !== undefined || artifacts.length === 0) {
+    throw new Error('this attempt is not in a prepared manual-application state');
+  }
+  return recordUserReportedSubmission(db, attemptId);
+});
+
+guardedIpc.handle('application-executor:save-artifact', async (_event, input: unknown) => {
+  if (!mainWindow) return { saved: false };
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: artifact.fileName || 'application-document.pdf',
+    filters: [{ name: 'PDF document', extensions: ['pdf'] }],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  await cp(artifact.storagePath, result.filePath);
+  return { saved: true };
+});
+
+guardedIpc.handle('application-executor:open-artifact', async (_event, input: unknown) => {
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const detail = await shell.openPath(artifact.storagePath);
+  return detail ? { opened: false, detail } : { opened: true };
+});
+
 /*
  * ---------------------------------------------------------------------------------------------
  * #272: the preparation pipeline that joins the pieces above into one production path -- queue,
  * JD/CV snapshots, document staging, field-map generation, filling, ready-for-review.
  *
- * One IPC channel only (`application-pipeline:start`), and it takes a saved-job id, not a URL, a
- * company, or a job description: everything an attempt is made of is resolved here, main-process
+ * Pipeline IPC takes app-owned record ids, not a URL, company, or job description: everything an
+ * attempt is made of is resolved here, main-process
  * side, from this app's own records. The renderer cannot name where an application goes, which CV
  * it is built from, or what text it is tailored against.
  *
- * Nothing here changes what happens at the submit decision. This path stops at `ready`; the submit
+ * Nothing here changes what happens at the submit decision. This path stops at review; the submit
  * kill switch, the human confirmation, the rate limits and the CAPTCHA refusal all still sit
  * between `ready` and any real submission, untouched.
  * ---------------------------------------------------------------------------------------------
@@ -1498,8 +1538,9 @@ async function loadApplicationValueProfile(): Promise<ApplicationValueProfile | 
 }
 
 async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
+  const db = await ensureWorkspaceDb();
   return {
-    db: await ensureWorkspaceDb(),
+    db,
     storageRoot: applicationArtifactStorageRoot(),
     queue: applicationQueuePort,
     async generateFieldMap(prompt: string) {
@@ -1509,6 +1550,15 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
       // this session is hardened to the daemon's 'no-network' profile and is never asked to touch
       // a file.
       return runFieldMapGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    async generateTailoredResume(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        // Only Claude's adapter implements the daemon's no-network hardening profile.
         provider: 'claude',
         cwd: await ensureAiWorkspaceDir(),
         prompt,
@@ -1544,18 +1594,11 @@ function resolvePipelineVacancy(vacancyKey: string): PipelineVacancy | undefined
   };
 }
 
-guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const savedJobId = parseId(source.savedJobId, 'savedJobId');
+async function startPipelineForSavedJob(savedJobId: string) {
   const deps = await applicationPipelineDeps();
-
   const job = workspace.listSavedJobs(deps.db).find((saved) => saved.id === savedJobId);
   if (!job) throw new Error('no such saved job');
 
-  // A saved job discovered by a scan resolves to its full discovery row (job description included).
-  // One entered by hand has no report row, so the attempt is created from what the saved job itself
-  // records and the pipeline reports the missing job description as a handoff -- visible in the
-  // attempt's own state, rather than refused here with no trace of what was asked for.
   const vacancy = (job.vacancyKey ? resolvePipelineVacancy(job.vacancyKey) : undefined) ?? {
     vacancyKey: job.vacancyKey,
     company: job.company,
@@ -1564,11 +1607,62 @@ guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) =
     description: null,
     descriptionComplete: false,
   };
-
   const result = await startApplicationAttempt(deps, { vacancy });
-  // Kick the worker immediately rather than waiting out the poll interval: a person who just asked
-  // for this expects it to start, and `runNextApplicationAttempt` is safe to call concurrently with
-  // the timer (the daemon hands out one lease at a time).
+  if (result.ok) void runApplicationPipelineTick();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const savedJobId = parseId(source.savedJobId, 'savedJobId');
+  return startPipelineForSavedJob(savedJobId);
+});
+
+guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
+  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+  if (!row) throw new Error('this vacancy is no longer available in the latest report');
+
+  const db = await ensureWorkspaceDb();
+  let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
+  const created = savedJob === undefined;
+  savedJob ??= workspace.createSavedJob(db, {
+    role: row.title,
+    company: row.company,
+    location: row.location,
+    vacancyKey: row.key,
+    matchPercent: row.profileScore,
+    sourceUrl: row.url,
+    status: 'considering',
+  });
+
+  const result = await startPipelineForSavedJob(savedJob.id);
+  if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
+    return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
+  }
+  return { ...result, savedJobId: savedJob.id, created };
+});
+
+async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
+  const result = await restartApplicationTailoring(await applicationPipelineDeps(), attemptId, mode);
+  if (result.ok) void runApplicationPipelineTick();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:retry-tailoring', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return restartTailoring(parseId(source.attemptId, 'attemptId'), 'ai');
+});
+
+guardedIpc.handle('application-pipeline:use-original-cv', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return restartTailoring(parseId(source.attemptId, 'attemptId'), 'original');
+});
+
+guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
   if (result.ok) void runApplicationPipelineTick();
   return result;
 });
@@ -1898,7 +1992,16 @@ async function runApplicationPipelineTick(): Promise<void> {
   if (applicationPipelineTickInFlight) return;
   applicationPipelineTickInFlight = true;
   try {
-    await runNextApplicationAttempt(await applicationPipelineDeps());
+    const deps = await applicationPipelineDeps();
+    const { result } = await runNextApplicationAttempt(deps);
+    if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
+      const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
+      notifyApplicationPreparation({
+        company: attempt.company,
+        role: attempt.role,
+        needsUser: result.checkpoint === 'needs_user',
+      });
+    }
   } catch (error: unknown) {
     console.error('[application-pipeline] preparation tick failed', error);
   } finally {

@@ -434,6 +434,35 @@ describe('electron/preload.ts: workspace bridge', () => {
     await (api.listApplicationArtifacts as (attemptId: string) => Promise<unknown>)('attempt-1');
     expect(invoke).toHaveBeenCalledWith('workspace:application-artifacts:list', { attemptId: 'attempt-1' });
   });
+
+  it('removes app-owned storage paths from artifact metadata before it reaches the renderer', async () => {
+    invoke.mockResolvedValue([
+      {
+        id: 'artifact-1',
+        attemptId: 'attempt-1',
+        kind: 'cv_pdf',
+        fileName: 'cv.pdf',
+        mimeType: 'application/pdf',
+        byteSize: 42,
+        contentHash: 'hash',
+        storagePath: 'C:\\private\\application-artifacts\\cv.pdf',
+        createdAt: '2026-09-11T00:00:00.000Z',
+      },
+    ]);
+    const api = await loadPreload('workspace');
+    const [artifact] = await (api.listApplicationArtifacts as (attemptId: string) => Promise<Record<string, unknown>[]>)('attempt-1');
+    expect(artifact).toEqual({
+      id: 'artifact-1',
+      attemptId: 'attempt-1',
+      kind: 'cv_pdf',
+      fileName: 'cv.pdf',
+      mimeType: 'application/pdf',
+      byteSize: 42,
+      contentHash: 'hash',
+      createdAt: '2026-09-11T00:00:00.000Z',
+    });
+    expect(artifact).not.toHaveProperty('storagePath');
+  });
 });
 
 describe('electron/preload.ts: cv bridge', () => {
@@ -1405,7 +1434,7 @@ const SNAPSHOT_RESULT = {
 };
 
 describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
-  it('exposes exactly the ten documented capability functions and nothing else', async () => {
+  it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload('applicationExecutor');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -1421,6 +1450,9 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
         // window, supply bounds, or reach a view for an attempt with no open review.
         'showHandoff',
         'hideHandoff',
+        'recordUserReportedSubmission',
+        'saveArtifact',
+        'openArtifact',
       ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
@@ -1653,13 +1685,31 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     await (api.cancelScheduledAutomaticSubmission as (id: string) => Promise<void>)('attempt-1');
     expect(invoke).toHaveBeenCalledWith('application-executor:cancel-scheduled-automatic-submission', 'attempt-1');
   });
+
+  it('records manual completion and opens or saves staged documents through fixed channels', async () => {
+    const api = await loadPreload('applicationExecutor');
+    invoke.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ saved: true }).mockResolvedValueOnce({ opened: true });
+
+    await expect((api.recordUserReportedSubmission as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({ ok: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:record-user-reported-submission', 'attempt-1');
+
+    await expect((api.saveArtifact as (id: string) => Promise<unknown>)('artifact-1')).resolves.toEqual({ saved: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:save-artifact', 'artifact-1');
+
+    await expect((api.openArtifact as (id: string) => Promise<unknown>)('artifact-1')).resolves.toEqual({ opened: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:open-artifact', 'artifact-1');
+  });
 });
 
 describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
-  it('exposes exactly one capability function and nothing else', async () => {
+  it('exposes exactly the preparation entry and recovery points', async () => {
     const api = await loadPreload('applicationPipeline');
-    expect(Object.keys(api)).toEqual(['start']);
+    expect(Object.keys(api)).toEqual(['start', 'startFromVacancy', 'retryTailoring', 'useOriginalCv', 'resume']);
     expect(typeof api.start).toBe('function');
+    expect(typeof api.startFromVacancy).toBe('function');
+    expect(typeof api.retryTailoring).toBe('function');
+    expect(typeof api.useOriginalCv).toBe('function');
+    expect(typeof api.resume).toBe('function');
   });
 
   it('exposes no generic IPC passthrough', async () => {
@@ -1675,6 +1725,31 @@ describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
     const result = await (api.start as (id: string) => Promise<unknown>)('saved-1');
     expect(invoke).toHaveBeenCalledWith('application-pipeline:start', { savedJobId: 'saved-1' });
     expect(result).toEqual({ ok: true, attemptId: 'attempt-1' });
+  });
+
+  it('startFromVacancy invokes the fixed channel with only the vacancy key', async () => {
+    invoke.mockResolvedValue({ ok: true, attemptId: 'attempt-1', savedJobId: 'saved-1', created: true });
+    const api = await loadPreload('applicationPipeline');
+    const result = await (api.startFromVacancy as (key: string) => Promise<unknown>)('vacancy-1');
+    expect(invoke).toHaveBeenCalledWith('application-pipeline:start-from-vacancy', { vacancyKey: 'vacancy-1' });
+    expect(result).toEqual({ ok: true, attemptId: 'attempt-1', savedJobId: 'saved-1', created: true });
+  });
+
+  it('tailoring recovery invokes fixed channels and verifies the returned attempt and mode', async () => {
+    invoke
+      .mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai' })
+      .mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'original' });
+    const api = await loadPreload('applicationPipeline');
+
+    await expect((api.retryTailoring as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({
+      ok: true, attemptId: 'attempt-1', tailoringMode: 'ai',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'application-pipeline:retry-tailoring', { attemptId: 'attempt-1' });
+
+    await expect((api.useOriginalCv as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({
+      ok: true, attemptId: 'attempt-1', tailoringMode: 'original',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'application-pipeline:use-original-cv', { attemptId: 'attempt-1' });
   });
 
   it('carries a refusal and the attempt already in progress back unchanged', async () => {

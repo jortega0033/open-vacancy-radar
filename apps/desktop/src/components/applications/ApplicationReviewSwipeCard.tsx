@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
-import type { ApplicationArtifactRecord, ApplicationAttemptRecord } from '../../window.js';
+import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 
 export interface ApplicationReviewSwipeCardProps {
@@ -9,7 +9,7 @@ export interface ApplicationReviewSwipeCardProps {
   snapshot: FormSnapshot;
   screenshotBase64: string;
   /** The documents staged against this exact attempt (#272). */
-  documents?: readonly ApplicationArtifactRecord[];
+  documents?: readonly ApplicationArtifactSummary[];
   /**
    * What the live form actually holds, read back out of the browser (#277). This card reports
    * `readiness.verifiedFilledCount`, never `snapshot.fields.length` -- see the header comment.
@@ -20,6 +20,7 @@ export interface ApplicationReviewSwipeCardProps {
   busy?: boolean;
   onApprove: () => void;
   onSkip: () => void;
+  onOpenArtifact?: (artifactId: string) => void;
   /** Opens the real, focusable page over the app so the person can finish it themselves. */
   onOpenLiveView: () => void;
 }
@@ -81,9 +82,11 @@ export function ApplicationReviewSwipeCard({
   busy,
   onApprove,
   onSkip,
+  onOpenArtifact,
   onOpenLiveView,
 }: ApplicationReviewSwipeCardProps) {
   const [dragX, setDragX] = useState(0);
+  const dragXRef = useRef(0);
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -99,12 +102,13 @@ export function ApplicationReviewSwipeCard({
     if (busy) return;
     dragOriginRef.current = event.clientX;
     setDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
   function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragOriginRef.current === null) return;
-    setDragX(event.clientX - dragOriginRef.current);
+    dragXRef.current = event.clientX - dragOriginRef.current;
+    setDragX(dragXRef.current);
   }
 
   function endDrag() {
@@ -116,9 +120,10 @@ export function ApplicationReviewSwipeCard({
     // progress. Without this, releasing that drag past the threshold would fire a second
     // approve/skip on top of the one already in flight.
     if (!busy) {
-      if (dragX > SWIPE_THRESHOLD_PX) onApprove();
-      else if (dragX < -SWIPE_THRESHOLD_PX) onSkip();
+      if (dragXRef.current > SWIPE_THRESHOLD_PX) onApprove();
+      else if (dragXRef.current < -SWIPE_THRESHOLD_PX) onSkip();
     }
+    dragXRef.current = 0;
     setDragX(0);
   }
 
@@ -167,7 +172,7 @@ export function ApplicationReviewSwipeCard({
           </p>
         </div>
 
-        <ApplicationPreparedSummary attempt={attempt} documents={documents} />
+        <ApplicationPreparedSummary attempt={attempt} documents={documents} onOpenArtifact={onOpenArtifact} />
 
         {blockers.length > 0 && (
           <div className="border-b border-base-300 bg-warning/10 px-5 py-3">

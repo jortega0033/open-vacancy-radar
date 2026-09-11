@@ -41,6 +41,8 @@ import type {
 } from './application-executor-types.js';
 import type {
   ApplicationPipelineBridge,
+  RestartApplicationTailoringResult,
+  StartApplicationFromVacancyResult,
   StartApplicationAttemptRefusal,
   StartApplicationAttemptResult,
 } from './application-pipeline-types.js';
@@ -364,8 +366,24 @@ const workspaceApi: WorkspaceBridge = {
   updateApplicationAttempt(id, patch) {
     return ipcRenderer.invoke('workspace:application-attempts:update', { id, patch });
   },
-  listApplicationArtifacts(attemptId) {
-    return ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+  async listApplicationArtifacts(attemptId) {
+    const result: unknown = await ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+    if (!Array.isArray(result)) throw new Error('the workspace returned unexpected application artifacts');
+    return result.map((entry) => {
+      const source = asRecord(entry);
+      if (!source) throw new Error('the workspace returned an unexpected application artifact');
+      const kind = requiredString(source, 'kind');
+      return {
+        id: requiredString(source, 'id'),
+        attemptId: requiredString(source, 'attemptId'),
+        kind: kind === 'cv_pdf' || kind === 'cover_letter_pdf' || kind === 'combined_pdf' ? kind : 'other',
+        fileName: requiredString(source, 'fileName'),
+        mimeType: requiredString(source, 'mimeType'),
+        byteSize: nonNegativeInt(source.byteSize),
+        contentHash: requiredString(source, 'contentHash'),
+        createdAt: requiredString(source, 'createdAt'),
+      };
+    });
   },
   listAutomationGrants() {
     return ipcRenderer.invoke('workspace:automation-grants:list');
@@ -1435,6 +1453,36 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
   async cancelScheduledAutomaticSubmission(attemptId) {
     await ipcRenderer.invoke('application-executor:cancel-scheduled-automatic-submission', attemptId);
   },
+
+  async recordUserReportedSubmission(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:record-user-reported-submission', attemptId);
+    const source = asRecord(result);
+    const ok = source?.ok;
+    if (typeof ok !== 'boolean') throw new Error('the application executor returned an unexpected response');
+    const reason = source ? optionalString(source, 'reason') : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(reason ? { reason: reason as 'already_observed' | 'attempt_not_found' } : {}),
+      ...(detail ? { detail } : {}),
+    };
+  },
+
+  async saveArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:save-artifact', artifactId);
+    const source = asRecord(result);
+    return { saved: source?.saved === true };
+  },
+
+  async openArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:open-artifact', artifactId);
+    const source = asRecord(result);
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      opened: source?.opened === true,
+      ...(detail ? { detail } : {}),
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('applicationExecutor', applicationExecutorApi);
@@ -1469,6 +1517,63 @@ const applicationPipelineApi: ApplicationPipelineBridge = {
       ...(detail === undefined ? {} : { detail }),
     };
   },
+  async startFromVacancy(vacancyKey): Promise<StartApplicationFromVacancyResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start-from-vacancy', { vacancyKey });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const savedJobId = source ? optionalString(source, 'savedJobId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(savedJobId === undefined ? {} : { savedJobId }),
+      ...(source?.created === true || source?.created === false ? { created: source.created } : {}),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+  async retryTailoring(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:retry-tailoring', { attemptId }),
+      attemptId,
+      'ai',
+    );
+  },
+  async useOriginalCv(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:use-original-cv', { attemptId }),
+      attemptId,
+      'original',
+    );
+  },
+  async resume(attemptId): Promise<RestartApplicationTailoringResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', { attemptId });
+    const source = asRecord(result);
+    const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+    return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
+  },
 };
+
+function parseRestartTailoringResult(
+  result: unknown,
+  requestedAttemptId: string,
+  requestedMode: RestartApplicationTailoringResult['tailoringMode'],
+): RestartApplicationTailoringResult {
+  const source = asRecord(result);
+  const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+  const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok: source?.ok === true && attemptId === requestedAttemptId && mode === requestedMode,
+    attemptId: attemptId ?? requestedAttemptId,
+    tailoringMode: mode === 'original' ? 'original' : 'ai',
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
 
 contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);

@@ -18,6 +18,11 @@ import {
   type ApplicationValueTableEntry,
 } from './application-value-table.js';
 import { cvDocumentToTailoredResume } from './cv-export.js';
+import type { TailoredResume } from './resume-schema.js';
+import {
+  generateApplicationTailoredResume,
+  type ApplicationTailoringGenerationResult,
+} from './application-tailoring.js';
 import * as workspace from './workspace/repository.js';
 import { ApplicationAttemptDuplicateError } from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
@@ -91,6 +96,8 @@ export interface ApplicationPipelineDeps {
   /** Runs the daemon's hardened, text-only field-map generation session. The one genuinely external
    * step in the pipeline, and the only thing a test stands in for. */
   generateFieldMap(prompt: string): Promise<FieldMapGenerationOutcome>;
+  /** Runs source-grounded, vacancy-specific CV tailoring in the app-owned scratch workspace. */
+  generateTailoredResume(prompt: string): Promise<ApplicationTailoringGenerationResult>;
   /** The configured candidate profile, or null when there is none. Never defaulted: an unconfigured
    * profile contributes no values rather than assumed ones. */
   loadProfile(): Promise<ApplicationValueProfile | null>;
@@ -110,10 +117,48 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function enqueueApplicationAttempt(deps: ApplicationPipelineDeps, attemptId: string): Promise<void> {
+  try {
+    await deps.queue.enqueue(attemptId);
+  } catch (firstError) {
+    // A lost response can mean the daemon committed the enqueue even though this process saw an
+    // error. Reconcile durable queue state before retrying, so one action never schedules twice.
+    let queueState: ApplicationQueueEntryState | null;
+    try {
+      queueState = await deps.queue.entryState(attemptId);
+    } catch {
+      queueState = null;
+    }
+    if (queueState === null) {
+      try {
+        await deps.queue.enqueue(attemptId);
+      } catch (retryError) {
+        settle(
+          deps,
+          attemptId,
+          'failed',
+          `application preparation could not be queued: ${describeError(retryError)}`,
+          'failed',
+        );
+        throw retryError;
+      }
+    } else if (queueState === 'cancelled' || queueState === 'done' || queueState === 'failed') {
+      settle(
+        deps,
+        attemptId,
+        'failed',
+        `application preparation could not be queued: ${describeError(firstError)}`,
+        'failed',
+      );
+      throw firstError;
+    }
+  }
+}
+
 /** Identifies which version of this pipeline produced an attempt, so a later change to the
  * contract cannot silently reinterpret an already-recorded one (see `applicationAttempts`'
  * `workflowVersion` column). */
-export const APPLICATION_PIPELINE_WORKFLOW_VERSION = 'review-mode-v1';
+export const APPLICATION_PIPELINE_WORKFLOW_VERSION = 'review-mode-v2-ai-tailored';
 
 // --------------------------------------------------------------------------------- starting
 
@@ -208,9 +253,7 @@ export async function startApplicationAttempt(
     throw err;
   }
 
-  // The queue's own enqueue is idempotent for an attempt it already tracks, so a retry after a
-  // transient daemon failure adds nothing twice.
-  await deps.queue.enqueue(attempt.id);
+  await enqueueApplicationAttempt(deps, attempt.id);
   return { ok: true, attemptId: attempt.id };
 }
 
@@ -232,6 +275,13 @@ export interface RunApplicationAttemptResult {
   attemptId: string;
   outcome: RunApplicationAttemptOutcome;
   checkpoint: ApplicationAttemptCheckpoint;
+  detail?: string;
+}
+
+export interface RestartApplicationTailoringResult {
+  ok: boolean;
+  attemptId: string;
+  tailoringMode: ApplicationAttemptRecord['tailoringMode'];
   detail?: string;
 }
 
@@ -354,23 +404,7 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
     );
   }
 
-  // --------------------------------------------------------- 2. where this application goes
-  // Resolved before any work is done, so an unsupported destination costs nothing and, crucially,
-  // never falls back to a policy that was compiled for something else. The fixture policy covers
-  // exactly two local files by full URL; every real employer URL resolves to nothing here, and gets
-  // a handoff rather than the fixture's permissions.
-  const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
-  if (!policyId) {
-    return settle(
-      deps,
-      attemptId,
-      'needs_user',
-      'this employer’s application site is not one this app is cleared to fill in for you. Your tailored documents are kept with this attempt; apply on the site yourself and then mark this attempt done.',
-      'needs_user',
-    );
-  }
-
-  // ---------------------------------------------------------------------- 3. the documents
+  // ---------------------------------------------------------------------- 2. the documents
   workspace.updateApplicationAttempt(deps.db, attemptId, { checkpoint: 'tailoring', checkpointDetail: '' });
   const cv = workspace.listCvDocuments(deps.db).find((document) => document.id === attempt.sourceCvId);
   if (!cv) {
@@ -385,7 +419,29 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
 
   const profile = await deps.loadProfile();
   const target = { company: attempt.company, role: attempt.role };
-  const resume = cvDocumentToTailoredResume(cv, profile);
+  let resume: TailoredResume;
+  let tailoringSummary: string;
+  if (attempt.tailoringMode === 'original') {
+    resume = cvDocumentToTailoredResume(cv, profile);
+    tailoringSummary = 'Original reviewed CV used by your explicit choice after automatic tailoring stopped.';
+  } else {
+    tailoringSummary = 'CV tailored for this vacancy from the reviewed source.';
+    try {
+      const tailored = await generateApplicationTailoredResume(attempt, cv, deps.generateTailoredResume);
+      resume = tailored.resume;
+      if (tailored.dropped.length > 0) {
+        tailoringSummary += ` Removed unsupported output: ${tailored.dropped.join('; ')}.`;
+      }
+    } catch (err) {
+      return settle(
+        deps,
+        attemptId,
+        'needs_user',
+        `Automatic CV tailoring stopped: ${describeError(err)}`,
+        'needs_user',
+      );
+    }
+  }
 
   workspace.updateApplicationAttempt(deps.db, attemptId, { checkpoint: 'rendering', checkpointDetail: '' });
   let stagedRecords: ReturnType<typeof workspace.listApplicationArtifacts>;
@@ -411,6 +467,22 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
     return settle(deps, attemptId, 'needs_user', `the application documents are not ready: ${readinessRefusals.join('; ')}`, 'needs_user');
   }
 
+  // --------------------------------------------------------- 3. where this application goes
+  // Documents are useful on every employer site, so target policy is resolved only after staging.
+  // An unsupported destination still never inherits another target's permissions; it reaches a
+  // manual review card with attempt-owned documents instead of stopping before anything useful is
+  // produced.
+  const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
+  if (!policyId) {
+    return settle(
+      deps,
+      attemptId,
+      'needs_user',
+      `${tailoringSummary} Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.`,
+      'needs_user',
+    );
+  }
+
   const stillWanted = await queueStillWantsThis(deps, attemptId);
   if (stillWanted === 'cancelled') return settle(deps, attemptId, 'skipped', 'this application was cancelled from the queue', 'halted');
   if (stillWanted === 'paused') return settle(deps, attemptId, 'queued', 'paused; it will pick up again when you resume it', 'halted');
@@ -432,7 +504,48 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
       deps.log?.('could not close the preparation browser view', { attemptId, error: describeError(err) });
     });
   }
+  if (formResult.outcome === 'ready') {
+    workspace.updateApplicationAttempt(deps.db, attemptId, {
+      checkpointDetail: `${tailoringSummary}${formResult.detail ? ` ${formResult.detail}` : ''}`,
+    });
+  }
   return formResult;
+}
+
+/** Requeues one failed tailoring attempt after the person chooses retry or the original-CV path. */
+export async function restartApplicationTailoring(
+  deps: ApplicationPipelineDeps,
+  attemptId: string,
+  tailoringMode: ApplicationAttemptRecord['tailoringMode'],
+): Promise<RestartApplicationTailoringResult> {
+  const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
+  if (attempt.checkpoint !== 'needs_user' || !attempt.checkpointDetail.startsWith('Automatic CV tailoring stopped:')) {
+    return { ok: false, attemptId, tailoringMode, detail: 'this application is not waiting on a tailoring failure' };
+  }
+  workspace.restartApplicationTailoring(deps.db, attemptId, tailoringMode);
+  await enqueueApplicationAttempt(deps, attemptId);
+  return { ok: true, attemptId, tailoringMode };
+}
+
+/** Re-runs preparation after a person addresses a durable needs-user blocker such as a required
+ * letter. Manual-target handoffs are already complete preparation and cannot be restarted here. */
+export async function resumeApplicationAttempt(
+  deps: ApplicationPipelineDeps,
+  attemptId: string,
+): Promise<RestartApplicationTailoringResult> {
+  const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
+  if (attempt.checkpoint !== 'needs_user' || attempt.checkpointDetail.includes('Your application documents are ready.')) {
+    return {
+      ok: false,
+      attemptId,
+      tailoringMode: attempt.tailoringMode,
+      detail: 'this application is not waiting on a preparation blocker',
+    };
+  }
+  await closeApplicationReview(attemptId).catch(() => {});
+  workspace.restartApplicationTailoring(deps.db, attemptId, attempt.tailoringMode);
+  await enqueueApplicationAttempt(deps, attemptId);
+  return { ok: true, attemptId, tailoringMode: attempt.tailoringMode };
 }
 
 interface FillApplicationFormInput {
@@ -467,6 +580,22 @@ async function fillApplicationForm(
       attemptId,
       'needs_user',
       'this page is showing a CAPTCHA or bot check. This app never answers those; open the application yourself to continue.',
+      'needs_user',
+    );
+  }
+
+  const requiredLetterField = snapshot.fields.find(
+    (field) => field.active && field.required && field.controlType === 'file' && /\b(?:cover\s*letter|motivation\s*letter)\b/iu.test(field.label),
+  );
+  const hasLetter = input.stagedArtifacts.some(
+    (artifact) => artifact.kind === 'cover_letter_pdf' || artifact.kind === 'combined_pdf',
+  );
+  if (requiredLetterField && !hasLetter) {
+    return settle(
+      deps,
+      attemptId,
+      'needs_user',
+      `this form requires "${requiredLetterField.label}", but no final cover or motivation letter is saved for this vacancy. Generate and review one, then resume the application.`,
       'needs_user',
     );
   }

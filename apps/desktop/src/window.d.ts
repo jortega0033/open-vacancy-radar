@@ -223,6 +223,7 @@ export type {
 export type {
   ApplicationArtifactKind,
   ApplicationArtifactRecord,
+  ApplicationArtifactSummary,
   ApplicationAttemptCheckpoint,
   ApplicationAttemptPatch,
   ApplicationAttemptRecord,

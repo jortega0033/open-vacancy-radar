@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { SearchPage } from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
+import type { ApplicationPipelineBridge } from '../../../electron/application-pipeline-types.js';
 import { installBridges } from '../../cv-bridges.js';
 import {
   DEFAULT_CANDIDATE_PROFILE,
@@ -89,6 +90,18 @@ function makeWorldwideReport(
 function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): VacancyRadarBridge {
   installBridges();
   installWorkspaceBridge();
+  (window as unknown as { applicationPipeline: ApplicationPipelineBridge }).applicationPipeline = {
+    start: vi.fn(),
+    startFromVacancy: vi.fn().mockResolvedValue({
+      ok: true,
+      attemptId: 'attempt-search-1',
+      savedJobId: 'saved-search-1',
+      created: true,
+    }),
+    retryTailoring: vi.fn(),
+    useOriginalCv: vi.fn(),
+    resume: vi.fn(),
+  };
   return installVacancyRadarBridge({
     getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
     ...overrides,
@@ -869,6 +882,23 @@ describe('SearchPage', () => {
       sourceUrl: 'https://example.invalid/jobs/ww-1',
       status: 'considering',
     });
+  });
+
+  it('starts preparation directly from Search and opens the resolved attempt', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    const pipeline = window.applicationPipeline;
+    const onViewApplicationAttempt = vi.fn();
+
+    render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare application' }));
+
+    await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
+    await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeInTheDocument();
   });
 
   it('reports a failed save on the vacancy rather than silently doing nothing', async () => {

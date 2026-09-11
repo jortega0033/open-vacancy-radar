@@ -48,7 +48,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
 
 function renderDetail(
   result: SearchResult,
-  overrides: { onGenerateLetter?: () => void; providerLabel?: string } = {},
+  overrides: { onGenerateLetter?: () => void; providerLabel?: string; prepareAvailable?: boolean } = {},
 ) {
   render(
     <VacancyDetail
@@ -56,7 +56,10 @@ function renderDetail(
       defaultCvName={null}
       providerLabel={overrides.providerLabel ?? 'Claude Code'}
       saveState="idle"
+      prepareState="idle"
+      prepareAvailable={overrides.prepareAvailable ?? true}
       onSave={vi.fn()}
+      onPrepare={vi.fn()}
       onGenerateLetter={overrides.onGenerateLetter ?? vi.fn()}
       assistantOpen={false}
       onToggleAssistant={vi.fn()}
@@ -88,14 +91,20 @@ describe('VacancyDetail', () => {
     expect(screen.getByText(/DevITjobs UK did not include description text/i)).toBeInTheDocument();
   });
 
-  it('offers "Generate Letter" alongside "Save job", firing the handler on click', () => {
+  it('offers application preparation, letter generation and saving from the vacancy', () => {
     const onGenerateLetter = vi.fn();
     renderDetail(worldwideResult(), { onGenerateLetter });
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
 
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds preparation until a streamed vacancy belongs to the final report', () => {
+    renderDetail(worldwideResult(), { prepareAvailable: false });
+    expect(screen.getByRole('button', { name: 'Finishing scan…' })).toBeDisabled();
   });
 
   it("names the actually-configured provider in the CV match card, not a hardcoded Claude Code", () => {
