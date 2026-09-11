@@ -4,7 +4,12 @@ import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } fro
 import { SearchPage } from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
 import { installBridges } from '../../cv-bridges.js';
-import { DEFAULT_SETTINGS, installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+import {
+  DEFAULT_CANDIDATE_PROFILE,
+  DEFAULT_SETTINGS,
+  installVacancyRadarBridge,
+  installWorkspaceBridge,
+} from '../../workspace-bridge.js';
 
 function makeWorldwideVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
   return {
@@ -279,6 +284,49 @@ describe('SearchPage', () => {
     expect(screen.getByText(/vacancies were found, but none were scored/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains when a saved profile exists but the loaded report is still unscored', async () => {
+    const rescored = makeWorldwideReport([makeWorldwideVacancy({ profileScore: 82 })]);
+    const bridge = installAllBridges({
+      getReport: vi
+        .fn()
+        .mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
+      getSearchProfile: vi.fn().mockResolvedValue({
+        ...DEFAULT_CANDIDATE_PROFILE,
+        targetRoles: ['Frontend Engineer'],
+      }),
+      runScan: vi.fn().mockResolvedValue(rescored),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText(/search profile is saved, but this report was generated before it could be scored/i)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Fill search profile' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rescan and score' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText(/generated before it could be scored/i)).not.toBeInTheDocument());
+    expect(screen.getAllByText('82').length).toBeGreaterThan(0);
+  });
+
+  it('keeps unscored-report guidance when the current search profile cannot be loaded', async () => {
+    installAllBridges({
+      getReport: vi
+        .fn()
+        .mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
+      getSearchProfile: vi.fn().mockRejectedValue(new Error('profile read failed')),
+    });
+
+    render(<SearchPage />);
+
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(screen.getByText(/could not check whether the current search profile can score this report/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/profile read failed/i)).toBeInTheDocument();
   });
 
   it('seeds the country filter from the persisted default search location on first load', async () => {

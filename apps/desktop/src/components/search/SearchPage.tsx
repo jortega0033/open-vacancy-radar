@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from '@phosphor-icons/react';
 import type { ProviderId } from '@agent-dock/shared';
-import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfile, DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
@@ -192,6 +192,8 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
+  const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
+  const [searchProfileError, setSearchProfileError] = useState<string>();
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -454,6 +456,27 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void window.vacancyRadar
+      .getSearchProfile()
+      .then((loaded) => {
+        if (!cancelled) {
+          setSearchProfile(loaded);
+          setSearchProfileError(undefined);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSearchProfile(null);
+          setSearchProfileError(describeError(error, 'could not load the search profile'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // While no final report is loaded yet, fall back to whatever `vacancy:scan-progress` has pushed
   // so far (issue #252) -- honestly unscored, provisional rows shown sooner than the scan's own
   // promise resolves. The moment a real `GlobalRemoteReport` exists, it is the only source of truth
@@ -503,7 +526,16 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
     [visible, selectedKey],
   );
 
-  const profileNotConfigured = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
+  const reportHasOnlyUnscoredRows = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
+  const currentProfileConfigured =
+    searchProfile !== null && (searchProfile.targetRoles.length > 0 || searchProfile.strongestSkills.length > 0);
+  const currentProfileScanQuery =
+    searchProfile?.targetRoles.find((role) => role.trim())?.trim() ??
+    searchProfile?.strongestSkills.find((skill) => skill.trim())?.trim() ??
+    '';
+  const profileNotConfigured = reportHasOnlyUnscoredRows && searchProfile !== null && !currentProfileConfigured;
+  const reportNeedsRescore = reportHasOnlyUnscoredRows && currentProfileConfigured;
+  const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
   const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
   const hasReport = worldwideReport !== null;
   // A scan is running and has pushed at least one row, but has not produced its final report yet:
@@ -513,8 +545,8 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const isStreamingPartial = !hasReport && partialVacancies.length > 0;
   const busy = hydrating || scanning;
 
-  const runScan = useCallback(async () => {
-    const query = filters.query.trim();
+  const runScan = useCallback(async (queryOverride?: string) => {
+    const query = (queryOverride ?? filters.query).trim();
     if (!query) {
       setScanning(false);
       setScanError(undefined);
@@ -552,6 +584,15 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
       }
     }
   }, [filters.query, waitForScanToFinish]);
+
+  const handleRescore = useCallback(() => {
+    const query = currentProfileScanQuery;
+    if (!query) return;
+    const nextFilters = { ...filters, query };
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+    void runScan(query);
+  }, [currentProfileScanQuery, filters, runScan]);
 
   // "Search" commits the draft filters (so the list reflects exactly what the form currently
   // shows) and goes to get fresh data, whether or not a report already exists -- there is
@@ -763,6 +804,23 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
                   Fill search profile
                 </button>
               )}
+            </div>
+          )}
+          {reportNeedsRescore && (
+            <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+              <span>
+                Search profile is saved, but this report was generated before it could be scored.
+                Cached vacancies remain browseable; rescan to score them with the current profile.
+              </span>
+              <button type="button" className="btn btn-warning btn-sm" onClick={handleRescore} disabled={busy || !currentProfileScanQuery}>
+                Rescan and score
+              </button>
+            </div>
+          )}
+          {profileScoringUnknown && (
+            <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+              Cached vacancies are browseable, but the app could not check whether the current
+              search profile can score this report: {searchProfileError}
             </div>
           )}
           <div
