@@ -46,6 +46,40 @@ export async function loadAtsRoster(projectRoot: string): Promise<AtsRosterEntry
   return parsed.entries;
 }
 
+/** What a host UI needs to render an honest "last refreshed" status without loading the whole
+ * (potentially large) roster: `null` means the import has never run against this data directory. */
+export type AtsRosterStatus = {
+  importedAt: string;
+  totalEntries: number;
+  sourceCounts: Partial<Record<AtsRosterProvider, number>>;
+} | null;
+
+/**
+ * Cheap companion to `loadAtsRoster`: reads the same file but reports only its summary fields
+ * (never the full entry list), for a host UI that wants to show "last refreshed" status without
+ * pulling every roster row across the IPC boundary. Same missing-file contract as `loadAtsRoster`
+ * (`null`, not a throw) since "not imported yet" is an expected, common state, not an error.
+ */
+export async function readAtsRosterStatus(projectRoot: string): Promise<AtsRosterStatus> {
+  const file = atsRosterFilePath(projectRoot);
+  let raw: string;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  const parsed = JSON.parse(raw) as Partial<AtsRosterFile>;
+  if (!Array.isArray(parsed.entries) || typeof parsed.importedAt !== 'string') {
+    throw new Error(`ATS roster file at ${file} does not contain a valid status`);
+  }
+  return {
+    importedAt: parsed.importedAt,
+    totalEntries: parsed.entries.length,
+    sourceCounts: parsed.sourceCounts ?? {},
+  };
+}
+
 export async function writeAtsRoster(
   projectRoot: string,
   entries: readonly AtsRosterEntry[],

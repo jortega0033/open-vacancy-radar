@@ -1,5 +1,7 @@
 import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type {
+  AtsRosterImportResult,
+  AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
   ScanProgressEvent,
@@ -51,6 +53,12 @@ export interface VacancyRadarBridge {
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /** Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
+   * `null` when the import has never run yet against this data directory. */
+  getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  /** Runs the roster import now. Deliberately manual, never automatic -- see the main-process
+   * doc comment on `runAtsRosterRefresh`. */
+  refreshAtsRoster(): Promise<AtsRosterImportResult>;
 }
 
 export interface CvFile {

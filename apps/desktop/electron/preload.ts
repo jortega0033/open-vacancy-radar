@@ -13,6 +13,8 @@ import {
   type ProviderStatus,
 } from '@agent-dock/shared';
 import type {
+  AtsRosterImportResult,
+  AtsRosterStatus,
   CandidateProfile,
   GlobalRemoteReport,
   ScanProgressEvent,
@@ -103,6 +105,20 @@ export interface VacancyRadarBridge {
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /**
+   * Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
+   * `null` when the import has never run yet against this data directory, so a scan will find zero
+   * companies on these five providers until `refreshAtsRoster` below runs at least once.
+   */
+  getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  /**
+   * Runs the roster import now: fetches each provider's CSV, re-verifies every row through this
+   * repo's own ATS URL detectors, and writes the local roster file the next vacancy scan reads.
+   * Deliberately never called automatically -- see `main.ts#runAtsRosterRefresh` for why this is a
+   * manual action, not a background timer. Mutually exclusive with a running vacancy scan (the same
+   * advisory lock the `ats-roster:import` CLI command already takes).
+   */
+  refreshAtsRoster(): Promise<AtsRosterImportResult>;
 }
 
 /**
@@ -233,6 +249,12 @@ const vacancyApi: VacancyRadarBridge = {
   },
   saveSearchProfile(patch) {
     return ipcRenderer.invoke('vacancy:save-search-profile', patch);
+  },
+  getAtsRosterStatus() {
+    return ipcRenderer.invoke('vacancy:ats-roster:get-status');
+  },
+  refreshAtsRoster() {
+    return ipcRenderer.invoke('vacancy:ats-roster:refresh');
   },
 };
 
