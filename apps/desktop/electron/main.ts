@@ -89,6 +89,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
+import { requiredScanQuery, scheduledScanQueryFromProfile } from './vacancy-scan-query.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
@@ -1715,25 +1716,22 @@ guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ sca
 const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
 
 /**
- * Shared by the `vacancy:run-scan` IPC handler and the background-scan timer (#195): a
- * `setInterval` callback has no IPC sender, so it cannot go through `guardedIpc` -- this is the
- * body the guard used to wrap directly, factored out so both callers run the identical scan path
- * (same lock, same report bookkeeping) rather than risking two copies drifting apart.
+ * Shared scan body for user-triggered vacancy discovery: the caller must supply a role or keyword
+ * before the engine opens any upstream provider request.
  *
  * `onProgress` (#252) pushes each discovery sub-source's own rows to the renderer the moment that
  * source resolves, well before this whole function's promise settles -- purely an additional,
- * best-effort notification layered on top of the scan below. The background-scan timer calls this
- * same function with nobody watching the Search page; pushing progress events nobody is listening
- * to is harmless (`sendToRenderer` already no-ops once the window is gone), so this is unconditional
- * rather than gated on "is anyone currently on the Search page".
+ * best-effort notification layered on top of the scan below. The renderer can be hidden or off the
+ * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
+ * unconditional rather than gated on "is anyone currently on the Search page".
  */
-async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
+async function runVacancyScan(query: string): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
-        query,
+        query: requiredScanQuery(query),
         onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
       });
       latestVacancyReport = result.report;
@@ -1744,7 +1742,7 @@ async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
 }
 
 guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>
-  runVacancyScan(typeof query === 'string' ? query : undefined),
+  runVacancyScan(requiredScanQuery(query)),
 );
 
 /**
@@ -1797,22 +1795,29 @@ const BACKGROUND_SCAN_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const BACKGROUND_SCAN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Started once in `app.whenReady()`, runs for the process's whole lifetime. `createScanGuard`
- * throws plain `Error`s, not a distinguishable subclass or code, so "another scan already owns
- * the lock" is recognized by comparing `error.message` against the guard's own exported
- * constants -- both are real, expected outcomes (a manual "Search" click won, or a `pnpm
- * vacancies:scan` in another process did) and are swallowed silently. Any other error is logged
- * (so a genuinely broken background scan doesn't fail forever in total silence) but never allowed
- * to escape as an unhandled rejection inside the timer callback, which would crash the process.
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime. A scheduled worldwide
+ * scan now needs the same upstream-effective narrowing signal as a manual scan (#315). Until a
+ * saved-search profile exists for that signal, the timer wakes, records why it skipped, and does no
+ * network work.
  */
 function scheduleBackgroundScanTick(): void {
   setInterval(() => {
     if (!autoScanEnabled) return;
     if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
-    void runVacancyScan().catch((error: unknown) => {
-      if (isExpectedScanBusyError(error)) return;
-      console.error('[background-scan] scheduled scan failed', error);
-    });
+    void candidateProfilePath()
+      .then((path) => loadCandidateProfile(path))
+      .then((profile) => {
+        const query = scheduledScanQueryFromProfile(profile);
+        if (query === null) {
+          console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
+          return null;
+        }
+        return runVacancyScan(query);
+      })
+      .catch((error: unknown) => {
+        if (isExpectedScanBusyError(error)) return;
+        console.error('[background-scan] scheduled scan failed', error);
+      });
   }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
 }
 

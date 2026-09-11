@@ -95,9 +95,10 @@ export interface VacancyRadarBridge {
   /**
    * `query` scopes each source's own server-side search parameter for this run (see
    * `GlobalRemoteScanOptions.query` in the engine) instead of always harvesting the same static
-   * default and filtering everything client-side afterward. Omitted or blank keeps that default.
+   * default and filtering everything client-side afterward. Blank input is rejected before any
+   * discovery request, so the renderer cannot accidentally trigger the checked-in fallback query.
    */
-  runScan(query?: string): Promise<GlobalRemoteReport>;
+  runScan(query: string): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
