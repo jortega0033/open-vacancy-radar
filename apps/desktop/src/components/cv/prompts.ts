@@ -4,6 +4,7 @@ import {
   selectSourceProjects,
   type CvSourceDocument,
 } from '../../../electron/workspace/cv-source-schema.js';
+import { GENERATION_INPUT_BUDGETS, type GenerationPromptContext } from '../../../electron/generation-input.js';
 import { RESUME_JSON_SHAPE } from '../../../electron/resume-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
@@ -26,8 +27,14 @@ import type { CvDocument, VacancyLead } from './types.js';
  *    experience is worse than no cover letter, because the user may not catch it; a *tailored CV*
  *    that does the same is worse still, because the user is likely to paste it into an
  *    application as their own factual record.
+ *
+ * Every budget below now reads from `GENERATION_INPUT_BUDGETS` (#281) rather than holding its own
+ * number. The names and values are unchanged, so every existing importer is unaffected; what
+ * changes is that the CV limit, the two job-description limits and the letters feature's
+ * instruction limit are one table instead of four independent literals that only agreed by
+ * coincidence.
  */
-export const MAX_CV_PROMPT_CHARS = 14_000;
+export const MAX_CV_PROMPT_CHARS = GENERATION_INPUT_BUDGETS.summaryCvChars;
 /**
  * The source-CV extraction path (#274) reads the CV end to end rather than through the 14,000
  * character clamp above, for the reason that ticket is about: a CV long enough that its projects
@@ -40,8 +47,8 @@ export const MAX_CV_PROMPT_CHARS = 14_000;
  * far beyond any real CV, and `wasCvTextTruncated` below means anything past it is *recorded* as
  * unread rather than dropped in silence.
  */
-export const MAX_SOURCE_CV_PROMPT_CHARS = 200_000;
-export const MAX_VACANCY_TEXT_CHARS = 6_000;
+export const MAX_SOURCE_CV_PROMPT_CHARS = GENERATION_INPUT_BUDGETS.sourceCvChars;
+export const MAX_VACANCY_TEXT_CHARS = GENERATION_INPUT_BUDGETS.interactiveJdChars;
 /**
  * The unattended structured-resume path (#199) reads the full job description rather than this
  * module's usual ~6,000-character clamp: #193 flagged that clamp as insufficient for full-JD
@@ -51,9 +58,9 @@ export const MAX_VACANCY_TEXT_CHARS = 6_000;
  * against a hostile or malformed source page: 60,000 characters is generous for a real posting,
  * far short of what a scraped page dump or an injection payload would need to matter.
  */
-export const MAX_UNATTENDED_VACANCY_TEXT_CHARS = 60_000;
+export const MAX_UNATTENDED_VACANCY_TEXT_CHARS = GENERATION_INPUT_BUDGETS.unattendedJdChars;
 /** Every `Label: value` line below is a single-line field; a real one is far shorter than this. */
-export const MAX_VACANCY_FIELD_CHARS = 300;
+export const MAX_VACANCY_FIELD_CHARS = GENERATION_INPUT_BUDGETS.vacancyFieldChars;
 
 function clamp(text: string, limit: number): string {
   const trimmed = text.trim();
@@ -92,6 +99,26 @@ export function wasVacancyTextTruncated(vacancy: VacancyLead, limit: number): bo
  * callers of `buildGapAnalysisPrompt` / `buildCoverLetterPrompt`.
  */
 export { clamp as clampPromptText, field as fieldPromptText };
+
+/**
+ * Where a `GenerationInputBundle` (#281) gets spliced into a prompt built here.
+ *
+ * Rules go with the document's other rules, above every data block, because an instruction placed
+ * after the untrusted vacancy text is an instruction the model reads last. Blocks go immediately
+ * before the CV, so the reviewed source facts, the critical requirements pulled from the full
+ * posting and the target's own form questions all sit between the posting and the CV rather than
+ * trailing off the end of the prompt.
+ *
+ * Both are empty strings when no bundle is supplied, so every existing call site produces exactly
+ * the prompt it produced before.
+ */
+export function promptContextRules(context?: GenerationPromptContext): string {
+  return context === undefined || context.rules.length === 0 ? '' : `${context.rules.join('\n')}\n`;
+}
+
+export function promptContextBlocks(context?: GenerationPromptContext): string {
+  return context === undefined || context.blocks.length === 0 ? '' : `${context.blocks.join('\n\n')}\n\n`;
+}
 
 /**
  * Renders one untrusted single-line vacancy field.
@@ -242,10 +269,15 @@ ${clamp(text, MAX_CV_PROMPT_CHARS)}`;
  * The result is never written anywhere: the caller streams it for review and offers copy, with no
  * save path back into the CV library (see `TailorCv.tsx`).
  */
-export function buildCvTailorPrompt(cv: CvDocument, vacancy: VacancyLead): string {
+export function buildCvTailorPrompt(
+  cv: CvDocument,
+  vacancy: VacancyLead,
+  context?: GenerationPromptContext,
+): string {
   return `You are helping a candidate tailor their CV for one specific vacancy, using their real CV as the only source of content.
 
 ${GROUNDING_RULES}
+${promptContextRules(context)}
 This is a reordering and re-emphasis task, not a rewriting task: every employer, title, date, degree, certification, technology, responsibility and metric in the output must already appear in the CV below. Do not add a single fact, skill, tool, employer, title, date or metric that is not already there, even if the vacancy asks for it and the CV is silent on it.
 Reorder sections and bullet points so the experience most relevant to this vacancy comes first, and re-word (without inventing) bullet points to foreground the framing, terminology and emphasis this vacancy asks for, drawing only on what the CV already says.
 Keep the candidate's real employers, titles, dates and structure intact: this is the same CV, re-emphasized for one posting, not a new document with a different shape.
@@ -256,7 +288,7 @@ Output the tailored CV text only: no title, no commentary before or after it, no
 === VACANCY ===
 ${formatVacancy(vacancy)}
 
-=== CANDIDATE CV (${field(cv.fileName)}) ===
+${promptContextBlocks(context)}=== CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
@@ -361,6 +393,7 @@ export function buildStructuredResumePrompt(
   cv: CvDocument,
   vacancy: VacancyLead,
   source?: CvSourceDocument | null,
+  context?: GenerationPromptContext,
 ): string {
   return `You are helping a candidate tailor their CV for one specific vacancy, using their real CV as the only source of content. Reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
 
@@ -370,13 +403,13 @@ Order experience entries so the ones most relevant to this vacancy come first, a
 Keep the candidate's real employers, titles, dates and structure intact: this is the same CV, re-emphasized for one posting, not a new document with different facts.
 Never invent a value for a field the CV does not state: use an empty string ("") or an empty array ([]) for it, do not guess. A candidate whose CV has no phone number gets "phone": "", not a placeholder.
 ${ENGAGEMENT_AND_PROJECT_RULES}
-Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
+${promptContextRules(context)}Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
 ${RESUME_JSON_SHAPE}
 
 === VACANCY ===
 ${formatVacancy(vacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)}
 ${source ? `\n${formatSourceCv(source)}\n` : ''}
-=== CANDIDATE CV (${field(cv.fileName)}) ===
+${promptContextBlocks(context)}=== CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, source ? MAX_SOURCE_CV_PROMPT_CHARS : MAX_CV_PROMPT_CHARS)}`;
 }
 
