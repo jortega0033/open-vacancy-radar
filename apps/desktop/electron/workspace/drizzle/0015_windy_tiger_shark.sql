@@ -1,0 +1,1 @@
+ALTER TABLE `application_attempts` ADD `tailoring_mode` text DEFAULT 'ai' NOT NULL;

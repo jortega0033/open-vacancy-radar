@@ -162,15 +162,16 @@ export function reconcileTailoredResumeWithSource(
     .filter((project): project is CvSourceProjectEntry => project !== undefined)
     .map(sourceProjectToResumeEntry);
 
-  const sourceEducationKeys = new Set(
-    source.education.map((entry) => `${matchKey(entry.institution)}|${matchKey(entry.credential)}`),
+  const sourceEducationByKey = new Map(
+    source.education.map((entry) => [`${matchKey(entry.institution)}|${matchKey(entry.credential)}`, entry]),
   );
-  const education = tailored.education.filter((entry) => {
-    const known = sourceEducationKeys.has(`${matchKey(entry.institution)}|${matchKey(entry.credential)}`);
-    if (!known) {
+  const education = tailored.education.flatMap((entry) => {
+    const match = sourceEducationByKey.get(`${matchKey(entry.institution)}|${matchKey(entry.credential)}`);
+    if (!match) {
       dropped.push(`qualification "${entry.credential || '(unnamed)'}" is not in your CV`);
+      return [];
     }
-    return known;
+    return [{ ...match }];
   });
 
   return {
@@ -179,7 +180,7 @@ export function reconcileTailoredResumeWithSource(
       // during review must reach the document exactly as reviewed, never as the model restated it.
       contact: {
         name: source.contact.name,
-        title: tailored.contact.title || source.contact.title,
+        title: source.contact.title,
         location: source.contact.location,
         email: source.contact.email,
         phone: source.contact.phone,

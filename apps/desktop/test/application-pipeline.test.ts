@@ -123,6 +123,17 @@ function uploadFormTree(): CdpDomNode {
   };
 }
 
+function requiredCoverLetterFormTree(): CdpDomNode {
+  const tree = uploadFormTree();
+  return {
+    ...tree,
+    children: [
+      ...(tree.children ?? []),
+      { nodeName: 'INPUT', nodeType: 1, backendNodeId: 20, attributes: ['type', 'file', 'name', 'coverLetter', 'accept', '.pdf', 'required', ''] },
+    ],
+  };
+}
+
 interface FakeView {
   sendCommand: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
@@ -448,6 +459,7 @@ let closeDb: () => void;
 let queue: FakeQueue;
 let deps: ApplicationPipelineDeps;
 let generateFieldMap: ReturnType<typeof vi.fn>;
+let generateTailoredResume: ReturnType<typeof vi.fn>;
 
 function makeDeps(database: WorkspaceDb): ApplicationPipelineDeps {
   return {
@@ -455,6 +467,7 @@ function makeDeps(database: WorkspaceDb): ApplicationPipelineDeps {
     storageRoot: join(dir, 'application-artifacts'),
     queue: queue.port,
     generateFieldMap: generateFieldMap as unknown as ApplicationPipelineDeps['generateFieldMap'],
+    generateTailoredResume: generateTailoredResume as unknown as ApplicationPipelineDeps['generateTailoredResume'],
     loadProfile: async () => ({
       candidateName: 'Jamie Rivera',
       currentRole: 'Senior Engineer',
@@ -484,6 +497,17 @@ beforeEach(() => {
   printToPDF.mockClear();
   createApplicationView.mockReset().mockImplementation(() => fakeView(noUploadFormTree()));
   generateFieldMap = vi.fn(async (prompt: string) => ({ ok: true, text: deterministicFieldMapper(prompt) }));
+  generateTailoredResume = vi.fn(async () => ({
+    ok: true,
+    text: JSON.stringify({
+      contact: SOURCE_CV.contact,
+      summary: SOURCE_CV.summary,
+      experience: SOURCE_CV.experience,
+      projects: [],
+      skills: ['TypeScript'],
+      education: [],
+    }),
+  }));
   queue = new FakeQueue();
   deps = makeDeps(db);
   seedCv(db);
@@ -527,6 +551,9 @@ describe('acceptance 1: the production entry point reaches ready-for-review', ()
     const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
     expect(attempt.checkpoint).toBe('ready');
     expect(attempt.workflowVersion).toBe(pipeline.APPLICATION_PIPELINE_WORKFLOW_VERSION);
+    expect(attempt.tailoringMode).toBe('ai');
+    expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    expect(generateTailoredResume.mock.calls[0]?.[0]).toContain(VACANCY.description);
 
     // The full JD text was snapshotted, and its hash is the one the pre-submit gate recomputes.
     expect(attempt.jdSnapshot).toBe(VACANCY.description);
@@ -597,6 +624,45 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
 
     expect(second).toMatchObject({ ok: false, reason: 'attempt_already_in_progress', attemptId: first.attemptId });
     expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+  });
+
+  it('reconciles queue state before retrying a transient enqueue failure', async () => {
+    let enqueueCalls = 0;
+    const recoveringDeps: ApplicationPipelineDeps = {
+      ...deps,
+      queue: {
+        ...queue.port,
+        enqueue: async (attemptId) => {
+          enqueueCalls += 1;
+          if (enqueueCalls === 1) throw new Error('connection reset');
+          await queue.port.enqueue(attemptId);
+        },
+      },
+    };
+
+    const result = await pipeline.startApplicationAttempt(recoveringDeps, { vacancy: VACANCY });
+
+    expect(result.ok).toBe(true);
+    expect(enqueueCalls).toBe(2);
+    expect(await queue.port.entryState(result.attemptId!)).toBe('queued');
+  });
+
+  it('marks an unscheduled attempt failed so a queue outage cannot wedge future starts', async () => {
+    const unavailableDeps: ApplicationPipelineDeps = {
+      ...deps,
+      queue: {
+        ...queue.port,
+        enqueue: async () => {
+          throw new Error('queue unavailable');
+        },
+        entryState: async () => null,
+      },
+    };
+
+    await expect(pipeline.startApplicationAttempt(unavailableDeps, { vacancy: VACANCY })).rejects.toThrow('queue unavailable');
+    expect(workspace.listApplicationAttempts(db)[0]).toMatchObject({ checkpoint: 'failed' });
+
+    await expect(pipeline.startApplicationAttempt(deps, { vacancy: VACANCY })).resolves.toMatchObject({ ok: true });
   });
 
   it('leaves an already-prepared attempt exactly as it is when the pipeline runs again', async () => {
@@ -776,11 +842,82 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
     expect(attempt.checkpoint).toBe('needs_user');
     expect(attempt.checkpointDetail).toContain('apply on the site yourself');
+    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(1);
 
     // Nothing was opened, nothing was typed, and no policy was resolved for it: an unsupported
     // destination does not inherit the fixture's allowlist, actions, or kill-switch settings.
     expect(createApplicationView).not.toHaveBeenCalled();
     expect(insertedText()).toEqual([]);
+  });
+
+  it('offers a durable retry after tailoring fails', async () => {
+    generateTailoredResume.mockResolvedValueOnce({ ok: false, text: '', error: 'provider unavailable' });
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const first = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(first.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('provider unavailable');
+
+    const restarted = await pipeline.restartApplicationTailoring(deps, started.attemptId!, 'ai');
+    expect(restarted).toMatchObject({ ok: true, tailoringMode: 'ai' });
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'queued', tailoringMode: 'ai' });
+
+    queueOneCvRender();
+    const second = await pipeline.runNextApplicationAttempt(deps);
+    expect(second.result?.outcome).toBe('ready');
+    expect(generateTailoredResume).toHaveBeenCalledTimes(2);
+  });
+
+  it('requeues a preparation blocker after the person addresses it', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-incomplete', description: null, descriptionComplete: false },
+    });
+    await pipeline.runNextApplicationAttempt(deps);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'needs_user' });
+
+    const resumed = await pipeline.resumeApplicationAttempt(deps, started.attemptId!);
+
+    expect(resumed.ok).toBe(true);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'queued' });
+    expect(await queue.port.entryState(started.attemptId!)).toBe('queued');
+  });
+
+  it('marks a resumed attempt failed when it cannot be scheduled', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-resume-outage', description: null, descriptionComplete: false },
+    });
+    await pipeline.runNextApplicationAttempt(deps);
+    const unavailableDeps: ApplicationPipelineDeps = {
+      ...deps,
+      queue: {
+        ...queue.port,
+        enqueue: async () => {
+          throw new Error('queue unavailable');
+        },
+        entryState: async () => null,
+      },
+    };
+
+    await expect(pipeline.resumeApplicationAttempt(unavailableDeps, started.attemptId!)).rejects.toThrow(
+      'queue unavailable',
+    );
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'failed' });
+  });
+
+  it('uses the original reviewed CV only after an explicit recovery choice', async () => {
+    generateTailoredResume.mockResolvedValueOnce({ ok: false, text: '', error: 'invalid response' });
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    await pipeline.runNextApplicationAttempt(deps);
+
+    const restarted = await pipeline.restartApplicationTailoring(deps, started.attemptId!, 'original');
+    expect(restarted).toMatchObject({ ok: true, tailoringMode: 'original' });
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).tailoringMode).toBe('original');
+
+    queueOneCvRender();
+    const second = await pipeline.runNextApplicationAttempt(deps);
+    expect(second.result?.outcome).toBe('ready');
+    expect(generateTailoredResume).toHaveBeenCalledTimes(1);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('Original reviewed CV used');
   });
 
   it('does not extend the fixture policy to any other local file', async () => {
@@ -821,6 +958,20 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
     expect(byLabel.get('fullName')).toMatchObject({ status: 'committed' });
     expect(byLabel.get('resume')).toMatchObject({ status: 'committed', required: true });
     expect(byLabel.get('resume')?.value).toContain('resume.pdf');
+  });
+
+  it('stops with a specific recovery when the form requires a letter that was not staged', async () => {
+    createApplicationView.mockReset().mockImplementation(() => fakeView(requiredCoverLetterFormTree()));
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-cover-letter', applyUrl: FIXTURE_FORM_URLS.withUpload },
+    });
+    queueOneCvRender();
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toMatch(/requires "coverLetter"/);
+    expect(generateFieldMap).not.toHaveBeenCalled();
   });
 
   it('hands a CAPTCHA to the person and never attempts to answer it', async () => {

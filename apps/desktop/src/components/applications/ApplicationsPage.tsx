@@ -18,9 +18,21 @@ import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
+import type { SelectedVacancy } from '../letters/types.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
 type PageTab = ApplicationFilter | 'in_progress';
+type AttemptView = 'review' | 'preparing' | 'history';
+
+const REVIEW_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>(['ready', 'needs_user']);
+const PREPARING_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>([
+  'queued',
+  'reading_jd',
+  'tailoring',
+  'rendering',
+  'filling',
+  'submitting',
+]);
 
 interface PendingUndo {
   message: string;
@@ -47,6 +59,7 @@ export interface ApplicationsPageProps {
   onApplicationsChanged?: () => void;
   focusAttemptId?: string | null;
   onFocusAttemptConsumed?: () => void;
+  onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
 }
 
 /**
@@ -60,6 +73,7 @@ export function ApplicationsPage({
   onApplicationsChanged,
   focusAttemptId = null,
   onFocusAttemptConsumed,
+  onGenerateLetter,
 }: ApplicationsPageProps) {
   const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
@@ -67,6 +81,8 @@ export function ApplicationsPage({
 
   const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
   const [attemptsError, setAttemptsError] = useState<string>();
+  const [attemptView, setAttemptView] = useState<AttemptView>('review');
+  const [focusedAttemptId, setFocusedAttemptId] = useState<string | null>(null);
   const [openAttempt, setOpenAttempt] = useState<ApplicationAttemptRecord | null>(null);
   const [reviewingAttempt, setReviewingAttempt] = useState<ApplicationAttemptRecord | null>(null);
 
@@ -80,7 +96,17 @@ export function ApplicationsPage({
   const [actionError, setActionError] = useState<string>();
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
-  const openedFocusedAttempt = useRef<string | null>(null);
+  const dismissedReviewAttempt = useRef<string | null>(null);
+
+  const refreshAttempts = useCallback(async () => {
+    try {
+      const rows = await window.workspace.listApplicationAttempts();
+      setAttempts(rows);
+      setAttemptsError(undefined);
+    } catch (err) {
+      setAttemptsError(describeError(err, 'could not load application attempts'));
+    }
+  }, []);
 
   // Linked-record dropdowns (saved job / CV / letter) load once, independently of the
   // applications list itself. A failure here must never block the pipeline table from showing.
@@ -125,65 +151,118 @@ export function ApplicationsPage({
     };
   }, [activeTab]);
 
-  // In-progress attempts are read-only and unrelated to the active/archived/all filter above, so
-  // they load once when that tab is first opened rather than re-fetching on every tab switch.
+  // Attempt checkpoints advance in Electron main while this page is open. Polling is bounded to
+  // this tab so a queued row becomes its review card without a manual refresh or another click.
   useEffect(() => {
-    if (activeTab !== 'in_progress' || attempts !== null) return;
+    if (activeTab !== 'in_progress') return;
     let cancelled = false;
-    setAttemptsError(undefined);
-    async function load() {
+    async function refresh() {
       try {
         const rows = await window.workspace.listApplicationAttempts();
-        if (!cancelled) setAttempts(rows);
+        if (!cancelled) {
+          setAttempts(rows);
+          setAttemptsError(undefined);
+        }
       } catch (err) {
         if (!cancelled) setAttemptsError(describeError(err, 'could not load in-progress applications'));
       }
     }
-    void load();
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1_500);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [activeTab, attempts]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (!focusAttemptId) return;
     setActiveTab('in_progress');
+    setFocusedAttemptId(focusAttemptId);
+    dismissedReviewAttempt.current = null;
     setAttempts(null);
-  }, [focusAttemptId]);
+    onFocusAttemptConsumed?.();
+  }, [focusAttemptId, onFocusAttemptConsumed]);
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
   const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
+  const reviewAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => REVIEW_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const preparingAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => PREPARING_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const historyAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => !REVIEW_CHECKPOINTS.has(attempt.checkpoint) && !PREPARING_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const visibleAttempts = attemptView === 'review' ? reviewAttempts : attemptView === 'preparing' ? preparingAttempts : historyAttempts;
+  const reviewPosition = reviewingAttempt
+    ? reviewAttempts.findIndex((attempt) => attempt.id === reviewingAttempt.id) + 1
+    : 0;
 
   // A `ready` attempt opens straight into the review-and-submit flow (issue #202) rather than the
   // plain read-only drawer -- that's the one checkpoint where there's actually a decision for a
   // person to make; every other checkpoint is still just informational.
   const openAttemptRow = useCallback((attempt: ApplicationAttemptRecord) => {
-    if (attempt.checkpoint === 'ready') setReviewingAttempt(attempt);
-    else setOpenAttempt(attempt);
+    setFocusedAttemptId(attempt.id);
+    dismissedReviewAttempt.current = null;
+    if (REVIEW_CHECKPOINTS.has(attempt.checkpoint)) {
+      setOpenAttempt(null);
+      setReviewingAttempt(attempt);
+    } else {
+      setReviewingAttempt(null);
+      setOpenAttempt(attempt);
+    }
   }, []);
 
   useEffect(() => {
-    if (!focusAttemptId || !attempts || openedFocusedAttempt.current === focusAttemptId) return;
-    const focused = attempts.find((attempt) => attempt.id === focusAttemptId);
+    if (!focusedAttemptId || !attempts) return;
+    const focused = attempts.find((attempt) => attempt.id === focusedAttemptId);
     if (!focused) return;
-    openedFocusedAttempt.current = focusAttemptId;
-    openAttemptRow(focused);
-    onFocusAttemptConsumed?.();
-  }, [attempts, focusAttemptId, onFocusAttemptConsumed, openAttemptRow]);
+    if (REVIEW_CHECKPOINTS.has(focused.checkpoint)) {
+      setAttemptView('review');
+      setOpenAttempt(null);
+      if (dismissedReviewAttempt.current !== focused.id) setReviewingAttempt(focused);
+    } else {
+      setAttemptView(PREPARING_CHECKPOINTS.has(focused.checkpoint) ? 'preparing' : 'history');
+      setReviewingAttempt(null);
+      setOpenAttempt((current) => (current?.id === focused.id ? focused : current ?? focused));
+    }
+  }, [attempts, focusedAttemptId]);
 
-  const closeReviewSession = useCallback(() => {
-    setReviewingAttempt(null);
-    setAttempts(null); // re-triggers the load-once effect so a changed checkpoint is reflected
-  }, []);
+  useEffect(() => {
+    if (activeTab !== 'in_progress' || attemptView !== 'review' || reviewingAttempt || openAttempt) return;
+    const next = reviewAttempts.find((attempt) => !attempt.scheduledAutomaticSubmitAt);
+    if (!next || dismissedReviewAttempt.current === next.id) return;
+    setFocusedAttemptId(next.id);
+    setReviewingAttempt(next);
+  }, [activeTab, attemptView, openAttempt, reviewAttempts, reviewingAttempt]);
+
+  const closeReviewSession = useCallback((outcome: 'dismissed' | 'resolved' = 'dismissed') => {
+    const currentId = reviewingAttempt?.id ?? null;
+    dismissedReviewAttempt.current = currentId;
+    if (outcome === 'dismissed') {
+      setReviewingAttempt(null);
+      return;
+    }
+    const next = reviewAttempts.find((attempt) => attempt.id !== currentId);
+    setAttempts((current) => current?.filter((attempt) => attempt.id !== currentId) ?? current);
+    setReviewingAttempt(next ?? null);
+    setFocusedAttemptId(next?.id ?? null);
+    if (next) dismissedReviewAttempt.current = null;
+  }, [reviewAttempts, reviewingAttempt?.id]);
 
   const cancelScheduledAutomaticSubmission = useCallback(async (attempt: ApplicationAttemptRecord) => {
     try {
       await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
-      setAttempts(null); // re-triggers the load-once effect so the cleared schedule is reflected
+      await refreshAttempts();
     } catch (err) {
       setAttemptsError(describeError(err, 'could not cancel the scheduled automatic submission'));
     }
-  }, []);
+  }, [refreshAttempts]);
 
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
@@ -288,7 +367,6 @@ export function ApplicationsPage({
   const isLoading = applications === null;
   const isEmpty = !isLoading && sortedApplications.length === 0;
   const isAttemptsLoading = attempts === null;
-  const isAttemptsEmpty = !isAttemptsLoading && sortedAttempts.length === 0;
 
   return (
     <div>
@@ -316,11 +394,12 @@ export function ApplicationsPage({
         <button
           type="button"
           role="tab"
+          aria-label="Review queue"
           aria-selected={isInProgressTab}
           className={`tab ${isInProgressTab ? 'tab-active' : ''}`}
           onClick={() => setActiveTab('in_progress')}
         >
-          In progress
+          Review queue{attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}
         </button>
       </div>
 
@@ -362,22 +441,33 @@ export function ApplicationsPage({
 
       {isInProgressTab && (
         <>
+          <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Review queue view">
+            <button type="button" className={`btn btn-sm ${attemptView === 'review' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('review')}>
+              Review ({reviewAttempts.length})
+            </button>
+            <button type="button" className={`btn btn-sm ${attemptView === 'preparing' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('preparing')}>
+              Preparing ({preparingAttempts.length})
+            </button>
+            <button type="button" className={`btn btn-sm ${attemptView === 'history' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('history')}>
+              History ({historyAttempts.length})
+            </button>
+          </div>
           {attemptsError && <ErrorBanner className="mt-4">{attemptsError}</ErrorBanner>}
 
           {isAttemptsLoading && !attemptsError && <PageLoading label="Loading…" />}
 
-          {isAttemptsEmpty && (
+          {!isAttemptsLoading && visibleAttempts.length === 0 && (
             <EmptyState
               illustration={emptyApplicationsIllustration}
-              title="Nothing in progress"
-              description="Applications the assistant is preparing, filling in, or waiting on you for will show up here."
+              title={attemptView === 'review' ? 'Nothing to review' : attemptView === 'preparing' ? 'Nothing preparing' : 'No attempt history'}
+              description="Prepared applications move here automatically as their status changes."
             />
           )}
 
-          {!isAttemptsLoading && sortedAttempts.length > 0 && (
+          {!isAttemptsLoading && visibleAttempts.length > 0 && (
             <div className="mt-4">
               <ApplicationAttemptsTable
-                attempts={sortedAttempts}
+                attempts={visibleAttempts}
                 onOpen={openAttemptRow}
                 onCancelScheduledAutomaticSubmission={cancelScheduledAutomaticSubmission}
               />
@@ -388,7 +478,15 @@ export function ApplicationsPage({
 
       {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
 
-      {reviewingAttempt && <ApplicationReviewSession attempt={reviewingAttempt} onClose={closeReviewSession} />}
+      {reviewingAttempt && (
+        <ApplicationReviewSession
+          attempt={reviewingAttempt}
+          position={reviewPosition}
+          total={reviewAttempts.length}
+          onClose={closeReviewSession}
+          onGenerateLetter={onGenerateLetter}
+        />
+      )}
 
       {drawerState && (
         <ApplicationDrawer

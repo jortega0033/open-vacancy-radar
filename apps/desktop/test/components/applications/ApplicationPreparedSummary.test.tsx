@@ -38,6 +38,7 @@ function attempt(overrides: Partial<ApplicationAttemptRecord> = {}): Application
     jdSnapshotHash: 'jd-hash',
     jdComplete: true,
     workflowVersion: 'review-mode-v1',
+    tailoringMode: 'ai',
     checkpoint: 'ready',
     checkpointDetail: '',
     createdAt: '2026-09-11T11:00:00.000Z',
@@ -78,6 +79,18 @@ describe('ApplicationPreparedSummary', () => {
     expect(screen.getByText('resume.pdf')).toBeInTheDocument();
     expect(screen.getByText('Cover letter')).toBeInTheDocument();
     expect(screen.getByText('cover-letter.pdf')).toBeInTheDocument();
+  });
+
+  it('shows the tailoring change and dropped-content summary before submission', () => {
+    render(
+      <ApplicationPreparedSummary
+        attempt={attempt({ checkpointDetail: 'CV tailored for this vacancy. Removed unsupported output: skill "Rust".' })}
+        documents={[artifact()]}
+      />,
+    );
+
+    expect(screen.getByText('Tailoring and preparation')).toBeInTheDocument();
+    expect(screen.getByText(/Removed unsupported output: skill "Rust"/)).toBeInTheDocument();
   });
 
   it('shows each committed answer with the value and where it came from', () => {

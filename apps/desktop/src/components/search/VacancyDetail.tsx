@@ -5,6 +5,7 @@ import { SectionHeading, VerificationSection } from './VerificationSection.js';
 import { formatDate, isStalePosting, isWebUrl, orNotStated, type SearchResult } from './results.js';
 
 export type SaveState = 'idle' | 'saving' | 'saved';
+export type PrepareState = 'idle' | 'preparing';
 
 /** `flex h-full flex-col`: the three cards sit in one grid row of uneven content (only "CV match"
  * carries a trailing button), so without a shared height each card's border box would size to its
@@ -48,8 +49,13 @@ export interface VacancyDetailProps {
    * (see `PROVIDER_LABEL`): reflects the user's configured default provider, not a fixed one. */
   providerLabel: string;
   saveState: SaveState;
+  prepareState: PrepareState;
+  /** False for streamed rows that are not in the main process's final trusted report yet. */
+  prepareAvailable?: boolean;
   saveError?: string;
+  prepareError?: string;
   onSave: () => void;
+  onPrepare: () => void;
   /** Builds a `SelectedVacancy` from this vacancy and hands it off to the Letters page. */
   onGenerateLetter: () => void;
   assistantOpen: boolean;
@@ -72,8 +78,12 @@ export function VacancyDetail({
   defaultCvName,
   providerLabel,
   saveState,
+  prepareState,
+  prepareAvailable = true,
   saveError,
+  prepareError,
   onSave,
+  onPrepare,
   onGenerateLetter,
   assistantOpen,
   onToggleAssistant,
@@ -95,6 +105,16 @@ export function VacancyDetail({
 
           <div className="flex flex-none flex-wrap gap-2">
             <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={onPrepare}
+              disabled={prepareState === 'preparing' || !prepareAvailable}
+              title={prepareAvailable ? undefined : 'Available when this scan finishes'}
+            >
+              {prepareState === 'preparing' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {prepareState === 'preparing' ? 'Preparing…' : prepareAvailable ? 'Prepare application' : 'Finishing scan…'}
+            </button>
+            <button
               className="btn btn-outline btn-sm"
               type="button"
               onClick={onSave}
@@ -106,7 +126,7 @@ export function VacancyDetail({
             <button className="btn btn-outline btn-sm" type="button" onClick={onGenerateLetter}>
               Generate Letter
             </button>
-            <button className="btn btn-primary btn-sm" type="button" onClick={onToggleAssistant}>
+            <button className="btn btn-outline btn-sm" type="button" onClick={onToggleAssistant}>
               {assistantOpen ? 'Hide AI assistant' : 'Use for AI'}
             </button>
             {isWebUrl(result.url) ? (
@@ -122,6 +142,11 @@ export function VacancyDetail({
         {saveError && (
           <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
             {saveError}
+          </div>
+        )}
+        {prepareError && (
+          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
+            {prepareError}
           </div>
         )}
 

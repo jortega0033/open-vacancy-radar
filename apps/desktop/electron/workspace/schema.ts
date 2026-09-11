@@ -183,6 +183,9 @@ export const applicationAttempts = sqliteTable('application_attempts', {
   /** Identifies which version of the generation task contract/prompt produced this attempt, so a
    * later change to that contract cannot silently reinterpret an already-recorded attempt. */
   workflowVersion: text('workflow_version').notNull().default(''),
+  /** Which document path this attempt records. `original` is set only after the person explicitly
+   * chooses the visible fallback after AI tailoring fails; it is never a silent fallback. */
+  tailoringMode: text('tailoring_mode', { enum: ['ai', 'original'] }).notNull().default('ai'),
   checkpoint: text('checkpoint', {
     enum: [
       'queued',

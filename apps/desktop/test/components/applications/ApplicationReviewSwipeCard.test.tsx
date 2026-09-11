@@ -148,4 +148,29 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
+
+  it('maps right and left drags to submit and skip without stale drag state', () => {
+    const { onApprove, onSkip } = renderCard();
+    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    expect(card).not.toBeNull();
+
+    function drag(type: string, clientX: number, pointerId: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, {
+        clientX: { value: clientX },
+        pointerId: { value: pointerId },
+      });
+      fireEvent(card!, event);
+    }
+
+    drag('pointerdown', 100, 1);
+    drag('pointermove', 230, 1);
+    drag('pointerup', 230, 1);
+    expect(onApprove).toHaveBeenCalledTimes(1);
+
+    drag('pointerdown', 230, 2);
+    drag('pointermove', 90, 2);
+    drag('pointerup', 90, 2);
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
 });

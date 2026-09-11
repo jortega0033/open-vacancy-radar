@@ -1,13 +1,14 @@
-import type { ApplicationArtifactRecord, ApplicationAttemptRecord, PreparedApplicationField } from '../../window.js';
+import type { ApplicationArtifactSummary, ApplicationAttemptRecord, PreparedApplicationField } from '../../window.js';
 
 export interface ApplicationPreparedSummaryProps {
   attempt: ApplicationAttemptRecord;
   /** The artifacts registered against this exact attempt id. Read through
    * `workspace.listApplicationArtifacts`, which scopes by attempt in SQL. */
-  documents: readonly ApplicationArtifactRecord[];
+  documents: readonly ApplicationArtifactSummary[];
+  onOpenArtifact?: (artifactId: string) => void;
 }
 
-const DOCUMENT_LABEL: Record<ApplicationArtifactRecord['kind'], string> = {
+const DOCUMENT_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
   cv_pdf: 'CV',
   cover_letter_pdf: 'Cover letter',
   combined_pdf: 'CV and letter',
@@ -52,12 +53,18 @@ const PROVENANCE_LABEL: Record<NonNullable<PreparedApplicationField['provenance'
  *    issue #277 flagged. Confirming each value is genuinely committed on the live page is #277's
  *    own work, and this wording does not get ahead of it.
  */
-export function ApplicationPreparedSummary({ attempt, documents }: ApplicationPreparedSummaryProps) {
+export function ApplicationPreparedSummary({ attempt, documents, onOpenArtifact }: ApplicationPreparedSummaryProps) {
   const prepared = attempt.preparedFields;
   const matchesThisAttempt = prepared != null && prepared.company === attempt.company && prepared.role === attempt.role;
 
   return (
     <div className="flex flex-col gap-3 border-b border-base-300 px-5 py-3.5">
+      {attempt.checkpointDetail && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">Tailoring and preparation</h3>
+          <p className="mt-1 text-xs text-base-content/70">{attempt.checkpointDetail}</p>
+        </div>
+      )}
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">Documents for this application</h3>
         {documents.length === 0 ? (
@@ -65,9 +72,16 @@ export function ApplicationPreparedSummary({ attempt, documents }: ApplicationPr
         ) : (
           <ul className="mt-1 flex flex-col gap-0.5">
             {documents.map((document) => (
-              <li key={document.id} className="text-xs">
-                <span className="font-medium">{DOCUMENT_LABEL[document.kind]}</span>{' '}
-                <span className="text-base-content/60">{document.fileName}</span>
+              <li key={document.id} className="flex items-center justify-between gap-3 text-xs">
+                <span>
+                  <span className="font-medium">{DOCUMENT_LABEL[document.kind]}</span>{' '}
+                  <span className="text-base-content/60">{document.fileName}</span>
+                </span>
+                {onOpenArtifact ? (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => onOpenArtifact(document.id)}>
+                    Review
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>
