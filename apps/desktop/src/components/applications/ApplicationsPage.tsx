@@ -34,16 +34,27 @@ function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+export interface ApplicationsPageProps {
+  /**
+   * Fired after any mutation that can change `activeApplications` (create, delete, archive/
+   * restore, and undoing a delete) so the caller (App.tsx) can refresh the sidebar badge and the
+   * header's "N active" subtitle without waiting for the user to navigate away and back.
+   *
+   * Plain status changes and edits are not wired to this: neither one touches the `archived` flag
+   * `activeApplications` is keyed on (see electron/workspace/repository.ts `getCounts`), so firing
+   * on them would just be an extra no-op IPC round trip.
+   */
+  onApplicationsChanged?: () => void;
+}
+
 /**
  * Top-level "Applications" screen: an Active/Archived/All tab switch backed by
  * `listApplications({ filter })`, a pipeline table with inline status changes, add/edit through
  * `ApplicationDrawer`, and delete through `ConfirmDialog` with a short undo window.
  *
  * Owns the whole lifecycle against `window.workspace`, in the same shape as `SavedJobsPage`.
- * Deliberately not wired into `App.tsx` here. This page is exported standalone via `index.ts` so
- * the shell's router can pick it up once every page agent's work has landed.
  */
-export function ApplicationsPage() {
+export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProps) {
   const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
@@ -162,6 +173,8 @@ export function ApplicationsPage() {
       if (drawerState.mode === 'create') {
         const created = await window.workspace.createApplication(input);
         setApplications((prev) => [...(prev ?? []), created]);
+        // A newly created application is always active, so `activeApplications` just changed.
+        onApplicationsChanged?.();
       } else {
         const updated = await window.workspace.updateApplication(drawerState.record.id, input);
         setApplications((prev) => (prev ?? []).map((row) => (row.id === updated.id ? updated : row)));
@@ -170,7 +183,7 @@ export function ApplicationsPage() {
       // inline without closing itself, so a failed save leaves the drawer open with the message.
       setDrawerState(null);
     },
-    [drawerState],
+    [drawerState, onApplicationsChanged],
   );
 
   const handleStatusChange = useCallback(async (record: ApplicationRecord, status: ApplicationStatus) => {
@@ -197,11 +210,13 @@ export function ApplicationsPage() {
           if (!belongsToCurrentTab) return rows.filter((row) => row.id !== updated.id);
           return rows.map((row) => (row.id === updated.id ? updated : row));
         });
+        // Archiving/restoring moves the row in or out of `activeApplications`.
+        onApplicationsChanged?.();
       } catch (err) {
         setActionError(describeError(err, 'could not update this application'));
       }
     },
-    [activeTab],
+    [activeTab, onApplicationsChanged],
   );
 
   const requestDelete = useCallback((record: ApplicationRecord) => {
@@ -225,11 +240,13 @@ export function ApplicationsPage() {
           message: `Deleted "${record.role}" at ${record.company}.`,
           input: toApplicationInput(record),
         });
+        // A deleted row may have been active, so `activeApplications` may just have changed.
+        onApplicationsChanged?.();
       }
     } catch (err) {
       setActionError(describeError(err, 'could not delete this application'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, onApplicationsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -239,10 +256,11 @@ export function ApplicationsPage() {
     try {
       const recreated = await window.workspace.createApplication(undo.input);
       setApplications((prev) => [...(prev ?? []), recreated]);
+      onApplicationsChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not undo the delete'));
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, onApplicationsChanged]);
 
   const isInProgressTab = activeTab === 'in_progress';
   const isLoading = applications === null;

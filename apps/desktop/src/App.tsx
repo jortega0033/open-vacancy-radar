@@ -226,7 +226,7 @@ export function App() {
 
           {nav === 'search' && <SearchPage onGenerateLetter={handleGenerateLetter} />}
           {nav === 'saved' && <SavedJobsPage />}
-          {nav === 'applications' && <ApplicationsPage />}
+          {nav === 'applications' && <ApplicationsPage onApplicationsChanged={refreshCounts} />}
           {nav === 'cv' && <CvLibraryPage />}
           {nav === 'letters' && (
             <LettersPage
