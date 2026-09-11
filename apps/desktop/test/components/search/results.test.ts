@@ -2,11 +2,14 @@ import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
+  buildSearchResultIndex,
   descriptionExcerpt,
+  filterSearchResultIndex,
   filterResults,
   countryOptions,
   formatDiscoverySalary,
   isStalePosting,
+  sortSearchResultIndex,
   sortResults,
   toPartialResults,
   worldwideVerification,
@@ -130,6 +133,81 @@ describe('filterResults: sponsorOnly', () => {
 
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
+  });
+});
+
+describe('large report filtering index', () => {
+  it('keeps indexed filtering and sorting behavior identical to the legacy helpers', () => {
+    const now = new Date('2026-09-01T00:00:00.000Z');
+    const results = [
+      {
+        ...worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' }),
+        title: 'Frontend Engineer',
+        company: 'Acme',
+        provider: 'jobicy',
+        employmentType: 'full_time',
+        postedAt: '2026-08-31T00:00:00.000Z',
+        profileScore: 70,
+      },
+      {
+        ...worldwideResult({ key: '2', location: 'Austin, United States' }),
+        title: 'Backend Engineer',
+        company: 'Beta',
+        provider: 'remotive',
+        employmentType: 'contract',
+        postedAt: '2026-07-01T00:00:00.000Z',
+        profileScore: 90,
+      },
+      {
+        ...worldwideResult({ key: '3', location: 'Rotterdam, Netherlands' }),
+        title: 'Frontend Lead',
+        company: 'Gamma',
+        provider: 'jobicy',
+        employmentType: 'full_time',
+        postedAt: null,
+        profileScore: 80,
+      },
+    ] satisfies SearchResult[];
+    const filters = {
+      ...DEFAULT_FILTERS,
+      query: 'frontend',
+      source: 'jobicy',
+      country: 'Netherlands',
+      employment: 'full_time',
+      postedWithin: '30',
+    } as const;
+
+    const legacy = sortResults(filterResults(results, filters, now)).map((result) => result.key);
+    const indexed = sortSearchResultIndex(filterSearchResultIndex(buildSearchResultIndex(results), filters, now)).map(
+      (result) => result.key,
+    );
+
+    expect(indexed).toEqual(legacy);
+  });
+
+  it('filters and sorts a 20k-row saved report inside the documented interaction budget', () => {
+    const now = new Date('2026-09-01T00:00:00.000Z');
+    const results = Array.from({ length: 20_000 }, (_unused, index) => ({
+      ...worldwideResult({
+        key: `job-${index}`,
+        location: index % 4 === 0 ? 'Amsterdam, Netherlands' : 'Austin, United States',
+      }),
+      title: index % 2 === 0 ? 'Frontend Engineer' : 'Backend Engineer',
+      company: `Company ${index}`,
+      provider: index % 3 === 0 ? 'jobicy' : 'remotive',
+      employmentType: index % 5 === 0 ? 'contract' : 'full_time',
+      postedAt: index % 7 === 0 ? '2026-08-31T00:00:00.000Z' : null,
+      profileScore: index % 100,
+    })) satisfies SearchResult[];
+    const filters = { ...DEFAULT_FILTERS, query: 'frontend', country: 'Netherlands' };
+    const start = performance.now();
+    const index = buildSearchResultIndex(results);
+    const filtered = filterSearchResultIndex(index, filters, now);
+    const sorted = sortSearchResultIndex(filtered);
+    const elapsedMs = performance.now() - start;
+
+    expect(sorted).toHaveLength(5_000);
+    expect(elapsedMs).toBeLessThan(1_500);
   });
 });
 
