@@ -16,8 +16,10 @@ import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
 import { EmptyState, ErrorBanner } from '../shell/index.js';
+import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
+import { buildBundledDocumentPrompt } from '../generation/prompts.js';
 import { exportDocx, exportMarkdown, exportPdf } from './export.js';
-import { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
+import { MAX_INSTRUCTION_CHARS } from './prompt.js';
 import {
   labelFor,
   LETTER_LENGTH_OPTIONS,
@@ -300,11 +302,23 @@ export function LetterGenerator({
     setSaveState('idle');
     setSaveError(undefined);
     runSeq.current += 1;
-    void run.start(buildLetterPrompt(cvDocument, lead, { type, tone, length, instructions }), {
+    // #281: the letter is generated from the shared input bundle, so the corrected profile and the
+    // reviewed source CV on the selected record reach the prompt instead of only its raw text, and
+    // the requirement lines read out of the whole posting survive the job-description clamp.
+    const bundle = buildGenerationInputBundle({
+      documentType: type,
+      length,
+      cv: cvDocument,
+      sourceCv: cvRecord?.source ?? null,
+      profile: cvRecord?.profile ?? null,
+      vacancy: lead,
+      ...(instructions.trim().length > 0 ? { instructions } : {}),
+    });
+    void run.start(buildBundledDocumentPrompt(bundle, { tone, instructions }), {
       ...(model ? { model } : {}),
       provider,
     });
-  }, [cvDocument, lead, type, tone, length, instructions, model, provider, run]);
+  }, [cvDocument, cvRecord, lead, type, tone, length, instructions, model, provider, run]);
 
   const handleGenerate = useCallback(() => {
     // Replacing text the user has edited but not saved is the one destructive thing this screen
