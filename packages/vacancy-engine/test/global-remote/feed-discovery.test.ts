@@ -75,7 +75,7 @@ function routes(): Map<string, string | AtsHttpResponse> {
     [WWR_URL, rss(`<item>
       <title>Acme: Senior Frontend Engineer</title>
       <region>Anywhere in the World</region><type>Full-Time</type>
-      <description><![CDATA[Annual base salary $150,000 per year.]]></description>
+      <description><![CDATA[<p>Multiple years of experience.</p><p>Two Microsoft certifications.</p><p>Annual base salary $150,000 per year.</p>]]></description>
       <pubDate>Mon, 31 Aug 2026 16:30:27 +0000</pubDate>
       <guid>wwr-1</guid><link>https://weworkremotely.com/remote-jobs/acme-frontend</link>
     </item>`)],
@@ -231,8 +231,16 @@ describe('credential-free JSON and RSS discovery feeds', () => {
         description: 'Build accessible interfaces. Annual base salary $150,000 per year.',
         postedAt: '2026-08-27T14:36:09.000Z',
       });
+    // QA regression: a real vacancy description read "experienceTwo Microsoft certifications" --
+    // words from separate `<p>` elements running together with no separator once the old
+    // `decodedText` (`load(html).text().replace(/\s+/gu, ' ').trim()`) stripped the HTML, since it
+    // read every text node with nothing inserted between them.
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'we_work_remotely'))
       .toMatchObject({ postedAt: '2026-08-31T16:30:27.000Z' });
+    const wwrDescription = result.vacancies.find((vacancy) => vacancy.provider === 'we_work_remotely')?.description;
+    expect(wwrDescription).not.toContain('experienceTwo');
+    expect(wwrDescription).toContain('Multiple years of experience.');
+    expect(wwrDescription).toContain('Two Microsoft certifications.');
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_first_jobs'))
       .toMatchObject({ postedAt: '2026-08-24T09:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_remotely'))

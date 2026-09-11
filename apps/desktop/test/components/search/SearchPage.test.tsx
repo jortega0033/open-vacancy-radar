@@ -390,10 +390,11 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
-    // Collapsed by default; the detail line only appears once the toggle is opened.
-    expect(screen.queryByText(`workable_global: ${warning}`)).not.toBeInTheDocument();
+    // Collapsed by default; the detail line only appears once the toggle is opened. The provider id
+    // renders through `discoveryProviderLabel` ("Workable"), not the raw "workable_global" id.
+    expect(screen.queryByText(`Workable: ${warning}`)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
-    expect(screen.getByText(`workable_global: ${warning}`)).toBeInTheDocument();
+    expect(screen.getByText(`Workable: ${warning}`)).toBeInTheDocument();
   });
 
   it('reports the missing verification as absent for a vacancy with no sponsor match', async () => {
@@ -615,7 +616,7 @@ describe('SearchPage', () => {
       role: 'Remote Frontend Engineer',
       company: 'Acme Corp',
       location: 'Worldwide',
-      salary: 'USD 120,000/year',
+      salary: 'from USD 120,000/yr',
       arrangement: null,
       verification: 'Not available for this vacancy',
       matchPercent: null,
@@ -639,7 +640,7 @@ describe('SearchPage', () => {
       company: 'Acme Corp',
       location: 'Worldwide',
       vacancyKey: 'ww-1',
-      salary: 'USD 120,000/year',
+      salary: 'from USD 120,000/yr',
       verification: 'Not available for this vacancy',
       matchPercent: 75,
       sourceUrl: 'https://example.invalid/jobs/ww-1',

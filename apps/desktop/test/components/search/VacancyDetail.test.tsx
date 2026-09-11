@@ -78,6 +78,16 @@ describe('VacancyDetail', () => {
     expect(screen.getByText(/remotive did not include description text/i)).toBeInTheDocument();
   });
 
+  // UX audit finding: the "Vacancy source" card and the Overview "Source" field both rendered the
+  // raw snake_case `DiscoveryProvider` id (e.g. "devitjobs_uk") instead of a human label.
+  it('shows a human-readable provider label, not the raw snake_case id, in the source card and Overview', () => {
+    renderDetail(worldwideResult({ provider: 'devitjobs_uk', description: null }));
+
+    expect(screen.getAllByText('DevITjobs UK').length).toBeGreaterThan(0);
+    expect(screen.queryByText('devitjobs_uk')).not.toBeInTheDocument();
+    expect(screen.getByText(/DevITjobs UK did not include description text/i)).toBeInTheDocument();
+  });
+
   it('offers "Generate Letter" alongside "Save job", firing the handler on click', () => {
     const onGenerateLetter = vi.fn();
     renderDetail(worldwideResult(), { onGenerateLetter });

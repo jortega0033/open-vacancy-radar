@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from 'react';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { countryOptions, type SearchFilters } from './results.js';
 
 export interface SearchFilterBarProps {
@@ -120,7 +121,7 @@ export function SearchFilterBar({
           <option value="all">All sources</option>
           {sources.map((source) => (
             <option key={source} value={source}>
-              {source}
+              {discoveryProviderLabel(source)}
             </option>
           ))}
         </select>
