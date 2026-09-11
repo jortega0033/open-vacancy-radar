@@ -159,6 +159,38 @@ describe('Additional public and configuration-gated discovery', () => {
     ]);
   });
 
+  // QA regression: a real vacancy description read "experienceTwo Microsoft certifications" and
+  // "customer-focused mannerStrong troubleshooting" -- words that used to sit in separate `<p>`
+  // elements running together with no separator once the HTML was stripped to plain text (the old
+  // `decodedText` was `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads every text node
+  // with nothing inserted between them).
+  it('keeps a word boundary between adjacent HTML block elements when stripping a description to plain text', async () => {
+    const routes = new Map([
+      [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
+      [MUSE_URL, JSON.stringify({
+        page: 1,
+        page_count: 1,
+        total: 1,
+        results: [{
+          id: 43,
+          name: 'Support Engineer',
+          contents: '<p>3+ years experience</p><p>Two Microsoft certifications</p>',
+          company: { name: 'Muse Co' },
+          locations: [{ name: 'Flexible / Remote' }],
+          refs: { landing_page: 'https://www.themuse.com/jobs/muse-co/support-engineer' },
+          publication_date: '2026-07-30T00:20:58Z',
+        }],
+      })],
+    ]);
+
+    const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
+
+    expect(result.vacancies[0]?.description).not.toContain('experienceTwo');
+    expect(result.vacancies[0]?.description).toContain('experience');
+    expect(result.vacancies[0]?.description).toContain('Two Microsoft certifications');
+  });
+
   it('keeps every researched source visible without mislabeling gated portals as active', () => {
     const registry = globalRemoteSourceRegistry(profile());
 

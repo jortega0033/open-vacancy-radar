@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { FileDashed } from '@phosphor-icons/react';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
 import { formatDate, isStalePosting, isWebUrl, orNotStated, type SearchResult } from './results.js';
 
@@ -22,7 +23,7 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
   return [
     { k: 'Company', v: result.company },
     { k: 'Location', v: orNotStated(result.location) },
-    { k: 'Source', v: result.provider },
+    { k: 'Source', v: discoveryProviderLabel(result.provider) },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
     {
@@ -153,7 +154,7 @@ export function VacancyDetail({
           </Card>
 
           <Card label="Vacancy source">
-            <div className="mt-1.5 text-sm font-semibold">{result.provider}</div>
+            <div className="mt-1.5 text-sm font-semibold">{discoveryProviderLabel(result.provider)}</div>
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">
               Discovery feed. Most sources here do not report a posting date, so check freshness on
               the vacancy itself when the date above is unknown.
@@ -171,7 +172,7 @@ export function VacancyDetail({
             <div className="mt-3 flex flex-col items-center gap-2 rounded-box border border-dashed border-base-300 py-8 text-center">
               <FileDashed size={28} className="text-base-content/30" aria-hidden="true" />
               <p className="text-sm text-base-content/60">
-                {result.provider} did not include description text for this vacancy.
+                {discoveryProviderLabel(result.provider)} did not include description text for this vacancy.
               </p>
               {isWebUrl(result.url) && (
                 <a className="link link-primary text-sm" href={result.url} target="_blank" rel="noopener noreferrer">

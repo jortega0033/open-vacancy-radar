@@ -139,6 +139,42 @@ export type ParsedSalary = {
   period: string | null;
 };
 
+/**
+ * Every period keyword this function recognizes, each paired with a `g` (global) regex so
+ * `nearestSalaryPeriod` below can find every occurrence, not just the first.
+ */
+const SALARY_PERIOD_PATTERNS: { period: string; pattern: RegExp }[] = [
+  { period: 'hourly', pattern: /\b(?:hour|hourly|hr)\b|\/\s*h\b/giu },
+  { period: 'monthly', pattern: /\b(?:month|monthly|mo)\b/giu },
+  { period: 'weekly', pattern: /\b(?:week|weekly|wk)\b/giu },
+  { period: 'annual', pattern: /\b(?:year|yearly|annual|annually|yr)\b/giu },
+];
+
+/**
+ * QA regression: free text describing a role often mentions a period word for something that is
+ * not the pay frequency -- a real confirmed case had "37.5 hours per week" ahead of "£25,000 -
+ * 35,000 per year" in the same description, and reading the period with a fixed hourly > monthly >
+ * weekly > annual priority order (first match wins) picked "weekly" purely because that check ran
+ * before "annual", regardless of which word actually sat next to the salary figure. Scanning every
+ * period keyword in the text and keeping whichever occurrence sits textually closest to the parsed
+ * salary number fixes that: the word that actually describes the pay almost always sits right next
+ * to the number, while an incidental one (working hours, notice period, etc.) sits further away.
+ */
+function nearestSalaryPeriod(value: string, numberIndex: number): string | null {
+  let closest: string | null = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const { period, pattern } of SALARY_PERIOD_PATTERNS) {
+    for (const periodMatch of value.matchAll(pattern)) {
+      const distance = Math.abs((periodMatch.index ?? 0) - numberIndex);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = period;
+      }
+    }
+  }
+  return closest;
+}
+
 export function parseSalaryText(value: string | null): ParsedSalary {
   if (value === null) return { minimum: null, currency: null, period: null };
   const currency = /\bUSD\b|\$/iu.test(value)
@@ -154,15 +190,7 @@ export function parseSalaryText(value: string | null): ParsedSalary {
   const numeric = Number(normalized);
   if (!Number.isFinite(numeric)) return { minimum: null, currency, period: null };
   const minimum = numeric * (match[2] === undefined ? 1 : 1_000);
-  const period = /\b(?:hour|hourly|hr)\b|\/\s*h\b/iu.test(value)
-    ? 'hourly'
-    : /\b(?:month|monthly|mo)\b/iu.test(value)
-      ? 'monthly'
-      : /\b(?:week|weekly|wk)\b/iu.test(value)
-        ? 'weekly'
-        : /\b(?:year|yearly|annual|annually|yr)\b/iu.test(value)
-          ? 'annual'
-          : null;
+  const period = nearestSalaryPeriod(value, match.index);
   return { minimum, currency, period };
 }
 

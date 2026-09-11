@@ -4,6 +4,7 @@ import type { ProviderId } from '@agent-dock/shared';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
@@ -776,7 +777,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
                   <div>
                     {sourceWarnings.map((source) => (
                       <span key={source.id} className="block">
-                        {source.provider}: {source.error ?? source.status}
+                        {discoveryProviderLabel(source.provider)}: {source.error ?? source.status}
                       </span>
                     ))}
                   </div>

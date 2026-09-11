@@ -1,6 +1,7 @@
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
-import { decisionLabel, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
+import { descriptionExcerpt, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
 
 export interface SearchResultRowProps {
   result: SearchResult;
@@ -11,15 +12,23 @@ export interface SearchResultRowProps {
 
 export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
+  const excerpt = descriptionExcerpt(result.description);
   // Verification has the identical "not available" tone on almost every row (the pipeline has no
   // per-employer verification step for most vacancies), so the badge would carry zero per-row
   // information there -- it is already explained once, correctly, in the detail pane. Only a real
   // per-row outcome (a possible sponsor match) earns a badge here.
+  //
+  // `decision` (the pipeline's internal `DiscoveryDecision`, e.g. `role_mismatch`) deliberately does
+  // NOT get a badge here. QA audit finding: in every populated screenshot reviewed, this read as
+  // "role mismatch" on essentially every card, which looks exactly like "this job doesn't match you"
+  // on 100% of listings to a candidate -- it is a pipeline classification, not a per-candidate match
+  // rejection, and styling it identically to the salary/employment-type chips actively misled. It
+  // already has an accurate home, unchanged, in the detail pane's Overview section ("Discovery
+  // decision" -- see `VacancyDetail.tsx`).
   const badges = [
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
-    { text: decisionLabel(result.raw.decision), tone: null },
   ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (
@@ -50,6 +59,8 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
           {result.company} · {orNotStated(result.location)}
         </div>
 
+        {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60">{excerpt}</p>}
+
         {badges.length > 0 && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             {badges.map((badge) => (
@@ -75,7 +86,7 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
             {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
             {stale ? ' (over a month old)' : ''}
           </span>
-          <span className="flex-none text-xs text-base-content/50">{result.provider}</span>
+          <span className="flex-none text-xs text-base-content/50">{discoveryProviderLabel(result.provider)}</span>
         </div>
       </div>
     </button>

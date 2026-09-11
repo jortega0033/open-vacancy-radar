@@ -55,6 +55,7 @@ export {
 
 export type {
   GlobalRemoteReport,
+  DiscoveryProvider,
   DiscoveryVacancyAudit,
   OfficialVacancyAudit,
   ScanProgressEvent,
