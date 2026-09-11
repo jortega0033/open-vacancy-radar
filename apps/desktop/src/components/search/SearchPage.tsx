@@ -143,9 +143,16 @@ export interface SearchPageProps {
    */
   onGenerateLetter?: (vacancy: SelectedVacancy) => void;
   onOpenSearchProfile?: () => void;
+  onSavedJobsChanged?: () => void;
+  preferredSelectedKey?: string | null;
 }
 
-export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPageProps = {}) {
+export function SearchPage({
+  onGenerateLetter,
+  onOpenSearchProfile,
+  onSavedJobsChanged,
+  preferredSelectedKey = null,
+}: SearchPageProps = {}) {
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
@@ -379,31 +386,39 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
    * which the mount-time reattachment effect above does not cover -- that effect runs once, only
    * on mount, and only reattaches when a scan is *still* running; it does nothing for one that
    * already finished while hidden, so showing the window again would otherwise keep displaying a
-   * stale report. On `visibilitychange` to `'visible'`, unconditionally re-fetch the report by
-   * resetting `hasHydrated` and bumping `reloadTick` (re-running the hydration effect above), and
-   * separately re-check scan status to re-arm the "Scanning..." banner if one is still running.
-   * The two checks are independent, not one replacing the other: a finished scan's result and a
-   * still-running scan's status are different questions.
+   * stale report. On `visibilitychange` to `'visible'`, check cheap scan/report metadata first:
+   * if the latest report is unchanged, keep the current 20k-row collection in place and avoid the
+   * heavy `getReport()` transfer/recompute path.
    */
   useEffect(() => {
     function onVisibilityChange(): void {
       if (document.visibilityState !== 'visible') return;
-      hasHydrated.current = false;
-      setReloadTick((tick) => tick + 1);
       void (async () => {
         try {
           const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
-          if (unmountedRef.current || !stillScanning) return;
-          setScanning(true);
-          waitForScanToFinish();
+          if (unmountedRef.current) return;
+          if (stillScanning) {
+            setScanning(true);
+            waitForScanToFinish();
+            return;
+          }
+          const summary = await window.vacancyRadar.getReportSummary();
+          if (unmountedRef.current) return;
+          const currentRunId = worldwideReport?.runId ?? null;
+          const currentGeneratedAt = worldwideReport?.generatedAt ?? null;
+          if ((summary?.runId ?? null) === currentRunId && (summary?.generatedAt ?? null) === currentGeneratedAt) {
+            return;
+          }
+          hasHydrated.current = false;
+          setReloadTick((tick) => tick + 1);
         } catch {
-          // No status available: nothing to reattach to.
+          // No status/summary available: keep the current report instead of forcing a large reload.
         }
       })();
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [waitForScanToFinish]);
+  }, [waitForScanToFinish, worldwideReport?.generatedAt, worldwideReport?.runId]);
 
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
@@ -516,10 +531,18 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
       setSelectedKey(null);
       return;
     }
+    if (preferredSelectedKey) {
+      const selectedIndex = visible.findIndex((result) => result.key === preferredSelectedKey);
+      if (selectedIndex >= 0) {
+        setPage(Math.floor(selectedIndex / PAGE_SIZE));
+        setSelectedKey(preferredSelectedKey);
+        return;
+      }
+    }
     setSelectedKey((current) =>
       current && visible.some((result) => result.key === current) ? current : visible[0]!.key,
     );
-  }, [visible]);
+  }, [preferredSelectedKey, visible]);
 
   const selected = useMemo(
     () => visible.find((result) => result.key === selectedKey) ?? null,
@@ -642,11 +665,12 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
       await window.workspace.createSavedJob(savedJobInputFor(selected));
       setSaveStates((current) => ({ ...current, [key]: 'saved' }));
       setSavedKeys((current) => new Set(current).add(key));
+      onSavedJobsChanged?.();
     } catch (error) {
       setSaveStates((current) => ({ ...current, [key]: 'idle' }));
       setSaveErrors((current) => ({ ...current, [key]: describeError(error, 'could not save this job') }));
     }
-  }, [selected]);
+  }, [onSavedJobsChanged, selected]);
 
   const handleGenerateLetter = useCallback(() => {
     if (!selected) return;
@@ -853,7 +877,12 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
                 onToggleAssistant={() =>
                   setAssistantForKey((current) => (current === selected.key ? null : selected.key))
                 }
-                assistant={<CvAssistant vacancy={toVacancyLead(selected)} />}
+                assistant={
+                  <CvAssistant
+                    vacancy={toVacancyLead(selected)}
+                    onBackToVacancy={() => setAssistantForKey(null)}
+                  />
+                }
               />
             ) : (
               <div className="min-w-0 flex-1">

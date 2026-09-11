@@ -32,11 +32,13 @@ export interface AgentDockBridge {
 }
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
+  getReportSummary(): Promise<VacancyReportSummary | null>;
   /** `query` scopes each source's own server-side search parameter for this run. Blank input is
    * rejected before discovery starts, so a new worldwide scan always has an explicit role signal. */
   runScan(query: string): Promise<GlobalRemoteReport>;

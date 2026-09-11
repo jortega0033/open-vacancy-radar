@@ -252,6 +252,7 @@ describe('SearchPage', () => {
     const getScanStatus = vi.fn().mockResolvedValue({ scanning: false });
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      getReportSummary: vi.fn().mockResolvedValue({ runId: 'ww-run-1', generatedAt: '2026-08-29T11:00:00.000Z', vacancyCount: 1 }),
       getScanStatus,
     });
 
@@ -262,12 +263,34 @@ describe('SearchPage', () => {
     vi.mocked(bridge.getReport).mockResolvedValue(
       makeWorldwideReport([makeWorldwideVacancy({ title: 'Freshly Scanned Role' })]),
     );
+    vi.mocked(bridge.getReportSummary).mockResolvedValue({
+      runId: 'ww-run-2',
+      generatedAt: '2026-08-29T12:00:00.000Z',
+      vacancyCount: 1,
+    });
 
     document.dispatchEvent(new Event('visibilitychange'));
 
     await waitFor(() => expect(screen.getAllByText('Freshly Scanned Role').length).toBeGreaterThan(0));
     // No scan was triggered to get here -- purely a re-fetch of the already-finished report.
     expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+    const getReport = vi.fn().mockResolvedValue(report);
+    installAllBridges({
+      getReport,
+      getReportSummary: vi.fn().mockResolvedValue({ runId: report.runId, generatedAt: report.generatedAt, vacancyCount: 1 }),
+      getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => expect(getReport).toHaveBeenCalledTimes(1));
   });
 
   it('keeps showing vacancies when the candidate profile has no targets configured', async () => {
@@ -494,6 +517,23 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getByText('Page 2 of 800')).toBeInTheDocument());
     expect(screen.getAllByRole('button', { name: /Frontend Role \d+/ })).toHaveLength(25);
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+  });
+
+  it('opens on the page containing a preferred selected vacancy', async () => {
+    const manyVacancies = Array.from({ length: 30 }, (_, index) =>
+      makeWorldwideVacancy({
+        key: `ww-${index}`,
+        title: index === 29 ? 'Z Frontend Role 29' : `A Frontend Role ${String(index).padStart(2, '0')}`,
+      }),
+    );
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport(manyVacancies)),
+    });
+
+    render(<SearchPage preferredSelectedKey="ww-29" />);
+
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    expect(screen.getAllByText('Z Frontend Role 29').length).toBeGreaterThan(0);
   });
 
   it('surfaces partial worldwide source health and snapshot age', async () => {

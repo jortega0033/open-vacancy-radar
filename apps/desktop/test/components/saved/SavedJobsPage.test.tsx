@@ -290,18 +290,22 @@ describe('SavedJobsPage', () => {
 });
 
 describe('SavedJobsPage: preparing an application (#272)', () => {
-  it('hands the saved job id to the pipeline and says where to watch it', async () => {
+  it('hands the saved job id to the pipeline and offers a direct application link', async () => {
     installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'job-7' })]) });
     const start = installApplicationPipelineBridge();
+    const onViewApplicationAttempt = vi.fn();
 
-    render(<SavedJobsPage />);
+    render(<SavedJobsPage onViewApplicationAttempt={onViewApplicationAttempt} />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /prepare application/i }));
 
     // The id and nothing else: the renderer never names a URL, a CV, or a job description.
     await waitFor(() => expect(start).toHaveBeenCalledWith('job-7'));
     expect(start).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/Track it under Applications, In progress/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Preparing an application/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /view application/i }));
+    expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-1');
   });
 
   it('reports the dedup refusal as a plain notice rather than an error', async () => {

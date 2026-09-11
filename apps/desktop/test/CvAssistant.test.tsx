@@ -1,13 +1,84 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CvAssistant } from '../src/components/cv/CvAssistant.js';
+import type { CvDocumentRecord } from '../src/window.js';
 import { installBridges, TEST_VACANCY } from './cv-bridges.js';
+import { installWorkspaceBridge } from './workspace-bridge.js';
+
+function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
+  return {
+    id: 'cv-1',
+    name: 'Frontend CV.pdf',
+    kind: 'uploaded',
+    targetRole: '',
+    text: 'Angular architect.',
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    source: null,
+    isDefault: false,
+    uploadedAt: '2026-08-01T09:00:00.000Z',
+    updatedAt: '2026-08-01T09:00:00.000Z',
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe('CvAssistant', () => {
+  it('defaults to the library default CV and marks it clearly', async () => {
+    installBridges();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([
+        makeCv({ id: 'cv-1', name: 'Old CV.pdf', text: 'Old profile.' }),
+        makeCv({ id: 'cv-2', name: 'Default Product CV.pdf', text: 'Product engineer.', isDefault: true }),
+      ]),
+    });
+
+    render(<CvAssistant vacancy={TEST_VACANCY} />);
+
+    const picker = await screen.findByRole('combobox', { name: /use saved cv/i });
+    expect(picker).toHaveValue('cv-2');
+    expect(screen.getByText(/Default Product CV\.pdf \(Default\)/)).toBeInTheDocument();
+    expect(screen.getByText(/CV loaded:/)).toHaveTextContent('Default Product CV.pdf');
+    expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeEnabled();
+  });
+
+  it('switches library CVs and still allows a one-off upload fallback', async () => {
+    installBridges({
+      cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'one-off.pdf', text: 'One off CV.' }) },
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([
+        makeCv({ id: 'cv-1', name: 'Frontend CV.pdf', text: 'Frontend.' }),
+        makeCv({ id: 'cv-2', name: 'Backend CV.pdf', text: 'Backend.' }),
+      ]),
+    });
+
+    render(<CvAssistant vacancy={TEST_VACANCY} />);
+
+    const picker = await screen.findByRole('combobox', { name: /use saved cv/i });
+    expect(screen.getByText(/CV loaded:/)).toHaveTextContent('Frontend CV.pdf');
+
+    fireEvent.change(picker, { target: { value: 'cv-2' } });
+    expect(screen.getByText(/CV loaded:/)).toHaveTextContent('Backend CV.pdf');
+
+    fireEvent.click(screen.getByRole('button', { name: /replace cv/i }));
+    await waitFor(() => expect(screen.getByText(/CV loaded:/)).toHaveTextContent('one-off.pdf'));
+  });
+
+  it('explains library CVs that cannot be used because no text was extracted', async () => {
+    installBridges();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv({ text: '' })]),
+    });
+
+    render(<CvAssistant vacancy={TEST_VACANCY} />);
+
+    expect(await screen.findByText(/no saved cv with extracted text/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 saved CV is unavailable/i)).toBeInTheDocument();
+  });
+
   it('uploads the CV once and enables all three AI features from that single upload', async () => {
     installBridges({
       cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }) },

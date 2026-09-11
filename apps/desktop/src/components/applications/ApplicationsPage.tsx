@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ApplicationAttemptRecord,
   ApplicationFilter,
@@ -45,6 +45,8 @@ export interface ApplicationsPageProps {
    * on them would just be an extra no-op IPC round trip.
    */
   onApplicationsChanged?: () => void;
+  focusAttemptId?: string | null;
+  onFocusAttemptConsumed?: () => void;
 }
 
 /**
@@ -54,7 +56,11 @@ export interface ApplicationsPageProps {
  *
  * Owns the whole lifecycle against `window.workspace`, in the same shape as `SavedJobsPage`.
  */
-export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProps) {
+export function ApplicationsPage({
+  onApplicationsChanged,
+  focusAttemptId = null,
+  onFocusAttemptConsumed,
+}: ApplicationsPageProps) {
   const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
@@ -74,6 +80,7 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
   const [actionError, setActionError] = useState<string>();
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
+  const openedFocusedAttempt = useRef<string | null>(null);
 
   // Linked-record dropdowns (saved job / CV / letter) load once, independently of the
   // applications list itself. A failure here must never block the pipeline table from showing.
@@ -138,6 +145,12 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
     };
   }, [activeTab, attempts]);
 
+  useEffect(() => {
+    if (!focusAttemptId) return;
+    setActiveTab('in_progress');
+    setAttempts(null);
+  }, [focusAttemptId]);
+
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
   const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
 
@@ -148,6 +161,15 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
     if (attempt.checkpoint === 'ready') setReviewingAttempt(attempt);
     else setOpenAttempt(attempt);
   }, []);
+
+  useEffect(() => {
+    if (!focusAttemptId || !attempts || openedFocusedAttempt.current === focusAttemptId) return;
+    const focused = attempts.find((attempt) => attempt.id === focusAttemptId);
+    if (!focused) return;
+    openedFocusedAttempt.current = focusAttemptId;
+    openAttemptRow(focused);
+    onFocusAttemptConsumed?.();
+  }, [attempts, focusAttemptId, onFocusAttemptConsumed, openAttemptRow]);
 
   const closeReviewSession = useCallback(() => {
     setReviewingAttempt(null);

@@ -38,6 +38,8 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  const [searchSelectedKey, setSearchSelectedKey] = useState<string | null>(null);
+  const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -112,6 +114,7 @@ export function App() {
     // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
+    if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
     void window.workspace?.updateSettings({ lastOpenedPage: page }).catch(() => {});
@@ -127,6 +130,7 @@ export function App() {
   const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
     setPendingVacancy(vacancy);
+    setSearchSelectedKey(vacancy.key ?? null);
     setNav('letters');
     void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
     void refreshCounts();
@@ -135,6 +139,22 @@ export function App() {
   // Passed to `LettersPage`: fired once it has captured its own copy of `pendingVacancy`, so this
   // state can be cleared immediately rather than waiting for the user to navigate elsewhere.
   const handleVacancyConsumed = useCallback(() => setPendingVacancy(null), []);
+
+  const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
+    hasNavigatedRef.current = true;
+    setSearchSelectedKey(vacancy.key ?? null);
+    setNav('search');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  const handleViewApplicationAttempt = useCallback((attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setApplicationAttemptToOpen(attemptId);
+    setNav('applications');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
 
   const handleToggleSidebar = useCallback(() => {
     setSidebarCollapsed((previous) => {
@@ -229,10 +249,23 @@ export function App() {
             <SearchPage
               onGenerateLetter={handleGenerateLetter}
               onOpenSearchProfile={() => handleNavigate('settings')}
+              onSavedJobsChanged={refreshCounts}
+              preferredSelectedKey={searchSelectedKey}
             />
           )}
-          {nav === 'saved' && <SavedJobsPage onSavedJobsChanged={refreshCounts} />}
-          {nav === 'applications' && <ApplicationsPage onApplicationsChanged={refreshCounts} />}
+          {nav === 'saved' && (
+            <SavedJobsPage
+              onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
+            />
+          )}
+          {nav === 'applications' && (
+            <ApplicationsPage
+              onApplicationsChanged={refreshCounts}
+              focusAttemptId={applicationAttemptToOpen}
+              onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
+            />
+          )}
           {nav === 'cv' && <CvLibraryPage />}
           {nav === 'letters' && (
             <LettersPage
@@ -240,6 +273,7 @@ export function App() {
               openOnGenerator={pendingVacancy !== null}
               onVacancyConsumed={handleVacancyConsumed}
               onLettersChanged={refreshCounts}
+              onBackToVacancy={handleBackToVacancy}
             />
           )}
           {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}

@@ -397,6 +397,27 @@ describe('ApplicationsPage', () => {
       expect(within(secondRow!).getByText('Needs your input')).toBeInTheDocument();
     });
 
+    it('opens the requested attempt when navigation lands from a preparation notice', async () => {
+      const attempt = makeAttempt({
+        id: 'attempt-focus',
+        checkpoint: 'needs_user',
+        checkpointDetail: 'Review the prepared application.',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      const onFocusAttemptConsumed = vi.fn();
+
+      render(<ApplicationsPage focusAttemptId="attempt-focus" onFocusAttemptConsumed={onFocusAttemptConsumed} />);
+
+      expect(await screen.findByRole('tab', { name: 'In progress' })).toHaveAttribute('aria-selected', 'true');
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Review the prepared application.')).toBeInTheDocument();
+      expect(onFocusAttemptConsumed).toHaveBeenCalledTimes(1);
+    });
+
     it('opens a read-only detail drawer with the checkpoint, JD snapshot, and documents; has no edit affordance', async () => {
       // Any non-'ready' checkpoint: 'ready' is the one state that opens the review-and-submit
       // session instead (see the dedicated test for that below), not this read-only drawer.

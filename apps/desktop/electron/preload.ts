@@ -80,6 +80,7 @@ export interface AgentDockBridge {
 }
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
 
 /**
  * A second, independent bridge namespace (rather than folding these onto `AgentDockBridge`)
@@ -92,6 +93,7 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
+  getReportSummary(): Promise<VacancyReportSummary | null>;
   /**
    * `query` scopes each source's own server-side search parameter for this run (see
    * `GlobalRemoteScanOptions.query` in the engine) instead of always harvesting the same static
@@ -237,6 +239,9 @@ const vacancyApi: VacancyRadarBridge = {
   },
   getReport() {
     return ipcRenderer.invoke('vacancy:get-report');
+  },
+  getReportSummary() {
+    return ipcRenderer.invoke('vacancy:get-report-summary');
   },
   runScan(query) {
     return ipcRenderer.invoke('vacancy:run-scan', query);

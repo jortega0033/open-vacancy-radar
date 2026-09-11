@@ -15,6 +15,11 @@ interface PendingUndo {
   job: SavedJobRecord;
 }
 
+interface PrepareNotice {
+  message: string;
+  attemptId?: string;
+}
+
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
@@ -28,6 +33,7 @@ export interface SavedJobsPageProps {
    * Status changes and edits are not wired to this: neither one changes the total count.
    */
   onSavedJobsChanged?: () => void;
+  onViewApplicationAttempt?: (attemptId: string) => void;
 }
 
 /**
@@ -39,7 +45,7 @@ export interface SavedJobsPageProps {
  * here. This page is exported standalone (see `index.ts`) so the shell's router can pick it up
  * once every page agent's work has landed, without every agent racing to edit the same file.
  */
-export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
+export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: SavedJobsPageProps = {}) {
   const [jobs, setJobs] = useState<SavedJobRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
@@ -58,7 +64,7 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
   // at a time by id rather than a single boolean, so a slow request never disables every other
   // row's button.
   const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
-  const [prepareNotice, setPrepareNotice] = useState<string>();
+  const [prepareNotice, setPrepareNotice] = useState<PrepareNotice>();
 
   useEffect(() => {
     let cancelled = false;
@@ -152,15 +158,19 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
       const result = await window.applicationPipeline.start(job.id);
       setPrepareNotice(
         result.ok
-          ? `Preparing an application for "${job.role}" at ${job.company}. Track it under Applications, In progress.`
-          : (result.detail ?? 'this application could not be started'),
+          ? {
+              message: `Preparing an application for "${job.role}" at ${job.company}.`,
+              attemptId: result.attemptId,
+            }
+          : { message: result.detail ?? 'this application could not be started', attemptId: result.attemptId },
       );
+      if (result.ok) onSavedJobsChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not start preparing this application'));
     } finally {
       setPreparingJobId(null);
     }
-  }, []);
+  }, [onSavedJobsChanged, onViewApplicationAttempt]);
 
   const requestDelete = useCallback((job: SavedJobRecord) => {
     setActionError(undefined);
@@ -221,8 +231,17 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
       {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
       {prepareNotice && (
-        <div className="alert alert-info mt-4" role="status">
-          <span>{prepareNotice}</span>
+        <div className="alert alert-info mt-4 flex items-center justify-between gap-3" role="status">
+          <span>{prepareNotice.message}</span>
+          {prepareNotice.attemptId && onViewApplicationAttempt && (
+            <button
+              type="button"
+              className="btn btn-info btn-sm"
+              onClick={() => onViewApplicationAttempt(prepareNotice.attemptId!)}
+            >
+              View application
+            </button>
+          )}
         </div>
       )}
 
