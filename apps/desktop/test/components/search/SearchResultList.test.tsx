@@ -53,6 +53,102 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
 }
 
 describe('SearchResultList', () => {
+  // UX audit finding: `decisionLabel(result.raw.decision)` used to render as a badge chip styled
+  // identically to the salary/employment-type chips. In every populated screenshot reviewed,
+  // `role_mismatch` read as "role mismatch" on essentially every card, which looks exactly like
+  // "this job doesn't match you" on 100% of listings -- misleading, since it is a pipeline
+  // classification, not a per-candidate match rejection. It still has an accurate home in the
+  // detail pane's Overview section ("Discovery decision"), unchanged -- only the card chip is gone.
+  it('never renders the raw discovery-decision chip on the card, for any decision value', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', { raw: discoveryVacancy('1', { decision: 'role_mismatch' }) }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/role mismatch/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/official review candidate/i)).not.toBeInTheDocument();
+  });
+
+  // UX audit finding: cards showed title/company/location/chips/date but zero role-content, so
+  // scanning a list of results meant opening each one individually to judge fit.
+  it('shows a clamped description excerpt between the company/location line and the chip row', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', {
+            description: 'Build accessible, performant interfaces for a distributed team.',
+          }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const excerpt = screen.getByText('Build accessible, performant interfaces for a distributed team.');
+    expect(excerpt).toHaveClass('line-clamp-2');
+  });
+
+  it('renders no description line at all when the source carries no description text', () => {
+    const { container } = render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer', { description: null })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.line-clamp-2')).not.toBeInTheDocument();
+  });
+
+  // UX audit finding: the card showed the raw snake_case `DiscoveryProvider` id (e.g.
+  // "devitjobs_uk") instead of a human label.
+  it('shows a human-readable provider label instead of the raw snake_case provider id', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', {
+            provider: 'devitjobs_uk',
+            raw: discoveryVacancy('1', { provider: 'devitjobs_uk' }),
+          }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('DevITjobs UK')).toBeInTheDocument();
+    expect(screen.queryByText('devitjobs_uk')).not.toBeInTheDocument();
+  });
+
   it('shows no verification badge for a row with no sponsor match', () => {
     render(
       <SearchResultList

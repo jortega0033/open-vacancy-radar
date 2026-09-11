@@ -2,8 +2,10 @@ import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
+  descriptionExcerpt,
   filterResults,
   countryOptions,
+  formatDiscoverySalary,
   isStalePosting,
   sortResults,
   toPartialResults,
@@ -290,5 +292,83 @@ describe('worldwideVerification', () => {
         discoveryVacancy({ worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '' } }),
       ),
     ).toBe(WORLDWIDE_VERIFICATION);
+  });
+});
+
+describe('formatDiscoverySalary', () => {
+  it('returns null when the source carries no advertised minimum', () => {
+    expect(formatDiscoverySalary(discoveryVacancy({ advertisedMinimum: null }))).toBeNull();
+  });
+
+  // UX audit finding: a single results list showed "USD 163,200/yearly", "GBP 25,000/weekly" and
+  // "USD 120,000/year" side by side -- three spellings straight from whichever upstream source
+  // produced them. Every synonym below must collapse onto the same canonical suffix.
+  it.each([
+    ['yearly', '/yr'],
+    ['year', '/yr'],
+    ['annual', '/yr'],
+    ['Annually', '/yr'],
+    ['yr', '/yr'],
+    ['monthly', '/mo'],
+    ['month', '/mo'],
+    ['weekly', '/wk'],
+    ['week', '/wk'],
+    ['hourly', '/hr'],
+    ['hour', '/hr'],
+    ['daily', '/day'],
+  ])('normalizes salaryPeriod %j to the canonical suffix %j', (salaryPeriod, suffix) => {
+    const salary = formatDiscoverySalary(
+      discoveryVacancy({ currency: 'USD', advertisedMinimum: 100_000, salaryPeriod }),
+    );
+    expect(salary).toBe(`from USD 100,000${suffix}`);
+  });
+
+  it('renders with no period suffix for a salaryPeriod it does not recognize, rather than leaking raw source text', () => {
+    expect(
+      formatDiscoverySalary(
+        discoveryVacancy({ currency: 'USD', advertisedMinimum: 100_000, salaryPeriod: 'per project' }),
+      ),
+    ).toBe('from USD 100,000');
+  });
+
+  it('renders with no period suffix at all when salaryPeriod is null', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: 'EUR', advertisedMinimum: 50_000, salaryPeriod: null })),
+    ).toBe('from EUR 50,000');
+  });
+
+  it('always prefixes "from" since advertisedMinimum is a minimum, never a fixed salary', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: 'GBP', advertisedMinimum: 25_000, salaryPeriod: 'annual' })),
+    ).toBe('from GBP 25,000/yr');
+  });
+
+  it('omits the currency, without a stray double space, when the source carries none', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: null, advertisedMinimum: 45_000, salaryPeriod: 'annual' })),
+    ).toBe('from 45,000/yr');
+  });
+});
+
+describe('descriptionExcerpt', () => {
+  it('returns null for a null description', () => {
+    expect(descriptionExcerpt(null)).toBeNull();
+  });
+
+  it('returns null for a whitespace-only description', () => {
+    expect(descriptionExcerpt('   \n\n  ')).toBeNull();
+  });
+
+  it('collapses preserved paragraph breaks to a single line for the card preview', () => {
+    // `description` can carry real newlines at former block-tag boundaries (see
+    // `packages/vacancy-engine/src/ats/shared.ts`'s `htmlToText`), which the detail pane renders
+    // with `whitespace-pre-wrap`. The card excerpt is a different, single-line rendering context.
+    expect(descriptionExcerpt('Multiple years of experience.\n\nTwo Microsoft certifications.')).toBe(
+      'Multiple years of experience. Two Microsoft certifications.',
+    );
+  });
+
+  it('trims leading and trailing whitespace', () => {
+    expect(descriptionExcerpt('  Build accessible interfaces.  ')).toBe('Build accessible interfaces.');
   });
 });

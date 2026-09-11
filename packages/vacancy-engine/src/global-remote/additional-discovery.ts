@@ -1,7 +1,6 @@
-import { load } from 'cheerio';
-
 import type { AtsHttpClient, AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
 import {
   discoveryAudit,
   httpUrl,
@@ -22,8 +21,17 @@ import type {
 } from './models.js';
 import { discoverRemoote } from './remoote-discovery.js';
 
+/**
+ * QA regression: this used to be `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads
+ * every text node with no separator between them. Adjacent block elements -- `<p>...experience</p>
+ * <p>Two Microsoft certifications</p>` -- lost the paragraph boundary entirely and ran together as
+ * "experienceTwo Microsoft certifications", a real confirmed case. `htmlToText` (shared with the ATS
+ * adapters) inserts a newline at every block-tag boundary before extracting text, so this now keeps
+ * exactly the same collapsing/trimming behavior while preserving the word boundary a `<p>`/`<br>`
+ * always implied.
+ */
 function decodedText(html: string): string {
-  return load(html).text().replace(/\s+/gu, ' ').trim();
+  return htmlToText(html);
 }
 
 function diceStructuredContent(response: AtsHttpResponse): Record<string, unknown> {
