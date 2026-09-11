@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { parseFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
+import { describeBlockers, parseFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
 import { stageApplicationDocuments } from './application-artifact-staging.js';
 import {
   applyApplicationFieldMap,
@@ -388,6 +388,7 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
   const resume = cvDocumentToTailoredResume(cv, profile);
 
   workspace.updateApplicationAttempt(deps.db, attemptId, { checkpoint: 'rendering', checkpointDetail: '' });
+  let stagedRecords: ReturnType<typeof workspace.listApplicationArtifacts>;
   let readinessRefusals: string[];
   try {
     const staged = await stageApplicationDocuments({
@@ -401,6 +402,7 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
       verifiedEmployers: (cv.source?.experience ?? []).map((entry) => entry.company),
       letters: requestedLetters(deps.db, attempt),
     });
+    stagedRecords = staged.records;
     readinessRefusals = staged.readiness.ok ? [] : staged.readiness.refusals.map((refusal) => refusal.detail);
   } catch (err) {
     return settle(deps, attemptId, 'needs_user', `the application documents could not be produced: ${describeError(err)}`, 'needs_user');
@@ -419,16 +421,18 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
   // never show a previous run's answers while this one is still in progress.
   workspace.recordPreparedApplicationFields(deps.db, attemptId, null);
 
+  let formResult: RunApplicationAttemptResult;
   try {
-    return await fillApplicationForm(deps, { attempt, policyId, cv, profile });
+    formResult = await fillApplicationForm(deps, { attempt, policyId, cv, profile, stagedArtifacts: stagedRecords });
   } catch (err) {
     return settle(deps, attemptId, 'failed', `preparing this application failed: ${describeError(err)}`, 'failed');
-  } finally {
-    // Always, on every path including a thrown error: see this function's own doc comment.
+  }
+  if (formResult.outcome !== 'ready' && formResult.outcome !== 'needs_user') {
     await closeApplicationReview(attemptId).catch((err: unknown) => {
       deps.log?.('could not close the preparation browser view', { attemptId, error: describeError(err) });
     });
   }
+  return formResult;
 }
 
 interface FillApplicationFormInput {
@@ -436,10 +440,11 @@ interface FillApplicationFormInput {
   policyId: string;
   cv: CvDocumentRecord;
   profile: ApplicationValueProfile | null;
+  stagedArtifacts: ReturnType<typeof workspace.listApplicationArtifacts>;
 }
 
 /** The open-snapshot-generate-validate-apply half, split out only so `runApplicationAttempt`'s
- * `finally` can guarantee the view is closed around all of it. */
+ * caller can decide whether to retain the prepared live view for review or close it after failure. */
 async function fillApplicationForm(
   deps: ApplicationPipelineDeps,
   input: FillApplicationFormInput,
@@ -490,7 +495,7 @@ async function fillApplicationForm(
     return settle(deps, attemptId, 'needs_user', 'the field-mapping step returned something this app could not read, so nothing was typed into the form', 'needs_user');
   }
 
-  const sanitised = sanitiseGeneratedFieldMap(parsed);
+  const sanitised = sanitiseGeneratedFieldMap(parsed, snapshot, input.stagedArtifacts);
   const applied = await applyApplicationFieldMap(deps.db, {
     attemptId,
     // Still raw as far as the executor is concerned: `validateFieldMap` inside `applyApplicationFieldMap`
@@ -509,12 +514,17 @@ async function fillApplicationForm(
     valueTable,
     uploadFieldRefs: sanitised.uploadFieldRefs,
     optionFieldRefs: sanitised.optionFieldRefs,
+    readinessBlockers: applied.readiness?.blockers ?? [],
+    attachments: applied.attachments ?? [],
     company: input.attempt.company,
     role: input.attempt.role,
     preparedAt: nowIso(deps),
   });
   workspace.recordPreparedApplicationFields(deps.db, attemptId, summary.prepared);
 
+  if (applied.readiness && !applied.readiness.ready) {
+    return settle(deps, attemptId, 'needs_user', describeBlockers(applied.readiness.blockers), 'needs_user');
+  }
   if (summary.blockers.length > 0) {
     return settle(deps, attemptId, 'needs_user', summary.blockers.join('; '), 'needs_user');
   }

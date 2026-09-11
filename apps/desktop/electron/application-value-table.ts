@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { FieldMap, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
 import type {
+  ApplicationArtifactRecord,
   PreparedApplicationField,
   PreparedApplicationFields,
   PreparedFieldProvenance,
@@ -214,7 +215,23 @@ export interface SanitisedFieldMap {
  * returned by fieldRef so it lands in the prepared-fields record as its own visible, specific
  * outcome instead of disappearing.
  */
-export function sanitiseGeneratedFieldMap(fieldMap: FieldMap): SanitisedFieldMap {
+function isDocumentUploadField(field: SnapshotField): boolean {
+  return field.active && !field.classification && field.controlType === 'file';
+}
+
+function chooseArtifactForField(field: SnapshotField, artifacts: readonly ApplicationArtifactRecord[]): ApplicationArtifactRecord | undefined {
+  const label = field.label.toLowerCase();
+  if (/\b(cover|letter|motivation)\b/u.test(label)) {
+    return artifacts.find((artifact) => artifact.kind === 'cover_letter_pdf') ?? artifacts.find((artifact) => artifact.kind === 'combined_pdf');
+  }
+  return artifacts.find((artifact) => artifact.kind === 'cv_pdf') ?? artifacts.find((artifact) => artifact.kind === 'combined_pdf');
+}
+
+export function sanitiseGeneratedFieldMap(
+  fieldMap: FieldMap,
+  snapshot: FormSnapshot,
+  artifacts: readonly ApplicationArtifactRecord[] = [],
+): SanitisedFieldMap {
   const uploadFieldRefs: string[] = [];
   const optionFieldRefs: string[] = [];
   const assignments: FieldMap['assignments'] = [];
@@ -222,7 +239,6 @@ export function sanitiseGeneratedFieldMap(fieldMap: FieldMap): SanitisedFieldMap
   for (const assignment of fieldMap.assignments) {
     if (assignment.source.kind === 'artifact') {
       uploadFieldRefs.push(assignment.fieldRef);
-      continue;
     }
     if (assignment.source.kind === 'option') {
       optionFieldRefs.push(assignment.fieldRef);
@@ -231,10 +247,23 @@ export function sanitiseGeneratedFieldMap(fieldMap: FieldMap): SanitisedFieldMap
     assignments.push(assignment);
   }
 
+  const assignedFieldRefs = new Set(assignments.map((assignment) => assignment.fieldRef));
+  for (const field of snapshot.fields) {
+    if (!isDocumentUploadField(field) || assignedFieldRefs.has(field.fieldRef)) continue;
+    const artifact = chooseArtifactForField(field, artifacts);
+    if (!artifact) {
+      uploadFieldRefs.push(field.fieldRef);
+      continue;
+    }
+    assignments.push({ fieldRef: field.fieldRef, source: { kind: 'artifact', artifactId: artifact.id } });
+    uploadFieldRefs.push(field.fieldRef);
+    assignedFieldRefs.add(field.fieldRef);
+  }
+
   const removed = [...uploadFieldRefs, ...optionFieldRefs];
   const unmapped: FieldMap['unmapped'] = [
-    ...fieldMap.unmapped.filter((entry) => !removed.includes(entry.fieldRef)),
-    ...removed.map((fieldRef) => ({ fieldRef, reason: 'needs_user' as const })),
+    ...fieldMap.unmapped.filter((entry) => !removed.includes(entry.fieldRef) && !assignedFieldRefs.has(entry.fieldRef)),
+    ...removed.filter((fieldRef) => !assignedFieldRefs.has(fieldRef)).map((fieldRef) => ({ fieldRef, reason: 'needs_user' as const })),
   ];
 
   return { fieldMap: { ...fieldMap, assignments, unmapped }, uploadFieldRefs, optionFieldRefs };
@@ -247,6 +276,8 @@ export interface SummarisePreparedFieldsInput {
   valueTable: readonly ApplicationValueTableEntry[];
   uploadFieldRefs: readonly string[];
   optionFieldRefs: readonly string[];
+  readinessBlockers?: readonly { kind: string; fieldRef?: string; label?: string }[];
+  attachments?: readonly { fieldRef: string; fileName: string; attachedFileName: string }[];
   company: string;
   role: string;
   /** ISO-8601, from the caller's clock. */
@@ -275,6 +306,8 @@ export function summarisePreparedFields(input: SummarisePreparedFieldsInput): Pr
   const assignmentByFieldRef = new Map(input.fieldMap.assignments.map((assignment) => [assignment.fieldRef, assignment]));
   const uploads = new Set(input.uploadFieldRefs);
   const options = new Set(input.optionFieldRefs);
+  const blockedFieldRefs = new Set(input.readinessBlockers?.map((blocker) => blocker.fieldRef).filter((fieldRef): fieldRef is string => Boolean(fieldRef)) ?? []);
+  const attachmentByFieldRef = new Map(input.attachments?.map((attachment) => [attachment.fieldRef, attachment]) ?? []);
 
   const fields: PreparedApplicationField[] = [];
   const blockers: string[] = [];
@@ -294,10 +327,16 @@ export function summarisePreparedFields(input: SummarisePreparedFieldsInput): Pr
       continue;
     }
 
+    const attachment = attachmentByFieldRef.get(field.fieldRef);
+    if (attachment) {
+      fields.push({ ...base, status: 'committed', value: attachment.attachedFileName, provenance: 'cv' });
+      continue;
+    }
+
     if (uploads.has(field.fieldRef) || field.controlType === 'file') {
-      fields.push({ ...base, status: 'pending_upload', detail: 'this form wants a document attached, which this app cannot attach and verify yet' });
+      fields.push({ ...base, status: 'pending_upload', detail: 'this form wants a document attached, but the page did not confirm the attachment yet' });
       if (field.required) {
-        blockers.push(`"${field.label}" needs a document attached, and verified uploads are not wired up yet`);
+        blockers.push(`"${field.label}" needs a document attached, but the page did not confirm the attachment yet`);
       }
       continue;
     }
@@ -308,6 +347,10 @@ export function summarisePreparedFields(input: SummarisePreparedFieldsInput): Pr
       // Unreachable once Domain B has passed the map (rule 4 refuses an unknown valueRef), but
       // recorded honestly rather than asserted away: an entry with no value is not a committed one.
       if (entry) {
+        if (blockedFieldRefs.has(field.fieldRef)) {
+          fields.push({ ...base, status: 'awaiting_you', detail: 'this app tried to fill this field, but the page did not confirm the value' });
+          continue;
+        }
         fields.push({ ...base, status: 'committed', value: entry.value, provenance: entry.provenance });
         continue;
       }

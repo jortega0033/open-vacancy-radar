@@ -23,17 +23,25 @@ const VALUE_NAME = 'v0000000000000001';
 const VALUE_JD = 'v0000000000000002';
 const UNKNOWN_VALUE = 'v0000000000000003';
 
+/** Every field in this fixture lives in the top-level document's one form and is active -- the
+ * ordinary shape. Tests that care about the active-form rule (#277) build their own inactive field
+ * explicitly rather than flipping a shared fixture out from under every other test here. */
+const ACTIVE_TOP_FRAME = { frameId: 0, formScope: 100, active: true } as const;
+
 const SNAPSHOT: FormSnapshot = {
   generation: 5,
   capturedAt: '2026-01-01T00:00:00.000Z',
   challengeDetected: false,
   submitControls: [],
+  activeFrameId: 0,
+  activeFormScope: 100,
+  pageStateFingerprint: 'fingerprint-for-this-fixture',
   fields: [
-    { fieldRef: NAME_FIELD, label: 'Name', controlType: 'text', required: true },
-    { fieldRef: RESUME_FIELD, label: 'Resume', controlType: 'file', required: true },
-    { fieldRef: COUNTRY_FIELD, label: 'Country', controlType: 'select', required: false, options: [{ optionRef: OPTION_NL, label: 'Netherlands' }] },
-    { fieldRef: PASSWORD_FIELD, label: 'Password', controlType: 'text', required: false, classification: 'credential_field' },
-    { fieldRef: REQUIRED_UNCOVERED_FIELD, label: 'Salary expectation', controlType: 'text', required: true },
+    { fieldRef: NAME_FIELD, label: 'Name', controlType: 'text', required: true, ...ACTIVE_TOP_FRAME },
+    { fieldRef: RESUME_FIELD, label: 'Resume', controlType: 'file', required: true, ...ACTIVE_TOP_FRAME },
+    { fieldRef: COUNTRY_FIELD, label: 'Country', controlType: 'select', required: false, options: [{ optionRef: OPTION_NL, label: 'Netherlands' }], ...ACTIVE_TOP_FRAME },
+    { fieldRef: PASSWORD_FIELD, label: 'Password', controlType: 'text', required: false, classification: 'credential_field', ...ACTIVE_TOP_FRAME },
+    { fieldRef: REQUIRED_UNCOVERED_FIELD, label: 'Salary expectation', controlType: 'text', required: true, ...ACTIVE_TOP_FRAME },
   ],
 };
 
@@ -175,6 +183,34 @@ describe('validateFieldMap: rule 9, completeness', () => {
 
   it('accepts a required field that is explicitly listed as unmapped instead of assigned', () => {
     expect(validateFieldMap(baseInput()).ok).toBe(true); // REQUIRED_UNCOVERED_FIELD is in unmapped
+  });
+});
+
+describe('validateFieldMap: rule 8b, the active-form veto (#277)', () => {
+  const DECOY_FIELD = 'f0000000000000009';
+  const DECOY_SNAPSHOT: FormSnapshot = {
+    ...SNAPSHOT,
+    fields: [
+      ...SNAPSHOT.fields,
+      // A perfectly ordinary-looking field, in a hidden duplicate of the same form.
+      { fieldRef: DECOY_FIELD, label: 'Name', controlType: 'text', required: true, frameId: 1, formScope: 200, active: false },
+    ],
+  };
+
+  it('refuses an assignment to a field that is not part of the active form', () => {
+    const raw = { ...baseRaw(), assignments: [...baseRaw().assignments, { fieldRef: DECOY_FIELD, source: { kind: 'value', valueRef: VALUE_NAME } }] };
+    expect(validateFieldMap(baseInput({ raw, snapshot: DECOY_SNAPSHOT }))).toMatchObject({ ok: false, reason: 'inactive_form_field' });
+  });
+
+  it('allows a skip on an inactive field, which is how a session says it saw one and left it alone', () => {
+    const raw = { ...baseRaw(), assignments: [...baseRaw().assignments, { fieldRef: DECOY_FIELD, source: { kind: 'skip', reason: 'not_applicable' } }] };
+    expect(validateFieldMap(baseInput({ raw, snapshot: DECOY_SNAPSHOT })).ok).toBe(true);
+  });
+
+  it('does not demand coverage for a required field in an inactive form', () => {
+    // Rule 9 is scoped to the active form: a required field nobody can see is not something an
+    // applicant could answer, and demanding it would make such a page permanently unmappable.
+    expect(validateFieldMap(baseInput({ snapshot: DECOY_SNAPSHOT })).ok).toBe(true);
   });
 });
 

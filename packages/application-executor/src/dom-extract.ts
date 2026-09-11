@@ -150,9 +150,47 @@ function submitControlLabel(node: CdpDomNode): string {
 const CHALLENGE_IFRAME_SRC_PATTERN = /google\.com\/recaptcha|hcaptcha\.com|challenges\.cloudflare\.com/i;
 const CHALLENGE_CLASS_PATTERN = /(^|\s)(g-recaptcha|h-captcha|cf-turnstile)(\s|$)/i;
 
+/**
+ * How much of a page-authored validation message is ever carried out of this extractor (#277).
+ *
+ * The text comes from an arbitrary element the page pointed `aria-errormessage` at, so its length
+ * is entirely the page's choice, and from here it travels: snapshot, IPC, a refusal `detail`, and
+ * in the automatic path a desktop notification body. Bounded for the same reason
+ * `maximumSnapshotBytes` bounds a snapshot, and bounded here at the boundary rather than at each
+ * place it is displayed, so no future consumer has to remember to do it.
+ */
+const MAX_VALIDATION_MESSAGE_LENGTH = 300;
+
+/**
+ * One frame/form pair that holds at least one fillable field (#277) -- the unit "which form is the
+ * active one?" is decided over. `containerNodeId` is the `backendNodeId` of the thing whose
+ * rendering actually settles it: the `<form>` element when the fields are inside one, otherwise the
+ * `<iframe>` element hosting the frame, otherwise (top-level document, no form) the first field
+ * itself. `executor.ts` probes exactly this node with `DOM.getContentQuads`, and only when more
+ * than one group exists.
+ */
+export interface FieldGroup {
+  frameId: number;
+  formScope?: number;
+  containerNodeId: number;
+  fieldRefs: readonly string[];
+}
+
 export interface ExtractedSnapshot {
   fields: SnapshotField[];
   submitControls: SnapshotSubmitControl[];
+  /** Every frame/form pair holding fields, in first-seen order. A page with more than one entry is
+   * ambiguous: it has at least one duplicate or unrelated form, and `executor.ts` runs a rendering
+   * probe to decide which one a person is actually looking at. */
+  fieldGroups: readonly FieldGroup[];
+  /** Every submit-shaped control found anywhere, tagged with the frame/form it lives in.
+   * `submitControls` above is this list already narrowed to the frame/form most fields were found
+   * in; this one is kept so `executor.ts` can re-narrow it if the rendering probe moves the active
+   * group somewhere the plain field count did not. */
+  submitCandidates: readonly { control: SnapshotSubmitControl; frameId: number; formScope?: number }[];
+  /** The frame/form pair the *field count alone* picked, before any rendering probe. */
+  dominantFrameId: number;
+  dominantFormScope?: number;
   /** `fieldRef -> backendNodeId` AND `controlRef -> backendNodeId`, sharing one map since both are
    * opaque refs `executor.ts` resolves the exact same way (a real CDP node handle to click/focus).
    * For `executor.ts`'s own internal use only. */
@@ -227,8 +265,21 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   const fieldFrameIds: number[] = [];
   const fieldFormScopes: (number | undefined)[] = [];
   const submitCandidates: Array<{ control: SnapshotSubmitControl; frameId: number; formScope: number | undefined }> = [];
+  /** Every element carrying an `id`, per frame -- an id reference (`aria-errormessage`,
+   * `aria-describedby`) only ever resolves within its own document, so these are keyed by frame and
+   * never allowed to match an element in a different one. */
+  const elementsById = new Map<string, CdpDomNode>();
+  /** Deferred until the whole tree is walked: an `aria-errormessage` can point forward at an
+   * element that has not been visited yet. */
+  const pendingValidation: Array<{ field: SnapshotField; node: CdpDomNode; frameId: number }> = [];
+  /** The `backendNodeId` of the `<form>` element for each form scope, and of the `<iframe>` element
+   * hosting each frame -- what `FieldGroup.containerNodeId` resolves to. */
+  const frameOwnerNodeIds = new Map<number, number>();
 
   function walk(node: CdpDomNode, frameId: number, formScope: number | undefined): void {
+    const id = attr(node, 'id');
+    if (id !== undefined) elementsById.set(`${frameId} ${id}`, node);
+
     if (
       node.nodeName === 'IFRAME' &&
       CHALLENGE_IFRAME_SRC_PATTERN.test(attr(node, 'src') ?? '')
@@ -254,18 +305,33 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       if (inputType !== 'hidden' && !hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
         const label = resolveLabel(node);
         const controlType = controlTypeFor(node, inputType);
-        const classification = classify(node, inputType, `${label} ${attr(node, 'name') ?? ''} ${attr(node, 'id') ?? ''}`);
+        const name = attr(node, 'name');
+        const classification = classify(node, inputType, `${label} ${name ?? ''} ${attr(node, 'id') ?? ''}`);
         const fieldRef = mintFieldRef();
         nodeIds.set(fieldRef, node.backendNodeId);
-        fields.push({
+        const ariaInvalid = (attr(node, 'aria-invalid') ?? '').toLowerCase();
+        const field: SnapshotField = {
           fieldRef,
           label,
           controlType,
-          required: hasAttr(node, 'required'),
+          ...(name ? { name } : {}),
+          required: hasAttr(node, 'required') || attr(node, 'aria-required') === 'true',
+          frameId,
+          ...(formScope !== undefined ? { formScope } : {}),
+          // Provisional: every field starts active, and the frame/form resolution below demotes
+          // the ones that turn out to belong to a duplicate or unrelated form. A page with a
+          // single form leaves every field exactly as it is here.
+          active: true,
           ...(controlType === 'select' ? { options: extractOptions(node) } : {}),
-          ...(controlType === 'checkbox' ? { checked: hasAttr(node, 'checked') } : {}),
+          // Read for `radio` as well as `checkbox` (#277): `fill()` clicks a radio to select it,
+          // and a click on an already-selected radio is a no-op in a real browser but still a
+          // dispatched event on the page -- knowing the starting state is what lets it skip one.
+          ...(controlType === 'checkbox' || controlType === 'radio' ? { checked: hasAttr(node, 'checked') } : {}),
           ...(classification ? { classification } : {}),
-        });
+          ...(ariaInvalid === 'true' ? { invalid: true } : {}),
+        };
+        fields.push(field);
+        pendingValidation.push({ field, node, frameId });
         fieldFrameIds.push(frameId);
         fieldFormScopes.push(formScope);
       }
@@ -273,6 +339,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
 
     if (node.nodeName === 'IFRAME' && node.contentDocument) {
       nextFrameId += 1;
+      frameOwnerNodeIds.set(nextFrameId, node.backendNodeId);
       walk(node.contentDocument, nextFrameId, undefined);
     } else if (node.nodeName !== 'SELECT') {
       // SELECT's own OPTION children are already consumed by extractOptions above; don't also
@@ -283,6 +350,24 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
 
   walk(root, 0, undefined);
 
+  // Resolved after the whole tree is walked, never during it: an `aria-errormessage` legitimately
+  // points forward at an element that has not been visited yet, and an id reference only ever
+  // resolves inside its own document (hence the frame-scoped key).
+  for (const { field, node, frameId } of pendingValidation) {
+    const errorRef = attr(node, 'aria-errormessage') ?? (field.invalid ? attr(node, 'aria-describedby') : undefined);
+    if (errorRef === undefined) continue;
+    // A space-separated id list is legal for `aria-describedby`; take the first id that resolves to
+    // an element with real text rather than concatenating every one of them.
+    for (const candidateId of errorRef.split(/\s+/).filter(Boolean)) {
+      const target = elementsById.get(`${frameId} ${candidateId}`);
+      const message = target ? textContent(target) : '';
+      if (message) {
+        field.validationMessage = message.slice(0, MAX_VALIDATION_MESSAGE_LENGTH);
+        break;
+      }
+    }
+  }
+
   // A page with no fields yet (a field-less "review and submit" step, or an empty read still
   // mid-retry in executor.ts) has nothing to compute a dominant frame/form from -- default to the
   // top document's own top-level scope (frame 0, no form) rather than excluding every candidate.
@@ -292,7 +377,44 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
     .filter((candidate) => candidate.frameId === dominantFrameId && candidate.formScope === dominantFormScope)
     .map((candidate) => candidate.control);
 
-  return { fields, submitControls, nodeIds, challengeDetected };
+  // One group per distinct frame/form pair that holds fields, in first-seen order. `executor.ts`
+  // only probes rendering when there is more than one, so the overwhelmingly common single-form
+  // page costs nothing extra.
+  const groupsByKey = new Map<string, { frameId: number; formScope?: number; containerNodeId: number; fieldRefs: string[] }>();
+  for (const field of fields) {
+    const key = `${field.frameId} ${field.formScope ?? 'none'}`;
+    const existing = groupsByKey.get(key);
+    if (existing) {
+      existing.fieldRefs.push(field.fieldRef);
+      continue;
+    }
+    // The most specific rendered thing that settles the whole group: its own `<form>`, else the
+    // `<iframe>` hosting its frame, else (top document, no form) the field itself. `nodeIds` always
+    // has an entry for a field this loop is iterating -- it was set in the same branch that minted
+    // the ref -- so the final fallback cannot be undefined in practice.
+    const containerNodeId = field.formScope ?? frameOwnerNodeIds.get(field.frameId) ?? nodeIds.get(field.fieldRef) ?? 0;
+    groupsByKey.set(key, {
+      frameId: field.frameId,
+      ...(field.formScope !== undefined ? { formScope: field.formScope } : {}),
+      containerNodeId,
+      fieldRefs: [field.fieldRef],
+    });
+  }
+
+  return {
+    fields,
+    submitControls,
+    nodeIds,
+    challengeDetected,
+    fieldGroups: [...groupsByKey.values()],
+    submitCandidates: submitCandidates.map(({ control, frameId, formScope }) => ({
+      control,
+      frameId,
+      ...(formScope !== undefined ? { formScope } : {}),
+    })),
+    dominantFrameId,
+    ...(dominantFormScope !== undefined ? { dominantFormScope } : {}),
+  };
 }
 
 // ------------------------------------------------------- post-submit observation signals (#271)

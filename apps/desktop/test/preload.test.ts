@@ -1350,28 +1350,43 @@ describe('electron/preload.ts: applicationQueue bridge (#200)', () => {
   });
 });
 
+const READINESS_RESULT = {
+  ready: true,
+  verifiedFilledCount: 2,
+  discoveredFieldCount: 2,
+  requiredFieldCount: 2,
+  requiredFieldsSatisfied: 2,
+  blockers: [],
+};
+
 const SNAPSHOT_RESULT = {
   snapshot: {
     generation: 1,
     capturedAt: '2026-01-01T00:00:00.000Z',
     challengeDetected: false,
+    activeFrameId: 0,
+    pageStateFingerprint: 'a'.repeat(64),
     fields: [
-      { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true },
+      { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true, frameId: 0, active: true },
       {
         fieldRef: 'f0000000000000002',
         label: 'workAuthorization',
         controlType: 'select',
         required: true,
+        frameId: 0,
+        active: true,
         options: [{ optionRef: 'o0000000000000001', label: 'Yes' }],
       },
     ],
     submitControls: [{ controlRef: 'c0000000000000001', label: 'Submit Application' }],
   },
   screenshotBase64: 'ZmFrZQ==',
+  readiness: READINESS_RESULT,
+  handoffShown: false,
 };
 
 describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
-  it('exposes exactly the eight documented capability functions and nothing else', async () => {
+  it('exposes exactly the ten documented capability functions and nothing else', async () => {
     const api = await loadPreload('applicationExecutor');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -1383,6 +1398,10 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
         'requestAutomationGrant',
         'scheduleAutomaticSubmission',
         'cancelScheduledAutomaticSubmission',
+        // #277's live handoff. Both take an attempt id and nothing else: the renderer cannot name a
+        // window, supply bounds, or reach a view for an attempt with no open review.
+        'showHandoff',
+        'hideHandoff',
       ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
@@ -1418,13 +1437,46 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
         generation: 1,
         capturedAt: '2026-01-01T00:00:00.000Z',
         challengeDetected: false,
-        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }],
+        activeFrameId: 0,
+        pageStateFingerprint: 'b'.repeat(64),
+        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false, frameId: 0, active: true }],
         submitControls: [],
       },
       screenshotBase64: 'ZmFrZQ==',
+      readiness: READINESS_RESULT,
+      handoffShown: false,
     });
     const api = await loadPreload('applicationExecutor');
     await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unrecognized control type/);
+  });
+
+  it('openReview throws rather than downgrading an unreadable readiness reading to an empty one (#277)', async () => {
+    // The single worst direction for this value to fail in: a dropped readiness object would read
+    // as zero blockers, which is indistinguishable from "ready to submit".
+    invoke.mockResolvedValue({ ...SNAPSHOT_RESULT, readiness: { ready: true } });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unexpected readiness response/);
+  });
+
+  it('showHandoff invokes the hard-coded show-handoff channel with nothing but the attempt id (#277)', async () => {
+    invoke.mockResolvedValue({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.showHandoff as (i: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:show-handoff', 'attempt-1');
+    expect(result).toEqual({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+  });
+
+  it('showHandoff rejects an unrecognized refusal reason rather than passing it through', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'something-new' });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.showHandoff as (i: string) => Promise<unknown>)('attempt-1')).rejects.toThrow(/unrecognized handoff refusal reason/);
+  });
+
+  it('hideHandoff invokes the hard-coded hide-handoff channel with nothing but the attempt id', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('applicationExecutor');
+    await (api.hideHandoff as (i: string) => Promise<void>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:hide-handoff', 'attempt-1');
   });
 
   it('applyFieldMap invokes the hard-coded apply-field-map channel and passes the result through', async () => {

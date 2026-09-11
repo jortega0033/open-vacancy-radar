@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import type { FieldMap, FormSnapshot } from '@agent-dock/application-executor';
+import type { FieldMap, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
 import {
   buildApplicationValueTable,
   buildFieldMapGenerationPrompt,
@@ -34,6 +34,10 @@ const PROFILE = {
 
 function labelled(entries: ReturnType<typeof buildApplicationValueTable>, label: string) {
   return entries.find((entry) => entry.label === label);
+}
+
+function field(overrides: Partial<SnapshotField> & { fieldRef: string; label: string; controlType: SnapshotField['controlType']; required: boolean }): SnapshotField {
+  return { frameId: 0, active: true, ...overrides };
 }
 
 describe('buildApplicationValueTable', () => {
@@ -82,12 +86,14 @@ describe('buildFieldMapGenerationPrompt', () => {
   const snapshot: FormSnapshot = {
     generation: 3,
     fields: [
-      { fieldRef: 'f1111111111111111', label: 'fullName', controlType: 'text', required: true },
-      { fieldRef: 'f2222222222222222', label: 'agreeToTerms', controlType: 'checkbox', required: true, classification: 'consent_field' },
+      field({ fieldRef: 'f1111111111111111', label: 'fullName', controlType: 'text', required: true }),
+      field({ fieldRef: 'f2222222222222222', label: 'agreeToTerms', controlType: 'checkbox', required: true, classification: 'consent_field' }),
     ],
     submitControls: [{ controlRef: 'c1111111111111111', label: 'Submit Application' }],
     capturedAt: '2026-09-11T12:00:00.000Z',
     challengeDetected: false,
+    activeFrameId: 0,
+    pageStateFingerprint: 'fingerprint',
   };
 
   it('names every field and every value, and pins the attempt and generation', () => {
@@ -127,18 +133,17 @@ describe('sanitiseGeneratedFieldMap', () => {
     unmapped: [{ fieldRef: 'f4444444444444444', reason: 'needs_user' }],
   };
 
-  it('keeps the value assignments and removes the kinds this app will not commit', () => {
-    const result = sanitiseGeneratedFieldMap(base);
-    expect(result.fieldMap.assignments).toEqual([base.assignments[0]]);
+  it('keeps value and artifact assignments, but removes option choices this app will not commit', () => {
+    const result = sanitiseGeneratedFieldMap(base, { generation: 1, fields: [], submitControls: [], capturedAt: '', challengeDetected: false, activeFrameId: 0, pageStateFingerprint: '' });
+    expect(result.fieldMap.assignments).toEqual([base.assignments[0], base.assignments[1]]);
     expect(result.uploadFieldRefs).toEqual(['f2222222222222222']);
     expect(result.optionFieldRefs).toEqual(['f3333333333333333']);
   });
 
-  it('moves each removed assignment into unmapped rather than dropping it silently', () => {
-    const result = sanitiseGeneratedFieldMap(base);
+  it('moves each removed option into unmapped rather than dropping it silently', () => {
+    const result = sanitiseGeneratedFieldMap(base, { generation: 1, fields: [], submitControls: [], capturedAt: '', challengeDetected: false, activeFrameId: 0, pageStateFingerprint: '' });
     expect(result.fieldMap.unmapped).toEqual([
       { fieldRef: 'f4444444444444444', reason: 'needs_user' },
-      { fieldRef: 'f2222222222222222', reason: 'needs_user' },
       { fieldRef: 'f3333333333333333', reason: 'needs_user' },
     ]);
   });
@@ -146,9 +151,9 @@ describe('sanitiseGeneratedFieldMap', () => {
   it('does not list a removed field twice when the session also listed it as unmapped', () => {
     const result = sanitiseGeneratedFieldMap({
       ...base,
-      unmapped: [{ fieldRef: 'f2222222222222222', reason: 'unrecognized' }],
-    });
-    expect(result.fieldMap.unmapped.filter((entry) => entry.fieldRef === 'f2222222222222222')).toHaveLength(1);
+      unmapped: [{ fieldRef: 'f3333333333333333', reason: 'unrecognized' }],
+    }, { generation: 1, fields: [], submitControls: [], capturedAt: '', challengeDetected: false, activeFrameId: 0, pageStateFingerprint: '' });
+    expect(result.fieldMap.unmapped.filter((entry) => entry.fieldRef === 'f3333333333333333')).toHaveLength(1);
   });
 });
 
@@ -156,15 +161,17 @@ describe('summarisePreparedFields', () => {
   const snapshot: FormSnapshot = {
     generation: 1,
     fields: [
-      { fieldRef: 'f1111111111111111', label: 'fullName', controlType: 'text', required: true },
-      { fieldRef: 'f2222222222222222', label: 'resume', controlType: 'file', required: true },
-      { fieldRef: 'f3333333333333333', label: 'workArrangement', controlType: 'select', required: true, options: [] },
-      { fieldRef: 'f4444444444444444', label: 'agreeToTerms', controlType: 'checkbox', required: true, classification: 'consent_field' },
-      { fieldRef: 'f5555555555555555', label: 'coverLetter', controlType: 'textarea', required: false },
+      field({ fieldRef: 'f1111111111111111', label: 'fullName', controlType: 'text', required: true }),
+      field({ fieldRef: 'f2222222222222222', label: 'resume', controlType: 'file', required: true }),
+      field({ fieldRef: 'f3333333333333333', label: 'workArrangement', controlType: 'select', required: true, options: [] }),
+      field({ fieldRef: 'f4444444444444444', label: 'agreeToTerms', controlType: 'checkbox', required: true, classification: 'consent_field' }),
+      field({ fieldRef: 'f5555555555555555', label: 'coverLetter', controlType: 'textarea', required: false }),
     ],
     submitControls: [],
     capturedAt: '2026-09-11T12:00:00.000Z',
     challengeDetected: false,
+    activeFrameId: 0,
+    pageStateFingerprint: 'fingerprint',
   };
 
   const valueTable = [{ valueRef: 'v1111111111111111', label: 'Full name', value: 'Jamie Rivera', provenance: 'cv' as const }];
@@ -208,7 +215,7 @@ describe('summarisePreparedFields', () => {
     const { prepared, blockers } = summarise();
     expect(prepared.fields[1]).toMatchObject({ label: 'resume', status: 'pending_upload' });
     expect(blockers).toHaveLength(1);
-    expect(blockers[0]).toContain('verified uploads are not wired up yet');
+    expect(blockers[0]).toContain('did not confirm the attachment yet');
   });
 
   it('leaves a consent field to the person and never counts it as a blocker', () => {

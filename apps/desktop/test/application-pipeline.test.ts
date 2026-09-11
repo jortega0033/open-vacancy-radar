@@ -130,10 +130,65 @@ interface FakeView {
 
 const views: FakeView[] = [];
 
+interface ControlState {
+  kind: 'text' | 'checkbox' | 'radio' | 'select' | 'file';
+  value: string;
+  checked: boolean;
+  optionLabels: string[];
+}
+
+function attrOf(node: CdpDomNode, name: string): string | undefined {
+  const list = node.attributes ?? [];
+  for (let index = 0; index + 1 < list.length; index += 2) {
+    if (list[index]?.toLowerCase() === name.toLowerCase()) return list[index + 1];
+  }
+  return undefined;
+}
+
+function walkTree(node: CdpDomNode, visit: (node: CdpDomNode) => void): void {
+  visit(node);
+  for (const child of node.children ?? []) walkTree(child, visit);
+  if (node.contentDocument) walkTree(node.contentDocument, visit);
+}
+
 /** Records every CDP command so a test can prove the executor really typed a value, rather than
  * a value merely appearing in a summary this pipeline wrote itself. */
 function fakeView(tree: CdpDomNode) {
-  const sendCommand = vi.fn(async (method: string) => {
+  const controls = new Map<number, ControlState>();
+  walkTree(tree, (node) => {
+    const inputType = (attrOf(node, 'type') ?? 'text').toLowerCase();
+    const kind: ControlState['kind'] | undefined =
+      node.nodeName === 'SELECT'
+        ? 'select'
+        : node.nodeName === 'TEXTAREA'
+          ? 'text'
+          : node.nodeName === 'INPUT'
+            ? inputType === 'checkbox' || inputType === 'radio' || inputType === 'file'
+              ? inputType
+              : 'text'
+            : undefined;
+    if (!kind) return;
+    const optionLabels = (node.children ?? [])
+      .filter((child) => child.nodeName === 'OPTION')
+      .map((child) => (child.children ?? []).map((text) => text.nodeValue ?? '').join('') || (attrOf(child, 'value') ?? ''));
+    controls.set(node.backendNodeId, {
+      kind,
+      value: kind === 'select' ? (optionLabels[0] ?? '') : (attrOf(node, 'value') ?? ''),
+      checked: attrOf(node, 'checked') !== undefined,
+      optionLabels,
+    });
+  });
+
+  let focused: number | undefined;
+  let lastBoxModelNode: number | undefined;
+  let selectionIsWholeControl = false;
+
+  function reportedFileValue(control: ControlState): string {
+    return control.value === '' ? 'No file chosen' : control.value;
+  }
+
+  const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    const backendNodeId = typeof params?.backendNodeId === 'number' ? params.backendNodeId : undefined;
     switch (method) {
       case 'Page.navigate':
         return {};
@@ -142,11 +197,68 @@ function fakeView(tree: CdpDomNode) {
       case 'Page.captureScreenshot':
         return { data: 'ZmFrZS1zY3JlZW5zaG90' };
       case 'DOM.getBoxModel':
+        lastBoxModelNode = backendNodeId;
         return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
       case 'DOM.focus':
-      case 'Input.insertText':
-      case 'Input.dispatchKeyEvent':
+        focused = backendNodeId;
+        selectionIsWholeControl = false;
+        return {};
+      case 'Input.insertText': {
+        const control = focused !== undefined ? controls.get(focused) : undefined;
+        if (control) {
+          const text = typeof params?.text === 'string' ? params.text : '';
+          control.value = selectionIsWholeControl ? text : control.value + text;
+          selectionIsWholeControl = false;
+        }
+        return {};
+      }
+      case 'Input.dispatchKeyEvent': {
+        const commands = Array.isArray(params?.commands) ? (params.commands as string[]) : [];
+        const control = focused !== undefined ? controls.get(focused) : undefined;
+        if (commands.includes('selectAll')) selectionIsWholeControl = true;
+        if (commands.includes('delete') && control) {
+          control.value = '';
+          selectionIsWholeControl = false;
+        }
+        if (params?.key === 'Tab') focused = undefined;
+        return {};
+      }
       case 'Input.dispatchMouseEvent':
+        if (params?.type === 'mouseReleased' && lastBoxModelNode !== undefined) {
+          const control = controls.get(lastBoxModelNode);
+          if (control && (control.kind === 'checkbox' || control.kind === 'radio')) control.checked = !control.checked;
+        }
+        return {};
+      case 'DOM.setFileInputFiles': {
+        const control = backendNodeId !== undefined ? controls.get(backendNodeId) : undefined;
+        const files = Array.isArray(params?.files) ? (params.files as string[]) : [];
+        if (control) control.value = (files[0] ?? '').split(/[\\/]/u).pop() ?? '';
+        return {};
+      }
+      case 'Accessibility.getPartialAXTree': {
+        const control = backendNodeId !== undefined ? controls.get(backendNodeId) : undefined;
+        if (!control) return { nodes: [] };
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: backendNodeId,
+              value: { type: 'string', value: control.kind === 'file' ? reportedFileValue(control) : control.value },
+              name: { type: 'computedString', value: control.kind === 'file' ? reportedFileValue(control) : '' },
+              properties:
+                control.kind === 'checkbox' || control.kind === 'radio'
+                  ? [{ name: 'checked', value: { type: 'tristate', value: control.checked ? 'true' : 'false' } }]
+                  : [],
+            },
+          ],
+        };
+      }
+      case 'Accessibility.getFullAXTree':
+        return {
+          nodes: [...controls.entries()]
+            .filter(([, control]) => control.kind === 'file')
+            .map(([nodeId, control]) => ({ backendDOMNodeId: nodeId, value: { type: 'string', value: reportedFileValue(control) } })),
+        };
+      case 'DOM.getContentQuads':
         return {};
       default:
         throw new Error(`unexpected CDP method in test: ${method}`);
@@ -447,10 +559,10 @@ describe('acceptance 1: the production entry point reaches ready-for-review', ()
     expect(byLabel.get('currentLocation')).toMatchObject({ status: 'committed', value: 'Amsterdam', provenance: 'cv' });
   });
 
-  it('closes the preparation view so the person can open their own review afterwards', async () => {
+  it('keeps the prepared view alive so the person reviews the filled page, not a fresh blank one', async () => {
     await prepareOneApplication();
     expect(views).toHaveLength(1);
-    expect(views[0]!.destroy).toHaveBeenCalled();
+    expect(views[0]!.destroy).not.toHaveBeenCalled();
   });
 
   it('never fabricates an answer: a detail no saved record holds is left for the person', async () => {
@@ -692,8 +804,8 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
   });
 });
 
-describe('acceptance 5: what is still waiting on R01/R02b/R06 is refused, not assumed', () => {
-  it('refuses to call an application ready while a required document upload cannot be verified', async () => {
+describe('acceptance 5: verified uploads and live readiness decide whether the attempt is ready', () => {
+  it('attaches a required document upload and records the page-confirmed file', async () => {
     createApplicationView.mockReset().mockImplementation(() => fakeView(uploadFormTree()));
     const started = await pipeline.startApplicationAttempt(deps, {
       vacancy: { ...VACANCY, vacancyKey: 'vac-upload', applyUrl: FIXTURE_FORM_URLS.withUpload },
@@ -701,16 +813,14 @@ describe('acceptance 5: what is still waiting on R01/R02b/R06 is refused, not as
     queueOneCvRender();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
-    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(ticked.result?.outcome).toBe('ready');
     const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
-    expect(attempt.checkpoint).toBe('needs_user');
-    expect(attempt.checkpointDetail).toContain('verified uploads are not wired up yet');
+    expect(attempt.checkpoint).toBe('ready');
 
-    // The rest of the form was still filled and recorded, so the person is not sent back to a blank
-    // page -- the upload is named as the one outstanding thing.
     const byLabel = new Map(attempt.preparedFields!.fields.map((field) => [field.label, field]));
     expect(byLabel.get('fullName')).toMatchObject({ status: 'committed' });
-    expect(byLabel.get('resume')).toMatchObject({ status: 'pending_upload', required: true });
+    expect(byLabel.get('resume')).toMatchObject({ status: 'committed', required: true });
+    expect(byLabel.get('resume')?.value).toContain('resume.pdf');
   });
 
   it('hands a CAPTCHA to the person and never attempts to answer it', async () => {

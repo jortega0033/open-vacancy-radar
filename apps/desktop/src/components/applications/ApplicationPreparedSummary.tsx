@@ -54,7 +54,7 @@ const PROVENANCE_LABEL: Record<NonNullable<PreparedApplicationField['provenance'
  */
 export function ApplicationPreparedSummary({ attempt, documents }: ApplicationPreparedSummaryProps) {
   const prepared = attempt.preparedFields;
-  const matchesThisAttempt = prepared !== null && prepared.company === attempt.company && prepared.role === attempt.role;
+  const matchesThisAttempt = prepared != null && prepared.company === attempt.company && prepared.role === attempt.role;
 
   return (
     <div className="flex flex-col gap-3 border-b border-base-300 px-5 py-3.5">

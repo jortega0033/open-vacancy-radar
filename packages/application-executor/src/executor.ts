@@ -1,6 +1,21 @@
+import { readAttachmentNames, readAxControlState, type AxControlState } from './ax-readback.js';
 import { assertAllowedCdpMethod } from './cdp-allowlist.js';
-import { extractSnapshotFields, extractSubmissionSignals, type CdpDomNode, type ExtractedSnapshot, type FieldNodeMap } from './dom-extract.js';
-import { findSnapshotField, type FormSnapshot } from './form-snapshot.js';
+import {
+  extractSnapshotFields,
+  extractSubmissionSignals,
+  type CdpDomNode,
+  type ExtractedSnapshot,
+  type FieldGroup,
+  type FieldNodeMap,
+} from './dom-extract.js';
+import { evaluateFormReadiness, type FormReadiness, type LiveFieldState } from './form-readiness.js';
+import {
+  computePageStateFingerprint,
+  findSnapshotField,
+  type FormSnapshot,
+  type SnapshotField,
+  type VerifiedFieldState,
+} from './form-snapshot.js';
 import { classifySubmissionOutcome, type ObservedResponse, type SubmissionOutcomeReport } from './submission-receipt.js';
 import { resolveSubmitControl } from './submit-control.js';
 import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
@@ -91,6 +106,13 @@ export class ApplicationExecutor {
    * already on the page before the click can never be mistaken for evidence that the click did
    * something (#271). `undefined` until `submit()` has actually clicked. */
   #preSubmitPageText: string | undefined;
+  /**
+   * Every read-back this executor has recorded for its own writes, by `fieldRef` (#277). Cleared
+   * on every `snapshot()`: a verification names a control by a ref minted in one generation, and a
+   * re-read mints a fresh set, so carrying them across would let a stale "verified" claim describe
+   * a control that is no longer the same one.
+   */
+  #verifications = new Map<string, VerifiedFieldState>();
 
   constructor(
     private readonly transport: CdpTransport,
@@ -99,6 +121,13 @@ export class ApplicationExecutor {
 
   get currentSnapshot(): FormSnapshot | undefined {
     return this.#currentSnapshot;
+  }
+
+  /** Every field this executor wrote to during the current snapshot generation, with what the
+   * browser reported the control actually holding afterwards. The only honest basis for a "filled"
+   * count anywhere in this app. */
+  get verifications(): readonly VerifiedFieldState[] {
+    return [...this.#verifications.values()];
   }
 
   private send(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -152,11 +181,144 @@ export class ApplicationExecutor {
     this.#generation += 1; // navigation invalidates any prior snapshot's field refs
     this.#currentSnapshot = undefined;
     this.#nodeIds = new Map();
+    this.#verifications.clear();
   }
 
   private async readDom(): Promise<ExtractedSnapshot> {
     const document = (await this.send('DOM.getDocument', { depth: -1, pierce: true })) as { root: CdpDomNode };
     return extractSnapshotFields(document.root);
+  }
+
+  /**
+   * Whether the browser actually laid `backendNodeId` out, via `DOM.getContentQuads` (#277). This
+   * is the one question `dom-extract.ts` documents it cannot answer from markup: the `hidden`
+   * attribute and `type="hidden"` are visible in the DOM, but a stylesheet's `display: none` is
+   * not, and a page carrying a hidden duplicate of its own form is precisely where filling the
+   * wrong copy goes unnoticed.
+   *
+   * Three outcomes, deliberately kept distinct rather than collapsed into a boolean at the call
+   * site: a non-empty quad list is rendered, an empty one is not, and a transport error or a
+   * response with no `quads` field at all is `undefined` -- "the browser did not answer". Chromium
+   * raises a protocol error rather than returning an empty list for a node it could not compute
+   * quads for, so a throw is treated as "not rendered"; anything else (a transport that does not
+   * implement this read at all) stays unknown, and an unknown never demotes a field on its own.
+   */
+  private async isNodeRendered(backendNodeId: number): Promise<boolean | undefined> {
+    let response: unknown;
+    try {
+      response = await this.send('DOM.getContentQuads', { backendNodeId });
+    } catch {
+      // Chromium's own "Could not compute content quads." for a node with no layout box.
+      return false;
+    }
+    const quads = (response as { quads?: unknown } | undefined)?.quads;
+    if (!Array.isArray(quads)) return undefined;
+    return quads.length > 0;
+  }
+
+  /**
+   * Picks the one frame/form pair a person is actually looking at out of an extracted read (#277).
+   *
+   * A page with exactly one group is unambiguous and costs zero extra CDP calls -- the overwhelming
+   * majority of real application pages. Only a page holding fields in more than one frame/form pair
+   * (a hidden duplicate of its own form, a stale previous step still in the DOM, an unrelated
+   * newsletter or search form, an embedded widget) gets a rendering probe, and then only one probe
+   * per group, against the group's own container element.
+   *
+   * Among the groups the browser actually rendered, the one holding the most fields wins, matching
+   * how `dom-extract.ts` already resolves a dominant frame/form by count. If the probe finds none
+   * of them rendered, or answers for none of them, the count-based resolution stands on its own
+   * rather than the executor declaring the whole page unusable on the strength of a heuristic.
+   *
+   * Worth being explicit about the limit of this: the geometry answer comes from the page, so a
+   * page can steer which of its own forms is treated as active by rendering a larger one. That is a
+   * real property, and it is deliberately accepted. It does not widen what this executor can be
+   * made to do (a same-origin page choosing which of its own controls receives an answer the
+   * applicant already agreed to give it), and the alternative -- trusting markup order or field
+   * count alone, which is what happened before -- is strictly worse, because it lets a form the
+   * person cannot even see win.
+   */
+  private async resolveActiveGroup(
+    extracted: ExtractedSnapshot,
+  ): Promise<{ frameId: number; formScope?: number; renderedByRef: ReadonlyMap<string, boolean> }> {
+    const fallback = {
+      frameId: extracted.dominantFrameId,
+      ...(extracted.dominantFormScope !== undefined ? { formScope: extracted.dominantFormScope } : {}),
+      renderedByRef: new Map<string, boolean>(),
+    };
+    if (extracted.fieldGroups.length <= 1) return fallback;
+
+    const renderedByRef = new Map<string, boolean>();
+    const rendered: FieldGroup[] = [];
+    for (const group of extracted.fieldGroups) {
+      const isRendered = await this.isNodeRendered(group.containerNodeId);
+      if (isRendered === undefined) continue;
+      for (const fieldRef of group.fieldRefs) renderedByRef.set(fieldRef, isRendered);
+      if (isRendered) rendered.push(group);
+    }
+    if (rendered.length === 0) return { ...fallback, renderedByRef };
+
+    let best = rendered[0] as FieldGroup;
+    for (const group of rendered) {
+      if (group.fieldRefs.length > best.fieldRefs.length) best = group;
+    }
+    return {
+      frameId: best.frameId,
+      ...(best.formScope !== undefined ? { formScope: best.formScope } : {}),
+      renderedByRef,
+    };
+  }
+
+  /**
+   * One complete read of the live page: the DOM extraction, the active frame/form resolution, and
+   * the resulting page-state fingerprint -- without minting a new snapshot generation.
+   *
+   * Both `snapshot()` (which does mint one) and the freshness check before a submission go through
+   * here, deliberately: comparing fingerprints only means something if both sides were computed by
+   * the identical code path over the identical inputs. A separate "cheap" freshness read would be
+   * exactly the kind of near-duplicate that drifts and then always reports fresh.
+   */
+  private async readPageState(): Promise<{
+    extracted: ExtractedSnapshot;
+    fields: SnapshotField[];
+    submitControls: ExtractedSnapshot['submitControls'];
+    activeFrameId: number;
+    activeFormScope: number | undefined;
+    fingerprint: string;
+  }> {
+    const extracted = await this.readDom();
+    const active = await this.resolveActiveGroup(extracted);
+
+    const fields = extracted.fields.map((field) => {
+      const isRendered = active.renderedByRef.get(field.fieldRef);
+      return {
+        ...field,
+        active: field.frameId === active.frameId && field.formScope === active.formScope,
+        ...(isRendered !== undefined ? { rendered: isRendered } : {}),
+      };
+    });
+
+    // Re-narrowed to whatever the rendering probe settled on, which is not always the group the
+    // plain field count picked: a hidden decoy form with more inputs than the real one would
+    // otherwise take its submit button along with it.
+    const submitControls = extracted.submitCandidates
+      .filter((candidate) => candidate.frameId === active.frameId && candidate.formScope === active.formScope)
+      .map((candidate) => candidate.control);
+
+    return {
+      extracted,
+      fields,
+      submitControls,
+      activeFrameId: active.frameId,
+      activeFormScope: active.formScope,
+      fingerprint: computePageStateFingerprint({
+        fields,
+        submitControlLabels: submitControls.map((control) => control.label),
+        challengeDetected: extracted.challengeDetected,
+        activeFrameId: active.frameId,
+        ...(active.formScope !== undefined ? { activeFormScope: active.formScope } : {}),
+      }),
+    };
   }
 
   /** Reads the current DOM into a fresh `FormSnapshot`, minting a new set of field/option refs.
@@ -177,63 +339,200 @@ export class ApplicationExecutor {
    * neither is indistinguishable from that race and simply pays the (bounded) retry cost once. */
   async snapshot(): Promise<FormSnapshot> {
     this.requireAction('snapshot');
-    let extracted = await this.readDom();
+    let state = await this.readPageState();
     // A real challenge widget is a terminal signal, not a loading race: retrying an empty read
     // burns the whole budget for no reason when the page is showing a CAPTCHA on purpose, not
     // still parsing.
     for (
       let attempt = 0;
-      extracted.fields.length === 0 &&
-      extracted.submitControls.length === 0 &&
-      !extracted.challengeDetected &&
+      state.fields.length === 0 &&
+      state.submitControls.length === 0 &&
+      !state.extracted.challengeDetected &&
       attempt < EMPTY_SNAPSHOT_RETRY_LIMIT;
       attempt++
     ) {
       await sleep(EMPTY_SNAPSHOT_RETRY_DELAY_MS);
-      extracted = await this.readDom();
+      state = await this.readPageState();
     }
     this.#generation += 1;
-    this.#nodeIds = extracted.nodeIds;
+    this.#nodeIds = state.extracted.nodeIds;
+    // A fresh read means fresh refs: every verification recorded against the previous generation
+    // describes controls this snapshot no longer names. Dropped rather than carried forward, so a
+    // "verified" claim can never outlive the read it was made against.
+    this.#verifications.clear();
     const result: FormSnapshot = {
       generation: this.#generation,
-      fields: extracted.fields,
-      submitControls: extracted.submitControls,
+      fields: state.fields,
+      submitControls: state.submitControls,
       capturedAt: new Date().toISOString(),
-      challengeDetected: extracted.challengeDetected,
+      challengeDetected: state.extracted.challengeDetected,
+      activeFrameId: state.activeFrameId,
+      ...(state.activeFormScope !== undefined ? { activeFormScope: state.activeFormScope } : {}),
+      pageStateFingerprint: state.fingerprint,
     };
     this.#currentSnapshot = result;
     return result;
   }
 
-  /** Fills a text/textarea/checkbox field. `value` must already have been resolved by Domain B
-   * from the attempt's own value table -- this method takes a plain string because by the time it
-   * is called, validation has already happened; it is not itself a validation boundary. */
-  async fill(fieldRef: string, value: string): Promise<void> {
+  /**
+   * Reads one control's committed state straight out of the browser (#277), via the narrowest
+   * allowed read: `Accessibility.getPartialAXTree` for that one `backendNodeId`, with no relatives.
+   *
+   * Returns `undefined` when the browser published nothing for the node, which every caller must
+   * treat as "unknown", never as "empty" -- the whole point of this method is that a claim about a
+   * field's contents has to come from the browser rather than from the fact that a command was
+   * sent.
+   */
+  private async readControlState(backendNodeId: number): Promise<AxControlState | undefined> {
+    let response: unknown;
+    try {
+      response = await this.send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false });
+    } catch {
+      // A node that has gone away between the write and the read (the page re-rendered its form) is
+      // a legitimate, non-exceptional "cannot say", and is reported as such rather than thrown:
+      // `unreadable` is a real verification outcome that blocks readiness on its own.
+      return undefined;
+    }
+    return readAxControlState(response, backendNodeId);
+  }
+
+  /** Blurs the focused control by moving focus off it with a real Tab press. This is what actually
+   * commits a value in a real browser: `change` fires on blur, not on every keystroke, and a page
+   * that normalizes, rejects or rewrites what was typed does it here. Every read-back happens after
+   * this, so what is verified is the committed value rather than the characters that were sent. */
+  private async blurFocusedControl(): Promise<void> {
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  }
+
+  private recordVerification(verification: VerifiedFieldState): VerifiedFieldState {
+    this.#verifications.set(verification.fieldRef, verification);
+    return verification;
+  }
+
+  /** Refuses any write to a field that is not part of the active form (#277). A field found in a
+   * hidden duplicate frame, a decoy copy, or an unrelated form on the same page has a perfectly
+   * ordinary label and type -- being findable has never been evidence that it is the control an
+   * applicant would have typed into. */
+  private requireActiveField(action: string, field: SnapshotField): void {
+    if (field.active) return;
+    throw new ExecutorPolicyError(
+      action,
+      `fieldRef ${field.fieldRef} is not part of the active form (frame ${field.frameId}, form ${field.formScope ?? 'none'})`,
+    );
+  }
+
+  /**
+   * Fills a text/textarea/checkbox/radio field and verifies what the control actually ended up
+   * holding. `value` must already have been resolved by Domain B from the attempt's own value table
+   * -- this method takes a plain string because by the time it is called, validation has already
+   * happened; it is not itself a validation boundary.
+   *
+   * The write is an explicit *replace*, not an insert (#277): `Input.insertText` inserts at the
+   * caret, so calling this twice on the same email field used to produce
+   * "ada@example.invalidada@example.invalid" rather than the value asked for -- and nothing in the
+   * old code path could have noticed, because it never read the field back. The sequence is now
+   * focus, select the control's entire contents, replace the selection (or delete it outright for
+   * an empty value), blur to commit, and only then read the committed value back out of the
+   * browser.
+   *
+   * Returns what the browser reports the control holding afterwards. A `mismatch` is returned, not
+   * thrown: a controlled input that rewrote or rejected the value is a real state a person needs to
+   * see and `form-readiness.ts` needs to block on, not an exception to unwind a whole field map for.
+   */
+  async fill(fieldRef: string, value: string): Promise<VerifiedFieldState> {
     this.requireAction('fill');
     const field = this.currentField(fieldRef);
     if (!field) throw new ExecutorPolicyError('fill', `unknown fieldRef ${fieldRef}`);
     if (field.classification) {
       throw new ExecutorPolicyError('fill', `fieldRef ${fieldRef} is a ${field.classification}, never fillable`);
     }
+    this.requireActiveField('fill', field);
     const backendNodeId = this.nodeIdFor('fill', fieldRef);
 
-    if (field.controlType === 'checkbox') {
-      // A checkbox has no allowed-method way to set its checked state directly (`DOM.setAttributeValue`
-      // is deliberately not on the allowlist -- it would not fire the page's own change handlers at
-      // all). A real click at the element's own box-model center does, toggling whatever the box's
-      // current state is -- so a click is only correct when the desired state actually differs from
-      // it. Comparing against `field.checked` (rather than assuming every checkbox starts unchecked,
-      // a real gap found during #201's review) is what makes this work in both directions: a
-      // pre-checked box can now be unchecked, and an already-correct box is left alone rather than
-      // toggled by an unnecessary click.
+    if (field.controlType === 'checkbox' || field.controlType === 'radio') {
+      // A checkbox/radio has no allowed-method way to set its checked state directly
+      // (`DOM.setAttributeValue` is deliberately not on the allowlist -- it would not fire the
+      // page's own change handlers at all). A real click at the element's own box-model center
+      // does, toggling whatever the box's current state is -- so a click is only correct when the
+      // desired state actually differs from it. Comparing against `field.checked` (rather than
+      // assuming every checkbox starts unchecked, a real gap found during #201's review) is what
+      // makes this work in both directions: a pre-checked box can now be unchecked, and an
+      // already-correct box is left alone rather than toggled by an unnecessary click.
       const desiredChecked = value === 'true';
-      if (desiredChecked === (field.checked ?? false)) return; // already in the desired state
-      await this.clickAt(backendNodeId);
-      return;
+      if (desiredChecked !== (field.checked ?? false)) await this.clickAt(backendNodeId);
+      const state = await this.readControlState(backendNodeId);
+      return this.recordVerification(
+        this.#verificationFor(field, {
+          intendedValue: value,
+          state,
+          committedValue: state?.checked === undefined ? '' : String(state.checked),
+          matches: state?.checked === undefined ? undefined : state.checked === desiredChecked,
+        }),
+      );
     }
 
     await this.send('DOM.focus', { backendNodeId });
-    await this.send('Input.insertText', { text: value });
+    // `commands` is how CDP asks the renderer to run a real editing command; `selectAll` selects
+    // the focused control's entire contents, so the insert below replaces rather than appends. The
+    // key/modifier fields describe the same gesture a person would make, since a page listening for
+    // the keystroke itself should see a coherent one.
+    await this.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'a',
+      code: 'KeyA',
+      windowsVirtualKeyCode: 65,
+      modifiers: 2, // Ctrl
+      commands: ['selectAll'],
+    });
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    if (value === '') {
+      // `Input.insertText` with empty text inserts nothing at all, so it would leave the selection
+      // in place and the old value untouched: clearing a field has to be a real delete.
+      await this.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Delete',
+        code: 'Delete',
+        windowsVirtualKeyCode: 46,
+        commands: ['delete'],
+      });
+      await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46 });
+    } else {
+      await this.send('Input.insertText', { text: value });
+    }
+    await this.blurFocusedControl();
+
+    const state = await this.readControlState(backendNodeId);
+    return this.recordVerification(
+      this.#verificationFor(field, {
+        intendedValue: value,
+        state,
+        committedValue: state?.value ?? '',
+        matches: state?.value === undefined ? undefined : state.value === value,
+      }),
+    );
+  }
+
+  /** Assembles one `VerifiedFieldState` from a read-back, in one place so `fill`/`select`/`attach`
+   * cannot drift on what counts as verified. `matches: undefined` means the browser published
+   * nothing to compare against, which is `unreadable` -- never quietly `verified`. */
+  #verificationFor(
+    field: SnapshotField,
+    input: { intendedValue: string; state: AxControlState | undefined; committedValue: string; matches: boolean | undefined; attachmentNames?: readonly string[] },
+  ): VerifiedFieldState {
+    const validationMessage = input.state?.description ?? field.validationMessage;
+    const invalid = input.state?.invalid === true;
+    return {
+      fieldRef: field.fieldRef,
+      status: input.matches === undefined ? 'unreadable' : input.matches ? 'verified' : 'mismatch',
+      intendedValue: input.intendedValue,
+      committedValue: input.committedValue,
+      ...(input.state?.checked !== undefined ? { checked: input.state.checked } : {}),
+      ...(input.attachmentNames ? { attachmentNames: input.attachmentNames } : {}),
+      ...(invalid && validationMessage ? { validationMessage } : {}),
+      generation: this.#generation,
+      verifiedAt: new Date().toISOString(),
+    };
   }
 
   /** Selects one option on a `select` field. Best-effort within the CDP allowlist: focuses the
@@ -249,14 +548,16 @@ export class ApplicationExecutor {
    * same field. `ArrowUp` on an already-first option is a no-op in every real `<select>`, so
    * sending one per option is a safe, allowlist-only way to guarantee a known starting point
    * without any CDP method that reads the control's current value. */
-  async select(fieldRef: string, optionRef: string): Promise<void> {
+  async select(fieldRef: string, optionRef: string): Promise<VerifiedFieldState> {
     this.requireAction('select');
     const field = this.currentField(fieldRef);
     if (!field) throw new ExecutorPolicyError('select', `unknown fieldRef ${fieldRef}`);
     const options = field.options ?? [];
     const index = options.findIndex((option) => option.optionRef === optionRef);
     if (index === -1) throw new ExecutorPolicyError('select', `optionRef ${optionRef} is not on fieldRef ${fieldRef}`);
+    this.requireActiveField('select', field);
     const backendNodeId = this.nodeIdFor('select', fieldRef);
+    const intendedLabel = options[index]?.label ?? '';
 
     await this.send('DOM.focus', { backendNodeId });
     for (let i = 0; i < options.length; i++) {
@@ -266,6 +567,23 @@ export class ApplicationExecutor {
       await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown' });
     }
     await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter' });
+    await this.blurFocusedControl();
+
+    // The whole reason the arrow-key drive above needs verifying at all: it is a best-effort
+    // sequence within the allowlist, and a `<select>` that ignored it, wrapped around, or was
+    // re-rendered mid-drive would previously have been indistinguishable from one that moved. The
+    // browser reports a combobox's committed selection as its accessibility value, which is the
+    // selected option's own label -- the same text `dom-extract.ts` minted the option ref from.
+    const state = await this.readControlState(backendNodeId);
+    const committedValue = state?.value ?? '';
+    return this.recordVerification(
+      this.#verificationFor(field, {
+        intendedValue: intendedLabel,
+        state,
+        committedValue,
+        matches: state?.value === undefined ? undefined : committedValue.trim() === intendedLabel.trim(),
+      }),
+    );
   }
 
   /**
@@ -279,11 +597,12 @@ export class ApplicationExecutor {
    * actually enforced anywhere, so an oversized or wrong-type artifact would have reached
    * `DOM.setFileInputFiles` unchecked once artifact resolution (#198) was wired up.
    */
-  async attach(fieldRef: string, file: { localFilePath: string; mimeType: string; byteSize: number }): Promise<void> {
+  async attach(fieldRef: string, file: { localFilePath: string; mimeType: string; byteSize: number }): Promise<VerifiedFieldState> {
     this.requireAction('attach');
     const field = this.currentField(fieldRef);
     if (!field) throw new ExecutorPolicyError('attach', `unknown fieldRef ${fieldRef}`);
     if (field.controlType !== 'file') throw new ExecutorPolicyError('attach', `fieldRef ${fieldRef} is not a file input`);
+    this.requireActiveField('attach', field);
     const { maxBytes, mimeTypes } = this.policy.uploadConstraints;
     if (file.byteSize > maxBytes) {
       throw new ExecutorPolicyError('attach', `file (${file.byteSize} bytes) exceeds policy "${this.policy.id}"'s ${maxBytes}-byte limit`);
@@ -293,6 +612,82 @@ export class ApplicationExecutor {
     }
     const backendNodeId = this.nodeIdFor('attach', fieldRef);
     await this.send('DOM.setFileInputFiles', { files: [file.localFilePath], backendNodeId });
+
+    // `DOM.setFileInputFiles` resolving means the command was accepted, not that the control holds
+    // the file: an input the page swapped out, or one whose `accept` filter rejected it, resolves
+    // just the same (#277). A file input has no text value, so the read-back matches the base name
+    // the executor itself chose against the accessible name the browser publishes for the control.
+    // Splitting on both separators, rather than using `node:path`, keeps this package free of any
+    // filesystem dependency: a path handed to it may be in either platform's form regardless of
+    // which platform this process is running on.
+    const baseName = file.localFilePath.split(/[\\/]/).pop() ?? file.localFilePath;
+    const state = await this.readControlState(backendNodeId);
+    const attachmentNames = readAttachmentNames(state, [baseName]);
+    return this.recordVerification(
+      this.#verificationFor(field, {
+        intendedValue: baseName,
+        state,
+        committedValue: attachmentNames.join(', '),
+        // A file input whose accessibility node published nothing at all is `unreadable`; one that
+        // published something not containing the chosen name is a real `mismatch`.
+        matches: state === undefined ? undefined : attachmentNames.length > 0,
+        attachmentNames,
+      }),
+    );
+  }
+
+  /**
+   * Reads what every active field on the current snapshot is holding right now, re-reads the page's
+   * own state to check freshness, and answers whether this application is actually ready to submit
+   * (#277).
+   *
+   * This is the check that replaces "the snapshot found nine fields, so nine fields are filled". It
+   * costs one DOM read plus one narrow accessibility read per active field, and it is the only
+   * thing in this package entitled to describe a field as filled. Note what it deliberately does
+   * NOT depend on: a screenshot proves a page rendered, a field inventory proves a form exists, and
+   * neither contributes to `verifiedFilledCount`.
+   *
+   * Requires the `snapshot` action, since that is exactly what it does -- it reads the live page and
+   * nothing else. It never writes, never clicks, and never mints a new generation, so the refs a
+   * person is currently reviewing stay valid across it.
+   */
+  async evaluateReadiness(): Promise<FormReadiness> {
+    this.requireAction('snapshot');
+    const snapshot = this.#currentSnapshot;
+    if (!snapshot) throw new ExecutorPolicyError('snapshot', 'no current snapshot to evaluate readiness against');
+
+    const fresh = await this.readPageState();
+    const liveState = new Map<string, LiveFieldState>();
+    for (const field of snapshot.fields) {
+      if (!field.active || field.classification) continue;
+      const backendNodeId = this.#nodeIds.get(field.fieldRef);
+      if (backendNodeId === undefined) continue;
+      const state = await this.readControlState(backendNodeId);
+      if (!state) continue;
+      const recorded = this.#verifications.get(field.fieldRef);
+      liveState.set(field.fieldRef, {
+        ...(state.value !== undefined ? { value: state.value } : {}),
+        ...(state.checked !== undefined ? { checked: state.checked } : {}),
+        ...(state.invalid !== undefined ? { invalid: state.invalid } : {}),
+        ...(state.invalid === true && state.description ? { validationMessage: state.description } : {}),
+        ...(field.controlType === 'file'
+          ? {
+              // A file input has no text value of its own. Prefer the names this executor verified
+              // for its own upload; otherwise fall back to whatever value the browser published,
+              // which is how a file a person attached themselves during a live handoff is seen at
+              // all. An empty published value is an empty attachment list, not an unknown one.
+              attachmentNames: recorded?.attachmentNames ?? (state.value ? [state.value] : []),
+            }
+          : {}),
+      });
+    }
+
+    return evaluateFormReadiness({
+      snapshot,
+      liveState,
+      verifications: this.verifications,
+      currentPageStateFingerprint: fresh.fingerprint,
+    });
   }
 
   /**
@@ -373,6 +768,19 @@ export class ApplicationExecutor {
     if (!this.#currentSnapshot) throw new ExecutorPolicyError('submit', 'no current snapshot to submit from');
     if (this.#currentSnapshot.challengeDetected) {
       throw new ExecutorPolicyError('submit', 'refusing to submit: the current snapshot has an active CAPTCHA/bot-detection challenge');
+    }
+    // Freshness, checked here and not only by the caller (#277): between a person reviewing this
+    // page and this click, the page may have grown a required field, started showing a validation
+    // error, replaced its form, or raised a challenge. This compares a fresh read of the page's own
+    // state against the snapshot under review and refuses outright if they differ, on the one
+    // action in this class that has no undo. It is a structural last line, not a substitute for the
+    // caller's own readiness evaluation, which reports *why* and can be acted on.
+    const fresh = await this.readPageState();
+    if (fresh.fingerprint !== this.#currentSnapshot.pageStateFingerprint) {
+      throw new ExecutorPolicyError(
+        'submit',
+        'refusing to submit: the page changed since the snapshot under review was taken, so nothing reviewed describes it any more',
+      );
     }
     const resolved = resolveSubmitControl(this.#currentSnapshot.submitControls);
     if (!resolved || resolved.controlRef !== controlRef) {

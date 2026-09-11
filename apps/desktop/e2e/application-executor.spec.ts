@@ -102,7 +102,20 @@ test.describe('applicationExecutor (#201)', () => {
       },
     );
 
-    expect(applied).toEqual({ ok: true, appliedCount: 6 });
+    // The remaining required upload and work-arrangement fields are deliberately left for the
+    // reviewer, so the applied values are verified but the form is not yet ready to submit.
+    expect(applied).toMatchObject({
+      ok: true,
+      appliedCount: 6,
+      verifiedCount: 6,
+      readiness: {
+        ready: false,
+        discoveredFieldCount: 10,
+        requiredFieldCount: 5,
+        requiredFieldsSatisfied: 4,
+        verifiedFilledCount: 6,
+      },
+    });
 
     // Nothing here ever calls a submit action -- ApplicationExecutor.submit() is real (#202), but
     // there is no IPC channel exposing it to the renderer, and this spec never invokes it directly
