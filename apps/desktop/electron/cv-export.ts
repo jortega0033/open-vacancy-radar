@@ -1,4 +1,3 @@
-import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { TailoredResume } from './resume-schema.js';
 import { tailoredResumeFromSource } from './resume-source.js';
 import { describeCvSourceGaps } from './workspace/cv-source-schema.js';
@@ -27,9 +26,12 @@ import type { CvDocumentRecord } from './workspace/types.js';
  * "Frontend CV: Netherlands") is a label for the entry, never a person, and is used by neither.
  *
  * `candidate` is passed in rather than loaded here, so this function stays free of any
- * Electron/filesystem API and is unit-testable on its own -- see `cv-export.test.ts`.
+ * Electron/filesystem API and is unit-testable on its own -- see `cv-export.test.ts`. It is typed
+ * as the one field actually read rather than as the whole `CandidateProfile`: a real profile still
+ * satisfies it unchanged, and #272's preparation pipeline can hand over the narrow projection it
+ * already carries without importing the vacancy engine's profile schema for a single string.
  */
-export function cvDocumentToTailoredResume(doc: CvDocumentRecord, candidate: CandidateProfile | null): TailoredResume {
+export function cvDocumentToTailoredResume(doc: CvDocumentRecord, candidate: { candidateName: string } | null): TailoredResume {
   const fallbackName = candidate?.candidateName.trim() ?? '';
   if (doc.source) {
     const resume = tailoredResumeFromSource(doc.source, doc.profile.skills);

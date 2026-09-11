@@ -47,6 +47,17 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
+import { runFieldMapGeneration } from './application-generation-runner.js';
+import {
+  recoverInterruptedApplicationAttempts,
+  runNextApplicationAttempt,
+  startApplicationAttempt,
+  type ApplicationPipelineDeps,
+  type ApplicationQueueEntryState,
+  type ApplicationQueuePort,
+  type PipelineVacancy,
+} from './application-pipeline.js';
+import type { ApplicationValueProfile } from './application-value-table.js';
 import {
   applyApplicationFieldMap,
   cancelScheduledAutomaticSubmission,
@@ -499,6 +510,10 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
         // so this attaches proactively -- "reopening the window reflects current queue state"
         // needs the stream live before any renderer even asks.
         applicationQueueRelay.attach();
+        // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+        // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+        // must not wait on workspace recovery.
+        void recoverApplicationPipelineOnStartup();
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -1376,6 +1391,159 @@ guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', 
   cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
 });
 
+/*
+ * ---------------------------------------------------------------------------------------------
+ * #272: the preparation pipeline that joins the pieces above into one production path -- queue,
+ * JD/CV snapshots, document staging, field-map generation, filling, ready-for-review.
+ *
+ * One IPC channel only (`application-pipeline:start`), and it takes a saved-job id, not a URL, a
+ * company, or a job description: everything an attempt is made of is resolved here, main-process
+ * side, from this app's own records. The renderer cannot name where an application goes, which CV
+ * it is built from, or what text it is tailored against.
+ *
+ * Nothing here changes what happens at the submit decision. This path stops at `ready`; the submit
+ * kill switch, the human confirmation, the rate limits and the CAPTCHA refusal all still sit
+ * between `ready` and any real submission, untouched.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Where staged CV/letter PDFs live. App-owned, per-user, and never a path the renderer supplies. */
+function applicationArtifactStorageRoot(): string {
+  return join(app.getPath('userData'), 'application-artifacts');
+}
+
+const APPLICATION_QUEUE_ENTRY_STATES: readonly ApplicationQueueEntryState[] = [
+  'queued',
+  'active',
+  'paused',
+  'cancelled',
+  'done',
+  'failed',
+];
+
+/** The daemon's queue as the pipeline consumes it. Every method is one HTTP call to a route the
+ * daemon owns -- this process keeps no queue state of its own, so a daemon restart is the daemon's
+ * recovery to perform, not this one's to reconstruct. */
+const applicationQueuePort: ApplicationQueuePort = {
+  async enqueue(attemptId: string): Promise<void> {
+    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+  },
+
+  async acquireLease() {
+    const res = await daemonFetch('/v2/applications/lease/acquire', { method: 'POST' });
+    if (!res.ok) return null;
+    const body = (await res.json().catch(() => ({}))) as { lease?: unknown };
+    const lease = body.lease && typeof body.lease === 'object' ? (body.lease as Record<string, unknown>) : undefined;
+    if (!lease || typeof lease.leaseId !== 'string' || typeof lease.attemptId !== 'string') return null;
+    return { leaseId: lease.leaseId, attemptId: lease.attemptId };
+  },
+
+  async release(leaseId: string, outcome: 'completed' | 'failed' | 'requeue'): Promise<void> {
+    await daemonFetch('/v2/applications/lease/release', { method: 'POST', body: { leaseId, outcome } });
+  },
+
+  async entryState(attemptId: string) {
+    const body = await daemonGetJson(`/v2/applications/${encodeURIComponent(attemptId)}`);
+    const entry = body?.entry && typeof body.entry === 'object' ? (body.entry as Record<string, unknown>) : undefined;
+    const state = entry?.state;
+    if (typeof state !== 'string' || !(APPLICATION_QUEUE_ENTRY_STATES as readonly string[]).includes(state)) return null;
+    return state as ApplicationQueueEntryState;
+  },
+};
+
+/** The narrow projection of the search profile the pipeline's value table draws on. A profile that
+ * has never been configured produces `null`, contributing no values rather than assumed ones. */
+async function loadApplicationValueProfile(): Promise<ApplicationValueProfile | null> {
+  try {
+    const profile = await loadCandidateProfile(await candidateProfilePath());
+    return {
+      candidateName: profile.candidateName,
+      currentRole: profile.currentRole,
+      location: profile.location,
+      professionalLanguage: profile.constraints.professionalLanguage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
+  return {
+    db: await ensureWorkspaceDb(),
+    storageRoot: applicationArtifactStorageRoot(),
+    queue: applicationQueuePort,
+    async generateFieldMap(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      // The one production caller `application-generation-runner.ts` was written for. `cwd` is the
+      // app's own empty scratch directory, the same one every other one-shot text session gets:
+      // this session is hardened to the daemon's 'no-network' profile and is never asked to touch
+      // a file.
+      return runFieldMapGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    loadProfile: loadApplicationValueProfile,
+    log: (message, meta) => console.warn(`[application-pipeline] ${message}`, meta ?? {}),
+  };
+}
+
+/**
+ * One vacancy as this app's own discovery data records it, or `undefined` when the latest report
+ * has no row for that key (the report was replaced by a newer scan, or the saved job predates one).
+ *
+ * `applyUrl` is preferred over the raw discovered `url` only when issue #278's own resolver marked
+ * it `verified`; anything weaker falls back to the discovered URL rather than treating a careers
+ * page or an aggregator listing as a place to apply.
+ */
+function resolvePipelineVacancy(vacancyKey: string): PipelineVacancy | undefined {
+  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+  if (!row) return undefined;
+  const verifiedApplyUrl = row.applyUrl?.status === 'verified' ? row.applyUrl.url : null;
+  return {
+    vacancyKey: row.key,
+    company: row.company,
+    role: row.title,
+    applyUrl: verifiedApplyUrl ?? row.url,
+    description: row.description,
+    // No discovery source this app reads truncates a description: each returns the posting's text
+    // whole or returns none at all (`DiscoveryVacancyAudit.description` is null in that case, never
+    // a shortened string). A source that ever starts truncating has to report that here instead.
+    descriptionComplete: true,
+  };
+}
+
+guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const savedJobId = parseId(source.savedJobId, 'savedJobId');
+  const deps = await applicationPipelineDeps();
+
+  const job = workspace.listSavedJobs(deps.db).find((saved) => saved.id === savedJobId);
+  if (!job) throw new Error('no such saved job');
+
+  // A saved job discovered by a scan resolves to its full discovery row (job description included).
+  // One entered by hand has no report row, so the attempt is created from what the saved job itself
+  // records and the pipeline reports the missing job description as a handoff -- visible in the
+  // attempt's own state, rather than refused here with no trace of what was asked for.
+  const vacancy = (job.vacancyKey ? resolvePipelineVacancy(job.vacancyKey) : undefined) ?? {
+    vacancyKey: job.vacancyKey,
+    company: job.company,
+    role: job.role,
+    applyUrl: job.sourceUrl ?? '',
+    description: null,
+    descriptionComplete: false,
+  };
+
+  const result = await startApplicationAttempt(deps, { vacancy });
+  // Kick the worker immediately rather than waiting out the poll interval: a person who just asked
+  // for this expects it to start, and `runNextApplicationAttempt` is safe to call concurrently with
+  // the timer (the daemon hands out one lease at a time).
+  if (result.ok) void runApplicationPipelineTick();
+  return result;
+});
+
 guardedIpc.handle('dialog:select-directory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
@@ -1652,6 +1820,57 @@ function scheduleAutomaticSubmissionTick(): void {
         automaticSubmissionTickInFlight = false;
       });
   }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
+}
+
+/** How often main asks the daemon whether there is an application to prepare. Short enough that a
+ * resumed or newly-queued attempt starts promptly, long enough that an idle app is not polling a
+ * local HTTP route constantly. A start requested from the UI does not wait for it (see
+ * `application-pipeline:start`). */
+const APPLICATION_PIPELINE_TICK_INTERVAL_MS = 15 * 1000;
+
+/** Same reasoning as `automaticSubmissionTickInFlight`: one preparation involves a real PDF render,
+ * a real generation session and a real page load, comfortably longer than the poll interval, and
+ * `setInterval` does not wait for the previous callback. A skipped tick costs nothing -- the queue
+ * still holds the attempt, and the next tick picks it up. */
+let applicationPipelineTickInFlight = false;
+
+/** One turn of the preparation worker. Swallows its own errors on purpose: this is called both from
+ * a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
+ * surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read. */
+async function runApplicationPipelineTick(): Promise<void> {
+  if (applicationPipelineTickInFlight) return;
+  applicationPipelineTickInFlight = true;
+  try {
+    await runNextApplicationAttempt(await applicationPipelineDeps());
+  } catch (error: unknown) {
+    console.error('[application-pipeline] preparation tick failed', error);
+  } finally {
+    applicationPipelineTickInFlight = false;
+  }
+}
+
+function scheduleApplicationPipelineTick(): void {
+  setInterval(() => {
+    void runApplicationPipelineTick();
+  }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
+}
+
+/**
+ * Re-queues every attempt a previous run of the app left mid-preparation, once, at startup.
+ *
+ * Runs after the daemon is reachable, since re-queuing is a daemon call. A failure here is logged
+ * and dropped rather than retried: the attempts stay durably recorded either way, and the next
+ * launch runs this again.
+ */
+async function recoverApplicationPipelineOnStartup(): Promise<void> {
+  try {
+    const recovered = await recoverInterruptedApplicationAttempts(await applicationPipelineDeps());
+    if (recovered.length > 0) {
+      console.warn('[application-pipeline] re-queued interrupted application attempts', { count: recovered.length });
+    }
+  } catch (error: unknown) {
+    console.error('[application-pipeline] startup recovery failed', error);
+  }
 }
 
 async function candidateProfilePath(): Promise<string> {
@@ -1962,6 +2181,7 @@ if (gotSingleInstanceLock) {
     void hydrateLatestVacancyReport();
     scheduleBackgroundScanTick();
     scheduleAutomaticSubmissionTick();
+    scheduleApplicationPipelineTick();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

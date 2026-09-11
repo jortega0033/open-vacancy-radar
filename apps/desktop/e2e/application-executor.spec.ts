@@ -15,6 +15,9 @@ import { expect, test } from './fixtures.js';
  * connection actually reading and mutating a real Chromium-rendered DOM.
  */
 const FIXTURE_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'ashby-application-form.html')).href;
+const NO_UPLOAD_FIXTURE_URL = pathToFileURL(
+  join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'ashby-application-form-no-upload.html'),
+).href;
 const POLICY_ID = 'ashby-fixture-test-only';
 
 test.describe('applicationExecutor (#201)', () => {
@@ -113,6 +116,31 @@ test.describe('applicationExecutor (#201)', () => {
       { attemptId, policyId: POLICY_ID, targetUrl: FIXTURE_URL },
     );
     expect(reopened.snapshot.fields).toHaveLength(11);
+    await window.evaluate(async (attemptId) => self.applicationExecutor.closeReview(attemptId), attemptId);
+  });
+
+  test('extracts the no-upload fixture the review-mode pipeline is driven against (#272)', async ({ window }) => {
+    // The sibling fixture `ashby-application-form-no-upload.html` exists so #272's preparation
+    // pipeline can be driven to ready-for-review without relaxing its refusal to call an
+    // application ready while a required document upload cannot be verified (#273/R02b). This is
+    // the one place that fixture meets a real Chromium render: `application-pipeline.test.ts`
+    // mirrors this DOM against a fake CDP transport, and would agree with itself if the real
+    // extraction ever diverged.
+    const attemptId = randomUUID();
+    const opened = await window.evaluate(
+      async ({ attemptId, policyId, targetUrl }) => self.applicationExecutor.openReview({ attemptId, policyId, targetUrl }),
+      { attemptId, policyId: POLICY_ID, targetUrl: NO_UPLOAD_FIXTURE_URL },
+    );
+
+    // Eight fillable controls, and no file input anywhere on the page.
+    expect(opened.snapshot.fields.map((f) => f.label).sort()).toEqual(
+      ['agreeToTerms', 'coverLetter', 'currentLocation', 'email', 'fullName', 'linkedInUrl', 'phone', 'workArrangement'].sort(),
+    );
+    expect(opened.snapshot.fields.some((f) => f.controlType === 'file')).toBe(false);
+    expect(opened.snapshot.fields.some((f) => f.label === 'referralSource')).toBe(false);
+    expect(opened.snapshot.fields.find((f) => f.label === 'agreeToTerms')?.classification).toBe('consent_field');
+    expect(opened.snapshot.submitControls).toEqual([{ controlRef: expect.any(String), label: 'Submit Application' }]);
+
     await window.evaluate(async (attemptId) => self.applicationExecutor.closeReview(attemptId), attemptId);
   });
 

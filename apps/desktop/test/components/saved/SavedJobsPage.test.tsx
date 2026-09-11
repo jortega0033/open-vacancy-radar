@@ -25,6 +25,13 @@ function makeJob(overrides: Partial<SavedJobRecord> = {}): SavedJobRecord {
   };
 }
 
+/** #272: the preparation pipeline bridge, stubbed the same way `installWorkspaceBridge` stubs the
+ * workspace one. Returns the stub so a test can assert what the page actually asked for. */
+function installApplicationPipelineBridge(start = vi.fn().mockResolvedValue({ ok: true, attemptId: 'attempt-1' })) {
+  Object.defineProperty(window, 'applicationPipeline', { value: { start }, configurable: true, writable: true });
+  return start;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -279,5 +286,39 @@ describe('SavedJobsPage', () => {
       await waitFor(() => expect(createSavedJob).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(onSavedJobsChanged).toHaveBeenCalledTimes(2));
     });
+  });
+});
+
+describe('SavedJobsPage: preparing an application (#272)', () => {
+  it('hands the saved job id to the pipeline and says where to watch it', async () => {
+    installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'job-7' })]) });
+    const start = installApplicationPipelineBridge();
+
+    render(<SavedJobsPage />);
+    await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /prepare application/i }));
+
+    // The id and nothing else: the renderer never names a URL, a CV, or a job description.
+    await waitFor(() => expect(start).toHaveBeenCalledWith('job-7'));
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Track it under Applications, In progress/i)).toBeInTheDocument();
+  });
+
+  it('reports the dedup refusal as a plain notice rather than an error', async () => {
+    installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([makeJob({ id: 'job-7' })]) });
+    installApplicationPipelineBridge(
+      vi.fn().mockResolvedValue({
+        ok: false,
+        reason: 'attempt_already_in_progress',
+        attemptId: 'attempt-existing',
+        detail: 'an application for this vacancy is already in progress',
+      }),
+    );
+
+    render(<SavedJobsPage />);
+    await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /prepare application/i }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('already in progress');
   });
 });

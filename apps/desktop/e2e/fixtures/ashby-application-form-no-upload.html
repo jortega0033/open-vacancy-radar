@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: application form with no document upload</title>
+<!--
+  Test-only fixture (issue #272). Like `ashby-application-form.html` next to it, this is NOT a real
+  employer page, is never fetched from the network, and is only ever loaded over a file:// URL that
+  `application-target-policies.ts` pins by exact path.
+
+  Why a second fixture rather than one more control on the first: the review-mode pipeline refuses
+  to report an application ready while a *required* document upload has not actually been attached
+  and verified, and verified uploads are issue #273 (R02b), which has not landed. The first fixture
+  has a required `<input type="file">` and therefore exercises exactly that refusal -- which is the
+  behaviour under test there. This one has no upload control at all, so the same pipeline can be
+  driven all the way through to ready-for-review without weakening that refusal to do it. When
+  #273 merges, the upload-bearing fixture becomes the primary end-to-end path and this one keeps
+  covering forms that ask for no attachment.
+
+  Control shapes mirror `dom-extract.ts`'s classifier the same way the first fixture's do: text,
+  email, tel and url inputs, a native <select> with real options, a <textarea>, a consent checkbox
+  (which must be surfaced as an excluded `consent_field` and never auto-filled), and a structurally
+  hidden honeypot that must never appear as a fillable field at all.
+-->
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+  .hint { font-weight: 400; color: #666; font-size: 0.85rem; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="url"], select, textarea {
+    width: 100%; padding: 0.5rem; box-sizing: border-box; font-size: 1rem;
+  }
+  .consent label { font-weight: 400; display: inline-flex; align-items: center; gap: 0.4rem; }
+  .hidden-honeypot { display: none; }
+</style>
+</head>
+<body>
+  <h1>Apply: Senior Widget Engineer (fixture, no upload)</h1>
+  <form id="application-form">
+    <div class="field">
+      <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+      <input type="text" id="full-name" name="fullName" autocomplete="name" required />
+    </div>
+
+    <div class="field">
+      <label for="email">Email <span aria-hidden="true">*</span></label>
+      <input type="email" id="email" name="email" autocomplete="email" required />
+    </div>
+
+    <div class="field">
+      <label for="phone">Phone <span class="hint">(optional)</span></label>
+      <input type="tel" id="phone" name="phone" autocomplete="tel" />
+    </div>
+
+    <div class="field">
+      <label for="linkedin">LinkedIn profile URL <span class="hint">(optional)</span></label>
+      <input type="url" id="linkedin" name="linkedInUrl" />
+    </div>
+
+    <div class="field">
+      <label for="current-location">Current location <span aria-hidden="true">*</span></label>
+      <input type="text" id="current-location" name="currentLocation" required />
+    </div>
+
+    <div class="field">
+      <label for="work-arrangement">Preferred work arrangement <span aria-hidden="true">*</span></label>
+      <select id="work-arrangement" name="workArrangement" required>
+        <option value="">Select one</option>
+        <option value="remote">Remote</option>
+        <option value="hybrid">Hybrid</option>
+        <option value="onsite">On-site</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="cover-letter">Cover letter <span class="hint">(optional)</span></label>
+      <textarea id="cover-letter" name="coverLetter" rows="6"></textarea>
+    </div>
+
+    <!-- Structurally hidden: `dom-extract.ts` must skip this, never surface it as fillable. -->
+    <div class="field hidden-honeypot">
+      <label for="referral-source">Referral source</label>
+      <input type="text" id="referral-source" name="referralSource" hidden />
+    </div>
+
+    <div class="field consent">
+      <label>
+        <input type="checkbox" name="agreeToTerms" required />
+        I agree to the processing of my data per the privacy policy. <span aria-hidden="true">*</span>
+      </label>
+    </div>
+
+    <button type="submit" id="submit-application">Submit Application</button>
+  </form>
+</body>
+</html>

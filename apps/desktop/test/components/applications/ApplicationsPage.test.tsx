@@ -26,6 +26,7 @@ function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): Applica
     formStructureHash: null,
     scheduledAutomaticSubmitAt: null,
     submissionMode: null,
+    preparedFields: null,
     ...overrides,
   };
 }

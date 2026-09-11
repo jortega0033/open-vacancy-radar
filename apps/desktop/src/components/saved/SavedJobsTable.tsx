@@ -6,6 +6,13 @@ export interface SavedJobsTableProps {
   onEdit: (job: SavedJobRecord) => void;
   onDelete: (job: SavedJobRecord) => void;
   onStatusChange: (job: SavedJobRecord, status: SavedJobStatus) => void;
+  /**
+   * Starts the preparation pipeline for this job (#272): tailored documents, a filled form, and an
+   * attempt waiting for review. Never a submission -- see `window.applicationPipeline`.
+   */
+  onPrepareApplication: (job: SavedJobRecord) => void;
+  /** The job whose preparation request is currently in flight, if any. */
+  preparingJobId: string | null;
 }
 
 function formatSavedAt(iso: string): string {
@@ -20,7 +27,14 @@ function formatSavedAt(iso: string): string {
  * em dash when unset rather than an empty cell, so a reviewer can tell "not filled in" apart from
  * a rendering glitch.
  */
-export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: SavedJobsTableProps) {
+export function SavedJobsTable({
+  jobs,
+  onEdit,
+  onDelete,
+  onStatusChange,
+  onPrepareApplication,
+  preparingJobId,
+}: SavedJobsTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="table">
@@ -80,6 +94,14 @@ export function SavedJobsTable({ jobs, onEdit, onDelete, onStatusChange }: Saved
                 </select>
               </td>
               <td className="text-right whitespace-nowrap">
+                <button
+                  className="btn btn-outline btn-xs"
+                  type="button"
+                  disabled={preparingJobId !== null}
+                  onClick={() => onPrepareApplication(job)}
+                >
+                  {preparingJobId === job.id ? <span className="loading loading-spinner loading-xs" /> : 'Prepare application'}
+                </button>
                 <button className="btn btn-ghost btn-xs" type="button" onClick={() => onEdit(job)}>
                   Edit
                 </button>

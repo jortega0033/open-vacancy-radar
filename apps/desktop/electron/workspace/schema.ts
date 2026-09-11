@@ -214,6 +214,21 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * so counting a manually-reviewed submission against that cap would be wrong -- a person's own
    * review pace is already the rate limit #202 relies on for the manual path. Null until submitted. */
   submissionMode: text('submission_mode', { enum: ['manual', 'automatic'] }),
+  /**
+   * What the preparation pipeline (#272) actually committed to this attempt's form, as JSON --
+   * one entry per field the live snapshot carried, each recording the field's own label, control
+   * type, whether it was committed/left to the person/left blank, and where a committed value came
+   * from (`cv`/`profile`/`user_answer`). Empty string for every attempt no pipeline run has
+   * prepared, which is every attempt created before this column existed.
+   *
+   * Stored on the attempt rather than derived at review time on purpose: it is the record of what
+   * *this* attempt committed, so a review can never show a previous attempt's answers for the same
+   * vacancy, and it survives an app restart exactly as the checkpoint does. It records only what
+   * this app itself applied -- reading the page back to confirm each value is genuinely committed
+   * is #277 (R06)'s work, which is why each entry carries its own `verification` field rather than
+   * this column implying a read-back that has not happened.
+   */
+  preparedFields: text('prepared_fields').notNull().default(''),
 });
 
 /**

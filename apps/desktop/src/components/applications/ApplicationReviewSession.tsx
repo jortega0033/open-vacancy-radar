@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OpenApplicationReviewResult } from '../../../electron/application-executor-types.js';
-import type { ApplicationAttemptRecord } from '../../window.js';
+import type { ApplicationArtifactRecord, ApplicationAttemptRecord } from '../../window.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 
 export interface ApplicationReviewSessionProps {
@@ -34,11 +34,27 @@ function describeError(err: unknown, fallback: string): string {
  */
 export function ApplicationReviewSession({ attempt, onClose }: ApplicationReviewSessionProps) {
   const [state, setState] = useState<SessionState>({ phase: 'resolving' });
+  // Loaded independently of the browser review, and always scoped to this attempt's own id (#272).
+  // A failure here must never block the review itself: the summary then says it has no record,
+  // which is the honest thing to show, rather than the review refusing to open at all.
+  const [documents, setDocuments] = useState<readonly ApplicationArtifactRecord[]>([]);
   const openedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     openedRef.current = false;
+    // Cleared before the new attempt's documents load, never left showing the previous one's.
+    setDocuments([]);
+
+    async function loadDocuments() {
+      try {
+        const rows = await window.workspace.listApplicationArtifacts(attempt.id);
+        if (!cancelled) setDocuments(rows);
+      } catch {
+        if (!cancelled) setDocuments([]);
+      }
+    }
+    void loadDocuments();
 
     async function start() {
       setState({ phase: 'resolving' });
@@ -145,6 +161,7 @@ export function ApplicationReviewSession({ attempt, onClose }: ApplicationReview
             attempt={attempt}
             snapshot={state.review.snapshot}
             screenshotBase64={state.review.screenshotBase64}
+            documents={documents}
             busy={state.phase === 'deciding'}
             onApprove={handleApprove}
             onSkip={handleSkip}
