@@ -1,5 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { isoPostedAt, isoPostedAtFromUnixSeconds } from '../../src/global-remote/discovery-shared.js';
+import { isoPostedAt, isoPostedAtFromUnixSeconds, stringValue } from '../../src/global-remote/discovery-shared.js';
+
+describe('stringValue', () => {
+  it('returns null for non-string and empty/whitespace-only values', () => {
+    expect(stringValue(null)).toBeNull();
+    expect(stringValue(undefined)).toBeNull();
+    expect(stringValue(42)).toBeNull();
+    expect(stringValue('   ')).toBeNull();
+  });
+
+  it('trims and passes through a plain string unchanged', () => {
+    expect(stringValue('  Senior Engineer  ')).toBe('Senior Engineer');
+  });
+
+  // QA regression: a real vacancy title from an upstream feed rendered literally as
+  // "J. J. Keller &#038; Associates, Inc." instead of "J. J. Keller & Associates, Inc.". JSON.parse
+  // never decodes HTML entities embedded in a string value, so a JSON-based discovery source that
+  // hands back a pre-HTML-escaped company/title field left the raw escape sequence in place all the
+  // way through to the UI, saved jobs, and AI letter-generation prompts.
+  it('decodes numeric, named, and quote HTML entities left raw by a JSON feed', () => {
+    expect(stringValue('J. J. Keller &#038; Associates, Inc.')).toBe('J. J. Keller & Associates, Inc.');
+    expect(stringValue('Sales &amp; Marketing Lead')).toBe('Sales & Marketing Lead');
+    expect(stringValue('Support the &quot;flagship&quot; account')).toBe('Support the "flagship" account');
+  });
+
+  it('leaves a literal angle bracket that is not part of a real tag untouched', () => {
+    // Regression guard: a full HTML-parse-based decode (e.g. round-tripping through cheerio) would
+    // interpret this as markup and silently drop content after it. The entity decoder must not do
+    // that -- it only replaces recognized `&name;`/`&#NNN;` runs, nothing else.
+    expect(stringValue('Engineer (Level 1 < 2) & Design')).toBe('Engineer (Level 1 < 2) & Design');
+  });
+});
 
 describe('isoPostedAt', () => {
   it('returns null for a null input', () => {

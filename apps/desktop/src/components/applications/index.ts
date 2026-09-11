@@ -1,4 +1,5 @@
 export { ApplicationsPage } from './ApplicationsPage.js';
+export type { ApplicationsPageProps } from './ApplicationsPage.js';
 export { ApplicationsTable } from './ApplicationsTable.js';
 export type { ApplicationsTableProps } from './ApplicationsTable.js';
 export { ApplicationDrawer } from './ApplicationDrawer.js';
