@@ -1,3 +1,4 @@
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { formatDate, type SearchResult } from './results.js';
 
 function KeyValue({ items }: { items: { k: string; v: string }[] }) {
@@ -54,8 +55,8 @@ export function VerificationSection({ result }: VerificationSectionProps) {
             unconditionally, for every level, so doing it again here would duplicate it verbatim. */}
         <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
           You can still compare this vacancy against your CV, save it, generate a letter and track
-          an application. Discovery source: {result.provider}. Discovery decision:{' '}
-          {result.raw.decision.replace(/_/g, ' ')}.
+          an application. Discovery source: {discoveryProviderLabel(result.provider)}. Discovery
+          decision: {result.raw.decision.replace(/_/g, ' ')}.
         </p>
       </div>
 

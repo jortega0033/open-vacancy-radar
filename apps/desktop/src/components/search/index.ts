@@ -19,6 +19,7 @@ export {
   WORLDWIDE_VERIFICATION,
   countryOptions,
   decisionLabel,
+  descriptionExcerpt,
   employmentOptions,
   filterResults,
   formatDate,

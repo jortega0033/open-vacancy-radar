@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isoPostedAt, isoPostedAtFromUnixSeconds, stringValue } from '../../src/global-remote/discovery-shared.js';
+import {
+  isoPostedAt,
+  isoPostedAtFromUnixSeconds,
+  parseSalaryText,
+  stringValue,
+} from '../../src/global-remote/discovery-shared.js';
 
 describe('stringValue', () => {
   it('returns null for non-string and empty/whitespace-only values', () => {
@@ -69,5 +74,64 @@ describe('isoPostedAtFromUnixSeconds', () => {
 
   it('converts unix seconds to an ISO string', () => {
     expect(isoPostedAtFromUnixSeconds(1788241217)).toBe('2026-09-01T05:40:17.000Z');
+  });
+});
+
+describe('parseSalaryText', () => {
+  it('returns an all-null result for a null input', () => {
+    expect(parseSalaryText(null)).toEqual({ minimum: null, currency: null, period: null });
+  });
+
+  it('extracts an hourly rate right next to the number', () => {
+    expect(parseSalaryText('$45/hr, remote')).toMatchObject({ minimum: 45, currency: 'USD', period: 'hourly' });
+  });
+
+  it('extracts a monthly figure', () => {
+    expect(parseSalaryText('EUR 4,500 monthly gross')).toMatchObject({
+      minimum: 4_500,
+      currency: 'EUR',
+      period: 'monthly',
+    });
+  });
+
+  it('extracts a weekly figure when the only period word actually describes the pay', () => {
+    expect(parseSalaryText('GBP 500 per week')).toMatchObject({ minimum: 500, currency: 'GBP', period: 'weekly' });
+  });
+
+  it('extracts an annual figure', () => {
+    expect(parseSalaryText('USD 120,000 per year')).toMatchObject({
+      minimum: 120_000,
+      currency: 'USD',
+      period: 'annual',
+    });
+  });
+
+  // QA regression: a real vacancy read as "GBP 25,000/weekly" while its own description read "£25,000
+  // - 35,000 per year". The description mentioned working hours ("hours per week") ahead of the
+  // salary figure, and the old hourly > monthly > weekly > annual priority order picked "weekly" from
+  // that unrelated sentence purely because it was checked before "annual", regardless of which period
+  // word actually sat next to the number.
+  it('picks the period word nearest the salary figure over one from an unrelated sentence', () => {
+    expect(
+      parseSalaryText('Salary: £25,000 - 35,000 per year. Full-time, standard hours per week.'),
+    ).toMatchObject({ minimum: 25_000, currency: 'GBP', period: 'annual' });
+  });
+
+  it('picks weekly when the weekly word is the one actually next to the figure, even with an annual figure earlier in the text', () => {
+    expect(
+      parseSalaryText('Contract runs for a full year. Weekly rate: $1,200 per week.'),
+    ).toMatchObject({ minimum: 1_200, currency: 'USD', period: 'weekly' });
+  });
+
+  it('returns a null period when no known period word is present', () => {
+    expect(parseSalaryText('USD 90,000')).toMatchObject({ minimum: 90_000, currency: 'USD', period: null });
+  });
+
+  it('returns an all-null result when no number is present', () => {
+    expect(parseSalaryText('Competitive salary, remote role')).toEqual({
+      minimum: null,
+      currency: null,
+      period: null,
+    });
   });
 });

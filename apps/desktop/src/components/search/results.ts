@@ -126,15 +126,73 @@ export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verificat
   };
 }
 
+/** Canonical suffix shown for each of the pay-period buckets this app recognizes. */
+const SALARY_PERIOD_LABELS = {
+  hourly: '/hr',
+  weekly: '/wk',
+  monthly: '/mo',
+  annual: '/yr',
+  daily: '/day',
+} as const;
+
+type SalaryPeriodLabel = keyof typeof SALARY_PERIOD_LABELS;
+
+/**
+ * `DiscoveryVacancyAudit['salaryPeriod']` is a plain `string | null`, not a closed enum -- some
+ * discovery adapters run raw upstream feed vocabulary through `parseSalaryText` first (giving one
+ * of a handful of known words), but others (Himalayas, Jobicy, ...) pass the source's own
+ * `salaryPeriod` field straight through unnormalized (see `discoverHimalayas`/`discoverJobicy` in
+ * `packages/vacancy-engine/src/global-remote/discovery.ts`). A confirmed audit finding was a single
+ * results list showing "USD 163,200/yearly", "GBP 25,000/weekly" and "USD 120,000/year" side by
+ * side -- three spellings of two periods, read verbatim from whichever source happened to produce
+ * them. This maps every synonym actually seen across this app's sources onto one of a small,
+ * consistent set of suffixes. A value this doesn't recognize renders with no period suffix at all,
+ * rather than leaking arbitrary source text into the UI.
+ */
+function normalizeSalaryPeriod(period: string | null): SalaryPeriodLabel | null {
+  if (!period) return null;
+  if (/\b(?:hour|hourly|hr)\b/iu.test(period)) return 'hourly';
+  if (/\b(?:week|weekly|wk)\b/iu.test(period)) return 'weekly';
+  if (/\b(?:month|monthly|mo)\b/iu.test(period)) return 'monthly';
+  if (/\b(?:day|daily)\b/iu.test(period)) return 'daily';
+  if (/\b(?:year|yearly|annual|annually|yr|p\.?a\.?)\b/iu.test(period)) return 'annual';
+  return null;
+}
+
+/**
+ * `advertisedMinimum` is exactly what its name says -- a minimum, not a fixed salary -- so this is
+ * prefixed with "from" rather than rendered as if it were the whole story (a confirmed audit
+ * finding: the UI never said "minimum" anywhere, so a candidate had no way to know the number on a
+ * card was a floor rather than the actual offer).
+ */
 export function formatDiscoverySalary(vacancy: DiscoveryVacancyAudit): string | null {
   if (vacancy.advertisedMinimum == null) return null;
-  const currency = vacancy.currency ?? '';
-  const period = vacancy.salaryPeriod ? `/${vacancy.salaryPeriod}` : '';
-  return `${currency} ${vacancy.advertisedMinimum.toLocaleString()}${period}`.trim();
+  const parts = ['from'];
+  if (vacancy.currency) parts.push(vacancy.currency);
+  parts.push(vacancy.advertisedMinimum.toLocaleString());
+  const amount = parts.join(' ');
+  const normalizedPeriod = normalizeSalaryPeriod(vacancy.salaryPeriod);
+  return normalizedPeriod ? `${amount}${SALARY_PERIOD_LABELS[normalizedPeriod]}` : amount;
 }
 
 export function decisionLabel(decision: DiscoveryVacancyAudit['decision']): string {
   return decision.replace(/_/g, ' ');
+}
+
+/**
+ * Single-line preview of `description` for the results-list card (issue: cards showed zero
+ * role-content, so scanning 25 results meant opening each one individually to judge fit). The
+ * stored `description` can now carry real paragraph breaks (`htmlToText` inserts a newline at every
+ * block-tag boundary -- see `packages/vacancy-engine/src/global-remote/feed-discovery.ts`'s
+ * `decodedText`), which the detail pane renders with `whitespace-pre-wrap`; collapsing them to
+ * spaces here is purely a card-preview concern; it never mutates or re-derives the text the detail
+ * pane shows. Returns null for a blank/whitespace-only description so the card never renders an
+ * empty line.
+ */
+export function descriptionExcerpt(description: string | null): string | null {
+  if (!description) return null;
+  const collapsed = description.replace(/\s+/gu, ' ').trim();
+  return collapsed.length > 0 ? collapsed : null;
 }
 
 /** Renderer-side scheme guard, mirroring `electron/external-url.ts`. A feed controls this string. */
