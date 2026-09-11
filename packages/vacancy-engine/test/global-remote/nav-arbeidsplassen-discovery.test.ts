@@ -99,6 +99,12 @@ describe('NAV Arbeidsplassen feed discovery (configuration-required until a bear
         // profile, so the walk stops at its configured page budget, not an error or rate limit.
         status: 'partial',
         error: expect.stringContaining('configured 1-page limit'),
+        // issue #279: a capped page walk carries its own completeness marker plus the feed's own
+        // `next_url` as a real resumable cursor, not a synthesized page number -- this source
+        // paginates by opaque cursor, so the cursor IS the continuation evidence.
+        complete: false,
+        completenessReason: expect.stringContaining('configured 1-page limit'),
+        continuationCursor: 'https://pam-stilling-feed.nav.no/api/v1/feed/22222222-0000-4000-8000-000000000002',
       }),
     ]);
     expect(result.vacancies.map((vacancy) => vacancy.key)).toEqual([
@@ -193,7 +199,17 @@ describe('NAV Arbeidsplassen feed discovery (configuration-required until a bear
       navArbeidsplassenEntryUrl(STAVANGER_UUID),
     ]);
     expect(result.sources).toEqual([
-      expect.objectContaining({ requests: 5, listings: 3, status: 'success', error: null }),
+      expect.objectContaining({
+        requests: 5,
+        listings: 3,
+        status: 'success',
+        error: null,
+        // Reaching a genuine `next_url: null` end of feed -- never mistaken for a stopped-early
+        // scan just because it took more than one page to get there.
+        complete: true,
+        completenessReason: null,
+        continuationCursor: null,
+      }),
     ]);
     expect(result.vacancies.map((vacancy) => vacancy.key)).toEqual([
       `nav_arbeidsplassen:${FRONTEND_UUID}`,

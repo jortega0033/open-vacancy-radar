@@ -6,7 +6,13 @@ import {
   type AtsRosterProvider,
 } from '../companies/ats-roster-source.js';
 import type { CareerSourceDescriptor, NormalizedVacancy, VacancyAdapter } from '../domain/models.js';
-import { discoveryAudit, sourceFailure } from './discovery-shared.js';
+import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+  type NetworkAttemptCounters,
+} from './discovery-attribution.js';
+import { completeAudit, discoveryAudit, incompleteAudit, sourceFailure } from './discovery-shared.js';
 import type {
   DiscoveryProvider,
   DiscoveryRun,
@@ -90,6 +96,7 @@ function sourceAuditFor(
   provider: AtsRosterProvider,
   companiesAttempted: number,
   tally: ProviderTally,
+  counters: NetworkAttemptCounters,
 ): DiscoverySourceAudit {
   const discoveryProvider = rosterDiscoveryProvider(provider);
   if (companiesAttempted === 0) {
@@ -101,6 +108,9 @@ function sourceAuditFor(
       listings: 0,
       status: 'success',
       error: 'No imported roster entries for this provider yet; run the ats-roster:import CLI command first.',
+      ...networkAttemptFields(counters),
+      // Nothing was skipped or capped -- there was simply nothing to scan for this provider.
+      ...completeAudit(),
     };
   }
   const status: DiscoverySourceAudit['status'] =
@@ -111,6 +121,10 @@ function sourceAuditFor(
         : tally.companiesFailed === companiesAttempted
           ? 'error'
           : 'partial';
+  const error =
+    tally.companiesFailed === 0
+      ? null
+      : `${tally.companiesFailed}/${companiesAttempted} companies failed (last error: ${tally.lastError ?? 'unknown'}).`;
   return {
     id: `${discoveryProvider}:roster-scan`,
     provider: discoveryProvider,
@@ -118,10 +132,15 @@ function sourceAuditFor(
     requests: tally.requests,
     listings: tally.listings,
     status,
-    error:
-      tally.companiesFailed === 0
-        ? null
-        : `${tally.companiesFailed}/${companiesAttempted} companies failed (last error: ${tally.lastError ?? 'unknown'}).`,
+    error,
+    ...networkAttemptFields(counters),
+    // Every roster company for this provider was attempted (a per-company failure is folded into
+    // `tally`, not skipped) -- so this provider's own partition of the roster is always fully
+    // walked. A per-company failure still shows up as `status !== 'success'`/`error` above; it is
+    // not the kind of "stopped early" gap `complete`/`completenessReason` exist to describe.
+    ...(tally.companiesFailed === companiesAttempted && companiesAttempted > 0
+      ? incompleteAudit(error ?? 'All attempted companies failed for this provider.')
+      : completeAudit()),
   };
 }
 
@@ -147,9 +166,18 @@ export async function runAtsRosterDiscovery(
   config: GlobalRemoteConfig,
   roster: readonly AtsRosterEntry[],
 ): Promise<DiscoveryRun> {
+  // One `NetworkAttemptCounters` per provider, not per company: every company of a given provider
+  // shares one `DiscoverySourceAudit` row (see the module doc comment above), so their attempts are
+  // meant to accumulate together -- what must not happen is a *different provider's* attempts
+  // landing here, which wrapping each provider's own adapter client with its own counters prevents
+  // exactly the way `attributeNetworkRequests` prevents it between top-level discovery branches.
+  const countersByProvider = new Map<AtsRosterProvider, NetworkAttemptCounters>(
+    ATS_ROSTER_PROVIDERS.map((provider) => [provider, newNetworkAttemptCounters()]),
+  );
   const adapters = new Map<AtsRosterProvider, VacancyAdapter>();
   for (const provider of ATS_ROSTER_PROVIDERS) {
-    const adapter = createVacancyAdapter(provider, http);
+    const providerCounters = countersByProvider.get(provider) ?? newNetworkAttemptCounters();
+    const adapter = createVacancyAdapter(provider, attributeNetworkRequests(http, providerCounters));
     // `ATS_ROSTER_PROVIDERS` is a fixed subset of the providers `createVacancyAdapter` already
     // handles (see `ats/factory.ts`), so this can only fail if the two lists ever drift apart.
     if (adapter === null) throw new Error(`No adapter registered for ATS roster provider ${provider}`);
@@ -198,7 +226,12 @@ export async function runAtsRosterDiscovery(
   await Promise.all(Array.from({ length: concurrency }, worker));
 
   const sources = ATS_ROSTER_PROVIDERS.map((provider) =>
-    sourceAuditFor(provider, attemptedByProvider.get(provider) ?? 0, tallyByProvider.get(provider) ?? emptyTally()),
+    sourceAuditFor(
+      provider,
+      attemptedByProvider.get(provider) ?? 0,
+      tallyByProvider.get(provider) ?? emptyTally(),
+      countersByProvider.get(provider) ?? newNetworkAttemptCounters(),
+    ),
   );
 
   return { sources, vacancies };

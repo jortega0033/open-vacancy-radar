@@ -1,10 +1,17 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   locations,
   numberValue,
@@ -113,6 +120,8 @@ async function discoverFreehire(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://freehire.me/api/v1/jobs/search');
   if (config.discovery.roleQuery) url.searchParams.set('category', config.discovery.roleQuery);
   url.searchParams.set('work_mode', 'remote');
@@ -170,6 +179,10 @@ async function discoverFreehire(
         listings: vacancies.length,
         status,
         error: status === 'partial' ? `Bounded to ${root.data.length} of ${total} matching rows.` : null,
+        ...networkAttemptFields(counters),
+        ...(status === 'partial'
+          ? incompleteAudit(`Bounded to ${root.data.length} of ${total} matching rows.`)
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -182,6 +195,7 @@ async function discoverFreehire(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -196,6 +210,8 @@ async function discoverJobOpportunities(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://api.jobopportunitiesapi.org/public/jobs');
   if (config.discovery.roleQuery) url.searchParams.set('q', config.discovery.roleQuery);
   url.searchParams.set('remote_confirmed', 'true');
@@ -248,6 +264,10 @@ async function discoverJobOpportunities(
         listings: vacancies.length,
         status: partial ? 'partial' : 'success',
         error: partial ? 'More rows match; keyless access intentionally exposes one page.' : null,
+        ...networkAttemptFields(counters),
+        ...(partial
+          ? incompleteAudit('More rows match; keyless access intentionally exposes one page.')
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -260,6 +280,7 @@ async function discoverJobOpportunities(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -270,11 +291,14 @@ async function discoverRemoteLanders(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://remotelanders.com/api/jobs';
   const pageSize = 100;
   try {
@@ -320,6 +344,7 @@ async function discoverRemoteLanders(
       if (complete) break;
       if (page === config.discovery.remoteLandersMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.remoteLandersMaxPages}-page limit.`;
       }
     }
@@ -327,6 +352,7 @@ async function discoverRemoteLanders(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -337,6 +363,8 @@ async function discoverRemoteLanders(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -346,11 +374,14 @@ async function discoverJobgether(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://jobgether.com/astroapi/ai/jobs.json';
   const pageSize = 25;
   try {
@@ -399,6 +430,7 @@ async function discoverJobgether(
       if (!hasMore) break;
       if (page === config.discovery.jobgetherMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the documented ${config.discovery.jobgetherMaxPages}-page limit.`;
       }
     }
@@ -406,6 +438,7 @@ async function discoverJobgether(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -416,6 +449,8 @@ async function discoverJobgether(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };

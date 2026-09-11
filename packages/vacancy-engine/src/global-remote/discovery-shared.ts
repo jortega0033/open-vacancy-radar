@@ -144,13 +144,41 @@ export function discoveryAudit(
   };
 }
 
-export function sourceFailure(error: unknown): Pick<DiscoverySourceAudit, 'status' | 'error'> {
+export function sourceFailure(
+  error: unknown,
+): Pick<DiscoverySourceAudit, 'status' | 'error' | 'complete' | 'completenessReason' | 'continuationCursor'> {
   const status = error instanceof AtsResponseError ? error.status : null;
   const blocked = status !== null && [401, 403, 406, 407, 429, 451].includes(status);
+  const message = error instanceof Error ? error.message : String(error);
   return {
     status: blocked ? 'blocked' : 'error',
-    error: error instanceof Error ? error.message : String(error),
+    error: message,
+    // A failure is never a complete scan of the source, by definition -- the same reason the
+    // failure itself gives (`message`) is the honest answer to "why is coverage incomplete".
+    complete: false,
+    completenessReason: message,
+    continuationCursor: null,
   };
+}
+
+/** For a source's normal end-of-run completion: it reached the end of its available listings with
+ * no cap hit and no error. */
+export function completeAudit(): Pick<
+  DiscoverySourceAudit,
+  'complete' | 'completenessReason' | 'continuationCursor'
+> {
+  return { complete: true, completenessReason: null, continuationCursor: null };
+}
+
+/** For a source that stopped before the end of its available listings -- a configured page/result
+ * cap, most often -- without erroring. `continuationCursor` carries whatever resumable marker the
+ * adapter already tracked at the point it stopped (a next-page URL or page/offset number), or stays
+ * `null` where the source's contract has no such thing to carry. */
+export function incompleteAudit(
+  reason: string,
+  continuationCursor: string | null = null,
+): Pick<DiscoverySourceAudit, 'complete' | 'completenessReason' | 'continuationCursor'> {
+  return { complete: false, completenessReason: reason, continuationCursor };
 }
 
 export type ParsedSalary = {

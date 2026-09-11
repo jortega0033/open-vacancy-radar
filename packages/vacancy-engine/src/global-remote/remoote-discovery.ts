@@ -1,5 +1,12 @@
 import { AtsResponseError, type AtsHttpClient } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+  type NetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
   numberValue,
   parsedRoot,
@@ -255,8 +262,13 @@ function searchCacheKey(config: GlobalRemoteConfig, request: Record<string, unkn
   });
 }
 
-function successfulDiscovery(parsed: ParsedRemooteSearch, requests: number): DiscoveryRun {
+function successfulDiscovery(
+  parsed: ParsedRemooteSearch,
+  requests: number,
+  counters: NetworkAttemptCounters,
+): DiscoveryRun {
   const partial = parsed.rejectedRows > 0;
+  const error = partial ? `ignored ${parsed.rejectedRows} invalid Remoote result(s)` : null;
   return {
     sources: [
       {
@@ -266,7 +278,11 @@ function successfulDiscovery(parsed: ParsedRemooteSearch, requests: number): Dis
         requests,
         listings: parsed.vacancies.length,
         status: partial ? 'partial' : 'success',
-        error: partial ? `ignored ${parsed.rejectedRows} invalid Remoote result(s)` : null,
+        error,
+        ...networkAttemptFields(counters),
+        // A rejected row is a data-quality gap in this response, not a stopped-early scan (the
+        // whole capped result page this search returns was read either way, cache hit or not).
+        ...completeAudit(),
       },
     ],
     vacancies: parsed.vacancies,
@@ -335,23 +351,25 @@ export async function discoverRemoote(
   config: GlobalRemoteConfig,
   options: RemooteDiscoveryOptions = {},
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  const attributedHttp = attributeNetworkRequests(http, counters);
   const cache = options.cache ?? defaultSearchCache;
   const now = options.now ?? Date.now;
   const request = searchRequest(config);
   const cacheKey = searchCacheKey(config, request);
   const cached = readSearchCache(cache, cacheKey, now());
-  if (cached !== null) return successfulDiscovery(cached, 0);
+  if (cached !== null) return successfulDiscovery(cached, 0, counters);
 
   let requests = 0;
   try {
     requests += 1;
-    const response = await http.postJson(REMOOTE_SEARCH_URL, request, {
+    const response = await attributedHttp.postJson(REMOOTE_SEARCH_URL, request, {
       allowedOrigins: [REMOOTE_API_ORIGIN],
       headers: { Accept: 'application/json' },
     });
     const parsed = parseRemooteSearch(response, config);
     writeSearchCache(cache, cacheKey, parsed, now());
-    return successfulDiscovery(parsed, requests);
+    return successfulDiscovery(parsed, requests, counters);
   } catch (error) {
     const failure = sourceFailure(error);
     return {
@@ -362,8 +380,8 @@ export async function discoverRemoote(
           url: REMOOTE_SEARCH_URL,
           requests,
           listings: 0,
-          status: failure.status,
-          error: failure.error,
+          ...failure,
+          ...networkAttemptFields(counters),
         },
       ],
       vacancies: [],

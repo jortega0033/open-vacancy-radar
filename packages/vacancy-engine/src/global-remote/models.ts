@@ -302,10 +302,52 @@ export type DiscoverySourceAudit = {
   id: string;
   provider: DiscoveryVacancyAudit['provider'];
   url: string;
+  /** Logical fetch calls this source's own adapter code issued (one per page/cursor it walked),
+   * unchanged in meaning since before issue #279: `SafeHttpClient` may have retried underneath any
+   * one of these transparently, which `requests` alone never showed. See `networkAttempts`. */
   requests: number;
   listings: number;
   status: 'success' | 'partial' | 'blocked' | 'error';
   error: string | null;
+  /**
+   * Actual network attempts `SafeHttpClient` made on this source's behalf, including every bounded
+   * retry (429/5xx/timeout) and every redirect hop -- always `>= requests`. Attributed via
+   * `discovery-attribution.ts`'s `AsyncLocalStorage`-based wrapper so two sources running
+   * concurrently (every `Promise.all` fan-out in this package) never pool into the same counter
+   * (issue #279). A source not yet wired through that wrapper reports this equal to `requests`
+   * (no retry visibility beyond the logical count, never an undercount).
+   */
+  networkAttempts: number;
+  /**
+   * The subset of `networkAttempts` beyond the first attempt of each logical request -- i.e.
+   * retries `SafeHttpClient` performed after a 429/5xx/timeout response, whether or not the retry
+   * eventually succeeded. A 429 followed by an eventual success is recorded here even though
+   * `status` stays `'success'`: observing a retry must never by itself downgrade `status` to
+   * `'partial'`, which only ever describes *coverage*, not how many attempts a request needed.
+   */
+  retries: number;
+  /**
+   * Whether this source's own coverage claim is definitively complete for this run. Distinct from
+   * `status`, which already existed and describes whether the underlying request(s) succeeded: a
+   * source can be `status: 'success'` yet `complete: false` (a page walk that hit its configured
+   * cap without ever erroring), and a `status` other than `'success'` is always `complete: false`.
+   * An empty result set that genuinely reached the end of the source (no cap hit, no error) is
+   * `complete: true` with zero `listings` -- "nothing to show" is not the same claim as "did not
+   * finish looking".
+   */
+  complete: boolean;
+  /** Set whenever `complete` is false: why this source did not reach the end of its available
+   * listings (a configured page/result cap, retries exhausted, a timeout, cancellation, an upstream
+   * error, ...). Never inferred by a reader from string-matching `error` -- this is the field meant
+   * for that. `null` exactly when `complete` is true. */
+  completenessReason: string | null;
+  /**
+   * Resumable evidence of where a capped or interrupted source stopped, carried through from
+   * whatever the adapter already tracks internally (a next-page URL, a next page/offset number, a
+   * remaining-partition marker) -- never invented for a source whose contract has no such thing.
+   * `null` whenever the source has nothing to resume from, including every `complete: true` row.
+   */
+  continuationCursor: string | null;
 };
 
 export type DiscoveryRun = {
@@ -399,6 +441,29 @@ export type GlobalRemoteReport = {
     /** The subset of the above that cost this run a Wikidata request. */
     sponsorMatchLookedUpCompanies?: number;
     sponsorMatchUnverifiedCompanies?: number;
+    /**
+     * Sums of `DiscoverySourceAudit.networkAttempts`/`.retries` across every discovery source this
+     * run made (issue #279) -- `discoveryRetries` is always `<= discoveryNetworkAttempts -
+     * discoveryRequests` and is zero whenever no source needed a bounded retry. Optional for the
+     * same reason `sponsorMatchEligibleRows` above is: a report persisted by an engine version from
+     * before issue #279 carries none of these three fields. Every run of this engine writes all
+     * three together.
+     */
+    discoveryNetworkAttempts?: number;
+    discoveryRetries?: number;
+    /**
+     * Total vacancy rows emitted across every `ScanProgressEvent` this run fired (issue #252's
+     * streaming rows), before final dedup/confirmation -- a purely additive count of what a
+     * listener was shown provisionally, never deduplicated against `discoveryUniqueListings` and
+     * never itself added into it. The two counts can overlap (the same row is normally shown
+     * provisionally and then also appears in the final `discoveryAudit`) without either counter
+     * double-counting that row, because each is computed independently: this one by summing what
+     * `onProgress` was called with as it happened, `discoveryUniqueListings` by deduplicating the
+     * final merged result once, after every source finished. Zero on every run with no `onProgress`
+     * listener attached (`officialOnly`/`offlineReclassify` reruns included, since those make no
+     * new discovery requests either).
+     */
+    discoveryProgressiveRowsEmitted?: number;
   };
   sourceRegistry: SourceRegistryEntry[];
   discoverySources: DiscoverySourceAudit[];

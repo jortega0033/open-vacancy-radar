@@ -4,6 +4,11 @@ import { discoverAiDevJobs } from './ai-dev-jobs-discovery.js';
 import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runAtsRosterDiscovery } from './ats-roster-discovery.js';
 import type { AtsRosterEntry } from '../companies/ats-roster-source.js';
+import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
 import { runFeedDiscovery } from './feed-discovery.js';
 import { writeGapTelemetryReport } from './gap-report.js';
 import { runJobtechDiscovery } from './jobtech-discovery.js';
@@ -11,9 +16,11 @@ import { runKeyedDiscovery } from './keyed-discovery.js';
 import { recordDiscoveryGapTelemetry } from './source-gap-telemetry.js';
 import { discoverTaiwanJobs } from './taiwan-jobs-discovery.js';
 import {
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   isoPostedAtFromUnixSeconds,
   locations,
@@ -43,10 +50,18 @@ export async function discoverHimalayas(
   // silently disable Himalayas forever.
   const queries = config.discovery.himalayasQueries.length > 0 ? config.discovery.himalayasQueries : [''];
   for (const query of queries) {
+    // One `NetworkAttemptCounters` per query, not per call to this function: each query is its own
+    // `DiscoverySourceAudit` row (`id` below is keyed by `query`), so attempts made walking one
+    // query's pages must never bleed into another query's row even though both run inside the same
+    // `for` loop over the same shared `http`.
+    const counters = newNetworkAttemptCounters();
+    const queryHttp = attributeNetworkRequests(http, counters);
     let requests = 0;
     let listings = 0;
     let status: DiscoverySourceAudit['status'] = 'success';
     let errorMessage: string | null = null;
+    let complete = true;
+    let continuationCursor: string | null = null;
     let lastUrl = 'https://himalayas.app/jobs/api/search';
     try {
       for (let page = 1; page <= config.discovery.himalayasMaxPagesPerQuery; page += 1) {
@@ -58,7 +73,7 @@ export async function discoverHimalayas(
         url.searchParams.set('sort', 'salaryDesc');
         url.searchParams.set('page', String(page));
         lastUrl = url.toString();
-        const root = parsedRoot(await http.get(lastUrl), 'himalayas');
+        const root = parsedRoot(await queryHttp.get(lastUrl), 'himalayas');
         requests += 1;
         if (!Array.isArray(root.jobs)) throw new AtsResponseError('himalayas', 'jobs is not an array');
         for (const raw of root.jobs) {
@@ -91,12 +106,19 @@ export async function discoverHimalayas(
         }
         const total = numberValue(root.totalCount);
         if (root.jobs.length === 0 || (total !== null && page * 20 >= total)) break;
-        if (page === config.discovery.himalayasMaxPagesPerQuery) status = 'partial';
+        if (page === config.discovery.himalayasMaxPagesPerQuery) {
+          status = 'partial';
+          complete = false;
+          continuationCursor = String(page + 1);
+          errorMessage = `Stopped at the configured ${config.discovery.himalayasMaxPagesPerQuery}-page limit for this query.`;
+        }
       }
     } catch (error) {
       const failure = sourceFailure(error);
       status = requests > 0 ? 'partial' : failure.status;
       errorMessage = failure.error;
+      complete = false;
+      continuationCursor = null;
     }
     sources.push({
       id: `himalayas:${query || 'all-jobs'}`,
@@ -106,6 +128,8 @@ export async function discoverHimalayas(
       listings,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     });
   }
   return { sources, vacancies };
@@ -115,6 +139,8 @@ export async function discoverJobicy(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const tagParam = config.discovery.roleQuery ? `&tag=${encodeURIComponent(config.discovery.roleQuery)}` : '';
   const url = `https://jobicy.com/api/v2/remote-jobs?count=${config.discovery.jobicyCount}${tagParam}`;
   try {
@@ -145,12 +171,30 @@ export async function discoverJobicy(
       })];
     });
     return {
-      sources: [{ id: 'jobicy:frontend', provider: 'jobicy', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'jobicy:frontend',
+        provider: 'jobicy',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'jobicy:frontend', provider: 'jobicy', url, requests: 0, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'jobicy:frontend',
+        provider: 'jobicy',
+        url,
+        requests: 0,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }

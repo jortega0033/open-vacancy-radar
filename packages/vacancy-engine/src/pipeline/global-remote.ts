@@ -21,6 +21,7 @@ import type { Database } from '../db/client.js';
 import { assessWorkEligibility } from '../eligibility/evidence.js';
 import { candidateWorkLanguages } from '../eligibility/language.js';
 import { normalizeCountry } from '../geo/countries.js';
+import { recordAttributedNetworkAttempt } from '../global-remote/discovery-attribution.js';
 import { runGlobalRemoteDiscovery } from '../global-remote/discovery.js';
 import { evaluateOfficialReview, mandatoryLanguageGate } from '../global-remote/evaluation.js';
 import {
@@ -612,6 +613,36 @@ function groupOfficial(
   };
 }
 
+/**
+ * Wraps a caller's `onProgress`, if any, purely to tally how many vacancy rows a run showed
+ * provisionally via `ScanProgressEvent` (issue #252) before final confirmation -- issue #279's
+ * "distinguish fetched/confirmed coverage from provisional progressive rows" acceptance check.
+ * Extracted from `runGlobalRemoteScan` so the counting behaviour is unit-testable on its own,
+ * without standing up a full scan (database, HTTP client, config files, ...).
+ *
+ * Never changes which events fire, what they carry, or in what order -- every existing progress
+ * consumer sees exactly what it always did; `count()` is purely additive bookkeeping alongside it.
+ * This count is never subtracted from, deduplicated against, or fed into
+ * `GlobalRemoteReport.statistics.discoveryUniqueListings`: that count is computed independently by
+ * `uniqueDiscovery()` over the final merged result, once, after every source has finished, so the
+ * same row appearing in both a progress event and the final result is counted by each place at
+ * most once for what that place measures -- never doubled.
+ */
+export function trackProgressiveRows(onProgress: ScanProgressCallback | undefined): {
+  onProgress: ScanProgressCallback | undefined;
+  count: () => number;
+} {
+  if (!onProgress) return { onProgress: undefined, count: () => 0 };
+  let total = 0;
+  return {
+    onProgress: (event) => {
+      total += event.vacancies.length;
+      onProgress(event);
+    },
+    count: () => total,
+  };
+}
+
 export type GlobalRemoteScanResult = {
   report: GlobalRemoteReport;
   files: GlobalRemoteReportFiles;
@@ -652,7 +683,20 @@ async function loadPreviousDiscovery(projectRoot: string): Promise<{
     throw new Error('Previous global remote report does not contain reusable discovery audit data');
   }
   return {
-    sources: parsed.discoverySources.map((source) => ({ ...source, requests: 0 })),
+    // No new request was made for a reused source, so its whole attempt/completeness picture is
+    // reset to "nothing happened this run" rather than replayed from the prior report -- the same
+    // reason `requests: 0` was already forced here before issue #279. A prior report written before
+    // these fields existed would otherwise carry `undefined` for all of them; this override also
+    // covers that case for free.
+    sources: parsed.discoverySources.map((source) => ({
+      ...source,
+      requests: 0,
+      networkAttempts: 0,
+      retries: 0,
+      complete: false,
+      completenessReason: 'Discovery API data was reused from the prior report; no new request was made.',
+      continuationCursor: null,
+    })),
     vacancies: parsed.discoveryAudit,
   };
 }
@@ -748,8 +792,12 @@ export async function runGlobalRemoteScan(
   const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
     maxStreamTimeoutMs: WORKABLE_GLOBAL_TIMEOUT_MS,
     maxStreamResponseBytes: WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
-    onNetworkRequest(url) {
-      logger.debug({ url }, 'Global remote scan HTTP request');
+    onNetworkRequest(url, meta) {
+      logger.debug({ url, retryIndex: meta.retryIndex }, 'Global remote scan HTTP request');
+      // Attributes this attempt to whichever source's wrapped client (`discovery-attribution.ts`)
+      // made the call, if any -- a no-op for callers that made this request outside such a wrapper
+      // (the worldwide sponsor-match enrichment below, which has no `DiscoverySourceAudit` row).
+      recordAttributedNetworkAttempt(meta.retryIndex);
     },
     onCacheError(error, operation, url) {
       logger.warn({ error, operation, url }, 'Global remote scan cache operation failed');
@@ -773,17 +821,19 @@ export async function runGlobalRemoteScan(
   // languages while it is running, not once every row already has a decision (issue #280).
   const candidateProfile = await loadCandidateProfile(candidateProfilePathFor(projectRoot));
   const candidateLanguages = candidateWorkLanguages(candidateProfile);
+  const progressiveRowTracker = trackProgressiveRows(options.onProgress);
+  const trackedOnProgress = progressiveRowTracker.onProgress;
   const [baseDiscovery, official, workableGlobal] = await Promise.all([
     reuseDiscovery
       ? loadPreviousDiscovery(projectRoot)
-      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, options.onProgress),
+      : runGlobalRemoteDiscovery(http, profile, atsRoster, projectRoot, trackedOnProgress),
     options.offlineReclassify
       ? loadPreviousOfficial(projectRoot, profile, candidateLanguages)
       : runOfficialGlobalRemoteSources(http, profile, candidateLanguages),
     reuseDiscovery
       ? Promise.resolve(null)
       : runWorkableGlobalDiscovery(safeClient, profile, projectRoot).then((result) => {
-          options.onProgress?.({ sourceId: 'workable_global', vacancies: result.vacancies });
+          trackedOnProgress?.({ sourceId: 'workable_global', vacancies: result.vacancies });
           return result;
         }),
   ]);
@@ -869,6 +919,9 @@ export async function runGlobalRemoteScan(
         sponsorMatched.statistics.cachedCompanies + sponsorMatched.statistics.lookedUpCompanies,
       sponsorMatchLookedUpCompanies: sponsorMatched.statistics.lookedUpCompanies,
       sponsorMatchUnverifiedCompanies: sponsorMatched.statistics.unverifiedCompanies,
+      discoveryNetworkAttempts: discovery.sources.reduce((sum, source) => sum + source.networkAttempts, 0),
+      discoveryRetries: discovery.sources.reduce((sum, source) => sum + source.retries, 0),
+      discoveryProgressiveRowsEmitted: progressiveRowTracker.count(),
     },
     sourceRegistry,
     discoverySources: discovery.sources,
