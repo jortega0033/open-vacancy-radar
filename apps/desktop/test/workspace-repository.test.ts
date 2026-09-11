@@ -512,6 +512,103 @@ describe('application artifacts (#198)', () => {
   });
 });
 
+describe('application submission receipts (#271)', () => {
+  const DESTINATION = 'https://fixture.example.invalid/apply';
+
+  it('records an observed submission with its attempt, destination, timestamp and evidence reference', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const receipt = workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      source: 'page_observation',
+      destination: DESTINATION,
+      evidenceKind: 'confirmation_page',
+      evidenceReference: 'Your application has been submitted',
+      detail: 'the page replaced the form with a confirmation',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+
+    expect(receipt).toMatchObject({
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      destination: DESTINATION,
+      evidenceReference: 'Your application has been submitted',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+    expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toEqual([receipt]);
+  });
+
+  it('refuses a "submitted" receipt with no evidence behind it -- the whole point of the table', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'page_observation',
+        evidenceKind: 'none',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'page_observation',
+        evidenceKind: 'confirmation_page',
+        evidenceReference: '   ',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+    expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toEqual([]);
+  });
+
+  it('never lets a person\'s own statement be recorded as an observed outcome', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'user_reported',
+        evidenceKind: 'user_statement',
+        evidenceReference: 'I applied myself',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+  });
+
+  it('keeps an unresolved observation and a later reconciliation as two rows, oldest first', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'unknown',
+      source: 'page_observation',
+      destination: DESTINATION,
+      evidenceKind: 'none',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      source: 'delayed_receipt',
+      destination: DESTINATION,
+      evidenceKind: 'delivery_receipt',
+      evidenceReference: 'confirmationNumber: FIXTURE-9001',
+      observedAt: '2026-09-12T08:00:00.000Z',
+    });
+
+    const timeline = workspace.listApplicationSubmissionReceipts(db, attempt.id);
+    expect(timeline.map((r) => r.outcome)).toEqual(['unknown', 'submitted']);
+  });
+
+  it('refuses a receipt for an attempt that does not exist', () => {
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: 'nope',
+        outcome: 'unknown',
+        source: 'page_observation',
+        evidenceKind: 'none',
+      }),
+    ).toThrow(WorkspaceNotFoundError);
+  });
+});
+
 describe('persistence across connections', () => {
   it('reopens the same database file and finds the data still there', () => {
     workspace.createSavedJob(db, JOB);

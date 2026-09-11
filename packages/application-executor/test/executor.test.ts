@@ -687,6 +687,223 @@ describe('ApplicationExecutor: submit', () => {
   });
 });
 
+describe('ApplicationExecutor: observeSubmissionOutcome (#271)', () => {
+  const BOX = { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
+
+  function textNode(value: string) {
+    return { nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: value };
+  }
+
+  /** The fixture form, plus whatever the page turns into after the click. Nothing here reaches a
+   * network at all: the "page" is two hand-built CDP trees and a swap on the click. */
+  function submitFixture(afterClickTree: unknown) {
+    let clicked = false;
+    const calls: string[] = [];
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        calls.push(method);
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') return clicked ? afterClickTree : NAME_INPUT_TREE;
+        return {};
+      },
+    };
+    return { transport, calls };
+  }
+
+  const REQUIRED_ERROR_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'DIV', nodeType: 1, backendNodeId: 8, attributes: ['class', 'field-error'], children: [textNode('Full name is required')] },
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName', 'aria-invalid', 'true'] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 7, children: [textNode('Submit Application')] },
+      ],
+    },
+  };
+
+  const CONFIRMATION_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'H1', nodeType: 1, backendNodeId: 2, children: [textNode('Your application has been submitted')] },
+        { nodeName: 'P', nodeType: 1, backendNodeId: 3, children: [textNode('Application reference: FIXTURE-2026-000123')] },
+      ],
+    },
+  };
+
+  it('acceptance 1: a click whose handler returns but leaves a required-field error is never submitted', async () => {
+    const { transport } = submitFixture(REQUIRED_ERROR_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef); // resolves perfectly normally
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report.outcome).toBe('rejected');
+    expect(report).toMatchObject({ reason: 'form_validation_error' });
+  });
+
+  it('acceptance 2: a confirmation page that replaced the form records submitted with a real evidence reference', async () => {
+    const { transport } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report.outcome).toBe('submitted');
+    expect(report.outcome === 'submitted' && report.evidence.kind).toBe('confirmation_page');
+    expect(report.observedAt).toEqual(expect.any(String));
+  });
+
+  it('waits for a confirmation that only appears a few polls after the click, rather than deciding on the first read', async () => {
+    let clicked = false;
+    let readsAfterClick = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') {
+          if (!clicked) return NAME_INPUT_TREE;
+          readsAfterClick += 1;
+          // The form is gone immediately, but the confirmation text lands three reads later.
+          return readsAfterClick < 3
+            ? { root: { nodeName: 'BODY', nodeType: 1, backendNodeId: 1, children: [] } }
+            : CONFIRMATION_TREE;
+        }
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 5_000, pollIntervalMs: 1 });
+
+    expect(report.outcome).toBe('submitted');
+    expect(readsAfterClick).toBe(3);
+  });
+
+  it('acceptance 3: a page that can no longer be read after the click reports unknown (navigation lost), never submitted', async () => {
+    let clicked = false;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') {
+          if (clicked) throw new Error('the renderer went away');
+          return NAME_INPUT_TREE;
+        }
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report).toMatchObject({ outcome: 'unknown', reason: 'navigation_lost' });
+    expect(report.detail).toContain('the renderer went away');
+  });
+
+  it('acceptance 3: a form still standing with nothing conclusive times out into unknown, under a real bounded budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, calls } = submitFixture(NAME_INPUT_TREE); // unchanged page: the click did nothing visible
+      const executor = new ApplicationExecutor(transport, fullPolicy());
+      const snapshot = await executor.snapshot();
+      await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+      const pending = executor.observeSubmissionOutcome();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const report = await pending;
+
+      expect(report).toMatchObject({ outcome: 'unknown', reason: 'observation_timeout' });
+      // Bounded, and emphatically never a second click: retrying a submit is the exact thing an
+      // unknown outcome exists to prevent.
+      expect(calls.filter((method) => method === 'Input.dispatchMouseEvent')).toHaveLength(2); // the one press/release from submit()
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('acceptance 5: an HTTP success carrying an application-error payload is not accepted as delivery, even on a confirmation page', async () => {
+    const { transport } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({
+      timeoutMs: 1_000,
+      pollIntervalMs: 10,
+      response: { status: 200, body: JSON.stringify({ errors: [{ field: 'workAuthorization', message: 'unanswered' }] }) },
+    });
+
+    expect(report).toMatchObject({ outcome: 'rejected', reason: 'application_error_payload' });
+  });
+
+  it('never claims a confirmation the page was already showing before the click', async () => {
+    // The same tree before and after: a posting whose own copy reads "thank you for applying".
+    const BOILERPLATE_TREE = {
+      root: {
+        nodeName: 'BODY',
+        nodeType: 1,
+        backendNodeId: 1,
+        children: [
+          { nodeName: 'P', nodeType: 1, backendNodeId: 2, children: [textNode('Thank you for applying to Fixture Employer.')] },
+          { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 7, children: [textNode('Submit Application')] },
+        ],
+      },
+    };
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'DOM.getDocument') return BOILERPLATE_TREE;
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 30, pollIntervalMs: 10 });
+    expect(report.outcome).toBe('unknown');
+  });
+
+  it('refuses to report on an executor that never clicked submit at all', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    await executor.snapshot();
+    await expect(executor.observeSubmissionOutcome()).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('only ever sends allowlisted CDP methods while observing', async () => {
+    const { transport, calls } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+    await executor.observeSubmissionOutcome({ timeoutMs: 100, pollIntervalMs: 10 });
+
+    const { isAllowedCdpMethod } = await import('../src/cdp-allowlist.js');
+    for (const method of calls) expect(isAllowedCdpMethod(method), method).toBe(true);
+  });
+});
+
 describe('ApplicationExecutor: capture and handoff', () => {
   it('captures a screenshot via Page.captureScreenshot', async () => {
     const { transport } = fakeTransport({ 'Page.captureScreenshot': { data: 'base64data' } });

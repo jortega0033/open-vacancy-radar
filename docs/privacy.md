@@ -33,6 +33,15 @@ Everything the app stores lives in Electron's per-user application-data director
   causes an application to be sent — as of this stage of the feature, nothing reads a browser,
   fills a form, or submits anything at all; see the auto-apply tracking issues for what each
   later stage adds and when.
+- **Submission receipts** (`workspace.db`, `application_submission_receipts` table — #271): one
+  row per observation of what actually happened after a submit action, so a claim that an
+  application was delivered can be checked afterwards rather than taken on trust. Each row holds
+  the attempt it belongs to, the URL it was submitted to, when the observation happened, and a
+  short excerpt of the evidence itself — a matched confirmation sentence, a receipt reference the
+  employer's page printed, or your own note if you told the app you completed the application by
+  hand. The excerpt is bounded in size and is third-party page text: the app displays it and never
+  acts on it. Rows are added, never rewritten, so a later reconciliation is visible as a second
+  record rather than as a silently changed first one.
 - **`application-artifacts/`** (#199): the actual generated PDF files the record above tracks —
   a tailored CV and/or cover letter, rendered locally through the app's own default template.
   Rendering never opens a Save dialog for this unattended path (the existing manual "Copy to
@@ -157,7 +166,9 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   that directory, or (for one attempt's files) by the app's own artifact-deletion path. Generated
   artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
   row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
-  runs, rather than silently ignored.
+  runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they
+  are bounded per attempt by a fixed count quota, are never pruned on their own, and are deleted
+  with the attempt (`on delete cascade`).
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.
