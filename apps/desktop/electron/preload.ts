@@ -29,7 +29,9 @@ import type {
   ApplicationQueueStatus,
 } from './application-queue-types.js';
 import type {
+  ApplicationAttachmentResult,
   ApplicationExecutorBridge,
+  ApplicationManualHandoff,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewResult,
   RequestAutomationGrantResult,
@@ -1146,6 +1148,37 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   return { snapshot: { generation, fields, submitControls, capturedAt, challengeDetected }, screenshotBase64 };
 }
 
+/** Rebuilt field by field, like every other converter here: only the four metadata strings an
+ * attachment result is defined to carry cross this bridge, so a future main-process change that
+ * added a path-shaped field to that object could not leak it into the renderer by accident. */
+function toApplicationAttachments(value: unknown): ApplicationAttachmentResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.flatMap((entry) => {
+    const source = asRecord(entry);
+    if (!source) return [];
+    return [
+      {
+        artifactId: requiredString(source, 'artifactId'),
+        fieldRef: requiredString(source, 'fieldRef'),
+        fileName: requiredString(source, 'fileName'),
+        attachedFileName: requiredString(source, 'attachedFileName'),
+      },
+    ];
+  });
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function toApplicationManualHandoff(value: unknown): ApplicationManualHandoff | undefined {
+  const source = asRecord(value);
+  if (!source) return undefined;
+  return {
+    fieldRef: requiredString(source, 'fieldRef'),
+    artifactId: requiredString(source, 'artifactId'),
+    fileName: requiredString(source, 'fileName'),
+    reason: requiredString(source, 'reason', 'unsupported_control') as ApplicationManualHandoff['reason'],
+  };
+}
+
 function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
   const source = asRecord(value);
   const ok = source?.ok;
@@ -1155,11 +1188,15 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   const reason = source ? optionalString(source, 'reason') : undefined;
   const detail = source ? optionalString(source, 'detail') : undefined;
   const appliedCount = source?.appliedCount;
+  const attachments = source ? toApplicationAttachments(source.attachments) : undefined;
+  const manualHandoff = source ? toApplicationManualHandoff(source.manualHandoff) : undefined;
   return {
     ok,
     ...(reason ? { reason: reason as NonNullable<ApplyApplicationFieldMapResult['reason']> } : {}),
     ...(detail ? { detail } : {}),
     ...(typeof appliedCount === 'number' ? { appliedCount } : {}),
+    ...(attachments ? { attachments } : {}),
+    ...(manualHandoff ? { manualHandoff } : {}),
   };
 }
 

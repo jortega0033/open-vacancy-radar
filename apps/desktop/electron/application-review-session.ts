@@ -1,5 +1,17 @@
 import { createHash } from 'node:crypto';
-import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
+import { basename } from 'node:path';
+import type { BrowserWindow } from 'electron';
+import {
+  ApplicationExecutor,
+  ExecutorPolicyError,
+  isActionAllowed,
+  isNavigationAllowed,
+  resolveSubmitControl,
+  validateFieldMap,
+  type ApplicationTargetPolicy,
+  type FormSnapshot,
+} from '@agent-dock/application-executor';
+import { listOwnedArtifactIds, resolveUploadArtifact, type UploadReadyArtifact } from './application-artifact-upload.js';
 import { createApplicationView, type ApplicationView } from './application-view.js';
 import { AcceptedBytesChangedError, readAcceptedArtifactBytes } from './document-readiness.js';
 import { resolveApplicationTargetPolicy, resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
@@ -17,6 +29,7 @@ import { WorkspaceNotFoundError } from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import type { ApplicationAttemptRecord } from './workspace/types.js';
 import type {
+  ApplicationAttachmentResult,
   ApplyApplicationFieldMapInput,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewInput,
@@ -25,8 +38,8 @@ import type {
 
 /**
  * The main-process orchestration behind `window.applicationExecutor` (issue #201): owns the
- * per-attempt `{ view, executor }` registry so `main.ts`'s IPC handlers stay thin, and so this
- * module is reachable directly (no IPC) from a Node test.
+ * per-attempt `{ view, executor, policy }` registry so `main.ts`'s IPC handlers stay thin, and so
+ * this module is reachable directly (no IPC) from a Node test.
  *
  * Deliberately Electron-adjacent, not Electron-free like `packages/application-executor` itself:
  * `createApplicationView` is real Electron. Kept in its own module rather than inlined into
@@ -38,6 +51,11 @@ import type {
 interface ActiveReview {
   view: ApplicationView;
   executor: ApplicationExecutor;
+  /** The same compiled policy the executor was constructed with. Kept here too so the artifact
+   * resolution in `applyApplicationFieldMap` can check a candidate upload against this target's own
+   * constraints *before* calling `attach`, without re-resolving a policy id and risking the two
+   * halves disagreeing about which policy this review is running under. */
+  policy: ApplicationTargetPolicy;
 }
 
 const activeReviews = new Map<string, ActiveReview>();
@@ -65,7 +83,7 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     (url) => console.warn('[application-executor] blocked an off-policy navigation', { attemptId: input.attemptId, policyId: policy.id, url }),
   );
   const executor = new ApplicationExecutor(view.transport, policy);
-  activeReviews.set(input.attemptId, { view, executor });
+  activeReviews.set(input.attemptId, { view, executor, policy });
 
   try {
     await executor.openTarget(input.targetUrl);
@@ -81,7 +99,48 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
   }
 }
 
-export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult> {
+/** How much of a page-reported file name is ever echoed back to the renderer. The string comes off
+ * the target page, so it is third-party text however plausible it looks -- bounded here for the
+ * same reason `maximumSnapshotBytes` bounds a snapshot. */
+const MAX_REPORTED_ATTACHMENT_NAME_LENGTH = 200;
+
+interface PlannedAttachment {
+  fieldRef: string;
+  file: UploadReadyArtifact;
+}
+
+/**
+ * Validates `fieldMap` and applies it (#196 §2.4, #201), now including its `artifact` (file-upload)
+ * assignments (#273).
+ *
+ * The artifact half runs in three deliberate phases rather than one pass:
+ *
+ * 1. **Resolve, before anything is applied.** Every `artifact` assignment is resolved against this
+ *    attempt's own registered artifacts and re-verified (`application-artifact-upload.ts`) --
+ *    ownership, staging location, the target's upload constraints, and a full re-hash of the bytes
+ *    currently on disk. Any failure refuses the whole call here, with nothing typed into the page
+ *    and nothing uploaded. That ordering is the point: a wrong-attempt, changed, missing, oversized
+ *    or wrong-type file must be refused *before* upload, not discovered halfway through one.
+ * 2. **Fill and select**, exactly as before.
+ * 3. **Attach, then read the control back.** `attach` is followed by
+ *    `readBackAttachment(fieldRef)`, and the call only succeeds if the browser itself reports the
+ *    staged file on that control. Nothing here is fire-and-forget: an attachment that cannot be
+ *    confirmed refuses with `attachment_unconfirmed` rather than being reported as applied.
+ *
+ * A retry is safe and is never ambient: phase 1 resolves the artifact id to the one path recorded
+ * for it under this attempt's own staging folder, and `DOM.setFileInputFiles` *replaces* a file
+ * input's selection rather than appending to it, so running this twice sets exactly the same
+ * intended file both times. No part of this path opens a native file picker, reads a directory, or
+ * looks at anything outside that one registered path.
+ *
+ * `db` is a parameter rather than something this module resolves for itself, the same shape
+ * `submitApplicationReview` already has: it keeps this function directly callable from a test
+ * against an in-memory workspace, and keeps the "who owns the database handle" answer in `main.ts`.
+ */
+export async function applyApplicationFieldMap(
+  db: WorkspaceDb,
+  input: ApplyApplicationFieldMapInput,
+): Promise<ApplyApplicationFieldMapResult> {
   const active = activeReviews.get(input.attemptId);
   if (!active) {
     throw new Error(`no open review for attempt ${input.attemptId}`);
@@ -96,11 +155,11 @@ export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapIn
     attemptId: input.attemptId,
     snapshot,
     valueTable: input.valueTable,
-    // Always empty: see this module's own doc comment and `ApplicationExecutorBridge.applyFieldMap`'s
-    // -- artifact ownership resolution (#198) is not wired into this slice, so any `artifact`
-    // assignment fails `validateFieldMap`'s rule 5 (`artifact_not_owned`) by construction, refusing
-    // the whole map rather than silently dropping one field.
-    ownedArtifactIds: [],
+    // #198's real artifact records, scoped in SQL to this exact attempt -- see
+    // `listOwnedArtifactIds`. This was a hardcoded empty array until #273, which made
+    // `validateFieldMap`'s rule 5 refuse every artifact assignment by construction, including an
+    // attempt's own CV.
+    ownedArtifactIds: listOwnedArtifactIds(db, input.attemptId),
     allowJdProvenance: input.allowJdProvenance,
   });
 
@@ -108,6 +167,31 @@ export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapIn
     return { ok: false, reason: result.reason, detail: result.detail };
   }
 
+  // Phase 1: resolve and verify every attachment before a single field is touched.
+  const planned: PlannedAttachment[] = [];
+  for (const assignment of result.fieldMap.assignments) {
+    if (assignment.source.kind !== 'artifact') continue;
+    const { artifactId } = assignment.source;
+    const resolved = await resolveUploadArtifact(db, input.attemptId, artifactId, active.policy);
+    if (!resolved.ok || !resolved.file) {
+      return { ok: false, reason: resolved.reason, detail: resolved.detail };
+    }
+    // The one refusal that is a handoff rather than an error: this target forbids uploads outright
+    // (a compiled kill switch, or a policy that never listed `attach`), so the file is the user's
+    // to add by hand on the page itself. Checked after the artifact resolved so the handoff can
+    // actually name the document the user should pick.
+    if (!isActionAllowed(active.policy, 'attach')) {
+      return {
+        ok: false,
+        reason: 'attachment_requires_manual_handoff',
+        detail: `target policy "${active.policy.id}" does not permit automated uploads`,
+        manualHandoff: { fieldRef: assignment.fieldRef, artifactId, fileName: resolved.file.fileName, reason: 'unsupported_control' },
+      };
+    }
+    planned.push({ fieldRef: assignment.fieldRef, file: resolved.file });
+  }
+
+  // Phase 2: the value/option assignments, unchanged.
   const valueByRef = new Map(input.valueTable.map((entry) => [entry.valueRef, entry.value]));
   let appliedCount = 0;
   for (const assignment of result.fieldMap.assignments) {
@@ -120,10 +204,69 @@ export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapIn
       await active.executor.select(assignment.fieldRef, assignment.source.optionRef);
       appliedCount += 1;
     }
-    // 'artifact' is unreachable here (see above); 'skip' assigns nothing by definition.
+    // 'artifact' is phase 3 below; 'skip' assigns nothing by definition.
   }
 
-  return { ok: true, appliedCount };
+  // Phase 3: attach, then confirm off the control itself.
+  const attachments: ApplicationAttachmentResult[] = [];
+  for (const { fieldRef, file } of planned) {
+    try {
+      await active.executor.attach(fieldRef, file);
+    } catch (err) {
+      if (err instanceof ExecutorPolicyError) {
+        // The executor refused this control (not a file input, or a policy check of its own).
+        // Nothing reached the page, and there is no second way to drive an upload control that
+        // should be tried instead -- hand it to the user, visibly.
+        return {
+          ok: false,
+          reason: 'attachment_requires_manual_handoff',
+          detail: err.message,
+          manualHandoff: { fieldRef, artifactId: file.artifactId, fileName: file.fileName, reason: 'unsupported_control' },
+        };
+      }
+      throw err;
+    }
+
+    const reported = await active.executor.readBackAttachment(fieldRef);
+    // The browser names a file input's selection by the staged file's own on-disk name
+    // (`<contentHash>-<fileName>`, per `stagedArtifactPath`), so that -- not the artifact's logical
+    // file name -- is what a confirmed read-back must contain. An empty control reports its "no
+    // file chosen" placeholder instead, and an unrecognized report is treated the same way: a
+    // concrete failure, never an assumed success.
+    const expected = basename(file.localFilePath);
+    if (reported === null || !reported.includes(expected)) {
+      return {
+        ok: false,
+        reason: 'attachment_unconfirmed',
+        detail: `the page did not report artifact ${file.artifactId} on field ${fieldRef} after the upload`,
+      };
+    }
+    attachments.push({
+      artifactId: file.artifactId,
+      fieldRef,
+      fileName: file.fileName,
+      attachedFileName: reported.slice(0, MAX_REPORTED_ATTACHMENT_NAME_LENGTH),
+    });
+    appliedCount += 1;
+  }
+
+  return { ok: true, appliedCount, ...(attachments.length > 0 ? { attachments } : {}) };
+}
+
+/**
+ * Surfaces an open review's real page to the user, so an upload control this executor may not drive
+ * ends in something the user can actually see and finish by hand -- #273's "unsupported upload
+ * controls preserve a visible manual handoff". Returns `false` when there is no open review for
+ * `attemptId`, so a caller can tell "shown" from "nothing to show" rather than assuming.
+ *
+ * Called by `main.ts` when `applyApplicationFieldMap` comes back with a `manualHandoff`; the view
+ * is detached again by `closeApplicationReview`, which destroys it.
+ */
+export function showApplicationReviewForHandoff(attemptId: string, window: BrowserWindow): boolean {
+  const active = activeReviews.get(attemptId);
+  if (!active) return false;
+  active.view.show(window);
+  return true;
 }
 
 export type SubmitApplicationReviewRefusalReason =

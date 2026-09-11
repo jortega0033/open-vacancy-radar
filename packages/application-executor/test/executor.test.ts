@@ -546,6 +546,97 @@ describe('ApplicationExecutor: attach', () => {
     await executor.attach(fileField.fieldRef, { localFilePath: '/staged/exact.pdf', mimeType: 'application/pdf', byteSize: 500 });
     expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles' });
   });
+
+  it('replaces, never accumulates, a file input\'s selection when the same field is attached twice', async () => {
+    // The property #273's retry case rests on: `DOM.setFileInputFiles` always carries the full
+    // intended selection, so a second attach cannot leave the first file behind alongside it.
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+
+    const uploads = calls.filter((call) => call.method === 'DOM.setFileInputFiles');
+    expect(uploads).toHaveLength(2);
+    for (const upload of uploads) expect(upload.params).toMatchObject({ files: ['/staged/resume.pdf'], backendNodeId: 6 });
+  });
+});
+
+describe('ApplicationExecutor: readBackAttachment', () => {
+  /** One `Accessibility.getFullAXTree` response naming the fixture tree's file input (backend node
+   * 6) -- what a real browser reports once a file is actually selected on that control. */
+  function axTree(reported: unknown, backendDOMNodeId = 6) {
+    return { nodes: [{ backendDOMNodeId, value: { type: 'string', value: reported } }] };
+  }
+
+  it('returns what the browser reports on that exact control, matched by backend node id', async () => {
+    const { transport, calls } = fakeTransport({
+      'DOM.getDocument': NAME_INPUT_TREE,
+      'Accessibility.getFullAXTree': {
+        nodes: [
+          { backendDOMNodeId: 2, value: { type: 'string', value: 'a totally different control' } },
+          { backendDOMNodeId: 6, value: { type: 'string', value: 'abc123-resume.pdf' } },
+        ],
+      },
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+
+    expect(await executor.readBackAttachment(fileField.fieldRef)).toBe('abc123-resume.pdf');
+    expect(calls.at(-1)?.method).toBe('Accessibility.getFullAXTree');
+  });
+
+  it('reports an empty control as exactly what the page said, never as a confirmed attachment', async () => {
+    const { transport } = fakeTransport({
+      'DOM.getDocument': NAME_INPUT_TREE,
+      'Accessibility.getFullAXTree': axTree('No file chosen'),
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    expect(await executor.readBackAttachment(fileField.fieldRef)).toBe('No file chosen');
+  });
+
+  it('returns null when the control is absent from the tree, or reports a non-string value', async () => {
+    const absent = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE, 'Accessibility.getFullAXTree': { nodes: [] } });
+    const absentExecutor = new ApplicationExecutor(absent.transport, fullPolicy());
+    const absentField = (await absentExecutor.snapshot()).fields.find((f) => f.controlType === 'file')!;
+    expect(await absentExecutor.readBackAttachment(absentField.fieldRef)).toBeNull();
+
+    const nonString = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE, 'Accessibility.getFullAXTree': axTree(42) });
+    const nonStringExecutor = new ApplicationExecutor(nonString.transport, fullPolicy());
+    const nonStringField = (await nonStringExecutor.snapshot()).fields.find((f) => f.controlType === 'file')!;
+    expect(await nonStringExecutor.readBackAttachment(nonStringField.fieldRef)).toBeNull();
+  });
+
+  it('refuses a non-file field and an unknown fieldRef, never reaching the transport', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const textField = snapshot.fields.find((f) => f.controlType === 'text')!;
+    const before = calls.length;
+
+    await expect(executor.readBackAttachment(textField.fieldRef)).rejects.toThrow(ExecutorPolicyError);
+    await expect(executor.readBackAttachment('f0000000000000000')).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before);
+  });
+
+  it('refuses on a policy that does not permit uploads at all', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy({ killSwitches: { navigate: false, fill: false, upload: true, submit: false } }));
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+    const before = calls.length;
+
+    await expect(executor.readBackAttachment(fileField.fieldRef)).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before);
+  });
 });
 
 describe('ApplicationExecutor: submit', () => {
