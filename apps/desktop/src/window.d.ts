@@ -37,9 +37,9 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
-  /** `query` scopes each source's own server-side search parameter for this run; omitted or blank
-   * keeps the checked-in profile's static default. */
-  runScan(query?: string): Promise<GlobalRemoteReport>;
+  /** `query` scopes each source's own server-side search parameter for this run. Blank input is
+   * rejected before discovery starts, so a new worldwide scan always has an explicit role signal. */
+  runScan(query: string): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;

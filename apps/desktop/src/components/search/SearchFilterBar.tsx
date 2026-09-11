@@ -40,6 +40,8 @@ export function SearchFilterBar({
   busy,
   salaryNote,
 }: SearchFilterBarProps) {
+  const hasQuery = filters.query.trim().length > 0;
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter') onSearch();
   }
@@ -74,7 +76,7 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
+        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
           Search
         </button>
@@ -96,6 +98,12 @@ export function SearchFilterBar({
           </label>
         )}
       </div>
+
+      {!hasQuery && (
+        <p className="mt-2 text-xs text-base-content/60" role="status">
+          Enter a role or keyword to start a new scan. Existing reports remain available to browse and filter.
+        </p>
+      )}
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <select

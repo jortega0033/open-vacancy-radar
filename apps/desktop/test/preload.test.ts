@@ -198,12 +198,12 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(report).toBeNull();
   });
 
-  it('runScan invokes vacancy:run-scan with no query when called with none', async () => {
+  it('runScan forwards blank input to main so the scan guard can reject it before discovery', async () => {
     invoke.mockResolvedValue({ runId: 'run-1' });
     const api = await loadPreload('vacancyRadar');
-    await (api.runScan as () => Promise<unknown>)();
+    await (api.runScan as (query: string) => Promise<unknown>)('   ');
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', undefined);
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', '   ');
   });
 
   it('getScanStatus invokes only vacancy:get-scan-status, no arguments', async () => {
@@ -218,7 +218,7 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
   it('runScan forwards the query string to vacancy:run-scan unchanged', async () => {
     invoke.mockResolvedValue({ runId: 'run-1' });
     const api = await loadPreload('vacancyRadar');
-    await (api.runScan as (query?: string) => Promise<unknown>)('frontend engineer');
+    await (api.runScan as (query: string) => Promise<unknown>)('frontend engineer');
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
   });
 

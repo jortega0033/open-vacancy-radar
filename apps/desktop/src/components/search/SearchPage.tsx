@@ -190,6 +190,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const [loadError, setLoadError] = useState<string>();
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
+  const [scanGuard, setScanGuard] = useState<string>();
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -508,15 +509,25 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async () => {
+    const query = filters.query.trim();
+    if (!query) {
+      setScanning(false);
+      setScanError(undefined);
+      setScanGuard(
+        'Add a role or keyword before starting a new worldwide scan. Country, source, date and employment filters narrow the report already loaded here; they do not reduce the upstream network scan yet.',
+      );
+      return;
+    }
     setScanning(true);
     setScanError(undefined);
+    setScanGuard(undefined);
     setLoadError(undefined);
     // A fresh scan this page itself starts has no partial rows yet -- clear whatever an earlier
     // run (or an earlier mount's now-gone accumulation) left behind, so a rescan's own progress
     // events build a clean list rather than mixing in a previous run's provisional rows.
     setPartialVacancies([]);
     try {
-      setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
+      setWorldwideReport(await window.vacancyRadar.runScan(query));
       hasHydrated.current = true;
       setScanning(false);
       setPartialVacancies([]);
@@ -548,6 +559,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
   }, [filters, runScan]);
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
+    if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
     setFilters((current) => ({ ...current, ...patch }));
   }, []);
 
@@ -669,6 +681,23 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
             Scan failed: {scanError}
           </ErrorBanner>
         )}
+        {scanGuard && (
+          <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="alert">
+            <span>{scanGuard}</span>
+            {hasReport && (
+              <button
+                type="button"
+                className="btn btn-warning btn-sm"
+                onClick={() => {
+                  setAppliedFilters(filters);
+                  setScanGuard(undefined);
+                }}
+              >
+                Browse saved report
+              </button>
+            )}
+          </div>
+        )}
         {loadError && (
           <ErrorBanner
             className="mt-3"
@@ -706,7 +735,7 @@ export function SearchPage({ onGenerateLetter, onOpenSearchProfile }: SearchPage
           title="No search yet"
           description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
           action={
-            <button className="btn btn-primary btn-sm" type="button" onClick={() => void runScan()} disabled={busy}>
+            <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
               Run the first scan
             </button>
           }
