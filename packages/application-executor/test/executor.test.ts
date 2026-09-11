@@ -278,7 +278,11 @@ describe('ApplicationExecutor: snapshot', () => {
 });
 
 describe('ApplicationExecutor: fill', () => {
-  it('focuses the real backend node then inserts text, for a plain text field', async () => {
+  it('focuses the real backend node, replaces its whole contents, blurs to commit, then reads back', async () => {
+    // The sequence #277 made explicit. `Input.insertText` alone inserts at the caret, so the
+    // selectAll before it is what makes this a replace rather than an append; the Tab after it is
+    // what commits the value (a real `change` fires on blur); and the read-back is what turns
+    // "a command was sent" into "the control holds this".
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
@@ -286,9 +290,13 @@ describe('ApplicationExecutor: fill', () => {
 
     await executor.fill(nameField.fieldRef, 'Jamie Rivera');
 
-    const relevant = calls.slice(-2);
+    // focus, selectAll (down/up), insertText, Tab (down/up), read-back.
+    const relevant = calls.slice(-7);
     expect(relevant[0]).toMatchObject({ method: 'DOM.focus', params: { backendNodeId: 2 } });
-    expect(relevant[1]).toMatchObject({ method: 'Input.insertText', params: { text: 'Jamie Rivera' } });
+    expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { commands: ['selectAll'] } });
+    expect(relevant[3]).toMatchObject({ method: 'Input.insertText', params: { text: 'Jamie Rivera' } });
+    expect(relevant[4]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Tab', type: 'keyDown' } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 2 } });
   });
 
   it('clicks the checkbox at its real box-model center when the value is true', async () => {
@@ -307,7 +315,7 @@ describe('ApplicationExecutor: fill', () => {
     expect(mouseCalls[0]).toMatchObject({ params: { type: 'mousePressed', x: 20, y: 30 } });
   });
 
-  it('does nothing for a checkbox fill of "false" when it is already unchecked', async () => {
+  it('clicks nothing for a checkbox fill of "false" when it is already unchecked, but still reads it back', async () => {
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
@@ -315,10 +323,14 @@ describe('ApplicationExecutor: fill', () => {
     const before = calls.length;
 
     await executor.fill(checkbox.fieldRef, 'false');
-    expect(calls.length).toBe(before); // no new CDP calls at all
+
+    // No click: the box is already in the desired state. But the read-back still happens (#277) --
+    // "we decided not to touch it" is not evidence of what it holds, and a box the page had
+    // re-rendered between the snapshot and now would otherwise go unnoticed entirely.
+    expect(calls.slice(before).map((c) => c.method)).toEqual(['Accessibility.getPartialAXTree']);
   });
 
-  it('does nothing for a checkbox fill of "true" when it is already checked', async () => {
+  it('clicks nothing for a checkbox fill of "true" when it is already checked', async () => {
     const preCheckedTree = {
       root: {
         nodeName: 'BODY',
@@ -334,7 +346,8 @@ describe('ApplicationExecutor: fill', () => {
     const before = calls.length;
 
     await executor.fill(snapshot.fields[0]!.fieldRef, 'true');
-    expect(calls.length).toBe(before); // already in the desired state -- no click needed
+    // Already in the desired state, so no click -- only the read-back (#277).
+    expect(calls.slice(before).map((c) => c.method)).toEqual(['Accessibility.getPartialAXTree']);
   });
 
   it('clicks a pre-checked checkbox to uncheck it when the value is "false"', async () => {
@@ -419,10 +432,13 @@ describe('ApplicationExecutor: select', () => {
     // NAME_INPUT_TREE's select has exactly one option (index 0): focus, one normalizing ArrowUp
     // (options.length -- see select()'s own doc comment on why this always runs, even for index 0),
     // zero ArrowDown (index 0), then Enter.
-    const relevant = calls.slice(-3);
+    // ...followed by the blur that commits the selection and the read-back that verifies it (#277).
+    const relevant = calls.slice(-6);
     expect(relevant[0]).toMatchObject({ method: 'DOM.focus', params: { backendNodeId: 4 } });
     expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'ArrowUp' } });
     expect(relevant[2]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Enter' } });
+    expect(relevant[3]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Tab', type: 'keyDown' } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 4 } });
   });
 
   it('refuses an optionRef that is not on the given field', async () => {
@@ -452,7 +468,8 @@ describe('ApplicationExecutor: select', () => {
     const arrowDownCount = keyEvents.filter((k) => k === 'ArrowDown').length;
     expect(arrowUpCount).toBe(3); // options.length
     expect(arrowDownCount).toBe(2); // sponsorOption's index
-    expect(keyEvents.at(-1)).toBe('Enter');
+    // The drive itself still ends on Enter; the Tab pair after it is the commit blur (#277).
+    expect(keyEvents.filter((k) => k !== 'Tab').at(-1)).toBe('Enter');
     // Every ArrowUp precedes every ArrowDown, so the normalize pass always completes before the
     // real navigation starts -- an interleaved order would defeat the whole point of resetting first.
     expect(keyEvents.lastIndexOf('ArrowUp')).toBeLessThan(keyEvents.indexOf('ArrowDown'));
@@ -489,7 +506,10 @@ describe('ApplicationExecutor: attach', () => {
 
     await executor.attach(fileField.fieldRef, A_VALID_PDF);
 
-    expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles', params: { files: ['/staged/resume.pdf'], backendNodeId: 6 } });
+    // The upload, then the read-back that turns "the command resolved" into "the control reports
+    // holding this file" (#277).
+    expect(calls.at(-2)).toMatchObject({ method: 'DOM.setFileInputFiles', params: { files: ['/staged/resume.pdf'], backendNodeId: 6 } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 6 } });
   });
 
   it('refuses to attach to a non-file field', async () => {
@@ -544,7 +564,7 @@ describe('ApplicationExecutor: attach', () => {
     const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
 
     await executor.attach(fileField.fieldRef, { localFilePath: '/staged/exact.pdf', mimeType: 'application/pdf', byteSize: 500 });
-    expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles' });
+    expect(calls.map((c) => c.method)).toContain('DOM.setFileInputFiles');
   });
 
   it('replaces, never accumulates, a file input\'s selection when the same field is attached twice', async () => {

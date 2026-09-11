@@ -1,4 +1,4 @@
-import type { FieldMapRefusalReason, FormSnapshot, HandoffReason, ValueProvenance } from '@agent-dock/application-executor';
+import type { FieldMapRefusalReason, FormReadiness, FormSnapshot, HandoffReason, ValueProvenance } from '@agent-dock/application-executor';
 import type { ArtifactUploadRefusalReason } from './application-artifact-upload.js';
 import type { AutomaticSubmissionRefusalReason, SubmitApplicationReviewRefusalReason } from './application-review-session.js';
 import type { RequestAutomationGrantRefusalReason } from './automatic-submission-grant.js';
@@ -16,12 +16,44 @@ export interface OpenApplicationReviewInput {
    * object itself, which never crosses this bridge. */
   policyId: string;
   targetUrl: string;
+  /** Re-read the existing live page into a new snapshot instead of reusing the prior generation. */
+  refresh?: boolean;
 }
 
 export interface OpenApplicationReviewResult {
   snapshot: FormSnapshot;
-  /** Base64 PNG, straight from `Page.captureScreenshot`. */
+  /** Base64 PNG, straight from `Page.captureScreenshot`. Evidence that the page rendered, and
+   * nothing more: it is never evidence that a field holds a value (#277). */
   screenshotBase64: string;
+  /**
+   * What the live form actually holds, read back out of the browser (#277). This, not
+   * `snapshot.fields.length`, is what a review UI may describe as filled -- see
+   * `FormReadiness.verifiedFilledCount` against `discoveredFieldCount`.
+   */
+  readiness: FormReadiness;
+  /** Whether this attempt's live view is currently on screen as a handoff. */
+  handoffShown: boolean;
+}
+
+export type ShowApplicationHandoffRefusalReason = 'no_open_review' | 'no_window' | 'already_submitting';
+
+export interface ShowApplicationHandoffResult {
+  ok: boolean;
+  reason?: ShowApplicationHandoffRefusalReason;
+  detail?: string;
+  /** The employer and role this handoff is for, read from the attempt record in this app's own
+   * workspace -- never from the third-party page, which must never get to tell a person what they
+   * are looking at. Present only when `ok` is true. */
+  company?: string;
+  role?: string;
+  /**
+   * The height, in pixels, of the strip at the top of the window that the live view does NOT cover
+   * (`application-view.ts`'s `HANDOFF_BANNER_HEIGHT_PX`). Sent over the bridge rather than
+   * duplicated in the renderer so there is one source of truth for it: the main process is what
+   * actually sizes the view, and a renderer banner that disagreed would either be painted over by
+   * the target page or leave a dead gap. Present only when `ok` is true.
+   */
+  bannerHeightPx?: number;
 }
 
 export interface ApplicationValueTableEntryInput {
@@ -81,7 +113,14 @@ export interface ApplyApplicationFieldMapResult {
   ok: boolean;
   reason?: ApplyApplicationFieldMapRefusalReason;
   detail?: string;
+  /** Writes that were issued. Never the same thing as `verifiedCount` -- a write being issued is
+   * not a value being committed, which is the confusion #277 exists to remove. */
   appliedCount?: number;
+  /** Writes whose committed value was read back out of the browser and matched (#277). An
+   * attachment counts here only once the control itself reported holding the staged file. */
+  verifiedCount?: number;
+  /** The full readiness reading taken immediately after applying (#277). */
+  readiness?: FormReadiness;
   /** Present only when `ok` is true and the field map assigned at least one artifact. */
   attachments?: ApplicationAttachmentResult[];
   /** Present only with reason `attachment_requires_manual_handoff`. */
@@ -117,8 +156,14 @@ export interface ScheduleAutomaticSubmissionResult {
 
 export interface ApplicationExecutorBridge {
   /** Opens an isolated browser view for `attemptId`, navigates it to `targetUrl` (refused unless
-   * `targetUrl`'s origin is in the resolved policy's allowlist), and returns a fresh snapshot plus
-   * a screenshot. Throws if `attemptId` already has an open review. */
+   * `targetUrl`'s origin is in the resolved policy's allowlist), and returns a fresh snapshot, a
+   * screenshot and a readiness reading.
+   *
+   * Calling it again for an attempt that already has an open review reuses that review (#277): the
+   * same view, the same executor, the same snapshot generation, re-read. Reopening must preserve
+   * the attempt, so closing the modal and coming back (which is exactly what a person does after a
+   * live handoff) never discards an authenticated session or a set of verified fields. Only a
+   * reopen naming a *different* target for the same attempt throws. */
   openReview(input: OpenApplicationReviewInput): Promise<OpenApplicationReviewResult>;
   /**
    * Validates `fieldMap` against the attempt's current snapshot and value table (#196 §2.4), then
@@ -133,6 +178,10 @@ export interface ApplicationExecutorBridge {
    * successful attachment is read back off the control and reported in `attachments`; an upload
    * control this executor may not drive ends in a visible manual handoff instead. No filesystem
    * path ever crosses this bridge in either direction.
+   *
+   * Every applied value/option is read back off its own control afterwards (#277), so the result
+   * reports `verifiedCount` alongside `appliedCount` and carries a full `readiness` reading: a
+   * write being issued has never been the same thing as a value being committed.
    */
   applyFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult>;
   /**
@@ -147,6 +196,18 @@ export interface ApplicationExecutorBridge {
   submitReview(attemptId: string): Promise<SubmitApplicationReviewResult>;
   /** Destroys the isolated view for `attemptId`. Safe to call for an attempt with no open review. */
   closeReview(attemptId: string): Promise<void>;
+  /**
+   * Puts this attempt's live browser view on screen, focused, so a person can complete a CAPTCHA,
+   * sign in, or finish a control the executor cannot drive (#277).
+   *
+   * Only one attempt's view can be on screen at a time. Showing this one hides whichever other one
+   * was showing and changes nothing else about it -- no other pending attempt loses its view, its
+   * snapshot, or its verified fields. Refused for an attempt that is mid-submit.
+   */
+  showHandoff(attemptId: string): Promise<ShowApplicationHandoffResult>;
+  /** Takes the live view back off screen and returns focus to the app. A no-op for an attempt that
+   * is not the one currently showing. */
+  hideHandoff(attemptId: string): Promise<void>;
   /**
    * Which compiled policy (if any) governs `canonicalUrl`, so a caller that only has an attempt's
    * URL (the review UI) can find the `policyId` `openReview` needs, without this app exposing a
