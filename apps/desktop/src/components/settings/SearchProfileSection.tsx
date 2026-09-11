@@ -63,6 +63,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState<string>();
+  const [defaultCvName, setDefaultCvName] = useState<string | null | undefined>();
 
   const saveSeq = useRef(0);
 
@@ -78,6 +79,26 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
         if (!cancelled) setLoadError(describeError(err, 'could not load the search profile'));
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const workspace = window.workspace;
+    if (!workspace?.listCvDocuments) {
+      setDefaultCvName(null);
+      return;
+    }
+    void workspace
+      .listCvDocuments()
+      .then((documents) => {
+        if (!cancelled) setDefaultCvName(documents.find((document) => document.isDefault)?.name ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setDefaultCvName(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -153,6 +174,18 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
   // package here would pull the whole Node-only engine (fs, node:crypto, drizzle-orm) into the
   // Vite-bundled renderer build.
   const unconfigured = profile.targetRoles.length === 0 && profile.strongestSkills.length === 0;
+  const completionFields = [
+    profile.candidateName,
+    profile.currentRole,
+    profile.location,
+    profile.experienceYears > 0 ? profile.experienceYears : '',
+    profile.strongestSkills.length > 0 ? profile.strongestSkills : '',
+    profile.additionalSkills.length > 0 ? profile.additionalSkills : '',
+    profile.targetRoles.length > 0 ? profile.targetRoles : '',
+    profile.consideredRoles.length > 0 ? profile.consideredRoles : '',
+    profile.excludedRoleFamilies.length > 0 ? profile.excludedRoleFamilies : '',
+    profile.constraints.professionalLanguage,
+  ].filter(Boolean).length;
 
   const field = <K extends keyof Draft>(key: K) => ({
     value: draft[key],
@@ -185,6 +218,16 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
         profile. Leave a field empty to skip that dimension entirely, rather than scoring against a
         made-up default.
       </p>
+
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Profile status">
+        <span>
+          <strong>Profile completion:</strong> {completionFields} of 10 fields
+        </span>
+        <span>
+          <strong>Default CV:</strong>{' '}
+          {defaultCvName === undefined ? 'Loading…' : defaultCvName ?? 'No default CV selected'}
+        </span>
+      </div>
 
       {unconfigured && (
         <div className="alert alert-warning alert-soft mt-2 text-sm">
@@ -247,6 +290,11 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
         />
       </SettingsRow>
       <SettingsSubheading>Role matching</SettingsSubheading>
+      <p className="mb-2 text-xs text-base-content/60">
+        Skills describe your experience. Target and considered roles describe what you want next.
+        CV fill only suggests experience fields for your review; it never changes this profile by
+        itself.
+      </p>
       <SettingsRow
         label="Strongest skills"
         description="Comma-separated. Used to score matching vacancies."
