@@ -361,4 +361,43 @@ describe('App', () => {
       expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('manual');
     });
   });
+
+  it('refreshes the saved jobs count after creating a saved job without navigating away', async () => {
+    const getCounts = vi.fn().mockResolvedValue({ savedJobs: 0, activeApplications: 0, letters: 0 });
+    const createSavedJob = vi.fn().mockResolvedValue({
+      id: 'new-1',
+      vacancyKey: null,
+      role: 'New Role',
+      company: 'New Co',
+      location: 'Amsterdam',
+      salary: 'EUR 5,000/month',
+      arrangement: 'Remote',
+      verification: 'Not checked',
+      matchPercent: null,
+      sourceUrl: null,
+      notes: '',
+      status: 'considering',
+      savedAt: '2026-08-20T10:00:00.000Z',
+      gapAnalysis: null,
+      gapAnalysisAt: null,
+    });
+    installWorkspaceBridge({ getCounts, listSavedJobs: vi.fn().mockResolvedValue([]), createSavedJob });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+    await waitFor(() => expect(screen.getByText(/no saved jobs/i)).toBeInTheDocument());
+
+    const callCountBeforeCreate = getCounts.mock.calls.length;
+
+    // Create a saved job from the drawer.
+    fireEvent.click(screen.getByRole('button', { name: /add job manually/i }));
+    const dialog = await screen.findByRole('dialog', { name: /add saved job/i });
+    fireEvent.change(within(dialog).getByLabelText(/^role$/i), { target: { value: 'New Role' } });
+    fireEvent.change(within(dialog).getByLabelText(/^company$/i), { target: { value: 'New Co' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+
+    // After creating, getCounts is called again (the onSavedJobsChanged callback fires).
+    // This test verifies that creating a saved job triggers a count refresh without navigating.
+    await waitFor(() => expect(getCounts.mock.calls.length).toBeGreaterThan(callCountBeforeCreate));
+  });
 });

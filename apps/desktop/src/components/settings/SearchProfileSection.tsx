@@ -143,7 +143,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
   if (!profile || !draft) {
     return (
       <SettingsSection title="Search profile">
-        <div className="alert alert-info alert-soft mt-2 text-sm">Loading search profile…</div>
+        <div className="alert alert-info mt-2 text-sm">Loading search profile…</div>
       </SettingsSection>
     );
   }
