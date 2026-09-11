@@ -7,9 +7,7 @@ export interface SearchFilterBarProps {
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
   /** The country filter: a plain, instant, client-side narrowing of whatever is already loaded. */
   onLocationChange: (value: string) => void;
-  /** Always runs a fresh scan, whether or not one is already loaded -- there is no separate "just
-   * filter" action, since typing in a filter field already re-filters the loaded report live (see
-   * the `onChange` handlers below), with no button needed for that. */
+  /** Starts a fresh upstream scan. Filtering the loaded report happens through `onFiltersChange`. */
   onSearch: () => void;
   onClear: () => void;
   /** Provider ids present in the loaded report: never a hardcoded list. */
@@ -19,6 +17,7 @@ export interface SearchFilterBarProps {
   busy: boolean;
   /** One honest line about the money the report actually carries. */
   salaryNote: string;
+  hasReport: boolean;
 }
 
 /**
@@ -39,11 +38,12 @@ export function SearchFilterBar({
   employmentTypes,
   busy,
   salaryNote,
+  hasReport,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') onSearch();
+    if (event.key === 'Enter' && !hasReport) onSearch();
   }
 
   return (
@@ -78,7 +78,7 @@ export function SearchFilterBar({
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-          Search
+          {hasReport ? 'Run new scan' : 'Run scan'}
         </button>
 
         {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
