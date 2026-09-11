@@ -22,7 +22,7 @@ const workspaceMock = vi.hoisted(() => ({
   getApplicationAttempt: vi.fn(),
   listApplicationAttempts: vi.fn(() => [] as unknown[]),
   listCvDocuments: vi.fn(() => [] as Array<{ id: string; text: string }>),
-  listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string }>),
+  listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string; contentHash: string }>),
   updateApplicationAttempt: vi.fn(),
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
   // Mirrors the real class's constructor: application-review-session.ts imports this from the
@@ -42,8 +42,24 @@ vi.mock('../electron/application-view.js', () => ({ createApplicationView }));
 vi.mock('../electron/workspace/repository.js', () => workspaceMock);
 vi.mock('../electron/cv-text.js', () => ({ extractPdfText }));
 vi.mock('../electron/automatic-submission-notify.js', () => ({ notifyAutomaticSubmission }));
-const { readFile } = vi.hoisted(() => ({ readFile: vi.fn(async () => Buffer.from('')) }));
-vi.mock('node:fs/promises', () => ({ readFile, default: { readFile } }));
+const { readFile, mkdir, writeFile } = vi.hoisted(() => ({
+  readFile: vi.fn(async () => Buffer.from('')),
+  mkdir: vi.fn(async () => undefined),
+  writeFile: vi.fn(async () => undefined),
+}));
+vi.mock('node:fs/promises', () => ({ readFile, mkdir, writeFile, default: { readFile, mkdir, writeFile } }));
+
+/**
+ * The hash of the bytes the mocked `readFile` hands back. #276 reads every staged artifact through
+ * `readAcceptedArtifactBytes`, which refuses unless the file still hashes to what the artifact row
+ * recorded at acceptance time -- so a mocked artifact has to carry the hash of its own mocked
+ * content, exactly as a real staged one does.
+ */
+const STAGED_ARTIFACT_HASH = createHash('sha256').update(new Uint8Array()).digest('hex');
+
+function stagedArtifact(kind: string, storagePath: string, contentHash: string = STAGED_ARTIFACT_HASH) {
+  return { kind, storagePath, contentHash };
+}
 
 const TREE: CdpDomNode = {
   nodeName: 'BODY',
@@ -311,18 +327,49 @@ describe('application-review-session', () => {
       expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
     });
 
-    it('refuses via the pre-submit gate when the rendered documents do not name the attempt\'s own company/role -- a real tampered/stale-content case', async () => {
+    it('refuses via the pre-submit gate when the rendered CV does not name the attempt\'s own role -- a real tampered/stale-content case', async () => {
       const { openApplicationReview, submitApplicationReview } = await importSession();
       createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('A perfectly nice resume that never mentions the employer or role at all.');
 
       const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
-      expect(result).toEqual({ ok: false, reason: 'company_not_found_in_documents', detail: expect.any(String) });
+      expect(result).toEqual({ ok: false, reason: 'role_not_found_in_documents', detail: expect.any(String) });
       expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled(); // gate refused before submitting ever began
+    });
+
+    it('does not require a CV-only attempt to name the employer being applied to (#276)', async () => {
+      // Before #276 this attempt refused with `company_not_found_in_documents`, and the only way to
+      // make it pass was for the CV to claim the prospective employer somewhere in its own history.
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+      extractPdfText.mockResolvedValue('Jamie Rivera, Senior Engineer. Previously at Redwood Software and Atlas Labs.');
+
+      const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+      expect(result).toEqual({ ok: true });
+    });
+
+    it('refuses when a staged artifact no longer hashes to the bytes that were accepted (#276)', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      // The row records the hash of what passed validation; the file on disk is now something else.
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf', 'a'.repeat(64))]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+
+      const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+      expect(result).toEqual({ ok: false, reason: 'artifact_bytes_changed', detail: expect.stringContaining('no longer matches') });
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      expect(extractPdfText).not.toHaveBeenCalled(); // never re-derives a verdict from the swapped file
     });
 
     it('refuses via the pre-submit gate when the live source CV in the library no longer matches the hash this attempt was created with', async () => {
@@ -332,7 +379,7 @@ describe('application-review-session', () => {
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt({ sourceCvId: 'cv-1', sourceCvContentHash: 'hash-of-the-original-cv-text' })));
       workspaceMock.listCvDocuments.mockReturnValue([{ id: 'cv-1', text: 'the CV has since been edited by the user' }]);
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
 
       const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
@@ -359,8 +406,8 @@ describe('application-review-session', () => {
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
       workspaceMock.listApplicationArtifacts.mockReturnValue([
-        { kind: 'cv_pdf', storagePath: '/fake/resume.pdf' },
-        { kind: 'cover_letter_pdf', storagePath: '/fake/letter.pdf' },
+        stagedArtifact('cv_pdf', '/fake/resume.pdf'),
+        stagedArtifact('cover_letter_pdf', '/fake/letter.pdf'),
       ]);
       extractPdfText.mockResolvedValue('Dear Acme Corp, I am excited to apply for the Senior Engineer role.');
 
@@ -390,7 +437,7 @@ describe('application-review-session', () => {
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
 
       const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
@@ -415,7 +462,7 @@ describe('application-review-session', () => {
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
 
       const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
@@ -431,7 +478,7 @@ describe('application-review-session', () => {
       createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
       // Never resolves on its own -- holds the in-flight lock open long enough for a second call to
       // land while the first is still mid-submit, the same window a real CDP click occupies.
@@ -461,7 +508,7 @@ describe('application-review-session', () => {
       createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       readFile.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
 
       await expect(submitApplicationReview(FAKE_DB, ATTEMPT_ID)).resolves.toEqual({
@@ -628,7 +675,7 @@ describe('application-review-session', () => {
       const attemptNow = withRealJdHash(fakeAttempt());
       workspaceMock.getApplicationAttempt.mockReturnValue(attemptNow);
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: NOW, expiresAt: '2026-03-01T00:00:00.000Z', revokedAt: null });
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
       workspaceMock.listApplicationAttempts.mockReturnValue([submittedAttempt({ formStructureHash: matchingHash })]);
 
@@ -742,7 +789,7 @@ describe('application-review-session', () => {
         return updated;
       });
       workspaceMock.findActiveAutomationGrant.mockReturnValue({ id: 'grant-1', policyId: AUTOMATION_POLICY_ID, createdAt: QUEUE_NOW, expiresAt: '2027-01-01T00:00:00.000Z', revokedAt: null });
-      workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
       extractPdfText.mockImplementation(async () => 'placeholder');
 
       // extractPdfText must name the right company/role per attempt for the gate to pass -- easier

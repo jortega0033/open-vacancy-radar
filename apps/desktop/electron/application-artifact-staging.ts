@@ -1,9 +1,18 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BrowserWindow } from 'electron';
+import {
+  acceptRenderedDocument,
+  hashDocumentBytes,
+  type DocumentAcceptance,
+  type DocumentAcceptanceContract,
+  type DocumentArtifactKind,
+  type DocumentTarget,
+} from './document-acceptance.js';
+import { letterAcceptanceContract, resumeAcceptanceContract } from './document-contracts.js';
+import { checkDocumentReadiness, type DocumentReadinessResult } from './document-readiness.js';
+import { renderLetterHtml } from './letter-html.js';
 import { renderResumeHtml } from './resume-html.js';
-import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import type { TailoredResume } from './resume-schema.js';
 import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
@@ -15,6 +24,12 @@ import type { ApplicationArtifactKind, ApplicationArtifactRecord } from './works
  * interactive export flow (`letters/export.ts`'s `window.system.saveFile`) is untouched and stays
  * available for manual use -- this is a separate, main-process-only path for the unattended
  * staging case, per #199's own scope: "Only the main process/worker resolves local file paths."
+ *
+ * Since #276 nothing reaches the artifact table unvalidated. Every staging path below runs the
+ * shared document acceptance contract (`document-acceptance.ts`) against the finished bytes first,
+ * and registers the artifact under *that* check's own content hash. Before #276 the resume path
+ * validated and the generic path (used for letters) did not, so a blank or clipped letter could be
+ * registered and reported ready exactly like a good one.
  */
 
 /**
@@ -57,30 +72,75 @@ export async function printHtmlToPdf(html: string): Promise<Buffer> {
   }
 }
 
+/** Thrown when finished PDF bytes fail the shared acceptance contract -- a template bug that
+ * silently dropped a section, a page that came out blank, content printed off the edge of the
+ * paper -- rather than staging and registering broken output. `reasons` is the contract's own
+ * finding list, so the caller can surface exactly what was wrong rather than "rendering failed". */
+export class DocumentAcceptanceError extends Error {
+  constructor(
+    public readonly kind: DocumentArtifactKind,
+    public readonly reasons: string[],
+  ) {
+    super(`the rendered ${kind.replaceAll('_', ' ')} PDF failed the document acceptance contract: ${reasons.join('; ')}`);
+    this.name = 'DocumentAcceptanceError';
+  }
+}
+
+function describeFindings(acceptance: DocumentAcceptance): string[] {
+  return acceptance.findings.map((finding) => (finding.page === undefined ? finding.detail : `page ${finding.page}: ${finding.detail}`));
+}
+
+/** The workspace artifact table predates #276's four-way document kind and has no row for a
+ * motivation letter, which it stores as a cover letter. Both directions are spelled out here so a
+ * future kind cannot be added on one side only. */
+const WORKSPACE_KIND: Readonly<Record<DocumentArtifactKind, ApplicationArtifactKind>> = {
+  cv: 'cv_pdf',
+  cover_letter: 'cover_letter_pdf',
+  motivation_letter: 'cover_letter_pdf',
+  combined: 'combined_pdf',
+};
+
+export function documentKindForArtifact(kind: ApplicationArtifactKind): DocumentArtifactKind | null {
+  switch (kind) {
+    case 'cv_pdf':
+      return 'cv';
+    case 'cover_letter_pdf':
+      return 'cover_letter';
+    case 'combined_pdf':
+      return 'combined';
+    default:
+      return null;
+  }
+}
+
 interface WriteAndRegisterOptions {
   db: WorkspaceDb;
   attemptId: string;
-  kind: ApplicationArtifactKind;
+  kind: DocumentArtifactKind;
   fileName: string;
   storageRoot: string;
   pdf: Buffer;
+  /** The hash the acceptance check itself computed over these exact bytes. Not recomputed here:
+   * the whole point of #276's fourth acceptance case is that the registered hash is the accepted
+   * one, so that a later readiness or attachment step comparing against it is comparing against a
+   * document something actually validated. */
+  contentHash: string;
 }
 
 /** The write-to-disk-and-register half shared by every staging path below, after each one has
- * already produced (and, where applicable, validated) the actual PDF bytes. */
+ * already produced and accepted the actual PDF bytes. */
 async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promise<ApplicationArtifactRecord> {
-  const contentHash = createHash('sha256').update(options.pdf).digest('hex');
-  const storagePath = stagedArtifactPath(options.storageRoot, options.attemptId, contentHash, options.fileName);
+  const storagePath = stagedArtifactPath(options.storageRoot, options.attemptId, options.contentHash, options.fileName);
   await mkdir(join(options.storageRoot, options.attemptId), { recursive: true });
   await writeFile(storagePath, options.pdf);
 
   return workspace.createApplicationArtifact(options.db, {
     attemptId: options.attemptId,
-    kind: options.kind,
+    kind: WORKSPACE_KIND[options.kind],
     fileName: options.fileName,
     mimeType: 'application/pdf',
     byteSize: options.pdf.byteLength,
-    contentHash,
+    contentHash: options.contentHash,
     storagePath,
   });
 }
@@ -88,8 +148,11 @@ async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promi
 export interface StageHtmlArtifactOptions {
   db: WorkspaceDb;
   attemptId: string;
-  kind: ApplicationArtifactKind;
   html: string;
+  /** What this document has to be for the acceptance contract to accept it. Required, not optional:
+   * an artifact staged with no contract is exactly the unvalidated letter path #276 exists to
+   * close. */
+  contract: DocumentAcceptanceContract;
   /** e.g. "cover-letter.pdf" -- the artifact's own record of what it should be called; never
    * derived from anything the renderer or a remote source supplies. */
   fileName: string;
@@ -100,14 +163,24 @@ export interface StageHtmlArtifactOptions {
 }
 
 /**
- * Renders arbitrary app-owned HTML to a PDF, writes it to disk, and registers it against #198's
- * artifact table -- the generic staging path (a cover letter, say) with no per-kind validation
- * beyond what `printToPDF` itself guarantees. See `stageTailoredResumeArtifact` below for the
- * resume-specific path, which additionally validates the rendered output.
+ * Renders app-owned HTML to a PDF, checks the finished bytes against the caller's acceptance
+ * contract, and only then writes and registers the artifact. The general path every kind-specific
+ * one below goes through.
  */
 export async function stageHtmlArtifact(options: StageHtmlArtifactOptions): Promise<ApplicationArtifactRecord> {
   const pdf = await printHtmlToPdf(options.html);
-  return writeAndRegisterArtifact({ ...options, pdf });
+  const acceptance = await acceptRenderedDocument(Uint8Array.from(pdf), options.contract);
+  if (!acceptance.ok) throw new DocumentAcceptanceError(options.contract.kind, describeFindings(acceptance));
+
+  return writeAndRegisterArtifact({
+    db: options.db,
+    attemptId: options.attemptId,
+    kind: options.contract.kind,
+    fileName: options.fileName,
+    storageRoot: options.storageRoot,
+    pdf,
+    contentHash: acceptance.contentHash,
+  });
 }
 
 export interface StageTailoredResumeOptions {
@@ -116,38 +189,174 @@ export interface StageTailoredResumeOptions {
   resume: TailoredResume;
   storageRoot: string;
   fileName?: string;
+  /** The vacancy this CV was tailored for. Recorded on the acceptance decision, never required to
+   * appear inside the CV's own work history -- see `document-acceptance.ts`'s `targetRule`. */
+  target?: DocumentTarget | null;
+  /** Employers the reviewed source CV attests to, so a genuine re-application to a previous
+   * employer is not mistaken for a fabricated one. */
+  verifiedEmployers?: readonly string[];
 }
 
-/** Thrown when the rendered resume PDF fails `validateRenderedResumePdf`'s check -- a template bug
- * that silently dropped a section, most likely -- rather than staging and registering broken
- * output. `reasons` is `validateRenderedResumePdf`'s own list, so the caller can surface exactly
- * what was wrong rather than a bare "rendering failed". */
-export class ResumeRenderValidationError extends Error {
-  constructor(public readonly reasons: string[]) {
-    super(`the rendered resume PDF failed validation: ${reasons.join('; ')}`);
-    this.name = 'ResumeRenderValidationError';
+/**
+ * The full unattended resume-staging path (#199, contract-checked since #276): render `resume`
+ * through the app's default template, print it to PDF, accept the finished bytes against the CV
+ * contract, then write and register them under the accepted hash. Nothing here is ever registered
+ * unvalidated.
+ */
+export function stageTailoredResumeArtifact(options: StageTailoredResumeOptions): Promise<ApplicationArtifactRecord> {
+  return stageHtmlArtifact({
+    db: options.db,
+    attemptId: options.attemptId,
+    html: renderResumeHtml(options.resume),
+    contract: resumeAcceptanceContract(options.resume, { target: options.target ?? null, verifiedEmployers: options.verifiedEmployers }),
+    fileName: options.fileName ?? 'resume.pdf',
+    storageRoot: options.storageRoot,
+  });
+}
+
+export interface StageLetterOptions {
+  db: WorkspaceDb;
+  attemptId: string;
+  kind: Extract<DocumentArtifactKind, 'cover_letter' | 'motivation_letter'>;
+  /** The letter's heading, e.g. "Cover Letter". Also the finished PDF's own title. */
+  title: string;
+  body: string;
+  candidateName: string;
+  target: DocumentTarget | null;
+  storageRoot: string;
+  fileName?: string;
+}
+
+/**
+ * The letter counterpart of `stageTailoredResumeArtifact`, and the reason #276 lists "CV and
+ * letter paths receive equivalent applicable checks" as an acceptance case of its own: before this,
+ * letters went through the generic HTML path with no validation at all.
+ */
+export function stageLetterArtifact(options: StageLetterOptions): Promise<ApplicationArtifactRecord> {
+  return stageHtmlArtifact({
+    db: options.db,
+    attemptId: options.attemptId,
+    html: renderLetterHtml(options.title, options.body, { candidateName: options.candidateName }),
+    contract: letterAcceptanceContract({
+      kind: options.kind,
+      title: options.title,
+      body: options.body,
+      candidateName: options.candidateName,
+      target: options.target,
+    }),
+    fileName: options.fileName ?? `${options.kind.replaceAll('_', '-')}.pdf`,
+    storageRoot: options.storageRoot,
+  });
+}
+
+export interface StageApplicationDocumentsOptions {
+  db: WorkspaceDb;
+  attemptId: string;
+  storageRoot: string;
+  target: DocumentTarget | null;
+  resume: TailoredResume;
+  verifiedEmployers?: readonly string[];
+  /** The letters this application actually asked for. A requested letter whose generation produced
+   * nothing must be listed here with an empty `body`: that is what lets readiness refuse instead of
+   * reporting the application ready on the CV alone. */
+  letters: ReadonlyArray<{
+    kind: Extract<DocumentArtifactKind, 'cover_letter' | 'motivation_letter'>;
+    title: string;
+    body: string;
+  }>;
+}
+
+export interface StageApplicationDocumentsResult {
+  records: ApplicationArtifactRecord[];
+  /** Whose refusals, if any, say why this application is not ready to attach. */
+  readiness: DocumentReadinessResult;
+}
+
+/**
+ * Stages every document one application asked for and reports whether the set is ready -- the one
+ * entry point that knows what was *requested*, which is the only place the "a requested cover
+ * letter that never got produced" case is visible at all (#276). Staging a CV successfully and
+ * finding no letter file is indistinguishable from "no letter was ever wanted" once you are only
+ * looking at the artifact table.
+ *
+ * A letter whose body is empty is never rendered: an empty PDF would fail the contract anyway, and
+ * refusing here reports the real cause ("the letter was requested and not produced") rather than
+ * "the letter is blank".
+ */
+export async function stageApplicationDocuments(options: StageApplicationDocumentsOptions): Promise<StageApplicationDocumentsResult> {
+  const requested: DocumentArtifactKind[] = ['cv', ...options.letters.map((letter) => letter.kind)];
+  const staged: Array<{ kind: DocumentArtifactKind; record: ApplicationArtifactRecord }> = [];
+
+  staged.push({
+    kind: 'cv',
+    record: await stageTailoredResumeArtifact({
+      db: options.db,
+      attemptId: options.attemptId,
+      resume: options.resume,
+      storageRoot: options.storageRoot,
+      target: options.target,
+      verifiedEmployers: options.verifiedEmployers,
+    }),
+  });
+
+  for (const letter of options.letters) {
+    if (letter.body.trim().length === 0) continue;
+    staged.push({
+      kind: letter.kind,
+      record: await stageLetterArtifact({
+        db: options.db,
+        attemptId: options.attemptId,
+        kind: letter.kind,
+        title: letter.title,
+        body: letter.body,
+        candidateName: options.resume.contact.name,
+        target: options.target,
+        storageRoot: options.storageRoot,
+      }),
+    });
+  }
+
+  const readiness = checkDocumentReadiness({
+    requested,
+    accepted: staged.map((document) => ({
+      kind: document.kind,
+      acceptedContentHash: document.record.contentHash,
+      acceptedTarget: options.target,
+    })),
+    present: staged.map((document) => ({ kind: document.kind, currentContentHash: document.record.contentHash })),
+    target: options.target,
+  });
+
+  return { records: staged.map((document) => document.record), readiness };
+}
+
+/** Thrown when the file behind an artifact record is no longer the file that was accepted. */
+export class AcceptedBytesChangedError extends Error {
+  constructor(
+    public readonly record: Pick<ApplicationArtifactRecord, 'id' | 'fileName' | 'contentHash' | 'storagePath'>,
+    public readonly currentContentHash: string,
+  ) {
+    super(
+      `"${record.fileName}" no longer matches the bytes that were validated (accepted ${record.contentHash.slice(0, 12)}, found ${currentContentHash.slice(0, 12)})`,
+    );
+    this.name = 'AcceptedBytesChangedError';
   }
 }
 
 /**
- * The full unattended resume-staging path (#199): render `resume` through the app's default
- * template (`resume-html.ts`), print it to PDF, validate the result actually contains readable
- * text and the resume's own employer/role names, then write and register it -- only once
- * validation passes. Nothing here is ever registered unvalidated.
+ * Reads a staged artifact and refuses unless the bytes still hash to what was accepted (#276).
+ *
+ * The one function anything downstream should use to get an artifact's bytes. Reading the file
+ * directly and re-deriving a hash from what came back proves nothing: it would agree with itself
+ * whatever the file now contains. Comparing against the hash written at acceptance time is what
+ * makes a changed file invalidate the earlier "validated" verdict instead of silently inheriting
+ * it, and what makes the bytes handed on for attachment provably the reviewed document.
  */
-export async function stageTailoredResumeArtifact(options: StageTailoredResumeOptions): Promise<ApplicationArtifactRecord> {
-  const html = renderResumeHtml(options.resume);
-  const pdf = await printHtmlToPdf(html);
-
-  const validation = await validateRenderedResumePdf(pdf, options.resume);
-  if (!validation.ok) throw new ResumeRenderValidationError(validation.reasons);
-
-  return writeAndRegisterArtifact({
-    db: options.db,
-    attemptId: options.attemptId,
-    kind: 'cv_pdf',
-    fileName: options.fileName ?? 'resume.pdf',
-    storageRoot: options.storageRoot,
-    pdf,
-  });
+export async function readAcceptedArtifactBytes(
+  record: Pick<ApplicationArtifactRecord, 'id' | 'fileName' | 'contentHash' | 'storagePath'>,
+): Promise<Buffer> {
+  const bytes = await readFile(record.storagePath);
+  const currentContentHash = hashDocumentBytes(bytes);
+  if (currentContentHash !== record.contentHash) throw new AcceptedBytesChangedError(record, currentContentHash);
+  return bytes;
 }

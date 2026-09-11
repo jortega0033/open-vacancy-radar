@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
+import { AcceptedBytesChangedError, readAcceptedArtifactBytes } from './application-artifact-staging.js';
 import { createApplicationView, type ApplicationView } from './application-view.js';
 import { resolveApplicationTargetPolicy, resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { runPreSubmitGate, type PreSubmitGateRefusalReason } from './application-submit-gate.js';
@@ -136,6 +136,7 @@ export type SubmitApplicationReviewRefusalReason =
   | 'unresolved_submit_control'
   | 'source_cv_not_found'
   | 'artifact_read_failed'
+  | 'artifact_bytes_changed'
   | 'submit_refused'
   | 'submission_unknown';
 
@@ -183,10 +184,12 @@ function computeFormStructureHash(snapshot: FormSnapshot): string {
  * 3. The pre-submit gate: the *current* source CV (re-read live from the CV library by
  *    `attempt.sourceCvId`, never trusted from the value stored at attempt-creation time) and the
  *    JD snapshot's own hash must still match what the attempt recorded, and the rendered CV/letter
- *    PDFs (read fresh from disk, not cached) must still name the right company/role and carry no
- *    placeholder text. A `sourceCvId` of `null` (the source CV was never a live library entry, or
- *    the attempt predates that link) has nothing live to re-check, so the hash the attempt was
- *    created with is compared against itself -- vacuously satisfied, not skipped.
+ *    PDFs (read fresh from disk, not cached, and only through #276's accepted-bytes check so a
+ *    file edited since it was validated refuses rather than inheriting that verdict) must still
+ *    address the right company/role and carry no placeholder text. A `sourceCvId` of `null` (the
+ *    source CV was never a live library entry, or the attempt predates that link) has nothing live
+ *    to re-check, so the hash the attempt was created with is compared against itself -- vacuously
+ *    satisfied, not skipped.
  *
  * `ExecutorPolicyError` from the submit call itself (the policy disallows the action, or any other
  * pre-click refusal `executor.submit` performs) is treated as a clean, non-ambiguous refusal --
@@ -254,13 +257,19 @@ export async function submitApplicationReview(
     let renderedCvText: string;
     let renderedLetterText: string | null;
     try {
-      renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readFile(cvArtifact.storagePath))) : '';
-      renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readFile(letterArtifact.storagePath))) : null;
+      // #276: read through the accepted-bytes check, never a bare `readFile`. Each artifact row
+      // carries the hash of the bytes the document acceptance contract actually passed; if what is
+      // on disk no longer hashes to it, the earlier "validated" verdict describes a document that
+      // no longer exists, and the attempt must not inherit it. Re-extracting text from whatever is
+      // there now would agree with itself no matter what was swapped in.
+      renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readAcceptedArtifactBytes(cvArtifact))) : '';
+      renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readAcceptedArtifactBytes(letterArtifact))) : null;
     } catch (err) {
       // Never let a missing/corrupted artifact throw out of this function: the automatic path's
       // caller treats a thrown error very differently from a returned refusal (see
       // `fireDueAutomaticSubmissions`), and only a returned refusal is guaranteed to notify the user.
       const detail = err instanceof Error ? err.message : String(err);
+      if (err instanceof AcceptedBytesChangedError) return { ok: false, reason: 'artifact_bytes_changed', detail };
       return { ok: false, reason: 'artifact_read_failed', detail };
     }
 
