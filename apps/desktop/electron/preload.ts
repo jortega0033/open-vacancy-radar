@@ -39,6 +39,11 @@ import type {
   ShowApplicationHandoffResult,
   SubmitApplicationReviewResult,
 } from './application-executor-types.js';
+import type {
+  ApplicationPipelineBridge,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from './application-pipeline-types.js';
 import type { FormReadiness } from '@agent-dock/application-executor';
 
 /**
@@ -1426,3 +1431,37 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
 };
 
 contextBridge.exposeInMainWorld('applicationExecutor', applicationExecutorApi);
+
+const START_APPLICATION_REFUSALS: readonly StartApplicationAttemptRefusal[] = [
+  'no_apply_url',
+  'no_cv_available',
+  'attempt_already_in_progress',
+];
+
+/**
+ * #272's preparation pipeline. Rebuilt field by field on the way back, the same fail-closed
+ * discipline every other bridge here uses: an `ok` this build cannot interpret becomes a refusal
+ * with no reason rather than a success, and nothing beyond the four documented fields crosses even
+ * if main sent it.
+ */
+const applicationPipelineApi: ApplicationPipelineBridge = {
+  async start(savedJobId): Promise<StartApplicationAttemptResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start', { savedJobId });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);

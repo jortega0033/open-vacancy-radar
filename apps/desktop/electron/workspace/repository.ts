@@ -53,6 +53,10 @@ import {
   type LetterInput,
   type LetterPatch,
   type LetterRecord,
+  type PreparedApplicationField,
+  type PreparedApplicationFields,
+  type PreparedFieldProvenance,
+  type PreparedFieldStatus,
   type SavedJobInput,
   type SavedJobPatch,
   type SavedJobRecord,
@@ -573,6 +577,73 @@ export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {
 
 type ApplicationAttemptRow = typeof applicationAttempts.$inferSelect;
 
+const PREPARED_FIELD_STATUSES: readonly PreparedFieldStatus[] = ['committed', 'awaiting_you', 'left_blank', 'pending_upload'];
+const PREPARED_FIELD_CONTROL_TYPES: readonly PreparedApplicationField['controlType'][] = [
+  'text',
+  'textarea',
+  'select',
+  'checkbox',
+  'radio',
+  'file',
+  'unknown',
+];
+const PREPARED_FIELD_PROVENANCES: readonly PreparedFieldProvenance[] = ['cv', 'profile', 'user_answer', 'jd'];
+
+/**
+ * Reads the `prepared_fields` JSON column back into a record, or `null` for anything this build
+ * cannot interpret -- an empty column (every attempt from before #272), malformed JSON, or a
+ * future shape. Fail-closed rather than partially-parsed on purpose: this is what a review renders
+ * as "the answers committed for this application", and half a record read as a whole one would be
+ * a claim nothing checked.
+ */
+function parsePreparedApplicationFields(raw: string): PreparedApplicationFields | null {
+  if (raw.trim().length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const source = parsed as Record<string, unknown>;
+  if (source.version !== 1 || source.verification !== 'applied') return null;
+  if (typeof source.preparedAt !== 'string' || typeof source.company !== 'string' || typeof source.role !== 'string') return null;
+  if (!Array.isArray(source.fields)) return null;
+
+  const fields: PreparedApplicationField[] = [];
+  for (const entry of source.fields) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const field = entry as Record<string, unknown>;
+    const { label, controlType, required, status, value, provenance, detail } = field;
+    if (typeof label !== 'string' || typeof required !== 'boolean') return null;
+    if (typeof controlType !== 'string' || !(PREPARED_FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) return null;
+    if (typeof status !== 'string' || !(PREPARED_FIELD_STATUSES as readonly string[]).includes(status)) return null;
+    if (value !== undefined && typeof value !== 'string') return null;
+    if (provenance !== undefined && (typeof provenance !== 'string' || !(PREPARED_FIELD_PROVENANCES as readonly string[]).includes(provenance))) {
+      return null;
+    }
+    if (detail !== undefined && typeof detail !== 'string') return null;
+    fields.push({
+      label,
+      controlType: controlType as PreparedApplicationField['controlType'],
+      required,
+      status: status as PreparedFieldStatus,
+      ...(value === undefined ? {} : { value }),
+      ...(provenance === undefined ? {} : { provenance: provenance as PreparedFieldProvenance }),
+      ...(detail === undefined ? {} : { detail }),
+    });
+  }
+
+  return {
+    version: 1,
+    preparedAt: source.preparedAt,
+    company: source.company,
+    role: source.role,
+    verification: 'applied',
+    fields,
+  };
+}
+
 function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRecord {
   return {
     id: row.id,
@@ -605,6 +676,7 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     supersedesAttemptId: row.supersedesAttemptId,
     reapplyReason: row.reapplyReason,
     reapplyPreviousCvContentHash: row.reapplyPreviousCvContentHash,
+    preparedFields: parsePreparedApplicationFields(row.preparedFields),
   };
 }
 
@@ -916,6 +988,33 @@ export function updateApplicationAttempt(
     if (!row) throw new WorkspaceNotFoundError('application attempt', id);
     return toApplicationAttempt(row);
   });
+}
+
+/**
+ * Records what the preparation pipeline (#272) committed to one attempt's form.
+ *
+ * A function of its own rather than a field on `ApplicationAttemptPatch`, deliberately: the patch
+ * type is what the renderer can send over `workspace:application-attempts:update`, and a renderer
+ * able to write this could claim an application was filled with answers nothing ever applied. Only
+ * main-process pipeline code calls this.
+ *
+ * Passing `null` clears the record, which is what a fresh run does before it starts filling: an
+ * attempt being re-prepared must never show the previous run's answers while the new fill is still
+ * in progress.
+ */
+export function recordPreparedApplicationFields(
+  db: WorkspaceDb,
+  id: string,
+  prepared: PreparedApplicationFields | null,
+): ApplicationAttemptRecord {
+  const [row] = db
+    .update(applicationAttempts)
+    .set({ preparedFields: prepared === null ? '' : JSON.stringify(prepared), updatedAt: new Date() })
+    .where(eq(applicationAttempts.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+  return toApplicationAttempt(row);
 }
 
 /** Cascades to the attempt's artifacts via the schema's `on delete cascade`. */

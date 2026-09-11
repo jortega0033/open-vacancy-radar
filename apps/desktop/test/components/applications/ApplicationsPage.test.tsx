@@ -69,6 +69,7 @@ function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): Applica
     supersedesAttemptId: null,
     reapplyReason: '',
     reapplyPreviousCvContentHash: null,
+    preparedFields: null,
     ...overrides,
   };
 }

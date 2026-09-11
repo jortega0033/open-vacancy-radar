@@ -1,12 +1,15 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
-import type { ApplicationAttemptRecord } from '../../window.js';
+import type { ApplicationArtifactRecord, ApplicationAttemptRecord } from '../../window.js';
+import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 
 export interface ApplicationReviewSwipeCardProps {
   attempt: ApplicationAttemptRecord;
   snapshot: FormSnapshot;
   screenshotBase64: string;
+  /** The documents staged against this exact attempt (#272). */
+  documents?: readonly ApplicationArtifactRecord[];
   /**
    * What the live form actually holds, read back out of the browser (#277). This card reports
    * `readiness.verifiedFilledCount`, never `snapshot.fields.length` -- see the header comment.
@@ -73,6 +76,7 @@ export function ApplicationReviewSwipeCard({
   attempt,
   snapshot,
   screenshotBase64,
+  documents = [],
   readiness,
   busy,
   onApprove,
@@ -83,6 +87,12 @@ export function ApplicationReviewSwipeCard({
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
+  const prepared = attempt.preparedFields;
+  const preparedMatchesAttempt = prepared != null && prepared.company === attempt.company && prepared.role === attempt.role;
+  const committedCount = preparedMatchesAttempt ? prepared.fields.filter((field) => field.status === 'committed').length : 0;
+  const awaitingCount = preparedMatchesAttempt
+    ? prepared.fields.filter((field) => field.status === 'awaiting_you' || field.status === 'pending_upload').length
+    : 0;
   const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -150,10 +160,14 @@ export function ApplicationReviewSwipeCard({
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
           </h2>
           <p className="text-xs text-base-content/60">
-            {verifiedFilledCount} of {discoveredFieldCount} field{discoveredFieldCount === 1 ? '' : 's'} verified filled
+            {preparedMatchesAttempt
+              ? `${verifiedFilledCount} verified on page, ${committedCount} prepared by this app, ${awaitingCount} left for you`
+              : `${verifiedFilledCount} of ${discoveredFieldCount} field${discoveredFieldCount === 1 ? '' : 's'} verified filled`}
             {requiredFieldCount > 0 ? `, ${requiredFieldsSatisfied} of ${requiredFieldCount} required answered` : ''}
           </p>
         </div>
+
+        <ApplicationPreparedSummary attempt={attempt} documents={documents} />
 
         {blockers.length > 0 && (
           <div className="border-b border-base-300 bg-warning/10 px-5 py-3">

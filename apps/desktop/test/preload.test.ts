@@ -1635,3 +1635,48 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     expect(invoke).toHaveBeenCalledWith('application-executor:cancel-scheduled-automatic-submission', 'attempt-1');
   });
 });
+
+describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
+  it('exposes exactly one capability function and nothing else', async () => {
+    const api = await loadPreload('applicationPipeline');
+    expect(Object.keys(api)).toEqual(['start']);
+    expect(typeof api.start).toBe('function');
+  });
+
+  it('exposes no generic IPC passthrough', async () => {
+    const api = await loadPreload('applicationPipeline');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+  });
+
+  it('start invokes the hard-coded channel with only the saved-job id', async () => {
+    invoke.mockResolvedValue({ ok: true, attemptId: 'attempt-1' });
+    const api = await loadPreload('applicationPipeline');
+    const result = await (api.start as (id: string) => Promise<unknown>)('saved-1');
+    expect(invoke).toHaveBeenCalledWith('application-pipeline:start', { savedJobId: 'saved-1' });
+    expect(result).toEqual({ ok: true, attemptId: 'attempt-1' });
+  });
+
+  it('carries a refusal and the attempt already in progress back unchanged', async () => {
+    invoke.mockResolvedValue({
+      ok: false,
+      reason: 'attempt_already_in_progress',
+      attemptId: 'attempt-existing',
+      detail: 'an application for this vacancy is already in progress',
+    });
+    const api = await loadPreload('applicationPipeline');
+    expect(await (api.start as (id: string) => Promise<unknown>)('saved-1')).toEqual({
+      ok: false,
+      reason: 'attempt_already_in_progress',
+      attemptId: 'attempt-existing',
+      detail: 'an application for this vacancy is already in progress',
+    });
+  });
+
+  it('fails closed on a shape this build cannot interpret rather than reporting success', async () => {
+    invoke.mockResolvedValue({ nonsense: true, reason: 'something_new', extra: 'should not cross' });
+    const api = await loadPreload('applicationPipeline');
+    expect(await (api.start as (id: string) => Promise<unknown>)('saved-1')).toEqual({ ok: false });
+  });
+});

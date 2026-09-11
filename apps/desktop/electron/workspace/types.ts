@@ -365,6 +365,65 @@ export interface ApplicationAttemptRecord {
   supersedesAttemptId: string | null;
   reapplyReason: string;
   reapplyPreviousCvContentHash: string | null;
+  /**
+   * What the preparation pipeline (#272) committed to this attempt's form, or null for an attempt
+   * no pipeline run has prepared. Read-only across the bridge: there is no patch field for it, so
+   * only the main-process pipeline can ever write one (see `recordPreparedApplicationFields`).
+   */
+  preparedFields: PreparedApplicationFields | null;
+}
+
+/** Where a committed value came from. Mirrors `ValueProvenance` in
+ * `@agent-dock/application-executor`, spelled out locally for the same reason every other enum in
+ * this file is: the renderer must not gain a runtime import from the executor package. */
+export type PreparedFieldProvenance = 'cv' | 'profile' | 'user_answer' | 'jd';
+
+export type PreparedFieldStatus =
+  /** This app filled the field, and the executor reported the fill succeeded. */
+  | 'committed'
+  /** Deliberately left for the person: a consent or credential field, which this app never fills
+   * on someone's behalf regardless of what a generation session proposes. */
+  | 'awaiting_you'
+  /** Optional, and no source value existed for it. Left empty rather than invented. */
+  | 'left_blank'
+  /** A document upload this attempt could not complete. Stays a blocker, never a silent skip. */
+  | 'pending_upload';
+
+export interface PreparedApplicationField {
+  /** The field's own label, exactly as the live page presented it when the fill ran. */
+  label: string;
+  controlType: 'text' | 'textarea' | 'select' | 'checkbox' | 'radio' | 'file' | 'unknown';
+  required: boolean;
+  status: PreparedFieldStatus;
+  /** The exact value committed. Present only for `committed`. */
+  value?: string;
+  /** Which source that value came from. Present only for `committed`. */
+  provenance?: PreparedFieldProvenance;
+  /** Why nothing was committed. Present for every status other than `committed`. */
+  detail?: string;
+}
+
+/**
+ * The durable record of one attempt's prepared form (#272), stored as JSON on the attempt row.
+ *
+ * `company`/`role` are recorded alongside the fields on purpose: a review renders these only when
+ * they still match the attempt it is showing, so a record left over from any other employer or
+ * role can never be presented as this application's answers.
+ */
+export interface PreparedApplicationFields {
+  version: 1;
+  /** ISO-8601, main-process clock, at the moment the fill ran. */
+  preparedAt: string;
+  company: string;
+  role: string;
+  /**
+   * How the values below were established. `applied` means this app applied them and the executor
+   * reported each fill succeeded -- it is explicitly NOT a read-back of the live page confirming
+   * the value is committed there, which is #277 (R06)'s work. A later verification level is added
+   * as a new value here rather than by widening what `applied` is taken to mean.
+   */
+  verification: 'applied';
+  fields: PreparedApplicationField[];
 }
 
 /**

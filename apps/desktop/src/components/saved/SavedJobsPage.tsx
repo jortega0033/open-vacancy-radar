@@ -54,6 +54,12 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
 
+  // #272: which job's preparation request is in flight, and what came back from the last one. One
+  // at a time by id rather than a single boolean, so a slow request never disables every other
+  // row's button.
+  const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
+  const [prepareNotice, setPrepareNotice] = useState<string>();
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -129,6 +135,33 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
     }
   }, []);
 
+  /**
+   * Hands one saved job to the preparation pipeline (#272). This records an attempt and queues it;
+   * it never submits anything, and it never reaches the daemon or a browser from here -- Electron
+   * main resolves the vacancy, the CV and the destination itself and does the work under a queue
+   * lease. Progress shows up on the Applications page's "In progress" tab.
+   *
+   * A refusal is reported as a plain notice rather than an error banner: "an application for this
+   * vacancy is already in progress" is the dedup rule working, not a failure.
+   */
+  const handlePrepare = useCallback(async (job: SavedJobRecord) => {
+    setActionError(undefined);
+    setPrepareNotice(undefined);
+    setPreparingJobId(job.id);
+    try {
+      const result = await window.applicationPipeline.start(job.id);
+      setPrepareNotice(
+        result.ok
+          ? `Preparing an application for "${job.role}" at ${job.company}. Track it under Applications, In progress.`
+          : (result.detail ?? 'this application could not be started'),
+      );
+    } catch (err) {
+      setActionError(describeError(err, 'could not start preparing this application'));
+    } finally {
+      setPreparingJobId(null);
+    }
+  }, []);
+
   const requestDelete = useCallback((job: SavedJobRecord) => {
     setActionError(undefined);
     setDeleteTarget(job);
@@ -187,6 +220,11 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
 
       {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+      {prepareNotice && (
+        <div className="alert alert-info mt-4" role="status">
+          <span>{prepareNotice}</span>
+        </div>
+      )}
 
       {isLoading && !loadError && <PageLoading label="Loading saved jobs…" />}
 
@@ -218,6 +256,8 @@ export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
             onEdit={openEditDrawer}
             onDelete={requestDelete}
             onStatusChange={handleStatusChange}
+            onPrepareApplication={handlePrepare}
+            preparingJobId={preparingJobId}
           />
         </div>
       )}

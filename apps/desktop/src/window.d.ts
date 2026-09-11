@@ -252,6 +252,10 @@ export type {
   LetterStatus,
   LetterTone,
   LetterType,
+  PreparedApplicationField,
+  PreparedApplicationFields,
+  PreparedFieldProvenance,
+  PreparedFieldStatus,
   SavedJobInput,
   SavedJobPatch,
   SavedJobRecord,
@@ -262,6 +266,14 @@ export type {
   WorkspaceBridge,
   WorkspaceCounts,
 } from '../electron/workspace/types.js';
+
+/** #272's preparation-pipeline result shapes, re-exported here for the same reason the workspace
+ * records above are: one definition shared by main, preload and the renderer. Type-only. */
+export type {
+  ApplicationPipelineBridge,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from '../electron/application-pipeline-types.js';
 
 declare global {
   interface Window {
@@ -282,6 +294,10 @@ declare global {
      * has confirmed, close it. `submitReview` performs no confirmation step itself: the caller must
      * not invoke it before the user has explicitly reviewed and confirmed this specific attempt. */
     applicationExecutor: import('../electron/application-executor-types.js').ApplicationExecutorBridge;
+    /** #272. The tenth namespace: start the preparation pipeline for one saved job. One method,
+     * taking a saved-job id and nothing else -- where an application goes, which CV it is built
+     * from and what it is tailored against are all resolved in Electron main. Never submits. */
+    applicationPipeline: import('../electron/application-pipeline-types.js').ApplicationPipelineBridge;
   }
 }
 
