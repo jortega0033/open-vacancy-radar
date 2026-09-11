@@ -111,7 +111,7 @@ function SessionRow({ entry, selected, onSelect, onToggleArchived }: SessionRowP
         <div className="mt-1.5 truncate text-sm font-medium">{provenanceLine(entry.view)}</div>
         <div className="mt-0.5 truncate text-xs text-base-content/50">{formatInstant(entry.view.startedAt)}</div>
         {streaming && (
-          <div className="mt-1 text-xs text-info" data-testid="live-indicator">
+          <div className="mt-1 text-xs text-success" data-testid="live-indicator">
             {entry.liveStatus === 'attaching' ? 'Connecting to live updates' : 'Live'}
           </div>
         )}

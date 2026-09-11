@@ -19,6 +19,17 @@ function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+export interface SavedJobsPageProps {
+  /**
+   * Fired after any mutation that can change the saved jobs count (create, delete, or undoing a
+   * delete) so the caller (App.tsx) can refresh the sidebar badge and the header's saved jobs
+   * count without waiting for the user to navigate away and back.
+   *
+   * Status changes and edits are not wired to this: neither one changes the total count.
+   */
+  onSavedJobsChanged?: () => void;
+}
+
 /**
  * Top-level "Saved Jobs" screen (`export-src.html` lines ~259-307): a role/company filter, a
  * table of saved jobs with an inline status select, add/edit through a right-side drawer, and
@@ -28,7 +39,7 @@ function describeError(err: unknown, fallback: string): string {
  * here. This page is exported standalone (see `index.ts`) so the shell's router can pick it up
  * once every page agent's work has landed, without every agent racing to edit the same file.
  */
-export function SavedJobsPage() {
+export function SavedJobsPage({ onSavedJobsChanged }: SavedJobsPageProps = {}) {
   const [jobs, setJobs] = useState<SavedJobRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
@@ -92,6 +103,8 @@ export function SavedJobsPage() {
         if (drawerState.mode === 'add') {
           const created = await window.workspace.createSavedJob(input);
           setJobs((prev) => [created, ...(prev ?? [])]);
+          // A newly created job changes the total count.
+          onSavedJobsChanged?.();
         } else {
           const updated = await window.workspace.updateSavedJob(drawerState.job.id, input);
           setJobs((prev) => (prev ?? []).map((job) => (job.id === updated.id ? updated : job)));
@@ -103,7 +116,7 @@ export function SavedJobsPage() {
         setSavingDrawer(false);
       }
     },
-    [drawerState],
+    [drawerState, onSavedJobsChanged],
   );
 
   const handleStatusChange = useCallback(async (job: SavedJobRecord, status: SavedJobStatus) => {
@@ -134,11 +147,13 @@ export function SavedJobsPage() {
       setJobs((prev) => (prev ?? []).filter((row) => row.id !== job.id));
       if (result.deleted) {
         setPendingUndo({ message: `Deleted "${job.role}" at ${job.company}.`, job });
+        // A deleted job moves out of the total count.
+        onSavedJobsChanged?.();
       }
     } catch (err) {
       setActionError(describeError(err, 'could not delete this job'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, onSavedJobsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -148,10 +163,12 @@ export function SavedJobsPage() {
     try {
       const recreated = await window.workspace.createSavedJob(toSavedJobInput(undo.job));
       setJobs((prev) => [recreated, ...(prev ?? [])]);
+      // Undoing a delete moves a job back into the total count.
+      onSavedJobsChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not undo the delete'));
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, onSavedJobsChanged]);
 
   const isLoading = jobs === null;
   const hasAnyJobs = (jobs?.length ?? 0) > 0;

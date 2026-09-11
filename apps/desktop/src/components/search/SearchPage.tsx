@@ -643,7 +643,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           </ErrorBanner>
         )}
         {scanning && (
-          <div className="alert alert-info alert-soft mt-3 text-sm">
+          <div className="alert alert-info mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             {isStreamingPartial
               ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
@@ -688,7 +688,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
 
       {hydrating && !hasReport ? (
         <>
-          <div className="alert alert-info alert-soft mt-3 text-sm">
+          <div className="alert alert-info mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             Loading the latest report…
           </div>
