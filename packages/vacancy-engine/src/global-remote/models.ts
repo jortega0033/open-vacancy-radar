@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
 import type { WorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
+import type { ApplyUrlEvidence, VacancyIdentity } from '../vacancies/identity.js';
+
+export type {
+  ApplyUrlEvidence,
+  ApplyUrlStatus,
+  VacancyIdentity,
+  VacancyIdentityKind,
+} from '../vacancies/identity.js';
 import type { WorkEligibilityEvidence } from '../eligibility/models.js';
 
 const reviewAnswerSchema = z.enum(['yes', 'no', 'uncertain']);
@@ -202,6 +210,13 @@ export type DiscoveryProvider =
   | 'ats_roster_personio'
   | 'nav_arbeidsplassen';
 
+/** One discovery source's contribution to a (possibly merged) vacancy row -- issue #278. */
+export type VacancySourceReference = {
+  provider: DiscoveryProvider;
+  key: string;
+  url: string;
+};
+
 export type DiscoveryVacancyAudit = {
   key: string;
   provider: DiscoveryProvider;
@@ -249,6 +264,38 @@ export type DiscoveryVacancyAudit = {
    * crash.
    */
   eligibility?: WorkEligibilityEvidence | null;
+  /**
+   * Issue #278: this row's canonical job identity -- requisition, canonical URL, or semantic, in
+   * that trust order. Always set by `discoveryAudit()` (`global-remote/discovery-shared.ts`) for a
+   * freshly discovered row; optional only so a `latest.json` report written by an engine version
+   * from before this field existed still deserializes, matching `eligibility`'s own compatibility
+   * reasoning above. `uniqueDiscovery` (`pipeline/global-remote.ts`) never trusts this field
+   * directly for grouping -- it recomputes identity from `url`/`company`/`title`/`location`
+   * instead, so an old row missing this field still merges correctly.
+   */
+  identity?: VacancyIdentity;
+  /**
+   * Issue #278: the exact URL this discovery source returned. Same value as `url`, added purely for
+   * explicit source-attribution naming alongside the new `applyUrl` below -- `url` itself is left
+   * untouched (still the same raw discovered URL it always was) so every existing reader of `.url`
+   * keeps working unchanged.
+   */
+  sourceUrl?: string;
+  /**
+   * Issue #278: whether `url` has actually been confirmed to resolve to this exact role, with the
+   * evidence behind that answer. A generic careers page, aggregator listing page or search-result
+   * snippet can only ever be `unresolved` here, never `verified` -- see `resolveApplyUrl`
+   * (`vacancies/identity.ts`). Optional for the same old-report-compatibility reason as `identity`.
+   */
+  applyUrl?: ApplyUrlEvidence;
+  /**
+   * Issue #278: every discovery source reference that contributed to this row after
+   * `uniqueDiscovery` merged same-identity duplicates -- e.g. an aggregator and an ATS-roster
+   * adapter that both resolved to the same requisition. Always at least one entry (this row's own
+   * source) for a freshly discovered row; optional for the same old-report-compatibility reason as
+   * `identity`.
+   */
+  sources?: VacancySourceReference[];
 };
 
 export type DiscoverySourceAudit = {

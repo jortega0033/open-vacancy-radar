@@ -100,6 +100,177 @@ describe('global remote discovery aggregation', () => {
     });
   });
 
+  // Issue #278 acceptance checks: canonical job identity, sourceUrl/applyUrl semantics, and merged
+  // source references. Each `it` below is named after (and maps directly to) one acceptance check
+  // from the issue.
+
+  it('acceptance 1: an aggregator and an official ATS adapter for the same requisition merge into one actionable vacancy carrying both source references', () => {
+    const requisitionUrl = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const results = uniqueDiscovery([
+      vacancy('himalayas', 'himalayas:abc123', requisitionUrl, 'Senior Frontend Engineer (aggregator copy)'),
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:555000',
+        requisitionUrl,
+        'Senior Frontend Engineer',
+      ),
+    ]);
+
+    expect(results).toHaveLength(1);
+    const [merged] = results;
+    // The direct ATS-roster adapter's own content wins (see `identityMergePriority`), but both
+    // sources are still recorded on the merged row.
+    expect(merged).toMatchObject({ provider: 'ats_roster_greenhouse', title: 'Senior Frontend Engineer' });
+    expect(merged!.identity).toMatchObject({
+      kind: 'requisition',
+      employerKey: 'greenhouse:acme',
+      requisitionId: '555000',
+    });
+    expect(merged!.applyUrl).toMatchObject({ status: 'verified', url: requisitionUrl });
+    expect(merged!.sources).toEqual(
+      expect.arrayContaining([
+        { provider: 'himalayas', key: 'himalayas:abc123', url: requisitionUrl },
+        {
+          provider: 'ats_roster_greenhouse',
+          key: 'ats_roster_greenhouse:acme:555000',
+          url: requisitionUrl,
+        },
+      ]),
+    );
+    expect(merged!.sources).toHaveLength(2);
+  });
+
+  it('acceptance 1: convergence works regardless of which discovery source is scanned first', () => {
+    const requisitionUrl = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    // Same two rows as above, reversed input order -- the merge must not depend on scan order.
+    const results = uniqueDiscovery([
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:555000',
+        requisitionUrl,
+        'Senior Frontend Engineer',
+      ),
+      vacancy('himalayas', 'himalayas:abc123', requisitionUrl, 'Senior Frontend Engineer (aggregator copy)'),
+    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.sources).toHaveLength(2);
+  });
+
+  it('acceptance 2: two different requisitions at the same employer stay distinct', () => {
+    const results = uniqueDiscovery([
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:1',
+        'https://job-boards.greenhouse.io/acme/jobs/1',
+        'Senior Frontend Engineer',
+      ),
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:2',
+        'https://job-boards.greenhouse.io/acme/jobs/2',
+        'Senior Frontend Engineer',
+      ),
+    ]);
+
+    expect(results).toHaveLength(2);
+    const requisitionIds = results.map((result) => result.identity?.requisitionId).sort();
+    expect(requisitionIds).toEqual(['1', '2']);
+  });
+
+  it('acceptance 2: an aggregator posting matching one requisition never absorbs a second, different requisition at the same employer', () => {
+    const results = uniqueDiscovery([
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:1',
+        'https://job-boards.greenhouse.io/acme/jobs/1',
+        'Senior Frontend Engineer',
+      ),
+      vacancy(
+        'himalayas',
+        'himalayas:other',
+        'https://job-boards.greenhouse.io/acme/jobs/2',
+        'Staff Frontend Engineer',
+      ),
+    ]);
+    expect(results).toHaveLength(2);
+  });
+
+  it('acceptance 3: a generic careers page, an aggregator listing page and a search snippet are stored but never marked verified', () => {
+    const results = uniqueDiscovery([
+      vacancy('himalayas', 'himalayas:careers-page', 'https://acme.com/careers', 'Some role at Acme'),
+      vacancy('jobicy', 'jobicy:listing-page', 'https://himalayas.app/jobs', 'Some role'),
+      vacancy(
+        'arbeitnow',
+        'arbeitnow:search-snippet',
+        'https://www.google.com/search?q=acme+careers',
+        'Acme careers search result',
+      ),
+    ]);
+
+    expect(results).toHaveLength(3);
+    for (const result of results) {
+      expect(result.applyUrl?.status).toBe('unresolved');
+      expect(result.identity?.kind).not.toBe('requisition');
+    }
+  });
+
+  it('acceptance 4: an unresolved apply URL never causes a row to be dropped', () => {
+    const results = uniqueDiscovery([
+      vacancy('himalayas', 'himalayas:unresolved-only', 'https://acme.com/careers', 'Some role at Acme'),
+    ]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.applyUrl?.status).toBe('unresolved');
+    expect(results[0]!.decision).toBe('salary_unverified');
+  });
+
+  it('acceptance 5: a merged row keeps its surviving source\'s original key and url, preserving any existing submitted-attempt link to it', () => {
+    const requisitionUrl = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const results = uniqueDiscovery([
+      vacancy('himalayas', 'himalayas:abc123', requisitionUrl, 'Senior Frontend Engineer (aggregator copy)'),
+      vacancy(
+        'ats_roster_greenhouse',
+        'ats_roster_greenhouse:acme:555000',
+        requisitionUrl,
+        'Senior Frontend Engineer',
+      ),
+    ]);
+
+    expect(results).toHaveLength(1);
+    // The surviving row's own `key`/`url` are exactly what `ats_roster_greenhouse` produced --
+    // unchanged and unsynthesized -- so a `SavedJobRecord.vacancyKey`/`ApplicationAttemptRecord`
+    // link created against this exact source keeps resolving.
+    expect(results[0]!.key).toBe('ats_roster_greenhouse:acme:555000');
+    expect(results[0]!.url).toBe(requisitionUrl);
+  });
+
+  it('acceptance 5: rows lacking identity/applyUrl/sources (an old persisted report row) still dedupe and merge correctly', () => {
+    const requisitionUrl = 'https://job-boards.greenhouse.io/acme/jobs/555000';
+    const legacyRow: DiscoveryVacancyAudit = vacancy(
+      'himalayas',
+      'himalayas:legacy',
+      requisitionUrl,
+      'Senior Frontend Engineer (legacy row)',
+    );
+    // Simulate a row read back from a `latest.json` written before issue #278: no `identity`,
+    // `sourceUrl`, `applyUrl` or `sources` field at all.
+    delete (legacyRow as Partial<DiscoveryVacancyAudit>).identity;
+    delete (legacyRow as Partial<DiscoveryVacancyAudit>).sourceUrl;
+    delete (legacyRow as Partial<DiscoveryVacancyAudit>).applyUrl;
+    delete (legacyRow as Partial<DiscoveryVacancyAudit>).sources;
+
+    const freshRow = vacancy(
+      'ats_roster_greenhouse',
+      'ats_roster_greenhouse:acme:555000',
+      requisitionUrl,
+      'Senior Frontend Engineer',
+    );
+
+    const results = uniqueDiscovery([legacyRow, freshRow]);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.sources).toHaveLength(2);
+  });
+
   it('renders discovery source health and safely exposes stale snapshot age', () => {
     const report = {
       runId: 'run-1',
