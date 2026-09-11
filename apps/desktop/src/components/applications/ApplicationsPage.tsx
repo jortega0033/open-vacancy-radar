@@ -10,7 +10,7 @@ import type {
   SavedJobRecord,
 } from '../../window.js';
 import emptyApplicationsIllustration from '../../../assets/illustrations/empty-applications.svg?no-inline';
-import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
 import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
 import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
@@ -270,16 +270,15 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Applications</h2>
-        {!isInProgressTab && (
+      {!isInProgressTab && (
+        <div className="flex justify-end">
           <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
             Add application
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div role="tablist" className="tabs tabs-border mt-4">
+      <div role="tablist" className="tabs tabs-box mt-4">
         {APPLICATIONS_FILTER_TABS.map((tab) => (
           <button
             key={tab.key}
@@ -305,18 +304,10 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
 
       {!isInProgressTab && (
         <>
-          {loadError && (
-            <div className="alert alert-error mt-4" role="alert">
-              {loadError}
-            </div>
-          )}
-          {actionError && (
-            <div className="alert alert-error mt-4" role="alert">
-              {actionError}
-            </div>
-          )}
+          {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+          {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 
-          {isLoading && !loadError && <div className="alert alert-info mt-4">Loading applications…</div>}
+          {isLoading && !loadError && <PageLoading label="Loading applications…" />}
 
           {isEmpty && (
             <EmptyState
@@ -349,16 +340,13 @@ export function ApplicationsPage({ onApplicationsChanged }: ApplicationsPageProp
 
       {isInProgressTab && (
         <>
-          {attemptsError && (
-            <div className="alert alert-error mt-4" role="alert">
-              {attemptsError}
-            </div>
-          )}
+          {attemptsError && <ErrorBanner className="mt-4">{attemptsError}</ErrorBanner>}
 
-          {isAttemptsLoading && !attemptsError && <div className="alert alert-info mt-4">Loading…</div>}
+          {isAttemptsLoading && !attemptsError && <PageLoading label="Loading…" />}
 
           {isAttemptsEmpty && (
             <EmptyState
+              illustration={emptyApplicationsIllustration}
               title="Nothing in progress"
               description="Applications the assistant is preparing, filling in, or waiting on you for will show up here."
             />

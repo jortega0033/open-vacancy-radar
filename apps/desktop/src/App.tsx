@@ -12,6 +12,7 @@ import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import {
   AppSidebar,
+  ErrorBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -221,7 +222,7 @@ export function App() {
               destination you are on, "the CLI runtime is not running" is worth knowing. */}
           {daemonState === 'connecting' && <div className="alert alert-info mb-5">Connecting to local daemon…</div>}
           {daemonState === 'unavailable' && (
-            <div className="alert alert-error alert-soft mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</div>
+            <ErrorBanner className="mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</ErrorBanner>
           )}
 
           {nav === 'search' && <SearchPage onGenerateLetter={handleGenerateLetter} />}

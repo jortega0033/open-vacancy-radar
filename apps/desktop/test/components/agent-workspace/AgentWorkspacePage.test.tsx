@@ -400,6 +400,20 @@ describe('AgentWorkspacePage: preferences are SQLite-backed', () => {
   });
 });
 
+describe('AgentWorkspacePage: empty session list', () => {
+  it('shows the shared empty state, with illustration, when there are no sessions yet', async () => {
+    installAgentWorkspaceBridge();
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+
+    await waitFor(() => expect(screen.getByText('No agent sessions yet')).toBeInTheDocument());
+    expect(screen.getByText('Start one to see it here.')).toBeInTheDocument();
+    const illustration = screen.getByTestId('empty-state-illustration');
+    expect(illustration.getAttribute('style')).toContain('empty-sessions.svg');
+  });
+});
+
 describe('AgentWorkspacePage: capacity', () => {
   it('reports the daemon aggregate without claiming a per-provider number it did not ask for', async () => {
     installAgentWorkspaceBridge({
