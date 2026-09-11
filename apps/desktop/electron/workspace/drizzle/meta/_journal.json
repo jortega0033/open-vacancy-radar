@@ -85,6 +85,13 @@
       "when": 1788648009623,
       "tag": "0011_mixed_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789110551104,
+      "tag": "0012_petite_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }

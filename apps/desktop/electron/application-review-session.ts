@@ -293,6 +293,11 @@ export async function submitApplicationReview(
       return { ok: false, reason: 'submission_unknown', detail };
     }
 
+    // Deliberately records no `completionEvidence` (#275). This path knows the submit control was
+    // clicked and returned, which is not the same as knowing the application landed -- the receipt
+    // observation that could honestly justify `receipt_confirmed` is #271's, and claiming it here
+    // would put a value in the audit trail that nothing actually observed. The null reads as
+    // "completed, evidence not recorded"; the checkpoint alone already suppresses a duplicate.
     workspace.updateApplicationAttempt(db, attemptId, {
       checkpoint: 'submitted',
       submittedAt: new Date().toISOString(),
