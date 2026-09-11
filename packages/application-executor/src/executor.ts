@@ -66,6 +66,14 @@ interface BoxModel {
   content: readonly number[]; // [x1,y1, x2,y2, x3,y3, x4,y4] quad
 }
 
+/** One `Accessibility.getFullAXTree` node, narrowed to the two fields `readBackAttachment` reads.
+ * CDP types `AXValue.value` as an arbitrary JSON value, so it stays `unknown` here and is narrowed
+ * at the one place that consumes it rather than asserted to be a string. */
+interface AxNode {
+  backendDOMNodeId?: number;
+  value?: { value?: unknown };
+}
+
 function boxCenter(box: BoxModel): { x: number; y: number } {
   const [x1, y1, , , x3, y3] = box.content;
   return { x: ((x1 ?? 0) + (x3 ?? 0)) / 2, y: ((y1 ?? 0) + (y3 ?? 0)) / 2 };
@@ -285,6 +293,42 @@ export class ApplicationExecutor {
     }
     const backendNodeId = this.nodeIdFor('attach', fieldRef);
     await this.send('DOM.setFileInputFiles', { files: [file.localFilePath], backendNodeId });
+  }
+
+  /**
+   * What the browser itself reports is currently selected on a `file` input, or `null` when it
+   * reports nothing at all -- the read-back half of `attach`, so a caller can confirm the file
+   * actually landed on the control rather than assuming `DOM.setFileInputFiles` resolving means it
+   * did (#273: "read back the attached filename ... before ready", never fire-and-forget).
+   *
+   * Reads the control's own accessible value out of `Accessibility.getFullAXTree`, matched by the
+   * exact `backendNodeId` this executor already holds for `fieldRef` -- never by label or by
+   * scanning for a string that looks like a file name. Chromium reports a file input's status text
+   * as that node's accessible value: verified directly against a real Electron process driving the
+   * `e2e/fixtures/ashby-application-form.html` file input over CDP, which reported
+   * `value: "No file chosen"` before `DOM.setFileInputFiles` and the selected file's own base name
+   * after it, with no `Accessibility.enable` call needed first.
+   *
+   * That is the only read-back available inside the frozen CDP allowlist: the selected file is an
+   * IDL property, not an HTML attribute, so `DOM.getAttributes`/`DOM.describeNode` cannot see it,
+   * and the one domain that could read a property directly is structurally denied
+   * (`cdp-allowlist.ts`'s `DENIED_CDP_DOMAINS`). Note the reported name is the *on-disk* file's
+   * base name, not whatever logical name the caller's artifact record carries.
+   *
+   * Deliberately returns the raw reported string rather than a boolean: deciding what counts as a
+   * confirmed attachment is the caller's judgment (it is the side that knows which file name it
+   * asked for), and a wrong-but-present file name must be distinguishable from nothing at all.
+   */
+  async readBackAttachment(fieldRef: string): Promise<string | null> {
+    this.requireAction('attach');
+    const field = this.currentField(fieldRef);
+    if (!field) throw new ExecutorPolicyError('attach', `unknown fieldRef ${fieldRef}`);
+    if (field.controlType !== 'file') throw new ExecutorPolicyError('attach', `fieldRef ${fieldRef} is not a file input`);
+    const backendNodeId = this.nodeIdFor('attach', fieldRef);
+    const tree = (await this.send('Accessibility.getFullAXTree', {})) as { nodes?: readonly AxNode[] };
+    const node = (tree.nodes ?? []).find((candidate) => candidate.backendDOMNodeId === backendNodeId);
+    const value = node?.value?.value;
+    return typeof value === 'string' ? value : null;
   }
 
   /** Captures a screenshot for the review UI / submission evidence record. */

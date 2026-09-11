@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CdpDomNode } from '@agent-dock/application-executor';
+import { ALLOWED_CDP_METHODS, type CdpDomNode } from '@agent-dock/application-executor';
+import { stagedArtifactPath } from '../electron/application-artifact-staging.js';
 import { FIXTURE_REVIEW_POLICY } from '../electron/application-target-policies.js';
 
 // The real fixture policy's own allowed URL, not an arbitrary literal -- since #201's review fix,
@@ -22,7 +24,7 @@ const workspaceMock = vi.hoisted(() => ({
   getApplicationAttempt: vi.fn(),
   listApplicationAttempts: vi.fn(() => [] as unknown[]),
   listCvDocuments: vi.fn(() => [] as Array<{ id: string; text: string }>),
-  listApplicationArtifacts: vi.fn(() => [] as Array<{ kind: string; storagePath: string; contentHash: string }>),
+  listApplicationArtifacts: vi.fn((_db: unknown, _attemptId: string) => [] as unknown[]),
   updateApplicationAttempt: vi.fn(),
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
   createApplicationSubmissionReceipt: vi.fn((_db: unknown, input: Record<string, unknown>) => ({ id: 'receipt-1', ...input })),
@@ -45,11 +47,16 @@ vi.mock('../electron/workspace/repository.js', () => workspaceMock);
 vi.mock('../electron/cv-text.js', () => ({ extractPdfText }));
 vi.mock('../electron/automatic-submission-notify.js', () => ({ notifyAutomaticSubmission }));
 const { readFile, mkdir, writeFile } = vi.hoisted(() => ({
-  readFile: vi.fn(async () => Buffer.from('')),
+  readFile: vi.fn(async (_path: string): Promise<Buffer> => Buffer.from('')),
   mkdir: vi.fn(async () => undefined),
   writeFile: vi.fn(async () => undefined),
 }));
 vi.mock('node:fs/promises', () => ({ readFile, mkdir, writeFile, default: { readFile, mkdir, writeFile } }));
+// Nothing in this path may ever open a native file chooser: an attachment is resolved from the
+// attempt's own registered artifacts, never picked. Mocked (rather than left unmocked) so the
+// assertion that it stays untouched is a real one -- see the "no native file picker" test below.
+const { dialog } = vi.hoisted(() => ({ dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn() } }));
+vi.mock('electron', () => ({ dialog }));
 
 /**
  * The hash of the bytes the mocked `readFile` hands back. #276 reads every staged artifact through
@@ -117,8 +124,31 @@ const REQUIRED_ERROR_TREE: CdpDomNode = {
  * been dispatched -- the fixture equivalent of a page reacting to its own submit button. Without
  * it the page never changes, which is itself a case worth testing.
  */
+/** Every `backendNodeId` in `tree` that belongs to an `<input type="file">`, so the fake below can
+ * answer an accessibility read-back for exactly the controls a real browser would have one for. */
+function fileInputNodeIds(node: CdpDomNode): number[] {
+  const attributes = node.attributes ?? [];
+  const isFileInput =
+    node.nodeName === 'INPUT' &&
+    attributes.some((value, index) => index % 2 === 0 && value.toLowerCase() === 'type' && attributes[index + 1] === 'file');
+  return [...(isFileInput ? [node.backendNodeId] : []), ...(node.children ?? []).flatMap(fileInputNodeIds)];
+}
+
+/**
+ * A fake CDP transport that models the two browser behaviors these tests depend on.
+ *
+ * #273's read-back: a file input reports whatever file is currently selected on it as its own
+ * accessible value, and `DOM.setFileInputFiles` *replaces* that selection rather than adding to it.
+ * An untouched file input reports Chromium's own placeholder instead, which is what an attachment
+ * that silently failed looks like from the outside.
+ *
+ * #271's post-click observation: `afterSubmitTree`, when given, is what `DOM.getDocument` starts
+ * returning once a real click has been dispatched -- the fixture equivalent of a page reacting to
+ * its own submit button. Without it the page never changes, which is itself a case worth testing.
+ */
 function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNode; readFailsAfterSubmit?: boolean } = {}) {
   let clicked = false;
+  const selectedFiles = new Map<number, readonly string[]>();
   const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     switch (method) {
       case 'Page.navigate':
@@ -133,6 +163,19 @@ function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNo
       case 'Input.dispatchMouseEvent':
         clicked = true;
         return {};
+      case 'DOM.setFileInputFiles': {
+        const { backendNodeId, files } = (params ?? {}) as { backendNodeId: number; files: readonly string[] };
+        selectedFiles.set(backendNodeId, files);
+        return {};
+      }
+      case 'Accessibility.getFullAXTree':
+        return {
+          nodes: fileInputNodeIds(tree).map((backendDOMNodeId) => {
+            const files = selectedFiles.get(backendDOMNodeId) ?? [];
+            const reported = files.length === 0 ? 'No file chosen' : files.map((file) => basename(file)).join(', ');
+            return { backendDOMNodeId, value: { type: 'string', value: reported } };
+          }),
+        };
       case 'DOM.focus':
       case 'Input.insertText':
       case 'Input.dispatchKeyEvent':
@@ -141,12 +184,60 @@ function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNo
         throw new Error(`unexpected CDP method in test: ${method} ${JSON.stringify(params)}`);
     }
   });
-  return { view: {}, transport: { sendCommand }, show: vi.fn(), hide: vi.fn(), destroy: vi.fn() };
+  return { view: {}, transport: { sendCommand }, show: vi.fn(), hide: vi.fn(), destroy: vi.fn(), selectedFiles };
 }
 
 const FAKE_DB = {} as never;
 
 const ATTEMPT_ID = '11111111-1111-4111-8111-111111111111';
+
+/**
+ * A synthetic staging area: `path -> bytes`, served by the mocked `node:fs/promises.readFile`. All
+ * paths are computed by `stagedArtifactPath` from a fake storage root, so nothing here names a real
+ * location on the machine running the test.
+ */
+const STORAGE_ROOT = '/synthetic-staging-root';
+const stagedFiles = new Map<string, Buffer>();
+
+function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Writes `bytes` into the synthetic staging area under `attemptId`'s own folder and returns the
+ * artifact record #198 would have registered for them. */
+function stageArtifact(
+  id: string,
+  fileName: string,
+  bytes: Buffer,
+  overrides: Partial<Record<string, unknown>> = {},
+  attemptId: string = ATTEMPT_ID,
+) {
+  const contentHash = sha256Hex(bytes);
+  const storagePath = stagedArtifactPath(STORAGE_ROOT, attemptId, contentHash, fileName);
+  stagedFiles.set(storagePath, bytes);
+  return {
+    id,
+    attemptId,
+    kind: 'cv_pdf',
+    fileName,
+    mimeType: 'application/pdf',
+    byteSize: bytes.byteLength,
+    contentHash,
+    storagePath,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** Points the mocked `readFile` at the synthetic staging area, so an artifact whose bytes were
+ * never staged (or were removed) fails the same way a real missing file does. */
+function serveStagedFiles(): void {
+  readFile.mockImplementation(async (path: string) => {
+    const bytes = stagedFiles.get(path);
+    if (bytes === undefined) throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+    return bytes;
+  });
+}
 
 function fakeAttempt(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -201,6 +292,12 @@ beforeEach(() => {
   workspaceMock.listApplicationSubmissionReceipts.mockReset().mockReturnValue([]);
   notifyAutomaticSubmission.mockReset();
   extractPdfText.mockReset().mockResolvedValue('');
+  dialog.showOpenDialog.mockReset();
+  dialog.showSaveDialog.mockReset();
+  // Reset rather than left standing: several tests below install a per-path implementation, and a
+  // leaked one would silently change what a later test's artifact reads back as.
+  readFile.mockReset().mockImplementation(async () => Buffer.from(''));
+  stagedFiles.clear();
 });
 
 async function importSession() {
@@ -263,7 +360,7 @@ describe('application-review-session', () => {
     const licenseField = opened.snapshot.fields.find((f) => f.label === 'hasDriversLicense')!;
     const yesOption = authField.options!.find((o) => o.label === 'Yes')!;
 
-    const result = await applyApplicationFieldMap({
+    const result = await applyApplicationFieldMap(FAKE_DB, {
       attemptId: '11111111-1111-4111-8111-111111111111',
       valueTable: [{ valueRef: 'v0000000000000001', value: 'Ada Lovelace', provenance: 'profile' }, { valueRef: 'v0000000000000002', value: 'true', provenance: 'user_answer' }],
       fieldMap: {
@@ -290,7 +387,7 @@ describe('application-review-session', () => {
     const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
 
-    const result = await applyApplicationFieldMap({
+    const result = await applyApplicationFieldMap(FAKE_DB, {
       attemptId: '11111111-1111-4111-8111-111111111111',
       valueTable: [{ valueRef: 'v0000000000000001', value: 'Ada Lovelace', provenance: 'profile' }],
       fieldMap: {
@@ -305,12 +402,12 @@ describe('application-review-session', () => {
     expect(result.reason).toBe('stale_snapshot_generation');
   });
 
-  it('refuses a field map with an artifact assignment, since ownership is never resolved in this slice', async () => {
+  it('refuses an artifact assignment naming an id this attempt does not own', async () => {
     const { openApplicationReview, applyApplicationFieldMap } = await importSession();
     const opened = await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
 
-    const result = await applyApplicationFieldMap({
+    const result = await applyApplicationFieldMap(FAKE_DB, {
       attemptId: '11111111-1111-4111-8111-111111111111',
       valueTable: [],
       fieldMap: {
@@ -328,8 +425,334 @@ describe('application-review-session', () => {
   it('throws when applying a field map for an attempt with no open review', async () => {
     const { applyApplicationFieldMap } = await importSession();
     await expect(
-      applyApplicationFieldMap({ attemptId: '22222222-2222-4222-8222-222222222222', valueTable: [], fieldMap: { attemptId: '22222222-2222-4222-8222-222222222222', snapshotGeneration: 1, assignments: [], unmapped: [] } }),
+      applyApplicationFieldMap(FAKE_DB, { attemptId: '22222222-2222-4222-8222-222222222222', valueTable: [], fieldMap: { attemptId: '22222222-2222-4222-8222-222222222222', snapshotGeneration: 1, assignments: [], unmapped: [] } }),
     ).rejects.toThrow(/no open review/);
+  });
+
+  /**
+   * #273: the application bridge used to hand `validateFieldMap` a permanently empty owned-artifact
+   * set, so every `artifact` assignment was refused by construction -- an attempt could not attach
+   * even its own CV. These cover the fixed path end to end, and every way it must still refuse.
+   */
+  describe('artifact attachments (#273)', () => {
+    const UPLOAD_TREE: CdpDomNode = {
+      ...TREE,
+      children: [
+        ...TREE.children!,
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 20, attributes: ['type', 'file', 'name', 'resume', 'required', ''] },
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 21, attributes: ['type', 'file', 'name', 'coverLetterFile', 'required', ''] },
+      ],
+    };
+
+    const CV_ARTIFACT_ID = '44444444-4444-4444-8444-444444444444';
+    const LETTER_ARTIFACT_ID = '55555555-5555-4555-8555-555555555555';
+    const FOREIGN_ARTIFACT_ID = '66666666-6666-4666-8666-666666666666';
+    const OTHER_ATTEMPT_ID = '22222222-2222-4222-8222-222222222222';
+    const CV_BYTES = Buffer.from('%PDF-1.4 synthetic fixture resume bytes');
+    const LETTER_BYTES = Buffer.from('%PDF-1.4 synthetic fixture cover letter bytes');
+
+    type Assignment = { fieldRef: string; source: Record<string, unknown> };
+
+    async function openUploadReview() {
+      const session = await importSession();
+      const view = fakeView(UPLOAD_TREE);
+      createApplicationView.mockImplementation(() => view);
+      const opened = await session.openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const field = (label: string) => {
+        const found = opened.snapshot.fields.find((f) => f.label === label);
+        if (!found) throw new Error(`fixture field "${label}" not in snapshot`);
+        return found;
+      };
+      /** Rule 9 (completeness) still applies: any required field this map does not assign has to be
+       * listed as unmapped, exactly as a real generation session would have to. */
+      const fieldMap = (assignments: Assignment[]) => ({
+        attemptId: ATTEMPT_ID,
+        snapshotGeneration: opened.snapshot.generation,
+        assignments,
+        unmapped: opened.snapshot.fields
+          .filter((f) => f.required && !assignments.some((a) => a.fieldRef === f.fieldRef))
+          .map((f) => ({ fieldRef: f.fieldRef, reason: 'needs_user' as const })),
+      });
+      return { session, view, opened, field, fieldMap };
+    }
+
+    function cdpCalls(view: ReturnType<typeof fakeView>, method: string) {
+      return view.transport.sendCommand.mock.calls.filter(([called]) => called === method);
+    }
+
+    function uploadedPaths(view: ReturnType<typeof fakeView>): string[][] {
+      return cdpCalls(view, 'DOM.setFileInputFiles').map(([, params]) => [...((params as { files: readonly string[] }).files)]);
+    }
+
+    it('attaches an attempt\'s own CV and required letter through the real bridge, and reports what the page itself came back with', async () => {
+      const { session, view, opened, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      const letter = stageArtifact(LETTER_ARTIFACT_ID, 'cover-letter.pdf', LETTER_BYTES, { kind: 'cover_letter_pdf' });
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv, letter]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([
+          { fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } },
+          { fieldRef: field('coverLetterFile').fieldRef, source: { kind: 'artifact', artifactId: LETTER_ARTIFACT_ID } },
+        ]),
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        appliedCount: 2,
+        attachments: [
+          { artifactId: CV_ARTIFACT_ID, fieldRef: field('resume').fieldRef, fileName: 'resume.pdf', attachedFileName: basename(cv.storagePath) },
+          { artifactId: LETTER_ARTIFACT_ID, fieldRef: field('coverLetterFile').fieldRef, fileName: 'cover-letter.pdf', attachedFileName: basename(letter.storagePath) },
+        ],
+      });
+      // The real CDP call carried exactly the two registered staging paths, nothing else.
+      expect(uploadedPaths(view)).toEqual([[cv.storagePath], [letter.storagePath]]);
+      expect(workspaceMock.listApplicationArtifacts).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID);
+      void opened;
+    });
+
+    it('reads the control back after the upload, and only then reports the attachment as applied', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result.ok).toBe(true);
+      const methods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
+      // Never fire-and-forget: the confirming read is a real call, and it happens after the upload.
+      expect(methods.indexOf('Accessibility.getFullAXTree')).toBeGreaterThan(methods.indexOf('DOM.setFileInputFiles'));
+    });
+
+    it('refuses, never reports ready, when the page does not report the file back on the control afterwards', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+      const browser = view.transport.sendCommand.getMockImplementation()!;
+      // The upload silently does not take -- the control still reports an empty selection.
+      view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Accessibility.getFullAXTree') {
+          return { nodes: [{ backendDOMNodeId: 20, value: { type: 'string', value: 'No file chosen' } }] };
+        }
+        return browser(method, params);
+      });
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'attachment_unconfirmed' });
+      expect(result.attachments).toBeUndefined();
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(1); // it genuinely tried, then refused on the read-back
+    });
+
+    it('refuses a file belonging to another attempt before uploading or typing anything', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const theirs = stageArtifact(FOREIGN_ARTIFACT_ID, 'resume.pdf', CV_BYTES, {}, OTHER_ATTEMPT_ID);
+      // The real repository query is scoped by attempt id in SQL: this attempt's list never
+      // contains the other attempt's row, however valid that row's own file is.
+      workspaceMock.listApplicationArtifacts.mockImplementation((_db: unknown, attemptId: string) => (attemptId === OTHER_ATTEMPT_ID ? [theirs] : []));
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [{ valueRef: 'v0000000000000001', value: 'Ada Lovelace', provenance: 'profile' }],
+        fieldMap: fieldMap([
+          { fieldRef: field('fullName').fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } },
+          { fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: FOREIGN_ARTIFACT_ID } },
+        ]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_not_owned' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+      // Not even the unrelated text field was filled: a refused map applies nothing at all.
+      expect(cdpCalls(view, 'Input.insertText')).toHaveLength(0);
+      expect(readFile).not.toHaveBeenCalledWith(theirs.storagePath);
+    });
+
+    it('refuses an artifact whose bytes changed since staging, before any upload', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+      // Same byte length, different content: only a real re-hash catches this.
+      stagedFiles.set(cv.storagePath, Buffer.from('%PDF-1.4 synthetic fixture resume BYTES'));
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_content_changed' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+    });
+
+    it('refuses an artifact whose staged file is gone, before any upload', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+      stagedFiles.delete(cv.storagePath);
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_file_unreadable' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+    });
+
+    it('refuses an oversized artifact before any upload', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES, {
+        byteSize: FIXTURE_REVIEW_POLICY.uploadConstraints.maxBytes + 1,
+      });
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_too_large' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+    });
+
+    it('refuses an artifact whose type this target does not accept, before any upload', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.docx', CV_BYTES, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_mime_not_allowed' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+    });
+
+    it('refuses an artifact registered to a path outside this attempt\'s own staging folder, however readable that file is', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      // A real, correctly-hashed PDF sitting somewhere ambient (a downloads-style folder) rather
+      // than in this attempt's staging folder.
+      const ambientPath = '/synthetic-downloads/resume.pdf';
+      stagedFiles.set(ambientPath, CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([
+        { ...stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES), storagePath: ambientPath },
+      ]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({ ok: false, reason: 'artifact_outside_attempt_staging' });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+    });
+
+    it('a retry re-attaches the same registered file, never whatever is newest somewhere else', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      // A newer, larger, plausibly-named file that appeared after staging, outside the attempt's
+      // folder -- nothing in this path may ever notice it exists.
+      const decoyPath = '/synthetic-downloads/resume (3).pdf';
+      stagedFiles.set(decoyPath, Buffer.from('%PDF-1.4 a much newer unrelated download that must never be attached'));
+      serveStagedFiles();
+
+      const input = {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      };
+      const first = await session.applyApplicationFieldMap(FAKE_DB, input);
+      const retry = await session.applyApplicationFieldMap(FAKE_DB, input);
+
+      expect(first.ok).toBe(true);
+      expect(retry.ok).toBe(true);
+      // Both runs set the identical single path -- `DOM.setFileInputFiles` replaces a selection
+      // rather than appending to it, so a retry leaves exactly the intended file on the control.
+      expect(uploadedPaths(view)).toEqual([[cv.storagePath], [cv.storagePath]]);
+      expect(view.selectedFiles.get(20)).toEqual([cv.storagePath]);
+      expect(readFile).not.toHaveBeenCalledWith(decoyPath);
+    });
+
+    it('needs no native file picker, and stays inside the frozen CDP allowlist, for the supported fixture path', async () => {
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dialog.showOpenDialog).not.toHaveBeenCalled();
+      expect(dialog.showSaveDialog).not.toHaveBeenCalled();
+      const methods = new Set(view.transport.sendCommand.mock.calls.map(([method]) => method as string));
+      for (const method of methods) expect(ALLOWED_CDP_METHODS).toContain(method);
+    });
+
+    it('hands an upload this target may not drive to the user as a visible manual handoff, never a silent drop', async () => {
+      vi.doMock('../electron/application-target-policies.js', () => {
+        const policy = { ...FIXTURE_REVIEW_POLICY, killSwitches: { ...FIXTURE_REVIEW_POLICY.killSwitches, upload: true } };
+        return {
+          FIXTURE_REVIEW_POLICY: policy,
+          resolveApplicationTargetPolicy: (id: string) => (id === policy.id ? policy : undefined),
+          resolvePolicyIdForCanonicalUrl: (url: string) => (url === FIXTURE_URL ? policy.id : undefined),
+        };
+      });
+      const { session, view, field, fieldMap } = await openUploadReview();
+      const cv = stageArtifact(CV_ARTIFACT_ID, 'resume.pdf', CV_BYTES);
+      workspaceMock.listApplicationArtifacts.mockReturnValue([cv]);
+      serveStagedFiles();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [],
+        fieldMap: fieldMap([{ fieldRef: field('resume').fieldRef, source: { kind: 'artifact', artifactId: CV_ARTIFACT_ID } }]),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: 'attachment_requires_manual_handoff',
+        manualHandoff: { fieldRef: field('resume').fieldRef, artifactId: CV_ARTIFACT_ID, fileName: 'resume.pdf', reason: 'unsupported_control' },
+      });
+      expect(cdpCalls(view, 'DOM.setFileInputFiles')).toHaveLength(0);
+      expect(dialog.showOpenDialog).not.toHaveBeenCalled();
+
+      // ...and the handoff is genuinely visible: the live page is surfaced on the app's own window.
+      const mainWindow = {} as never;
+      expect(session.showApplicationReviewForHandoff(ATTEMPT_ID, mainWindow)).toBe(true);
+      expect(view.show).toHaveBeenCalledWith(mainWindow);
+      expect(session.showApplicationReviewForHandoff('99999999-9999-4999-8999-999999999999', mainWindow)).toBe(false);
+    });
   });
 
   describe('submitApplicationReview (#202)', () => {
