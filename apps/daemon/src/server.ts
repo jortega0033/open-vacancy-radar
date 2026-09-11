@@ -10,6 +10,7 @@ import type { SessionManager } from './session-manager.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import type { McpConnectionManager } from './mcp/manager.js';
 import { registerV2ProviderRoutes } from './routes/v2-providers.js';
+import { registerV2StageRoutingRoutes } from './routes/v2-stage-routing.js';
 import { registerV2SessionRoutes } from './routes/v2-sessions.js';
 import type { ActiveSessionLimiter } from './active-session-limiter.js';
 import type { SessionLineageStore } from './session-lineage-store.js';
@@ -134,6 +135,13 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
   if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
   if (opts.v2) {
     registerV2ProviderRoutes(app, opts.registry, opts.v2.limiter);
+    // Issue #284. Read-only and registered beside the other v2 read routes: it reports which
+    // providers are eligible for which generation stage and starts nothing. Deleting this one line
+    // removes the surface entirely and changes no other route's behavior, since nothing else in the
+    // daemon consults the stage router -- in particular not
+    // `POST /sessions/application-field-map`, whose own literal provider check is deliberately
+    // independent of any capability a provider adapter declares about itself.
+    registerV2StageRoutingRoutes(app, opts.registry);
     registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter);
     if (opts.v2.workspace) {
       registerV2WorkspaceRoutes(app, {

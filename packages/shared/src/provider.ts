@@ -53,6 +53,27 @@ export interface ProviderCapabilities {
    * in this ticket, only) implementation; Claude's stays absent until #144.
    */
   modelCatalog?: boolean;
+  /**
+   * Does this adapter actually *implement* the `'no-network'` hardening profile
+   * (`StartSessionOptions.hardened` in `packages/agent-runtime/src/types.ts`) -- a reviewed,
+   * non-customizable argv that drops `WebFetch`/`WebSearch` from the CLI's tool allowlist?
+   *
+   * This is the same kind of statement every other key here makes: what the *adapter* does, never
+   * what the model is capable of. `hardened` is documented as a request, not a contract, and an
+   * adapter with nothing to restrict is free to ignore it -- Codex's `buildCodexArgs` does, by
+   * design and permanently. So "the caller asked for `'no-network'`" and "the session actually got
+   * the restrictions" are two different facts, and this key is the only machine-readable way to
+   * tell them apart without writing `if (provider.id === 'claude')` somewhere outside
+   * `packages/agent-runtime`.
+   *
+   * Added by issue #284 so the stage router (`packages/vacancy-agent-adapter/src/stage-routing`)
+   * can refuse to *select* a provider for a stage whose contract requires this profile. It is
+   * deliberately **not** what enforces that restriction at the daemon boundary:
+   * `POST /sessions/application-field-map` keeps its own literal provider check, which exists
+   * precisely so the guarantee does not rest on every current and future adapter declaring this
+   * flag honestly. Selection and enforcement are two independent layers, on purpose.
+   */
+  hardenedNoNetwork?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 
