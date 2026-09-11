@@ -211,4 +211,73 @@ describe('SavedJobsPage', () => {
 
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
+
+  describe('onSavedJobsChanged (stale sidebar/header counts after mutating without navigating away)', () => {
+    it('fires after creating a saved job, so the caller can refresh counts without navigating away', async () => {
+      const createSavedJob = vi
+        .fn()
+        .mockResolvedValue(makeJob({ id: 'new-1', role: 'New Role', company: 'New Co' }));
+      installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([]), createSavedJob });
+      const onSavedJobsChanged = vi.fn();
+
+      render(<SavedJobsPage onSavedJobsChanged={onSavedJobsChanged} />);
+      await waitFor(() => expect(screen.getByText(/no saved jobs/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /add job manually/i }));
+      const dialog = await screen.findByRole('dialog', { name: /add saved job/i });
+      fireEvent.change(within(dialog).getByLabelText(/^role$/i), { target: { value: 'New Role' } });
+      fireEvent.change(within(dialog).getByLabelText(/^company$/i), { target: { value: 'New Co' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(createSavedJob).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onSavedJobsChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not fire for a plain edit, which cannot change the total count', async () => {
+      const job = makeJob({ id: 'edit-1' });
+      const updateSavedJob = vi.fn().mockResolvedValue({ ...job, role: 'Staff Frontend Engineer' });
+      installWorkspaceBridge({ listSavedJobs: vi.fn().mockResolvedValue([job]), updateSavedJob });
+      const onSavedJobsChanged = vi.fn();
+
+      render(<SavedJobsPage onSavedJobsChanged={onSavedJobsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+      const dialog = await screen.findByRole('dialog', { name: /edit saved job/i });
+      fireEvent.change(within(dialog).getByLabelText(/^role$/i), { target: { value: 'Staff Frontend Engineer' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(updateSavedJob).toHaveBeenCalledTimes(1));
+      expect(onSavedJobsChanged).not.toHaveBeenCalled();
+    });
+
+    it('fires after a delete and again after undoing it', async () => {
+      const job = makeJob({ id: 'del-1' });
+      const deleteSavedJob = vi.fn().mockResolvedValue({ deleted: true });
+      const createSavedJob = vi
+        .fn()
+        .mockResolvedValue(makeJob({ id: 'recreated-1', role: job.role, company: job.company }));
+      installWorkspaceBridge({
+        listSavedJobs: vi.fn().mockResolvedValue([job]),
+        deleteSavedJob,
+        createSavedJob,
+      });
+      const onSavedJobsChanged = vi.fn();
+
+      render(<SavedJobsPage onSavedJobsChanged={onSavedJobsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      const confirmDialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
+
+      await waitFor(() => expect(deleteSavedJob).toHaveBeenCalledWith('del-1'));
+      await waitFor(() => expect(onSavedJobsChanged).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(await screen.findByRole('button', { name: /undo/i }));
+
+      await waitFor(() => expect(createSavedJob).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onSavedJobsChanged).toHaveBeenCalledTimes(2));
+    });
+  });
 });
