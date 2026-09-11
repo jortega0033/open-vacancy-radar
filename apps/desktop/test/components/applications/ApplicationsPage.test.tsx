@@ -4,6 +4,42 @@ import { ApplicationsPage } from '../../../src/components/applications/index.js'
 import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 
+/**
+ * What `openReview` hands the review session (#277). `readiness` is a first-class part of that
+ * result now, not an optional extra: the swipe card reports `verifiedFilledCount`, so a fixture
+ * that omitted it would be a fixture for a build where nothing had been verified.
+ *
+ * Defaults to ready with no blockers so the tests here keep being about the approve/skip/close
+ * flow. A test about readiness passes its own.
+ */
+function reviewResult(
+  fields: readonly Record<string, unknown>[],
+  readinessOverrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    snapshot: {
+      generation: 1,
+      fields,
+      submitControls: [],
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      challengeDetected: false,
+      activeFrameId: 0,
+      pageStateFingerprint: 'fingerprint',
+    },
+    screenshotBase64: 'ZmFrZQ==',
+    readiness: {
+      ready: true,
+      verifiedFilledCount: fields.length,
+      discoveredFieldCount: fields.length,
+      requiredFieldCount: fields.filter((field) => field.required === true).length,
+      requiredFieldsSatisfied: fields.filter((field) => field.required === true).length,
+      blockers: [],
+      ...readinessOverrides,
+    },
+    handoffShown: false,
+  };
+}
+
 function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): ApplicationAttemptRecord {
   return {
     id: overrides.id ?? 'attempt-1',
@@ -409,6 +445,8 @@ describe('ApplicationsPage', () => {
         applyFieldMap: vi.fn(),
         submitReview: vi.fn(),
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);
@@ -436,13 +474,12 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { resolveSubmit = resolve; }));
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);
@@ -476,10 +513,9 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn().mockResolvedValue({ ok: true });
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true }], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi
+          .fn()
+          .mockResolvedValue(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview,
@@ -499,6 +535,91 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     });
 
+    it('opening the live handoff names the employer and role from the attempt record, and returning re-reads the page (#277)', async () => {
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      const showHandoff = vi.fn().mockResolvedValue({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+      const hideHandoff = vi.fn().mockResolvedValue(undefined);
+      // The second openReview is the reopen after the handoff: the person has been typing into the
+      // real page, so the readiness reading that comes back is a fresh one.
+      const openReview = vi
+        .fn()
+        .mockResolvedValueOnce(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }], {
+          ready: false,
+          verifiedFilledCount: 0,
+          requiredFieldsSatisfied: 0,
+          blockers: [{ kind: 'challenge_detected' }],
+        }))
+        .mockResolvedValueOnce(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }]));
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview,
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff,
+        hideHandoff,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      // The CAPTCHA blocker is what makes the handoff the obvious next step.
+      await waitFor(() => expect(within(dialog).getByText(/showing a CAPTCHA/i)).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
+
+      await waitFor(() => expect(showHandoff).toHaveBeenCalledWith(attempt.id));
+      // The modal gets out of the way of the real page, and says which application this is.
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByText(/live application page for Senior Engineer at Acme Corp/i)).toBeInTheDocument();
+      expect(screen.getByText(/Other pending applications are untouched/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /done, back to review/i }));
+
+      await waitFor(() => expect(hideHandoff).toHaveBeenCalledWith(attempt.id));
+      // Reopened against the same attempt and target, which is what preserves it.
+      await waitFor(() => expect(openReview).toHaveBeenCalledTimes(2));
+      expect(openReview).toHaveBeenLastCalledWith({ attemptId: attempt.id, policyId: 'some-real-policy', targetUrl: attempt.canonicalUrl });
+      // And the state on screen is the state after the person worked in the page, not before.
+      const reopened = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(reopened).queryByText(/showing a CAPTCHA/i)).not.toBeInTheDocument());
+      expect(within(reopened).getByRole('button', { name: /submit application/i })).toBeEnabled();
+    });
+
+    it('a refused handoff surfaces the reason rather than pretending the live page opened', async () => {
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: false, reason: 'already_submitting', detail: 'this attempt is mid-submit' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /open the live page/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('this attempt is mid-submit');
+    });
+
     it('skipping the swipe card closes the review and marks the attempt skipped, without ever calling submitReview', async () => {
       const attempt = makeAttempt();
       const updateApplicationAttempt = vi.fn().mockResolvedValue(attempt);
@@ -511,10 +632,7 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn();
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview,
@@ -543,13 +661,12 @@ describe('ApplicationsPage', () => {
       });
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview: vi.fn().mockResolvedValue({ ok: false, reason: 'company_not_found_in_documents', detail: '"Acme Corp" does not appear in the rendered documents' }),
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);

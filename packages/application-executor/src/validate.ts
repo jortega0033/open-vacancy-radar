@@ -24,6 +24,10 @@ export type FieldMapRefusalReason =
   | 'disallowed_provenance'
   | 'type_mismatch'
   | 'excluded_field_targeted'
+  /** The field map targets a field that is not part of the active form (#277): a duplicate in a
+   * hidden frame, a decoy copy, an unrelated form on the same page. Refused rather than filled,
+   * since a control nobody can see is not one an applicant would have answered. */
+  | 'inactive_form_field'
   | 'incomplete';
 
 export interface ValidateFieldMapInput {
@@ -98,6 +102,16 @@ export function validateFieldMap(input: ValidateFieldMapInput): ValidateFieldMap
       return refuse('excluded_field_targeted', `fieldRef ${assignment.fieldRef} is a ${field.classification}`);
     }
 
+    // Rule 8b (#277): active-form veto. A `skip` assigns nothing, so it is allowed to name an
+    // inactive field -- that is exactly how a generation session says "I saw this and am leaving it
+    // alone". Anything that would write is refused.
+    if (!field.active && assignment.source.kind !== 'skip') {
+      return refuse(
+        'inactive_form_field',
+        `fieldRef ${assignment.fieldRef} is not part of the active form (frame ${field.frameId}, form ${field.formScope ?? 'none'})`,
+      );
+    }
+
     if (assignment.source.kind === 'value') {
       // Rule 4 (value half).
       const entry = valueByRef.get(assignment.source.valueRef);
@@ -143,8 +157,13 @@ export function validateFieldMap(input: ValidateFieldMapInput): ValidateFieldMap
 
   // Rule 9: completeness. Every required field is assigned or explicitly unmapped -- never absent
   // from both, which would be "quietly blank" masquerading as "deliberately deferred."
+  //
+  // Scoped to the active form (#277): a required field inside a hidden duplicate or an unrelated
+  // form is not something an applicant can answer, and demanding coverage for it would make every
+  // such page permanently unmappable for a reason that has nothing to do with the application.
   const covered = new Set([...fieldMap.assignments.map((a) => a.fieldRef), ...fieldMap.unmapped.map((u) => u.fieldRef)]);
   for (const field of input.snapshot.fields) {
+    if (!field.active) continue;
     if (field.required && !covered.has(field.fieldRef)) {
       return refuse('incomplete', `required fieldRef ${field.fieldRef} is neither assigned nor listed as unmapped`);
     }

@@ -54,8 +54,10 @@ import {
   closeApplicationReview,
   evaluateAndScheduleAutomaticSubmission,
   fireDueAutomaticSubmissions,
+  hideApplicationReviewHandoff,
   openApplicationReview,
   showApplicationReviewForHandoff,
+  showApplicationReviewHandoff,
   submitApplicationReview,
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
@@ -1345,7 +1347,7 @@ guardedIpc.handle('application-executor:apply-field-map', async (_event, input: 
   // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
   // still carries `manualHandoff` so the review UI can say which document to pick.
   if (result.manualHandoff && mainWindow) {
-    showApplicationReviewForHandoff(parsed.attemptId, mainWindow);
+    showApplicationReviewForHandoff(parsed.attemptId, mainWindow, await ensureWorkspaceDb());
   }
   return result;
 });
@@ -1360,6 +1362,22 @@ guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: 
 
 guardedIpc.handle('application-executor:close-review', async (_event, input: unknown) => {
   await closeApplicationReview(parseAttemptId(input));
+});
+
+/*
+ * The live handoff (#277). Two channels, both taking nothing but an attempt id: the renderer can
+ * ask for *its own* attempt's already-open view to be put on screen or taken off it, and can say
+ * nothing else about what happens. It cannot name a window, supply bounds, choose a URL, or reach a
+ * view for an attempt that has no open review -- `showApplicationReviewHandoff` resolves the window
+ * from this module's own `mainWindow` and the view from the main-process registry, exactly as every
+ * other channel here resolves a policy from the compiled table rather than from its caller.
+ */
+guardedIpc.handle('application-executor:show-handoff', async (_event, input: unknown) => {
+  return showApplicationReviewHandoff(await ensureWorkspaceDb(), mainWindow, parseAttemptId(input));
+});
+
+guardedIpc.handle('application-executor:hide-handoff', (_event, input: unknown) => {
+  hideApplicationReviewHandoff(mainWindow, parseAttemptId(input));
 });
 
 function parseRequestAutomationGrantInput(input: unknown): { policyId: string; durationMs: number } {
