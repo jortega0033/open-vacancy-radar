@@ -91,11 +91,30 @@ export function runPreSubmitGate(input: PreSubmitGateInput): PreSubmitGateResult
 
   const combinedText = `${input.renderedCvText}\n${input.renderedLetterText ?? ''}`;
 
-  if (!containsCaseInsensitive(combinedText, input.attempt.company)) {
-    return refuse('company_not_found_in_documents', `"${input.attempt.company}" does not appear in the rendered documents`);
-  }
-  if (!containsCaseInsensitive(combinedText, input.attempt.role)) {
-    return refuse('role_not_found_in_documents', `"${input.attempt.role}" does not appear in the rendered documents`);
+  // #276: the target is checked against the document that is actually addressed to the employer.
+  //
+  // This used to search the CV and the letter together, which meant that an attempt with no letter
+  // could only pass if the CV itself named the prospective employer -- and the only way a CV names
+  // a company it has no relationship with is for the tailoring step to write it into employment
+  // history, which is a false claim about where the candidate has worked. So the company is now
+  // required of the letter, where addressing the employer is the entire point of the document, and
+  // never of the CV.
+  //
+  // The role stays required either way: a tailored CV's professional headline legitimately states
+  // the role being applied for, which is a statement about what someone is looking for rather than
+  // a claim about their history, and it is what keeps "the wrong document is attached" detectable
+  // for a CV-only application. The structural half of this -- refusing a CV whose *work history*
+  // names the target employer at all -- is enforced where the structured resume is still available,
+  // at staging time, by `document-acceptance.ts`'s `states_own_history` rule.
+  if (input.renderedLetterText !== null) {
+    if (!containsCaseInsensitive(input.renderedLetterText, input.attempt.company)) {
+      return refuse('company_not_found_in_documents', `"${input.attempt.company}" does not appear in the rendered cover letter`);
+    }
+    if (!containsCaseInsensitive(input.renderedLetterText, input.attempt.role)) {
+      return refuse('role_not_found_in_documents', `"${input.attempt.role}" does not appear in the rendered cover letter`);
+    }
+  } else if (!containsCaseInsensitive(input.renderedCvText, input.attempt.role)) {
+    return refuse('role_not_found_in_documents', `"${input.attempt.role}" does not appear in the rendered CV`);
   }
 
   for (const pattern of PLACEHOLDER_PATTERNS) {
