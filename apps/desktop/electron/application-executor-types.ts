@@ -16,6 +16,8 @@ export interface OpenApplicationReviewInput {
    * object itself, which never crosses this bridge. */
   policyId: string;
   targetUrl: string;
+  /** Re-read the existing live page into a new snapshot instead of reusing the prior generation. */
+  refresh?: boolean;
 }
 
 export interface OpenApplicationReviewResult {

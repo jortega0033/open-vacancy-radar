@@ -1302,6 +1302,7 @@ function parseOpenReviewInput(input: unknown): OpenApplicationReviewInput {
     attemptId: parseAttemptId(source.attemptId),
     policyId: parsePolicyId(source.policyId),
     targetUrl: parseTargetUrl(source.targetUrl),
+    ...(source.refresh === true ? { refresh: true } : {}),
   };
 }
 

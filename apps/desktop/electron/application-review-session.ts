@@ -120,7 +120,7 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
         `attempt ${input.attemptId} already has an open review against a different target; close it before opening another`,
       );
     }
-    const snapshot = existing.executor.currentSnapshot;
+    const snapshot = input.refresh ? await existing.executor.snapshot() : existing.executor.currentSnapshot;
     if (!snapshot) throw new Error(`attempt ${input.attemptId} has an open review with no snapshot yet`);
     return {
       snapshot,

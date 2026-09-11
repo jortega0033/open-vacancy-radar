@@ -509,6 +509,34 @@ describe('application-review-session', () => {
     expect(view.controls.get(2)?.value).toBe('Grace Hopper');
   });
 
+  it('can refresh an existing live review into a new snapshot after a handoff changed the page', async () => {
+    const { openApplicationReview } = await importSession();
+    const view = fakeView();
+    createApplicationView.mockImplementation(() => view);
+    const first = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+    const grownTree: CdpDomNode = {
+      ...TREE,
+      children: [
+        ...TREE.children!,
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 30, attributes: ['type', 'text', 'name', 'salaryExpectation', 'required', ''] },
+      ],
+    };
+    const realSendCommand = view.transport.sendCommand.getMockImplementation()!;
+    view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'DOM.getDocument') return { root: grownTree };
+      return realSendCommand(method, params);
+    });
+
+    const refreshed = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL, refresh: true });
+
+    expect(createApplicationView).toHaveBeenCalledTimes(1);
+    expect(view.destroy).not.toHaveBeenCalled();
+    expect(refreshed.snapshot.generation).toBe(first.snapshot.generation + 1);
+    expect(refreshed.snapshot.fields.map((f) => f.label)).toContain('salaryExpectation');
+    expect(refreshed.readiness.blockers).toContainEqual({ kind: 'required_field_empty', fieldRef: expect.any(String), label: 'salaryExpectation' });
+  });
+
   it('refuses to reopen an attempt against a different target rather than answering from the wrong page', async () => {
     const { openApplicationReview } = await importSession();
     await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });

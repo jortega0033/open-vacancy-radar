@@ -81,6 +81,12 @@ export interface LiveFieldState {
   attachmentNames?: readonly string[];
 }
 
+interface RadioGroupReadiness {
+  fieldRef: string;
+  label: string;
+  satisfied: boolean;
+}
+
 /** Whether a control holding `state` counts as answered. A checkbox/radio answers with its checked
  * state, not with text; every other control answers with a non-blank value. */
 function isAnswered(field: SnapshotField, state: LiveFieldState | undefined): boolean {
@@ -92,6 +98,10 @@ function isAnswered(field: SnapshotField, state: LiveFieldState | undefined): bo
     return (state.attachmentNames ?? []).length > 0;
   }
   return (state.value ?? '').trim().length > 0;
+}
+
+function radioGroupKey(field: SnapshotField): string {
+  return JSON.stringify([field.frameId, field.formScope ?? null, field.name ?? field.fieldRef]);
 }
 
 /**
@@ -125,18 +135,29 @@ export function evaluateFormReadiness(input: EvaluateFormReadinessInput): FormRe
   const activeFields = snapshot.fields.filter((field) => field.active && !field.classification);
   let requiredFieldCount = 0;
   let requiredFieldsSatisfied = 0;
+  const requiredRadioGroups = new Map<string, RadioGroupReadiness>();
 
   for (const field of activeFields) {
     const state = liveState.get(field.fieldRef);
     const answered = isAnswered(field, state);
 
     if (field.required) {
-      requiredFieldCount += 1;
-      if (answered) requiredFieldsSatisfied += 1;
-      else if (field.controlType === 'file') {
-        blockers.push({ kind: 'attachment_missing', fieldRef: field.fieldRef, label: field.label });
+      if (field.controlType === 'radio') {
+        const key = radioGroupKey(field);
+        const group = requiredRadioGroups.get(key);
+        if (group) {
+          group.satisfied = group.satisfied || answered;
+        } else {
+          requiredRadioGroups.set(key, { fieldRef: field.fieldRef, label: field.name ?? field.label, satisfied: answered });
+        }
+      } else if (field.controlType === 'file') {
+        requiredFieldCount += 1;
+        if (answered) requiredFieldsSatisfied += 1;
+        else blockers.push({ kind: 'attachment_missing', fieldRef: field.fieldRef, label: field.label });
       } else {
-        blockers.push({ kind: 'required_field_empty', fieldRef: field.fieldRef, label: field.label });
+        requiredFieldCount += 1;
+        if (answered) requiredFieldsSatisfied += 1;
+        else blockers.push({ kind: 'required_field_empty', fieldRef: field.fieldRef, label: field.label });
       }
     }
 
@@ -152,6 +173,15 @@ export function evaluateFormReadiness(input: EvaluateFormReadinessInput): FormRe
         label: field.label,
         message: 'the page marked this field invalid without saying why',
       });
+    }
+  }
+
+  for (const group of requiredRadioGroups.values()) {
+    requiredFieldCount += 1;
+    if (group.satisfied) {
+      requiredFieldsSatisfied += 1;
+    } else {
+      blockers.push({ kind: 'required_field_empty', fieldRef: group.fieldRef, label: group.label });
     }
   }
 

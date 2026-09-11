@@ -1156,6 +1156,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     const formScope = fieldSource?.formScope;
     const rendered = fieldSource?.rendered;
     const invalid = fieldSource?.invalid;
+    const name = fieldSource ? optionalString(fieldSource, 'name') : undefined;
     // Untrusted third-party page text, carried across verbatim as a plain string for a person to
     // read. Nothing on either side of this bridge interprets it.
     const validationMessage = fieldSource ? optionalString(fieldSource, 'validationMessage') : undefined;
@@ -1166,6 +1167,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
       required,
       frameId,
       active,
+      ...(name ? { name } : {}),
       ...(typeof formScope === 'number' ? { formScope } : {}),
       ...(typeof rendered === 'boolean' ? { rendered } : {}),
       ...(typeof invalid === 'boolean' ? { invalid } : {}),

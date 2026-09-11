@@ -37,6 +37,8 @@ export interface SnapshotField {
   fieldRef: string;
   label: string;
   controlType: FieldControlType;
+  /** DOM `name`, when present. Radio groups use this with frame/form scope for required-state checks. */
+  name?: string;
   required: boolean;
   /** Present only for `select`/`radio` controls. */
   options?: readonly SnapshotOption[];
@@ -209,6 +211,7 @@ export function computePageStateFingerprint(input: PageStateFingerprintInput): s
       JSON.stringify([
         field.label,
         field.controlType,
+        field.name ?? null,
         field.required,
         field.classification ?? null,
         field.frameId,

@@ -130,6 +130,42 @@ describe('evaluateFormReadiness', () => {
     expect(checked.ready).toBe(true);
   });
 
+  it('counts a same-name required radio group once, satisfied when any active member is checked', () => {
+    const result = evaluateFormReadiness({
+      snapshot: snapshot([
+        field({ fieldRef: 'remote', label: 'Remote', controlType: 'radio', name: 'workplace', required: true }),
+        field({ fieldRef: 'hybrid', label: 'Hybrid', controlType: 'radio', name: 'workplace', required: true }),
+        field({ fieldRef: 'office', label: 'On-site', controlType: 'radio', name: 'workplace', required: true }),
+      ]),
+      liveState: live({ remote: { checked: false }, hybrid: { checked: true }, office: { checked: false } }),
+      verifications: [],
+      currentPageStateFingerprint: FINGERPRINT,
+    });
+
+    expect(result.ready).toBe(true);
+    expect(result.requiredFieldCount).toBe(1);
+    expect(result.requiredFieldsSatisfied).toBe(1);
+    expect(result.blockers).toEqual([]);
+  });
+
+  it('keeps same-name required radio groups separate across frames and forms', () => {
+    const result = evaluateFormReadiness({
+      snapshot: snapshot([
+        field({ fieldRef: 'topRemote', label: 'Remote', controlType: 'radio', name: 'workplace', required: true, frameId: 0, formScope: 1 }),
+        field({ fieldRef: 'topHybrid', label: 'Hybrid', controlType: 'radio', name: 'workplace', required: true, frameId: 0, formScope: 1 }),
+        field({ fieldRef: 'frameRemote', label: 'Remote', controlType: 'radio', name: 'workplace', required: true, frameId: 1, formScope: 1 }),
+      ]),
+      liveState: live({ topRemote: { checked: false }, topHybrid: { checked: true }, frameRemote: { checked: false } }),
+      verifications: [],
+      currentPageStateFingerprint: FINGERPRINT,
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.requiredFieldCount).toBe(2);
+    expect(result.requiredFieldsSatisfied).toBe(1);
+    expect(result.blockers).toEqual([{ kind: 'required_field_empty', fieldRef: 'frameRemote', label: 'workplace' }]);
+  });
+
   it('blocks a required file input with no attachment, as attachment_missing rather than empty', () => {
     const result = evaluateFormReadiness({
       snapshot: snapshot([field({ fieldRef: 'f1', label: 'Resume', controlType: 'file', required: true })]),

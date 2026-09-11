@@ -305,7 +305,8 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       if (inputType !== 'hidden' && !hasAttr(node, 'disabled') && !hasAttr(node, 'hidden')) {
         const label = resolveLabel(node);
         const controlType = controlTypeFor(node, inputType);
-        const classification = classify(node, inputType, `${label} ${attr(node, 'name') ?? ''} ${attr(node, 'id') ?? ''}`);
+        const name = attr(node, 'name');
+        const classification = classify(node, inputType, `${label} ${name ?? ''} ${attr(node, 'id') ?? ''}`);
         const fieldRef = mintFieldRef();
         nodeIds.set(fieldRef, node.backendNodeId);
         const ariaInvalid = (attr(node, 'aria-invalid') ?? '').toLowerCase();
@@ -313,6 +314,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
           fieldRef,
           label,
           controlType,
+          ...(name ? { name } : {}),
           required: hasAttr(node, 'required') || attr(node, 'aria-required') === 'true',
           frameId,
           ...(formScope !== undefined ? { formScope } : {}),

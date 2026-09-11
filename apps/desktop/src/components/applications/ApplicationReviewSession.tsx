@@ -115,12 +115,13 @@ export function ApplicationReviewSession({ attempt, onClose }: ApplicationReview
       // Re-open rather than reuse the review object that was on screen before the handoff: the
       // person has just been typing into the real page, so every value, validation message and
       // readiness reading from before it is out of date. Reopening is safe precisely because it
-      // preserves the attempt (#277): the same view, the same executor, the same snapshot
-      // generation, re-read.
+      // preserves the attempt (#277): the same view and executor, then a fresh snapshot of the
+      // page the person just changed.
       const refreshed = await window.applicationExecutor.openReview({
         attemptId: attempt.id,
         policyId: policyIdRef.current ?? '',
         targetUrl: attempt.canonicalUrl,
+        refresh: true,
       });
       setState({ phase: 'ready', review: refreshed });
     } catch (err) {

@@ -585,7 +585,7 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(hideHandoff).toHaveBeenCalledWith(attempt.id));
       // Reopened against the same attempt and target, which is what preserves it.
       await waitFor(() => expect(openReview).toHaveBeenCalledTimes(2));
-      expect(openReview).toHaveBeenLastCalledWith({ attemptId: attempt.id, policyId: 'some-real-policy', targetUrl: attempt.canonicalUrl });
+      expect(openReview).toHaveBeenLastCalledWith({ attemptId: attempt.id, policyId: 'some-real-policy', targetUrl: attempt.canonicalUrl, refresh: true });
       // And the state on screen is the state after the person worked in the page, not before.
       const reopened = await screen.findByRole('dialog');
       await waitFor(() => expect(within(reopened).queryByText(/showing a CAPTCHA/i)).not.toBeInTheDocument());
