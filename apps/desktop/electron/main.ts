@@ -26,8 +26,12 @@ import {
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
+  readAtsRosterStatus,
   readGlobalRemoteReport,
+  runAtsRosterImport,
   runGlobalRemoteScan,
+  type AtsRosterImportResult,
+  type AtsRosterStatus,
   type CandidateProfile,
   type Database,
   type GlobalRemoteReport,
@@ -1546,6 +1550,46 @@ async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
 guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>
   runVacancyScan(typeof query === 'string' ? query : undefined),
 );
+
+/**
+ * The missing trigger for issue #251/#264's ATS-roster (Greenhouse/Lever/Ashby/Recruitee/Personio)
+ * scan: that PR shipped `runAtsRosterDiscovery` (reads `.data/ats-roster-v1.json`) and the import
+ * step that writes it (`runAtsRosterImport`), but nothing under `electron/` ever called the import
+ * step -- it was reachable only via `node dist/cli.js ats-roster:import`, so a real user's roster
+ * file never existed and every scan found zero companies on these five providers.
+ *
+ * Deliberately a manual Settings action (`AtsRosterSection.tsx`), not an automatic background fetch
+ * like `scheduleBackgroundScanTick` below: the import step itself documents that it is "re-runnable
+ * on a deliberate refresh cadence, not a live fetch at scan time" (see
+ * `pipeline/ats-roster-import.ts`), and this app's one existing automatic recurring network
+ * operation is opt-in and off by default (`autoScanEnabled`) rather than silently on. A roster
+ * refresh is rarer and heavier (five third-party CSV fetches) than a normal scan, so it gets the
+ * same "the user asks for it, and sees an honest status" treatment as every other data-management
+ * action on that page, rather than a new always-on background timer.
+ *
+ * Shares `runExclusiveScan`/the cross-process advisory lock with `runVacancyScan` above -- the same
+ * mutual exclusion the CLI already applies between `ats-roster:import` and `global-remote:scan`
+ * (see cli.ts's `runExclusiveCommand`), so a refresh triggered from Settings can never race a scan's
+ * own read of the roster file. A scan that starts before any import has ever run is unaffected: the
+ * engine's `loadAtsRoster` already tolerates a missing file by returning no roster entries rather
+ * than failing (see `companies/ats-roster-repository.ts`), so this never blocks a normal scan.
+ */
+async function runAtsRosterRefresh(): Promise<AtsRosterImportResult> {
+  const db = await ensureVacancyEngine();
+  return runExclusiveScan(
+    async () => {
+      const config = vacancyEngineConfig();
+      return runAtsRosterImport(db, config, createLogger(config), await vacancyEngineDataRoot());
+    },
+    { takeAdvisoryLock: true },
+  );
+}
+
+guardedIpc.handle('vacancy:ats-roster:get-status', async (): Promise<AtsRosterStatus> =>
+  readAtsRosterStatus(await vacancyEngineDataRoot()),
+);
+
+guardedIpc.handle('vacancy:ats-roster:refresh', (): Promise<AtsRosterImportResult> => runAtsRosterRefresh());
 
 // #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker
 // UI is future scope, not this one.

@@ -94,7 +94,9 @@ describe('SettingsPage', () => {
     expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
 
     openTab('Search');
-    await waitFor(() => expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Search profile']));
+    await waitFor(() =>
+      expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Search profile', 'Company roster']),
+    );
 
     openTab('Workspace');
     expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
