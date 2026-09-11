@@ -312,7 +312,7 @@ const SOURCE_CV: CvSourceDocument = {
 };
 
 const VACANCY: PipelineVacancy = {
-  vacancyKey: 'vac-northwind-1',
+  vacancyKey: 'v1',
   company: 'Northwind Freight',
   role: 'Logistics Platform Engineer',
   applyUrl: FIXTURE_FORM_URLS.withoutUpload,
