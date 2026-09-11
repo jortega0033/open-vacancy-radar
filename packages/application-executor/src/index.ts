@@ -1,7 +1,15 @@
 export { fieldMapSchema, parseFieldMap, MAX_FIELD_MAP_ENTRIES } from './field-map.js';
 export type { FieldMap, FieldAssignment, UnmappedField } from './field-map.js';
 
-export { mintFieldRef, mintOptionRef, mintSubmitControlRef, findSnapshotField, findSnapshotOption, findSnapshotSubmitControl } from './form-snapshot.js';
+export {
+  mintFieldRef,
+  mintOptionRef,
+  mintSubmitControlRef,
+  findSnapshotField,
+  findSnapshotOption,
+  findSnapshotSubmitControl,
+  computePageStateFingerprint,
+} from './form-snapshot.js';
 export type {
   FieldControlType,
   FieldClassification,
@@ -9,7 +17,16 @@ export type {
   SnapshotField,
   SnapshotSubmitControl,
   FormSnapshot,
+  FieldVerificationStatus,
+  VerifiedFieldState,
+  PageStateFingerprintInput,
 } from './form-snapshot.js';
+
+export { evaluateFormReadiness, describeBlockers } from './form-readiness.js';
+export type { FormReadiness, ReadinessBlocker, LiveFieldState, EvaluateFormReadinessInput } from './form-readiness.js';
+
+export { readAxControlState, readAttachmentNames } from './ax-readback.js';
+export type { AxControlState, CdpAxNode, CdpAxValue, CdpAxProperty, CdpPartialAxTreeResponse } from './ax-readback.js';
 
 export { resolveSubmitControl } from './submit-control.js';
 
@@ -25,7 +42,7 @@ export { ApplicationExecutor, ExecutorPolicyError, SUBMISSION_OBSERVE_TIMEOUT_MS
 export type { CdpTransport, HandoffReason, HandoffResult } from './executor.js';
 
 export { extractSnapshotFields, extractSubmissionSignals, MAX_OBSERVED_PAGE_TEXT_LENGTH } from './dom-extract.js';
-export type { CdpDomNode, ExtractedSnapshot, FieldNodeMap, SubmissionSignals } from './dom-extract.js';
+export type { CdpDomNode, ExtractedSnapshot, FieldNodeMap, FieldGroup, SubmissionSignals } from './dom-extract.js';
 
 export { classifySubmissionOutcome, classifyDelayedReceipt, readResponseSignals, MAX_EVIDENCE_REFERENCE_LENGTH } from './submission-receipt.js';
 export type {

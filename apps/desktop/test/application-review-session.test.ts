@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_CDP_METHODS, type CdpDomNode } from '@agent-dock/application-executor';
 import { stagedArtifactPath } from '../electron/application-artifact-staging.js';
 import { FIXTURE_REVIEW_POLICY } from '../electron/application-target-policies.js';
+import { HANDOFF_BANNER_HEIGHT_PX } from '../electron/application-view.js';
 
 // The real fixture policy's own allowed URL, not an arbitrary literal -- since #201's review fix,
 // `openTarget` refuses any file:// URL not in `exactFileUrls`, so this must be the exact one.
@@ -42,7 +43,13 @@ const workspaceMock = vi.hoisted(() => ({
 const { extractPdfText } = vi.hoisted(() => ({ extractPdfText: vi.fn(async () => '') }));
 const { notifyAutomaticSubmission } = vi.hoisted(() => ({ notifyAutomaticSubmission: vi.fn() }));
 
-vi.mock('../electron/application-view.js', () => ({ createApplicationView }));
+// Only `createApplicationView` is faked. `HANDOFF_BANNER_HEIGHT_PX` is re-exported from the real
+// module so the assertion below compares against the value the app actually sizes the view with,
+// rather than one this test made up (which would pass for a build where the two disagreed).
+vi.mock('../electron/application-view.js', async () => ({
+  ...(await vi.importActual<typeof import('../electron/application-view.js')>('../electron/application-view.js')),
+  createApplicationView,
+}));
 vi.mock('../electron/workspace/repository.js', () => workspaceMock);
 vi.mock('../electron/cv-text.js', () => ({ extractPdfText }));
 vi.mock('../electron/automatic-submission-notify.js', () => ({ notifyAutomaticSubmission }));
@@ -75,7 +82,12 @@ const TREE: CdpDomNode = {
   nodeType: 1,
   backendNodeId: 1,
   children: [
-    { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName', 'required', ''] },
+    // Arrives with a value already in it, the way a real page with a remembered/prefilled answer
+    // does. `fakeBrowser` below seeds each control's committed state from its `value` attribute, so
+    // this required field reads back non-empty without every test here having to fill it first --
+    // which is what lets the tests about the *document* gate stay about the document gate. The
+    // tests that care about an empty required field (#277) build a tree without this on purpose.
+    { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName', 'required', '', 'value', 'Ada Lovelace'] },
     {
       nodeName: 'SELECT',
       nodeType: 1,
@@ -119,37 +131,93 @@ const REQUIRED_ERROR_TREE: CdpDomNode = {
   ],
 };
 
-/**
- * `afterSubmitTree`, when given, is what `DOM.getDocument` starts returning once a real click has
- * been dispatched -- the fixture equivalent of a page reacting to its own submit button. Without
- * it the page never changes, which is itself a case worth testing.
- */
-/** Every `backendNodeId` in `tree` that belongs to an `<input type="file">`, so the fake below can
- * answer an accessibility read-back for exactly the controls a real browser would have one for. */
-function fileInputNodeIds(node: CdpDomNode): number[] {
-  const attributes = node.attributes ?? [];
-  const isFileInput =
-    node.nodeName === 'INPUT' &&
-    attributes.some((value, index) => index % 2 === 0 && value.toLowerCase() === 'type' && attributes[index + 1] === 'file');
-  return [...(isFileInput ? [node.backendNodeId] : []), ...(node.children ?? []).flatMap(fileInputNodeIds)];
+function attrOf(node: CdpDomNode, name: string): string | undefined {
+  const list = node.attributes;
+  if (!list) return undefined;
+  for (let i = 0; i + 1 < list.length; i += 2) {
+    if (list[i]?.toLowerCase() === name.toLowerCase()) return list[i + 1];
+  }
+  return undefined;
+}
+
+function walkTree(node: CdpDomNode, visit: (node: CdpDomNode) => void): void {
+  visit(node);
+  for (const child of node.children ?? []) walkTree(child, visit);
+  if (node.contentDocument) walkTree(node.contentDocument, visit);
+}
+
+interface ControlState {
+  kind: 'text' | 'checkbox' | 'radio' | 'select' | 'file' | 'other';
+  value: string;
+  checked: boolean;
+  optionLabels: string[];
 }
 
 /**
- * A fake CDP transport that models the two browser behaviors these tests depend on.
+ * A fake `CdpTransport` that behaves like a browser rather than like a recorder (#277).
  *
- * #273's read-back: a file input reports whatever file is currently selected on it as its own
- * accessible value, and `DOM.setFileInputFiles` *replaces* that selection rather than adding to it.
- * An untouched file input reports Chromium's own placeholder instead, which is what an attachment
- * that silently failed looks like from the outside.
+ * Before this ticket, this fake answered every write with `{}`: `Input.insertText` succeeded no
+ * matter what, and nothing could be read back. That was fine while nothing read anything back, and
+ * it is precisely the shape that made "we sent an insert command" look identical to "the field
+ * holds this value" for as long as it did. Now it keeps per-control committed state, applies real
+ * edits to it (select-all replaces, insertText appends into the selection, a click toggles a
+ * checkbox, the arrow drive moves a select's selection), and publishes that state back through
+ * `Accessibility.getPartialAXTree` exactly the way a real browser does.
  *
- * #271's post-click observation: `afterSubmitTree`, when given, is what `DOM.getDocument` starts
- * returning once a real click has been dispatched -- the fixture equivalent of a page reacting to
- * its own submit button. Without it the page never changes, which is itself a case worth testing.
+ * It keeps #273's file-input behaviour intact and generalizes it: a file input reports whatever is
+ * currently selected on it as its own accessible value, `DOM.setFileInputFiles` *replaces* that
+ * selection rather than adding to it, and an untouched one reports Chromium's own "No file chosen"
+ * placeholder, which is what a silently failed attachment looks like from the outside.
+ *
+ * And it keeps #271's post-click observation: `afterSubmitTree`, when given, is what
+ * `DOM.getDocument` starts returning once a real click has been dispatched, the fixture equivalent
+ * of a page reacting to its own submit button. Without it the page never changes, which is itself
+ * a case worth testing.
+ *
+ * The payoff is that the tests below assert against a thing that can actually disagree with the
+ * executor: a fill that appended instead of replacing, or a select that never moved, fails here.
  */
-function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNode; readFailsAfterSubmit?: boolean } = {}) {
+function fakeBrowser(tree: CdpDomNode, options: { afterSubmitTree?: CdpDomNode; readFailsAfterSubmit?: boolean } = {}) {
   let clicked = false;
-  const selectedFiles = new Map<number, readonly string[]>();
+  const controls = new Map<number, ControlState>();
+  walkTree(tree, (node) => {
+    const inputType = (attrOf(node, 'type') ?? 'text').toLowerCase();
+    const kind: ControlState['kind'] =
+      node.nodeName === 'SELECT'
+        ? 'select'
+        : node.nodeName === 'TEXTAREA'
+          ? 'text'
+          : node.nodeName === 'INPUT'
+            ? inputType === 'checkbox' || inputType === 'radio' || inputType === 'file'
+              ? (inputType as 'checkbox' | 'radio' | 'file')
+              : 'text'
+            : 'other';
+    if (kind === 'other') return;
+    const optionLabels = (node.children ?? [])
+      .filter((child) => child.nodeName === 'OPTION')
+      .map((child) => (child.children ?? []).map((text) => text.nodeValue ?? '').join('') || (attrOf(child, 'value') ?? ''));
+    controls.set(node.backendNodeId, {
+      kind,
+      // Seeded from the page's own markup, the way a real prefilled control arrives.
+      value: kind === 'select' ? (optionLabels[0] ?? '') : (attrOf(node, 'value') ?? ''),
+      checked: attrOf(node, 'checked') !== undefined,
+      optionLabels,
+    });
+  });
+
+  let focused: number | undefined;
+  let lastBoxModelNode: number | undefined;
+  let selectionIsWholeControl = false;
+  let selectIndex = 0;
+
+  /** What a real file input publishes as its accessible value: the selected file's base name, or
+   * Chromium's own placeholder when nothing is selected. */
+  function reportedFileValue(control: ControlState): string {
+    return control.value === '' ? 'No file chosen' : control.value;
+  }
+
   const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    const backendNodeId = typeof params?.backendNodeId === 'number' ? params.backendNodeId : undefined;
     switch (method) {
       case 'Page.navigate':
         return {};
@@ -159,32 +227,112 @@ function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNo
       case 'Page.captureScreenshot':
         return { data: 'ZmFrZS1zY3JlZW5zaG90' };
       case 'DOM.getBoxModel':
+        lastBoxModelNode = backendNodeId;
         return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
-      case 'Input.dispatchMouseEvent':
-        clicked = true;
+      case 'DOM.getContentQuads':
+        // Only reached for a page with more than one frame/form group; every fixture in this file
+        // has one, so this simply answers "rendered" rather than modelling a hidden decoy (the
+        // executor package's own suite covers that case against a fake that does).
+        return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] };
+      case 'DOM.focus': {
+        focused = backendNodeId;
+        selectionIsWholeControl = false;
+        const control = focused !== undefined ? controls.get(focused) : undefined;
+        selectIndex = control ? Math.max(0, control.optionLabels.indexOf(control.value)) : 0;
         return {};
+      }
+      case 'Input.insertText': {
+        const control = focused !== undefined ? controls.get(focused) : undefined;
+        if (control) {
+          const text = typeof params?.text === 'string' ? params.text : '';
+          // The whole point: without a preceding selectAll this APPENDS, which is what a repeated
+          // fill used to do and what this fake now makes visible.
+          control.value = selectionIsWholeControl ? text : control.value + text;
+          selectionIsWholeControl = false;
+        }
+        return {};
+      }
+      case 'Input.dispatchKeyEvent': {
+        const commands = Array.isArray(params?.commands) ? (params.commands as string[]) : [];
+        const key = typeof params?.key === 'string' ? params.key : '';
+        const isKeyDown = params?.type === 'keyDown';
+        const control = focused !== undefined ? controls.get(focused) : undefined;
+        if (commands.includes('selectAll')) selectionIsWholeControl = true;
+        if (commands.includes('delete') && control) {
+          control.value = '';
+          selectionIsWholeControl = false;
+        }
+        if (isKeyDown && control?.kind === 'select') {
+          if (key === 'ArrowUp') selectIndex = Math.max(0, selectIndex - 1);
+          if (key === 'ArrowDown') selectIndex = Math.min(control.optionLabels.length - 1, selectIndex + 1);
+          if (key === 'Enter') control.value = control.optionLabels[selectIndex] ?? '';
+        }
+        if (isKeyDown && key === 'Tab') focused = undefined; // a real blur
+        return {};
+      }
+      case 'Input.dispatchMouseEvent': {
+        // A dispatched click is what #271's `afterSubmitTree` keys off, and what toggles a
+        // checkbox/radio (#277). Both, since a real click does both jobs on a real page.
+        clicked = true;
+        if (params?.type === 'mouseReleased' && lastBoxModelNode !== undefined) {
+          const control = controls.get(lastBoxModelNode);
+          if (control && (control.kind === 'checkbox' || control.kind === 'radio')) control.checked = !control.checked;
+        }
+        return {};
+      }
       case 'DOM.setFileInputFiles': {
-        const { backendNodeId, files } = (params ?? {}) as { backendNodeId: number; files: readonly string[] };
-        selectedFiles.set(backendNodeId, files);
+        const files = Array.isArray(params?.files) ? (params.files as string[]) : [];
+        const control = backendNodeId !== undefined ? controls.get(backendNodeId) : undefined;
+        if (control) control.value = (files[0] ?? '').split(/[\\/]/).pop() ?? '';
         return {};
       }
       case 'Accessibility.getFullAXTree':
+        // What #273's `readBackAttachment` reads. Only file inputs are published here, matching the
+        // narrower fake this replaced: it is the only control type that method is allowed to ask
+        // about.
         return {
-          nodes: fileInputNodeIds(tree).map((backendDOMNodeId) => {
-            const files = selectedFiles.get(backendDOMNodeId) ?? [];
-            const reported = files.length === 0 ? 'No file chosen' : files.map((file) => basename(file)).join(', ');
-            return { backendDOMNodeId, value: { type: 'string', value: reported } };
-          }),
+          nodes: [...controls.entries()]
+            .filter(([, control]) => control.kind === 'file')
+            .map(([nodeId, control]) => ({ backendDOMNodeId: nodeId, value: { type: 'string', value: reportedFileValue(control) } })),
         };
-      case 'DOM.focus':
-      case 'Input.insertText':
-      case 'Input.dispatchKeyEvent':
-        return {};
+      case 'Accessibility.getPartialAXTree': {
+        const control = backendNodeId !== undefined ? controls.get(backendNodeId) : undefined;
+        if (!control) return { nodes: [] };
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: backendNodeId,
+              value: { type: 'string', value: control.kind === 'file' ? reportedFileValue(control) : control.value },
+              name: { type: 'computedString', value: control.kind === 'file' ? reportedFileValue(control) : '' },
+              properties:
+                control.kind === 'checkbox' || control.kind === 'radio'
+                  ? [{ name: 'checked', value: { type: 'tristate', value: control.checked ? 'true' : 'false' } }]
+                  : [],
+            },
+          ],
+        };
+      }
       default:
         throw new Error(`unexpected CDP method in test: ${method} ${JSON.stringify(params)}`);
     }
   });
-  return { view: {}, transport: { sendCommand }, show: vi.fn(), hide: vi.fn(), destroy: vi.fn(), selectedFiles };
+
+  return { controls, sendCommand };
+}
+
+function fakeView(tree: CdpDomNode = TREE, options: { afterSubmitTree?: CdpDomNode; readFailsAfterSubmit?: boolean } = {}) {
+  const { sendCommand, controls } = fakeBrowser(tree, options);
+  return {
+    view: {},
+    transport: { sendCommand },
+    show: vi.fn(),
+    hide: vi.fn(),
+    shownIn: vi.fn(() => undefined),
+    destroy: vi.fn(),
+    /** Test-only: what the fake browser's controls hold, so a test can assert on committed state
+     * rather than on which CDP calls happened to be issued. */
+    controls,
+  };
 }
 
 const FAKE_DB = {} as never;
@@ -326,12 +474,75 @@ describe('application-review-session', () => {
     expect(createApplicationView).not.toHaveBeenCalled();
   });
 
-  it('refuses to open a second review for an attempt that already has one open', async () => {
+  it('reopening the same attempt reuses its live review rather than building a second one (#277)', async () => {
+    // Acceptance check 5: reopening the review view preserves the attempt. Before #277 this threw,
+    // so the only way back into a review was close + open, which destroys the WebContentsView and
+    // with it the authenticated session, the snapshot generation and every verified field.
+    const { openApplicationReview, applyApplicationFieldMap } = await importSession();
+    const view = fakeView();
+    createApplicationView.mockImplementation(() => view);
+    const first = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+    const nameField = first.snapshot.fields.find((f) => f.label === 'fullName')!;
+    await applyApplicationFieldMap(FAKE_DB, {
+      attemptId: ATTEMPT_ID,
+      valueTable: [{ valueRef: 'v0000000000000001', value: 'Grace Hopper', provenance: 'profile' }],
+      fieldMap: {
+        attemptId: ATTEMPT_ID,
+        snapshotGeneration: first.snapshot.generation,
+        assignments: [{ fieldRef: nameField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } }],
+        unmapped: [],
+      },
+    });
+
+    const second = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+    // Exactly one view was ever built, and it was never destroyed: no duplicate, nothing lost.
+    expect(createApplicationView).toHaveBeenCalledTimes(1);
+    expect(view.destroy).not.toHaveBeenCalled();
+    // The same generation and the same field refs, so a field map bound to the first reading is
+    // still valid against the second.
+    expect(second.snapshot.generation).toBe(first.snapshot.generation);
+    expect(second.snapshot.fields.map((f) => f.fieldRef)).toEqual(first.snapshot.fields.map((f) => f.fieldRef));
+    // And the work done before the reopen is still there, read back off the live page.
+    expect(second.readiness.verifiedFilledCount).toBe(1);
+    expect(view.controls.get(2)?.value).toBe('Grace Hopper');
+  });
+
+  it('can refresh an existing live review into a new snapshot after a handoff changed the page', async () => {
     const { openApplicationReview } = await importSession();
-    await openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+    const view = fakeView();
+    createApplicationView.mockImplementation(() => view);
+    const first = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+    const grownTree: CdpDomNode = {
+      ...TREE,
+      children: [
+        ...TREE.children!,
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 30, attributes: ['type', 'text', 'name', 'salaryExpectation', 'required', ''] },
+      ],
+    };
+    const realSendCommand = view.transport.sendCommand.getMockImplementation()!;
+    view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'DOM.getDocument') return { root: grownTree };
+      return realSendCommand(method, params);
+    });
+
+    const refreshed = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL, refresh: true });
+
+    expect(createApplicationView).toHaveBeenCalledTimes(1);
+    expect(view.destroy).not.toHaveBeenCalled();
+    expect(refreshed.snapshot.generation).toBe(first.snapshot.generation + 1);
+    expect(refreshed.snapshot.fields.map((f) => f.label)).toContain('salaryExpectation');
+    expect(refreshed.readiness.blockers).toContainEqual({ kind: 'required_field_empty', fieldRef: expect.any(String), label: 'salaryExpectation' });
+  });
+
+  it('refuses to reopen an attempt against a different target rather than answering from the wrong page', async () => {
+    const { openApplicationReview } = await importSession();
+    await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
     await expect(
-      openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL }),
-    ).rejects.toThrow(/already has an open review/);
+      openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: 'https://elsewhere.example/apply' }),
+    ).rejects.toThrow(/against a different target/);
   });
 
   it('destroys the view when openTarget refuses an off-policy origin, leaving no leaked registration', async () => {
@@ -375,11 +586,20 @@ describe('application-review-session', () => {
       },
     });
 
-    expect(result).toEqual({ ok: true, appliedCount: 3 });
+    expect(result.ok).toBe(true);
+    expect(result.appliedCount).toBe(3);
+    // Every one of the three was read back and confirmed by the (browser-like) fake, which is a
+    // much stronger claim than "three write commands were issued" (#277).
+    expect(result.verifiedCount).toBe(3);
+    expect(result.readiness?.verifiedFilledCount).toBe(3);
     const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
     expect(calledMethods).toContain('Input.insertText'); // fullName
     expect(calledMethods).toContain('Input.dispatchKeyEvent'); // select's arrow/enter drive
     expect(calledMethods).toContain('Input.dispatchMouseEvent'); // checkbox click
+    // The committed state of the real controls, not a record of what was sent to them.
+    expect(view.controls.get(2)?.value).toBe('Ada Lovelace');
+    expect(view.controls.get(3)?.value).toBe('Yes');
+    expect(view.controls.get(8)?.checked).toBe(true);
   });
 
   it('refuses (never partially applies) a field map targeting a stale snapshot generation', async () => {
@@ -500,9 +720,12 @@ describe('application-review-session', () => {
         ]),
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         ok: true,
         appliedCount: 2,
+        // #277: an attachment counts as verified only once the control itself reported holding the
+        // staged file, which is the same bar every other write is held to.
+        verifiedCount: 2,
         attachments: [
           { artifactId: CV_ARTIFACT_ID, fieldRef: field('resume').fieldRef, fileName: 'resume.pdf', attachedFileName: basename(cv.storagePath) },
           { artifactId: LETTER_ARTIFACT_ID, fieldRef: field('coverLetterFile').fieldRef, fileName: 'cover-letter.pdf', attachedFileName: basename(letter.storagePath) },
@@ -696,7 +919,8 @@ describe('application-review-session', () => {
       // Both runs set the identical single path -- `DOM.setFileInputFiles` replaces a selection
       // rather than appending to it, so a retry leaves exactly the intended file on the control.
       expect(uploadedPaths(view)).toEqual([[cv.storagePath], [cv.storagePath]]);
-      expect(view.selectedFiles.get(20)).toEqual([cv.storagePath]);
+      // And the control itself holds exactly that one file, not two appended selections.
+      expect(view.controls.get(20)?.value).toBe(basename(cv.storagePath));
       expect(readFile).not.toHaveBeenCalledWith(decoyPath);
     });
 
@@ -749,9 +973,11 @@ describe('application-review-session', () => {
 
       // ...and the handoff is genuinely visible: the live page is surfaced on the app's own window.
       const mainWindow = {} as never;
-      expect(session.showApplicationReviewForHandoff(ATTEMPT_ID, mainWindow)).toBe(true);
-      expect(view.show).toHaveBeenCalledWith(mainWindow);
-      expect(session.showApplicationReviewForHandoff('99999999-9999-4999-8999-999999999999', mainWindow)).toBe(false);
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      expect(session.showApplicationReviewForHandoff(ATTEMPT_ID, mainWindow, FAKE_DB)).toBe(true);
+      // Second argument is #277's Escape-to-exit callback.
+      expect(view.show).toHaveBeenCalledWith(mainWindow, expect.any(Function));
+      expect(session.showApplicationReviewForHandoff('99999999-9999-4999-8999-999999999999', mainWindow, FAKE_DB)).toBe(false);
     });
   });
 
@@ -1148,10 +1374,14 @@ describe('application-review-session', () => {
     it('lands on submission_unknown, never a silent retry or drop, when the submit click itself fails ambiguously', async () => {
       const { openApplicationReview, submitApplicationReview } = await importSession();
       const view = fakeView(SUBMIT_TREE);
-      view.transport.sendCommand.mockImplementation(async (method: string) => {
+      // Fails only the one call the submit click itself makes, and otherwise delegates to the fake
+      // browser: replacing the whole transport with a stub would also silence the read-back, and
+      // this test would then be proving that an unfilled form refuses rather than that an
+      // ambiguous click lands on `submission_unknown`.
+      const realTransport = view.transport.sendCommand.getMockImplementation()!;
+      view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
         if (method === 'DOM.getBoxModel') throw new Error('CDP connection dropped');
-        if (method === 'DOM.getDocument') return { root: SUBMIT_TREE };
-        return {};
+        return realTransport(method, params);
       });
       createApplicationView.mockImplementation(() => view);
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
@@ -1592,5 +1822,302 @@ describe('application-review-session', () => {
     await expect(
       openApplicationReview({ attemptId: '11111111-1111-4111-8111-111111111111', policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL }),
     ).resolves.toBeDefined();
+  });
+
+  /**
+   * #277 acceptance 4: the live handoff. `application-view.ts`'s `show()` has existed since #201
+   * with no production caller at all; these tests are about the caller, and above all about what
+   * showing one attempt's page is not allowed to do to any other attempt's.
+   */
+  describe('the live handoff (#277 acceptance 4)', () => {
+    const OTHER_ATTEMPT_ID = '22222222-2222-4222-8222-222222222222';
+    const FAKE_WINDOW = { id: 'main-window' } as never;
+
+    function attemptNamed(id: string, company: string, role: string) {
+      return withRealJdHash(fakeAttempt({ id, company, role }));
+    }
+
+    it('shows the attempt\'s own view and reports the employer and role from the workspace record, not the page', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff } = await importSession();
+      const view = fakeView();
+      createApplicationView.mockImplementation(() => view);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+
+      const result = showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+
+      expect(result).toMatchObject({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+      expect(view.show).toHaveBeenCalledWith(FAKE_WINDOW, expect.any(Function));
+    });
+
+    it('showing a second attempt hides the first one\'s view without destroying or unregistering it', async () => {
+      // The whole acceptance criterion: one window means one visible handoff, and it must cost
+      // nothing anywhere else. A person switching between two pending applications must not find
+      // that looking at one silently discarded the other.
+      const { openApplicationReview, showApplicationReviewHandoff, applyApplicationFieldMap } = await importSession();
+      const firstView = fakeView();
+      const secondView = fakeView();
+      createApplicationView.mockImplementationOnce(() => firstView).mockImplementationOnce(() => secondView);
+
+      const first = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      await openApplicationReview({ attemptId: OTHER_ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+      // Real work on the first attempt, so there is something that could be lost.
+      const nameField = first.snapshot.fields.find((f) => f.label === 'fullName')!;
+      await applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [{ valueRef: 'v0000000000000001', value: 'Grace Hopper', provenance: 'profile' }],
+        fieldMap: {
+          attemptId: ATTEMPT_ID,
+          snapshotGeneration: first.snapshot.generation,
+          assignments: [{ fieldRef: nameField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } }],
+          unmapped: [],
+        },
+      });
+
+      workspaceMock.getApplicationAttempt.mockImplementation((_db: unknown, id: string) =>
+        id === ATTEMPT_ID ? attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer') : attemptNamed(OTHER_ATTEMPT_ID, 'Globex', 'Staff Engineer'),
+      );
+
+      expect(showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID).ok).toBe(true);
+      const second = showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, OTHER_ATTEMPT_ID);
+
+      expect(second).toMatchObject({ ok: true, company: 'Globex', role: 'Staff Engineer' });
+      expect(firstView.hide).toHaveBeenCalledWith(FAKE_WINDOW);
+      // Hidden, never destroyed, and never unregistered.
+      expect(firstView.destroy).not.toHaveBeenCalled();
+      expect(secondView.show).toHaveBeenCalledWith(FAKE_WINDOW, expect.any(Function));
+
+      // The first attempt still has everything it had: the same view, the same snapshot
+      // generation, the same refs, and the value that was committed to its page.
+      const reopened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      expect(reopened.snapshot.generation).toBe(first.snapshot.generation);
+      expect(reopened.readiness.verifiedFilledCount).toBe(1);
+      expect(firstView.controls.get(2)?.value).toBe('Grace Hopper');
+    });
+
+    it('closing the attempt that is NOT holding the handoff leaves the shown one exactly where it is', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff, closeApplicationReview, currentHandoffAttemptId } = await importSession();
+      const shownView = fakeView();
+      const otherView = fakeView();
+      createApplicationView.mockImplementationOnce(() => shownView).mockImplementationOnce(() => otherView);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      await openApplicationReview({ attemptId: OTHER_ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+      showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+
+      await closeApplicationReview(OTHER_ATTEMPT_ID);
+
+      expect(otherView.destroy).toHaveBeenCalledTimes(1);
+      expect(shownView.destroy).not.toHaveBeenCalled();
+      expect(currentHandoffAttemptId()).toBe(ATTEMPT_ID);
+    });
+
+    it('hideHandoff for an attempt that is not the one showing is a no-op, never a hijack', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff, hideApplicationReviewHandoff, currentHandoffAttemptId } = await importSession();
+      const shownView = fakeView();
+      const otherView = fakeView();
+      createApplicationView.mockImplementationOnce(() => shownView).mockImplementationOnce(() => otherView);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      await openApplicationReview({ attemptId: OTHER_ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+      showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+
+      // A stale call from the other attempt's closing review.
+      hideApplicationReviewHandoff(FAKE_WINDOW, OTHER_ATTEMPT_ID);
+      expect(shownView.hide).not.toHaveBeenCalled();
+      expect(currentHandoffAttemptId()).toBe(ATTEMPT_ID);
+
+      hideApplicationReviewHandoff(FAKE_WINDOW, ATTEMPT_ID);
+      expect(shownView.hide).toHaveBeenCalledWith(FAKE_WINDOW);
+      expect(currentHandoffAttemptId()).toBeUndefined();
+    });
+
+    it('refuses a submit for an attempt whose live page a person currently has open', async () => {
+      // The other half of the mutual exclusion: showing a handoff already refuses mid-submit, but
+      // without this a submit could still fire under someone typing into the page. The automatic
+      // path is where that matters most, since the timer has no idea anyone is looking.
+      const { openApplicationReview, showApplicationReviewHandoff, submitApplicationReview } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+      showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+
+      for (const mode of ['manual', 'automatic'] as const) {
+        const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID, mode);
+        expect(result, mode).toMatchObject({ ok: false, reason: 'handoff_in_progress' });
+      }
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+    });
+
+    it('tells the renderer how much of the window the live view leaves to the app', async () => {
+      // One source of truth for the reserved strip: the main process sizes the view, so it is what
+      // says how tall the banner is. A renderer that guessed would either be painted over by the
+      // target page or leave a dead gap above it.
+      const { openApplicationReview, showApplicationReviewHandoff } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView());
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+
+      const result = showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+      expect(result.bannerHeightPx).toBe(HANDOFF_BANNER_HEIGHT_PX);
+    });
+
+    it('gives the live view an Escape handler that ends the handoff without the page cooperating', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff, currentHandoffAttemptId } = await importSession();
+      const view = fakeView();
+      createApplicationView.mockImplementation(() => view);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(attemptNamed(ATTEMPT_ID, 'Acme Corp', 'Senior Engineer'));
+      showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+
+      const [, onEscape] = view.show.mock.calls.at(-1) as [unknown, (() => void) | undefined];
+      expect(onEscape).toBeTypeOf('function');
+      onEscape!();
+
+      expect(view.hide).toHaveBeenCalledWith(FAKE_WINDOW);
+      expect(currentHandoffAttemptId()).toBeUndefined();
+    });
+
+    it('refuses, rather than throwing, when the attempt row is gone from under an open review', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff } = await importSession();
+      createApplicationView.mockImplementation(() => fakeView());
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockImplementation(() => {
+        throw new workspaceMock.WorkspaceNotFoundError('application attempt', ATTEMPT_ID);
+      });
+
+      expect(showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID)).toMatchObject({ ok: false, reason: 'no_open_review' });
+    });
+
+    it('refuses for an attempt with no open review, rather than creating one', async () => {
+      const { showApplicationReviewHandoff } = await importSession();
+      const result = showApplicationReviewHandoff(FAKE_DB, FAKE_WINDOW, ATTEMPT_ID);
+      expect(result).toMatchObject({ ok: false, reason: 'no_open_review' });
+      expect(createApplicationView).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the app has no main window to show it in', async () => {
+      const { openApplicationReview, showApplicationReviewHandoff } = await importSession();
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      expect(showApplicationReviewHandoff(FAKE_DB, undefined, ATTEMPT_ID)).toMatchObject({ ok: false, reason: 'no_window' });
+    });
+  });
+
+  /**
+   * #277 acceptance 3 and 5, at the orchestration layer: readiness is what stands between a filled
+   * form and a real, irreversible click, and neither a screenshot nor a field inventory ever
+   * contributes to a claim that a form is filled.
+   */
+  describe('readiness gates the real submit (#277 acceptance 3 and 5)', () => {
+    /** The same application form, with nothing prefilled: `fullName` is required and empty. */
+    const EMPTY_REQUIRED_TREE: CdpDomNode = {
+      ...SUBMIT_TREE,
+      children: [
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName', 'required', ''] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 9, children: [{ nodeName: '#text', nodeType: 3, backendNodeId: 10, nodeValue: 'Submit Application' }] },
+      ],
+    };
+
+    it('an unattended submit refuses when the page changed during the cancel window (#277)', async () => {
+      // The freshness gate needs a baseline that predates the automatic path's own re-read.
+      // Comparing the fresh read against the snapshot taken one statement earlier would compare the
+      // page to itself, so `stale_page_state` could never fire on the one path where nobody is
+      // watching. The baseline is the fingerprint from before that re-read: what a person reviewed.
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      const view = fakeView(SUBMIT_TREE);
+      createApplicationView.mockImplementation(() => view);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+
+      // The employer's form grows a new required question mid-window.
+      const grownTree: CdpDomNode = {
+        ...SUBMIT_TREE,
+        children: [
+          ...SUBMIT_TREE.children!,
+          { nodeName: 'INPUT', nodeType: 1, backendNodeId: 30, attributes: ['type', 'text', 'name', 'salaryExpectation', 'required', ''] },
+        ],
+      };
+      const realTransport = view.transport.sendCommand.getMockImplementation()!;
+      view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'DOM.getDocument') return { root: grownTree };
+        return realTransport(method, params);
+      });
+
+      const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID, 'automatic');
+
+      expect(result).toMatchObject({ ok: false, reason: 'form_not_ready' });
+      expect(result.detail).toContain('changed during the cancel window');
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      expect(view.transport.sendCommand.mock.calls.filter(([method]) => method === 'Input.dispatchMouseEvent')).toHaveLength(0);
+    });
+
+    it('an unattended submit on an unchanged page still goes through, so the gate is not always-refusing', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      // #271: the page has to produce a real receipt after the click, or the submit lands on
+      // `submission_unknown` rather than succeeding.
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE }));
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+
+      expect(await submitApplicationReview(FAKE_DB, ATTEMPT_ID, 'automatic')).toEqual({ ok: true });
+    });
+
+    it('refuses to submit a form whose required field is empty, without ever touching the checkpoint', async () => {
+      const { openApplicationReview, submitApplicationReview } = await importSession();
+      const view = fakeView(EMPTY_REQUIRED_TREE);
+      createApplicationView.mockImplementation(() => view);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+
+      const result = await submitApplicationReview(FAKE_DB, ATTEMPT_ID);
+
+      expect(result).toMatchObject({ ok: false, reason: 'form_not_ready' });
+      expect(result.detail).toContain('required field "fullName" is empty');
+      expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalled();
+      // And nothing was clicked.
+      expect(view.transport.sendCommand.mock.calls.filter(([method]) => method === 'Input.dispatchMouseEvent')).toHaveLength(0);
+    });
+
+    it('filling that same required field for real is what makes it submittable', async () => {
+      const { openApplicationReview, applyApplicationFieldMap, submitApplicationReview } = await importSession();
+      // #271: the page has to produce a real receipt after the click for the submit to succeed.
+      const view = fakeView(EMPTY_REQUIRED_TREE, { afterSubmitTree: CONFIRMATION_TREE });
+      createApplicationView.mockImplementation(() => view);
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+
+      // A screenshot was taken, and the snapshot found a field. Neither is worth anything yet.
+      expect(opened.screenshotBase64).toBe('ZmFrZS1zY3JlZW5zaG90');
+      expect(opened.snapshot.fields).toHaveLength(1);
+      expect(opened.readiness.discoveredFieldCount).toBe(1);
+      expect(opened.readiness.verifiedFilledCount).toBe(0);
+      expect(opened.readiness.ready).toBe(false);
+
+      const nameField = opened.snapshot.fields[0]!;
+      const applied = await applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [{ valueRef: 'v0000000000000001', value: 'Ada Lovelace', provenance: 'profile' }],
+        fieldMap: {
+          attemptId: ATTEMPT_ID,
+          snapshotGeneration: opened.snapshot.generation,
+          assignments: [{ fieldRef: nameField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } }],
+          unmapped: [],
+        },
+      });
+      expect(applied.readiness).toMatchObject({ ready: true, verifiedFilledCount: 1, discoveredFieldCount: 1 });
+
+      workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
+      workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
+      extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
+
+      expect(await submitApplicationReview(FAKE_DB, ATTEMPT_ID)).toEqual({ ok: true });
+    });
   });
 });

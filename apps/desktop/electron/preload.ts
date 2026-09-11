@@ -36,8 +36,10 @@ import type {
   OpenApplicationReviewResult,
   RequestAutomationGrantResult,
   ScheduleAutomaticSubmissionResult,
+  ShowApplicationHandoffResult,
   SubmitApplicationReviewResult,
 } from './application-executor-types.js';
+import type { FormReadiness } from '@agent-dock/application-executor';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
@@ -1086,12 +1088,19 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const rawFields = snapshotSource?.fields;
   const rawSubmitControls = snapshotSource?.submitControls;
   const challengeDetected = snapshotSource?.challengeDetected;
+  const activeFrameId = snapshotSource?.activeFrameId;
+  const pageStateFingerprint = snapshotSource ? optionalString(snapshotSource, 'pageStateFingerprint') : undefined;
+  const activeFormScope = snapshotSource?.activeFormScope;
+  const handoffShown = source?.handoffShown;
   if (
     typeof generation !== 'number' ||
     !capturedAt ||
     !Array.isArray(rawFields) ||
     !Array.isArray(rawSubmitControls) ||
     typeof challengeDetected !== 'boolean' ||
+    typeof activeFrameId !== 'number' ||
+    !pageStateFingerprint ||
+    typeof handoffShown !== 'boolean' ||
     !screenshotBase64
   ) {
     throw new Error('the application executor returned an unexpected response');
@@ -1113,7 +1122,16 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     const label = fieldSource ? optionalString(fieldSource, 'label') : undefined;
     const controlType = fieldSource ? optionalString(fieldSource, 'controlType') : undefined;
     const required = fieldSource?.required;
-    if (!fieldRef || label === undefined || !controlType || typeof required !== 'boolean') {
+    const frameId = fieldSource?.frameId;
+    const active = fieldSource?.active;
+    if (
+      !fieldRef ||
+      label === undefined ||
+      !controlType ||
+      typeof required !== 'boolean' ||
+      typeof frameId !== 'number' ||
+      typeof active !== 'boolean'
+    ) {
       throw new Error(`the application executor returned an unexpected field shape at index ${index}`);
     }
     if (!(FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) {
@@ -1135,17 +1153,125 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     if (classification !== undefined && !(FIELD_CLASSIFICATIONS as readonly string[]).includes(classification)) {
       throw new Error(`the application executor returned an unrecognized classification at index ${index}`);
     }
+    const formScope = fieldSource?.formScope;
+    const rendered = fieldSource?.rendered;
+    const invalid = fieldSource?.invalid;
+    const name = fieldSource ? optionalString(fieldSource, 'name') : undefined;
+    // Untrusted third-party page text, carried across verbatim as a plain string for a person to
+    // read. Nothing on either side of this bridge interprets it.
+    const validationMessage = fieldSource ? optionalString(fieldSource, 'validationMessage') : undefined;
     return {
       fieldRef,
       label,
       controlType: controlType as OpenApplicationReviewResult['snapshot']['fields'][number]['controlType'],
       required,
+      frameId,
+      active,
+      ...(name ? { name } : {}),
+      ...(typeof formScope === 'number' ? { formScope } : {}),
+      ...(typeof rendered === 'boolean' ? { rendered } : {}),
+      ...(typeof invalid === 'boolean' ? { invalid } : {}),
+      ...(validationMessage ? { validationMessage } : {}),
       ...(options ? { options } : {}),
       ...(classification ? { classification: classification as 'credential_field' | 'consent_field' } : {}),
     };
   });
 
-  return { snapshot: { generation, fields, submitControls, capturedAt, challengeDetected }, screenshotBase64 };
+  return {
+    snapshot: {
+      generation,
+      fields,
+      submitControls,
+      capturedAt,
+      challengeDetected,
+      activeFrameId,
+      pageStateFingerprint,
+      ...(typeof activeFormScope === 'number' ? { activeFormScope } : {}),
+    },
+    screenshotBase64,
+    readiness: toFormReadiness(source?.readiness),
+    handoffShown,
+  };
+}
+
+const READINESS_BLOCKER_KINDS = [
+  'required_field_empty',
+  'validation_error',
+  'value_mismatch',
+  'unverified_write',
+  'attachment_missing',
+  'stale_page_state',
+  'challenge_detected',
+] as const;
+
+/** Fail-closed like every other converter here: a readiness reading this build cannot interpret
+ * throws rather than being silently downgraded to an empty one, which would read as "ready" and is
+ * the single worst direction for this particular value to fail in (#277). */
+function toFormReadiness(value: unknown): FormReadiness {
+  const source = asRecord(value);
+  const ready = source?.ready;
+  const verifiedFilledCount = source?.verifiedFilledCount;
+  const discoveredFieldCount = source?.discoveredFieldCount;
+  const requiredFieldCount = source?.requiredFieldCount;
+  const requiredFieldsSatisfied = source?.requiredFieldsSatisfied;
+  const rawBlockers = source?.blockers;
+  if (
+    typeof ready !== 'boolean' ||
+    typeof verifiedFilledCount !== 'number' ||
+    typeof discoveredFieldCount !== 'number' ||
+    typeof requiredFieldCount !== 'number' ||
+    typeof requiredFieldsSatisfied !== 'number' ||
+    !Array.isArray(rawBlockers)
+  ) {
+    throw new Error('the application executor returned an unexpected readiness response');
+  }
+
+  const blockers = rawBlockers.map((rawBlocker, index) => {
+    const blockerSource = asRecord(rawBlocker);
+    const kind = blockerSource ? optionalString(blockerSource, 'kind') : undefined;
+    if (!kind || !(READINESS_BLOCKER_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(`the application executor returned an unrecognized readiness blocker at index ${index}`);
+    }
+    return {
+      kind,
+      ...(blockerSource ? { fieldRef: optionalString(blockerSource, 'fieldRef') } : {}),
+      ...(blockerSource ? { label: optionalString(blockerSource, 'label') } : {}),
+      ...(blockerSource ? { message: optionalString(blockerSource, 'message') } : {}),
+      ...(blockerSource ? { detail: optionalString(blockerSource, 'detail') } : {}),
+      // The discriminated union on the other side of this bridge is narrower than what arrives over
+      // IPC (each blocker kind carries only its own fields). This asserts the shape the union
+      // describes after the `kind` above has already been checked against the closed set, which is
+      // the one fact the structural check cannot express to the compiler on its own.
+    } as unknown as FormReadiness['blockers'][number];
+  });
+
+  return { ready, verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers };
+}
+
+const SHOW_HANDOFF_REFUSAL_REASONS = ['no_open_review', 'no_window', 'already_submitting'] as const;
+
+function toShowApplicationHandoffResult(value: unknown): ShowApplicationHandoffResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  if (reason !== undefined && !(SHOW_HANDOFF_REFUSAL_REASONS as readonly string[]).includes(reason)) {
+    throw new Error('the application executor returned an unrecognized handoff refusal reason');
+  }
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const company = source ? optionalString(source, 'company') : undefined;
+  const role = source ? optionalString(source, 'role') : undefined;
+  const bannerHeightPx = source?.bannerHeightPx;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ShowApplicationHandoffResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(company ? { company } : {}),
+    ...(role ? { role } : {}),
+    ...(typeof bannerHeightPx === 'number' && Number.isFinite(bannerHeightPx) ? { bannerHeightPx } : {}),
+  };
 }
 
 /** Rebuilt field by field, like every other converter here: only the four metadata strings an
@@ -1188,6 +1314,7 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   const reason = source ? optionalString(source, 'reason') : undefined;
   const detail = source ? optionalString(source, 'detail') : undefined;
   const appliedCount = source?.appliedCount;
+  const verifiedCount = source?.verifiedCount;
   const attachments = source ? toApplicationAttachments(source.attachments) : undefined;
   const manualHandoff = source ? toApplicationManualHandoff(source.manualHandoff) : undefined;
   return {
@@ -1195,6 +1322,8 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
     ...(reason ? { reason: reason as NonNullable<ApplyApplicationFieldMapResult['reason']> } : {}),
     ...(detail ? { detail } : {}),
     ...(typeof appliedCount === 'number' ? { appliedCount } : {}),
+    ...(typeof verifiedCount === 'number' ? { verifiedCount } : {}),
+    ...(source?.readiness !== undefined ? { readiness: toFormReadiness(source.readiness) } : {}),
     ...(attachments ? { attachments } : {}),
     ...(manualHandoff ? { manualHandoff } : {}),
   };
@@ -1265,6 +1394,15 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
 
   async closeReview(attemptId) {
     await ipcRenderer.invoke('application-executor:close-review', attemptId);
+  },
+
+  async showHandoff(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:show-handoff', attemptId);
+    return toShowApplicationHandoffResult(result);
+  },
+
+  async hideHandoff(attemptId) {
+    await ipcRenderer.invoke('application-executor:hide-handoff', attemptId);
   },
 
   async resolveTargetPolicyId(canonicalUrl) {
