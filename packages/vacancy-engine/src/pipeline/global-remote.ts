@@ -651,6 +651,8 @@ export type GlobalRemoteScanResult = {
 export type GlobalRemoteScanOptions = {
   officialOnly?: boolean;
   offlineReclassify?: boolean;
+  browseAll?: boolean;
+  browseAllResultCap?: number;
   /**
    * Overrides the checked-in profile's static `discovery.roleQuery` for this run only, so the
    * role/keyword a caller actually searched for scopes each source's own server-side search
@@ -672,6 +674,46 @@ export type GlobalRemoteScanOptions = {
    */
   onProgress?: ScanProgressCallback;
 };
+
+export function applyBrowseAllResultCap(report: GlobalRemoteReport, resultCap: number): GlobalRemoteReport {
+  const safeCap = Math.max(0, Math.floor(resultCap));
+  const resultCountBeforeCap = report.discoveryAudit.length;
+  const complete = resultCountBeforeCap <= safeCap;
+  if (complete) {
+    return {
+      ...report,
+      scanBounds: {
+        mode: 'browse_all',
+        resultCap: safeCap,
+        resultCountBeforeCap,
+        complete: true,
+        completenessReason: null,
+      },
+    };
+  }
+
+  const discoveryAudit = report.discoveryAudit.slice(0, safeCap);
+  const keptUrls = new Set(discoveryAudit.map((vacancy) => vacancy.url));
+  const officialAudit = report.officialAudit.filter((audit) => keptUrls.has(audit.url));
+  const groups = groupOfficial(officialAudit);
+  return {
+    ...report,
+    ...groups,
+    officialAudit,
+    discoveryAudit,
+    scanBounds: {
+      mode: 'browse_all',
+      resultCap: safeCap,
+      resultCountBeforeCap,
+      complete: false,
+      completenessReason: `Browse-all result cap kept ${safeCap.toLocaleString('en-US')} of ${resultCountBeforeCap.toLocaleString('en-US')} discovered vacancies.`,
+    },
+    methodology: [
+      ...report.methodology,
+      `Browse all was explicitly confirmed. The saved report is capped at ${safeCap.toLocaleString('en-US')} result rows and is marked incomplete when discovery finds more.`,
+    ],
+  };
+}
 
 async function loadPreviousDiscovery(projectRoot: string): Promise<{
   sources: DiscoverySourceAudit[];
@@ -883,10 +925,17 @@ export async function runGlobalRemoteScan(
   ).length;
   const manualOrProhibitedRegistrySources =
     sourceRegistry.length - activeRegistrySources - gatedRegistrySources;
-  const report: GlobalRemoteReport = {
+  let report: GlobalRemoteReport = {
     runId: randomUUID(),
     generatedAt: new Date().toISOString(),
     profileVersion: profile.version,
+    scanBounds: {
+      mode: options.browseAll ? 'browse_all' : 'focused',
+      resultCap: null,
+      resultCountBeforeCap: assessedDiscoveryAudit.length,
+      complete: true,
+      completenessReason: null,
+    },
     criteria: {
       role: 'Explicit frontend engineer/developer/architect; no full-stack, backend, or people-manager titles',
       fullyRemote: true,
@@ -963,6 +1012,9 @@ export async function runGlobalRemoteScan(
       .filter((source) => source.state === 'active')
       .map((source) => ({ name: source.name, url: source.url })),
   };
+  if (options.browseAll && options.browseAllResultCap !== undefined) {
+    report = applyBrowseAllResultCap(report, options.browseAllResultCap);
+  }
   const files = await writeGlobalRemoteReport(report, projectRoot);
   return { report, files };
 }

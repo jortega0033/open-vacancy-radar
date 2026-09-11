@@ -33,6 +33,7 @@ export interface AgentDockBridge {
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyScanRequest = string | { mode: 'query'; query: string } | { mode: 'browse_all' };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
@@ -41,7 +42,7 @@ export interface VacancyRadarBridge {
   getReportSummary(): Promise<VacancyReportSummary | null>;
   /** `query` scopes each source's own server-side search parameter for this run. Blank input is
    * rejected before discovery starts, so a new worldwide scan always has an explicit role signal. */
-  runScan(query: string): Promise<GlobalRemoteReport>;
+  runScan(request: VacancyScanRequest): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;

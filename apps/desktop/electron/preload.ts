@@ -81,6 +81,7 @@ export interface AgentDockBridge {
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyScanRequest = string | { mode: 'query'; query: string } | { mode: 'browse_all' };
 
 /**
  * A second, independent bridge namespace (rather than folding these onto `AgentDockBridge`)
@@ -100,7 +101,7 @@ export interface VacancyRadarBridge {
    * default and filtering everything client-side afterward. Blank input is rejected before any
    * discovery request, so the renderer cannot accidentally trigger the checked-in fallback query.
    */
-  runScan(query: string): Promise<GlobalRemoteReport>;
+  runScan(request: VacancyScanRequest): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
@@ -243,8 +244,8 @@ const vacancyApi: VacancyRadarBridge = {
   getReportSummary() {
     return ipcRenderer.invoke('vacancy:get-report-summary');
   },
-  runScan(query) {
-    return ipcRenderer.invoke('vacancy:run-scan', query);
+  runScan(request) {
+    return ipcRenderer.invoke('vacancy:run-scan', request);
   },
   getScanStatus() {
     return ipcRenderer.invoke('vacancy:get-scan-status');

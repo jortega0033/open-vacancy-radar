@@ -9,6 +9,8 @@ export interface SearchFilterBarProps {
   onLocationChange: (value: string) => void;
   /** Starts a fresh upstream scan. Filtering the loaded report happens through `onFiltersChange`. */
   onSearch: () => void;
+  /** Starts the deliberate broad scan flow. */
+  onBrowseAll: () => void;
   onClear: () => void;
   /** Provider ids present in the loaded report: never a hardcoded list. */
   sources: string[];
@@ -33,6 +35,7 @@ export function SearchFilterBar({
   onFiltersChange,
   onLocationChange,
   onSearch,
+  onBrowseAll,
   onClear,
   sources,
   employmentTypes,
@@ -80,6 +83,12 @@ export function SearchFilterBar({
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
           {hasReport ? 'Run new scan' : 'Run scan'}
         </button>
+
+        {!hasQuery && (
+          <button className="btn btn-outline btn-sm" type="button" onClick={onBrowseAll} disabled={busy}>
+            Browse all vacancies
+          </button>
+        )}
 
         {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
             `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just

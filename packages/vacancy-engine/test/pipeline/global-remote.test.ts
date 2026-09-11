@@ -23,6 +23,7 @@ import {
 import { indSponsors } from '../../src/db/schema.js';
 import {
   applyWorkEligibilityEvidence,
+  applyBrowseAllResultCap,
   applyWorldwideProfileScores,
   applyWorldwideSponsorMatches,
   planWorldwideSponsorMatches,
@@ -1031,6 +1032,66 @@ describe('applyWorkEligibilityEvidence', () => {
     The base salary range is benchmarked to the United States market.
     Eligibility
     You must be legally authorized to work in the United States.`;
+
+  it('records browse-all cap metadata and trims persisted rows when the cap is hit', () => {
+    const report = {
+      ...emptyReport(),
+      discoveryAudit: [
+        vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer'),
+        vacancy('jobicy', 'jobicy:2', 'https://example.test/2', 'Frontend Engineer'),
+      ],
+      officialAudit: [
+        {
+          id: 'official-1',
+          provider: 'greenhouse' as const,
+          state: 'active' as const,
+          company: 'Example Company',
+          title: 'Frontend Engineer',
+          url: 'https://example.test/1',
+          decision: 'strict_match' as const,
+          reasons: ['Exact URL matched.'],
+          evidence: [],
+          minimumAnnualBaseUsd: null,
+          contentHash: '1'.repeat(64),
+          reviewedContentHash: '1'.repeat(64),
+          reviewedAt: '2026-09-11T12:00:00.000Z',
+          requestCount: 1,
+          httpStatus: 200,
+        },
+        {
+          id: 'official-2',
+          provider: 'greenhouse' as const,
+          state: 'active' as const,
+          company: 'Example Company',
+          title: 'Frontend Engineer',
+          url: 'https://example.test/2',
+          decision: 'salary_unknown' as const,
+          reasons: ['Review needed.'],
+          evidence: [],
+          minimumAnnualBaseUsd: null,
+          contentHash: '2'.repeat(64),
+          reviewedContentHash: '2'.repeat(64),
+          reviewedAt: '2026-09-11T12:00:00.000Z',
+          requestCount: 1,
+          httpStatus: 200,
+        },
+      ],
+    };
+
+    const capped = applyBrowseAllResultCap(report, 1);
+
+    expect(capped.discoveryAudit).toHaveLength(1);
+    expect(capped.officialAudit).toHaveLength(1);
+    expect(capped.strictMatches).toHaveLength(1);
+    expect(capped.manualReview).toHaveLength(0);
+    expect(capped.scanBounds).toMatchObject({
+      mode: 'browse_all',
+      resultCap: 1,
+      resultCountBeforeCap: 2,
+      complete: false,
+    });
+    expect(capped.scanBounds?.completenessReason).toContain('kept 1 of 2');
+  });
 
   it('attaches an evidence record to every row, whatever source produced it', () => {
     const assessed = applyWorkEligibilityEvidence(

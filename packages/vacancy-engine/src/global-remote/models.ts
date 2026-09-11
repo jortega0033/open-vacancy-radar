@@ -402,6 +402,13 @@ export type GlobalRemoteReport = {
   runId: string;
   generatedAt: string;
   profileVersion: string;
+  scanBounds?: {
+    mode: 'focused' | 'browse_all';
+    resultCap: number | null;
+    resultCountBeforeCap: number;
+    complete: boolean;
+    completenessReason: string | null;
+  };
   criteria: {
     role: string;
     fullyRemote: true;

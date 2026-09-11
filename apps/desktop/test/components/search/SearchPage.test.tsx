@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
 import { SearchPage } from '../../../src/components/search/index.js';
@@ -276,6 +276,50 @@ describe('SearchPage', () => {
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
+  it('requires confirmation before a browse-all scan starts', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy()], []),
+      ),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    const dialog = screen.getByRole('dialog', { name: /browse all vacancies/i });
+    expect(within(dialog).getByText(/capped at 5,000 rows/i)).toBeInTheDocument();
+    expect(bridge.runScan).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: /browse all vacancies/i })).not.toBeInTheDocument();
+    expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  it('runs an explicitly confirmed browse-all scan and renders incomplete cap state', async () => {
+    const cappedReport = makeWorldwideReport([makeWorldwideVacancy()], []);
+    cappedReport.scanBounds = {
+      mode: 'browse_all',
+      resultCap: 5_000,
+      resultCountBeforeCap: 5_001,
+      complete: false,
+      completenessReason: 'Browse-all result cap kept 5,000 of 5,001 discovered vacancies.',
+    };
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(cappedReport),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all' }));
+    expect(await screen.findByText(/kept 5,000 of 5,001/i)).toBeInTheDocument();
+    expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
+  });
+
   it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
     const report = makeWorldwideReport([makeWorldwideVacancy()]);
     const getReport = vi.fn().mockResolvedValue(report);
@@ -470,7 +514,7 @@ describe('SearchPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
 
-    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith('backend engineer'));
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'backend engineer' }));
   });
 
   it('Clear filters applies immediately, with no separate Search click needed', async () => {
