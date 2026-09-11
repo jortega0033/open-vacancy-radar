@@ -5,6 +5,8 @@ import { App } from '../../../src/App.js';
 import { AppSidebar } from '../../../src/components/shell/AppSidebar.js';
 import { WorkspaceHeader } from '../../../src/components/shell/WorkspaceHeader.js';
 import { EmptyState } from '../../../src/components/shell/EmptyState.js';
+import { PageLoading } from '../../../src/components/shell/PageLoading.js';
+import { ErrorBanner } from '../../../src/components/shell/ErrorBanner.js';
 import { OpenVacancyRadarMark } from '../../../src/components/brand/OpenVacancyRadarMark.js';
 import { headerCopy, isNavPage, NAV_PAGES } from '../../../src/components/shell/nav.js';
 import type { AgentDockBridge, DaemonStatus, WorkspaceBridge } from '../../../src/window.js';
@@ -235,6 +237,35 @@ describe('EmptyState', () => {
     expect(illustration).toHaveAttribute('aria-hidden', 'true');
     expect(illustration.getAttribute('style')).toContain('empty-applications.svg');
     expect(illustration.getAttribute('style')).toContain('currentcolor');
+  });
+});
+
+describe('PageLoading', () => {
+  it('renders a spinner and the given label, announced as a status', () => {
+    render(<PageLoading label="Loading saved jobs…" />);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Loading saved jobs…');
+    expect(status.querySelector('.loading-spinner')).not.toBeNull();
+  });
+});
+
+describe('ErrorBanner', () => {
+  it('always renders alert alert-error alert-soft with role="alert", regardless of call site', () => {
+    render(<ErrorBanner>Something went wrong</ErrorBanner>);
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent('Something went wrong');
+    expect(banner.className).toContain('alert-error');
+    expect(banner.className).toContain('alert-soft');
+  });
+
+  it('renders an optional action after the message', () => {
+    render(
+      <ErrorBanner action={<button type="button">Retry</button>}>
+        Could not load
+      </ErrorBanner>,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });
 

@@ -10,10 +10,12 @@ import type {
   LetterType,
   SavedJobRecord,
 } from '../../window.js';
+import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
+import { EmptyState, ErrorBanner } from '../shell/index.js';
 import { exportDocx, exportMarkdown, exportPdf } from './export.js';
 import { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
 import {
@@ -513,11 +515,7 @@ export function LetterGenerator({
 
           <section>
             <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">CV</h3>
-            {cvError && (
-              <div className="alert alert-error alert-soft mb-2 text-sm" role="alert">
-                {cvError}
-              </div>
-            )}
+            {cvError && <ErrorBanner className="mb-2">{cvError}</ErrorBanner>}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
                 No CVs saved yet. Upload one on the Search page and choose “Save to CV library”, then
@@ -754,21 +752,9 @@ export function LetterGenerator({
           )}
         </div>
 
-        {saveError && (
-          <div className="alert alert-error mt-3 text-sm" role="alert">
-            {saveError}
-          </div>
-        )}
-        {copyState === 'failed' && copyError && (
-          <div className="alert alert-error mt-3 text-sm" role="alert">
-            {copyError}
-          </div>
-        )}
-        {exportState === 'failed' && exportError && (
-          <div className="alert alert-error mt-3 text-sm" role="alert">
-            {exportError}
-          </div>
-        )}
+        {saveError && <ErrorBanner className="mt-3">{saveError}</ErrorBanner>}
+        {copyState === 'failed' && copyError && <ErrorBanner className="mt-3">{copyError}</ErrorBanner>}
+        {exportState === 'failed' && exportError && <ErrorBanner className="mt-3">{exportError}</ErrorBanner>}
 
         {showStreamPanel && (
           <AiOutput
@@ -801,13 +787,11 @@ export function LetterGenerator({
           </div>
         ) : (
           !showStreamPanel && (
-            <div className="rounded-box mt-4 border border-base-300 p-8 text-center">
-              <div className="text-sm font-semibold">No document yet</div>
-              <p className="mt-1.5 text-sm text-base-content/60">
-                Choose a job, a CV and the document settings, then generate. The draft is written
-                from your saved CV and the vacancy text, and stays editable.
-              </p>
-            </div>
+            <EmptyState
+              illustration={emptyLettersIllustration}
+              title="No document yet"
+              description="Choose a job, a CV and the document settings, then generate. The draft is written from your saved CV and the vacancy text, and stays editable."
+            />
           )
         )}
       </div>

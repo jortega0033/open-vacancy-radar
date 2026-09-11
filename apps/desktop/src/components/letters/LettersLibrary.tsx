@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { describeError } from '../cv/useAgentRun.js';
-import { ConfirmDialog, EmptyState } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import {
   formatUpdatedAt,
   labelFor,
@@ -118,23 +118,10 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
         )}
       </div>
 
-      {loadError && (
-        <div className="alert alert-error mt-4 text-sm" role="alert">
-          {loadError}
-        </div>
-      )}
-      {actionError && (
-        <div className="alert alert-error mt-4 text-sm" role="alert">
-          {actionError}
-        </div>
-      )}
+      {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 
-      {isLoading && !loadError && (
-        <div className="mt-4 flex items-center gap-3 text-sm text-base-content/70" role="status">
-          <span className="loading loading-spinner loading-sm" aria-hidden="true" />
-          <span>Loading your letters…</span>
-        </div>
-      )}
+      {isLoading && !loadError && <PageLoading label="Loading your letters…" />}
 
       {!isLoading && rows.length === 0 && !loadError && (
         <EmptyState

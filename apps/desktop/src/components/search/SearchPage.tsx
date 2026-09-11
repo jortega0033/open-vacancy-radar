@@ -9,7 +9,7 @@ import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState } from '../shell/index.js';
+import { EmptyState, ErrorBanner } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
 import { VacancyDetail, type SaveState } from './VacancyDetail.js';
@@ -625,21 +625,23 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
 
       <div className="flex-none">
         {engineState === 'unavailable' && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>
-              Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still
-              be shown, but no new scan can run.
-            </span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={retryEngineCheck}
-              disabled={checkingEngine}
-            >
-              {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-              Retry
-            </button>
-          </div>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={retryEngineCheck}
+                disabled={checkingEngine}
+              >
+                {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                Retry
+              </button>
+            }
+          >
+            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
+            shown, but no new scan can run.
+          </ErrorBanner>
         )}
         {scanning && (
           <div className="alert alert-info mt-3 text-sm">
@@ -650,30 +652,38 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           </div>
         )}
         {scanError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>Scan failed: {scanError}</span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={() => void runScan()}
-              disabled={busy}
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={() => void runScan()}
+                disabled={busy}
+              >
+                Retry
+              </button>
+            }
+          >
+            Scan failed: {scanError}
+          </ErrorBanner>
         )}
         {loadError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>{loadError}</span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={retryLoad}
-              disabled={busy}
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={retryLoad}
+                disabled={busy}
+              >
+                Retry
+              </button>
+            }
+          >
+            {loadError}
+          </ErrorBanner>
         )}
       </div>
 
@@ -748,6 +758,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           ) : (
             <div className="min-w-0 flex-1">
               <EmptyState
+                illustration={emptySearchIllustration}
                 title="Select a vacancy"
                 description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
               />
