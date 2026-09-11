@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f07a7f91-16c7-4101-a2e2-5be8e6f5f8ea",
-  "prevId": "5ffab018-6096-4662-ac79-165e5b36289a",
+  "id": "9700a273-4b8a-47c7-b43d-227ace0f442e",
+  "prevId": "f07a7f91-16c7-4101-a2e2-5be8e6f5f8ea",
   "tables": {
     "app_settings": {
       "name": "app_settings",
@@ -491,6 +491,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "prepared_fields": {
+          "name": "prepared_fields",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
         }
       },
       "indexes": {},

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractSnapshotFields, type CdpDomNode } from '../src/dom-extract.js';
+import { extractSnapshotFields, extractSubmissionSignals, MAX_OBSERVED_PAGE_TEXT_LENGTH, type CdpDomNode } from '../src/dom-extract.js';
 
 let nextBackendId = 1;
 function node(partial: Partial<CdpDomNode> & { nodeName: string }): CdpDomNode {
@@ -383,5 +383,100 @@ describe('extractSnapshotFields: submit-control scoping (never a candidate from 
     const root = node({ nodeName: 'BUTTON', children: [{ nodeName: '#text', nodeType: 3, nodeValue: 'Submit Application', backendNodeId: 0 }] });
     const { submitControls } = extractSnapshotFields(root);
     expect(submitControls).toHaveLength(1);
+  });
+});
+
+describe('extractSubmissionSignals (#271)', () => {
+  function text(value: string): CdpDomNode {
+    return { nodeName: '#text', nodeType: 3, nodeValue: value, backendNodeId: 0 };
+  }
+
+  it('collects visible page text, whitespace-collapsed, skipping script and style bodies', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({ nodeName: 'SCRIPT', children: [text('var thankYouForApplying = false;')] }),
+        node({ nodeName: 'STYLE', children: [text('.error { color: red }')] }),
+        node({ nodeName: 'H1', children: [text('  Your application   has been submitted ')] }),
+      ],
+    });
+    const signals = extractSubmissionSignals(root);
+    expect(signals.text).toBe('Your application has been submitted');
+    expect(signals.text).not.toContain('thankYouForApplying');
+  });
+
+  it('reports the form as still standing while any submit-shaped control remains', () => {
+    const root = node({ nodeName: 'BODY', children: [node({ nodeName: 'BUTTON', children: [text('Submit Application')] })] });
+    expect(extractSubmissionSignals(root).formStillPresent).toBe(true);
+  });
+
+  it('reports the form as gone on a page with no submit-shaped control left', () => {
+    const root = node({ nodeName: 'BODY', children: [node({ nodeName: 'H1', children: [text('Thank you for applying')] })] });
+    expect(extractSubmissionSignals(root).formStillPresent).toBe(false);
+  });
+
+  it('collects an error-classed marker with its message', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [node({ nodeName: 'DIV', attributes: attrsFrom({ class: 'field-error' }), children: [text('Full name is required')] })],
+    });
+    expect(extractSubmissionSignals(root).errorMarkers).toEqual(['Full name is required']);
+  });
+
+  it('records an aria-invalid control by its own name even when the message lives in a sibling node', () => {
+    const root = node({
+      nodeName: 'FORM',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName', 'aria-invalid': 'true' }) }),
+        node({ nodeName: 'SPAN', children: [text('Please enter your name')] }),
+      ],
+    });
+    expect(extractSubmissionSignals(root).errorMarkers).toEqual(['field "fullName" was flagged invalid']);
+  });
+
+  it('ignores an empty error container, which plenty of forms ship unconditionally in the markup', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [node({ nodeName: 'DIV', attributes: attrsFrom({ class: 'error-message' }), children: [] })],
+    });
+    expect(extractSubmissionSignals(root).errorMarkers).toEqual([]);
+  });
+
+  it('never reads a success banner as an error marker -- an alert role and an alert-success class are not error signals', () => {
+    // A real regression risk in the other direction: misreading a success banner would report a
+    // genuinely delivered application as one that still needs attention.
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({
+          nodeName: 'DIV',
+          attributes: attrsFrom({ role: 'alert', class: 'alert alert-success' }),
+          children: [text('Your application has been submitted')],
+        }),
+      ],
+    });
+    expect(extractSubmissionSignals(root).errorMarkers).toEqual([]);
+  });
+
+  it('reads through an iframe the page embeds its confirmation in', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'https://fixture.example.invalid/embedded' }),
+          contentDocument: node({ nodeName: 'BODY', children: [node({ nodeName: 'P', children: [text('Application reference: FIXTURE-42-0001')] })] }),
+        }),
+      ],
+    });
+    expect(extractSubmissionSignals(root).text).toContain('FIXTURE-42-0001');
+  });
+
+  it('bounds collected page text rather than copying an unbounded third-party document', () => {
+    const root = node({
+      nodeName: 'BODY',
+      children: Array.from({ length: 4000 }, () => node({ nodeName: 'P', children: [text('x'.repeat(50))] })),
+    });
+    expect(extractSubmissionSignals(root).text.length).toBeLessThanOrEqual(MAX_OBSERVED_PAGE_TEXT_LENGTH);
   });
 });

@@ -294,3 +294,96 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
 
   return { fields, submitControls, nodeIds, challengeDetected };
 }
+
+// ------------------------------------------------------- post-submit observation signals (#271)
+
+/** Never walked for visible text: neither carries anything a person reads on the page, and a
+ * script body in particular is full of strings that would poison every phrase match in
+ * `submission-receipt.ts`. */
+const NON_VISIBLE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD']);
+
+/** Hard cap on collected page text. A real confirmation is at the top of a confirmation page, not
+ * 200KB into one, and an unbounded read of third-party page text has no business crossing into a
+ * classifier or a database row. */
+export const MAX_OBSERVED_PAGE_TEXT_LENGTH = 20_000;
+
+/** How many distinct error markers are worth collecting. The classifier only needs to know that
+ * at least one exists and roughly what it said. */
+const MAX_ERROR_MARKERS = 10;
+
+/** The fallback structural mark of a validation error, for a form that does not set
+ * `aria-invalid`. Anchored to whole class tokens so `error` matches but `terrorism-question` does
+ * not, and deliberately never matching a generic alert/banner token: `role="alert"` and
+ * `class="alert"` are used just as often for a *success* banner ("Your application was submitted"),
+ * and reading one of those as a field error would misreport a genuinely delivered application as
+ * one still needing attention. A success banner's own class (`alert-success`) does not match here. */
+const ERROR_CLASS_PATTERN = /(^|\s)(?:field-)?(?:error|errors|invalid|has-error|is-invalid|error-message|validation-error)(\s|$)/i;
+
+export interface SubmissionSignals {
+  /** Visible page text, whitespace-collapsed and capped at `MAX_OBSERVED_PAGE_TEXT_LENGTH`. */
+  text: string;
+  /** Whether any submit-shaped control is still on the page, i.e. the form is still standing.
+   * Deliberately the *unscoped* check (any submit-shaped control anywhere), not
+   * `extractSnapshotFields`'s dominant-frame/form narrowing: for this question a false "the form is
+   * still there" is the safe answer, since it is what withholds a `submitted` verdict. */
+  formStillPresent: boolean;
+  /** Non-empty text of each structural error marker found, capped at `MAX_ERROR_MARKERS`. */
+  errorMarkers: string[];
+}
+
+/**
+ * Reads a CDP `DOM.getDocument` tree for the three things #271's outcome classifier is allowed to
+ * look at after the submit click: what the page now says, whether the form is still standing, and
+ * whether the page is flagging field errors.
+ *
+ * Pure, like `extractSnapshotFields` above and for the same reason -- every branch here is
+ * exercisable against a hand-built fixture tree, with no browser and no real submission anywhere.
+ * Mints no refs and touches no node map: this pass is read-only observation, never a step that
+ * could be acted on.
+ */
+export function extractSubmissionSignals(root: CdpDomNode): SubmissionSignals {
+  const chunks: string[] = [];
+  let length = 0;
+  let formStillPresent = false;
+  const errorMarkers: string[] = [];
+
+  function walk(node: CdpDomNode): void {
+    if (NON_VISIBLE_TAGS.has(node.nodeName)) return;
+
+    if (node.nodeType === 3 /* TEXT_NODE */) {
+      const value = (node.nodeValue ?? '').replace(/\s+/g, ' ').trim();
+      if (value && length < MAX_OBSERVED_PAGE_TEXT_LENGTH) {
+        chunks.push(value);
+        length += value.length + 1;
+      }
+      return;
+    }
+
+    if (isSubmitControl(node) && !hasAttr(node, 'hidden')) formStillPresent = true;
+
+    const ariaInvalid = (attr(node, 'aria-invalid') ?? '').toLowerCase() === 'true';
+    const isErrorMarker = ariaInvalid || ERROR_CLASS_PATTERN.test(attr(node, 'class') ?? '');
+    if (isErrorMarker && errorMarkers.length < MAX_ERROR_MARKERS && !hasAttr(node, 'hidden')) {
+      const markerText = textContent(node).replace(/\s+/g, ' ').trim();
+      if (markerText) {
+        errorMarkers.push(markerText.slice(0, 200));
+      } else if (ariaInvalid) {
+        // A flagged *control* carries no text of its own -- the message it points at is a sibling
+        // node. The flag alone is still an unambiguous "this field was refused", so record it by
+        // the field's own name rather than dropping it. A merely empty error *container*, which
+        // plenty of forms ship in the markup and fill in only on failure, is dropped (below).
+        errorMarkers.push(`field "${resolveLabel(node) || node.nodeName.toLowerCase()}" was flagged invalid`);
+      }
+    }
+
+    if (node.nodeName === 'IFRAME' && node.contentDocument) {
+      walk(node.contentDocument);
+      return;
+    }
+    for (const child of node.children ?? []) walk(child);
+  }
+
+  walk(root);
+
+  return { text: chunks.join(' ').slice(0, MAX_OBSERVED_PAGE_TEXT_LENGTH), formStillPresent, errorMarkers };
+}

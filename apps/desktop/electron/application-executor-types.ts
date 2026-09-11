@@ -1,4 +1,5 @@
-import type { FieldMapRefusalReason, FormSnapshot, ValueProvenance } from '@agent-dock/application-executor';
+import type { FieldMapRefusalReason, FormSnapshot, HandoffReason, ValueProvenance } from '@agent-dock/application-executor';
+import type { ArtifactUploadRefusalReason } from './application-artifact-upload.js';
 import type { AutomaticSubmissionRefusalReason, SubmitApplicationReviewRefusalReason } from './application-review-session.js';
 import type { RequestAutomationGrantRefusalReason } from './automatic-submission-grant.js';
 
@@ -37,11 +38,54 @@ export interface ApplyApplicationFieldMapInput {
   allowJdProvenance?: boolean;
 }
 
+/**
+ * Everything `applyFieldMap` can refuse with: Domain B's own rules (#196 §2.4), plus the
+ * artifact-resolution refusals #273 added on top of them, plus the two outcomes that only exist
+ * once an attachment is actually attempted.
+ *
+ * `attachment_requires_manual_handoff` is never a silent failure: the live page is surfaced to the
+ * user and `manualHandoff` below says which field and which file it was, so an upload control this
+ * executor cannot drive ends as "you do this one by hand", never as a quietly dropped field or an
+ * attempt to drive the control some other way.
+ *
+ * `attachment_unconfirmed` means the file was sent to the control but the browser did not report it
+ * back on that control afterwards -- a concrete failure, deliberately distinct from success, so an
+ * attempt is never marked ready on an attachment nothing verified.
+ */
+export type ApplyApplicationFieldMapRefusalReason =
+  | FieldMapRefusalReason
+  | ArtifactUploadRefusalReason
+  | 'attachment_requires_manual_handoff'
+  | 'attachment_unconfirmed';
+
+/** One confirmed attachment. `attachedFileName` is what the *page* reported after the upload, read
+ * back from the control itself -- not an echo of what was requested. No path, ever. */
+export interface ApplicationAttachmentResult {
+  artifactId: string;
+  fieldRef: string;
+  fileName: string;
+  attachedFileName: string;
+}
+
+/** The visible fallback for an upload control this executor may not or cannot drive. Carries no
+ * path either: the user is shown the real page, and the file name is only there so the UI can say
+ * which document to pick. */
+export interface ApplicationManualHandoff {
+  fieldRef: string;
+  artifactId: string;
+  fileName: string;
+  reason: HandoffReason;
+}
+
 export interface ApplyApplicationFieldMapResult {
   ok: boolean;
-  reason?: FieldMapRefusalReason;
+  reason?: ApplyApplicationFieldMapRefusalReason;
   detail?: string;
   appliedCount?: number;
+  /** Present only when `ok` is true and the field map assigned at least one artifact. */
+  attachments?: ApplicationAttachmentResult[];
+  /** Present only with reason `attachment_requires_manual_handoff`. */
+  manualHandoff?: ApplicationManualHandoff;
 }
 
 export interface SubmitApplicationReviewResult {
@@ -78,11 +122,17 @@ export interface ApplicationExecutorBridge {
   openReview(input: OpenApplicationReviewInput): Promise<OpenApplicationReviewResult>;
   /**
    * Validates `fieldMap` against the attempt's current snapshot and value table (#196 §2.4), then
-   * applies every validated `value`/`option` assignment via fill/select. This slice never resolves
-   * artifact ownership (the caller always supplies an empty owned-artifact set -- #198's artifact
-   * repository integration is a separate, future piece of work), so a field map containing an
-   * `artifact` (file-upload) assignment is refused outright with reason `'artifact_not_owned'`,
-   * never silently skipped.
+   * applies every validated `value`/`option` assignment via fill/select and attaches every
+   * validated `artifact` assignment.
+   *
+   * Artifact ownership is resolved in the main process against #198's artifact records (#273): an
+   * `artifact` assignment naming anything not registered against *this* attempt is refused as
+   * `artifact_not_owned` before anything is applied, and an artifact that is owned but whose staged
+   * file is missing, has changed on disk since staging, or exceeds the target's upload constraints
+   * is refused with its own specific reason -- always before any upload, never a silent skip. A
+   * successful attachment is read back off the control and reported in `attachments`; an upload
+   * control this executor may not drive ends in a visible manual handoff instead. No filesystem
+   * path ever crosses this bridge in either direction.
    */
   applyFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult>;
   /**

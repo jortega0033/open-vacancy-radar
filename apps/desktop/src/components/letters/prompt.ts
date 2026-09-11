@@ -1,3 +1,9 @@
+import {
+  DOCUMENT_LENGTH_WORDS,
+  DOCUMENT_SHAPE,
+  GENERATION_INPUT_BUDGETS,
+  type GenerationPromptContext,
+} from '../../../electron/generation-input.js';
 import type { LetterLength, LetterTone, LetterType } from '../../window.js';
 import {
   clampPromptText,
@@ -5,6 +11,8 @@ import {
   formatVacancy,
   GROUNDING_RULES,
   MAX_CV_PROMPT_CHARS,
+  promptContextBlocks,
+  promptContextRules,
 } from '../cv/prompts.js';
 import type { CvDocument } from '../cv/types.js';
 import type { SelectedVacancy } from './types.js';
@@ -23,37 +31,26 @@ import type { SelectedVacancy } from './types.js';
  * is, but they are still bounded and still fenced into their own labelled section, and the prompt
  * states explicitly that they rank below the no-invention rule. "Say I have a CISSP" must not
  * become a CISSP on the letter.
+ *
+ * #281 moved two things out of this file and changed a third:
+ *
+ *  - The per-type document shape and the per-type word ranges now live in
+ *    `electron/generation-input.ts`, so the CV path answers "what does this document have to
+ *    contain, and how long is it" from the same table these four letter types do. The entries
+ *    themselves are unchanged.
+ *  - The instruction budget reads from `GENERATION_INPUT_BUDGETS`, with every other input limit.
+ *  - The output language is no longer hardcoded. It was "natural, conversational English", which
+ *    is a default about the candidate this app has no business shipping: a Dutch posting asks for
+ *    a Dutch letter. With no preference configured the prompt now follows the vacancy's own
+ *    language rather than assuming one.
  */
-export const MAX_INSTRUCTION_CHARS = 1_000;
+export const MAX_INSTRUCTION_CHARS = GENERATION_INPUT_BUDGETS.candidateInstructionChars;
 
 const DOCUMENT_NAME: Record<LetterType, string> = {
   motivation_letter: 'a motivation letter',
   cover_letter: 'a cover letter',
   recruiter_message: 'a short direct message to a recruiter',
   short_application_message: 'a short application message for an application form',
-};
-
-/** What each document type structurally is. The differences here are the point of the feature. */
-const DOCUMENT_SHAPE: Record<LetterType, readonly string[]> = {
-  motivation_letter: [
-    'opens by naming the role and the company and stating, in one specific sentence, why this candidate is writing',
-    'connects concrete experience from the CV to what this vacancy actually asks for, with real examples rather than adjectives',
-    'closes briefly and without pressure',
-  ],
-  cover_letter: [
-    'opens by naming the role and where it was found, then states the single strongest reason this candidate fits it',
-    'gives evidence from the CV for that claim, and covers the most important requirement in the posting the candidate does meet',
-    'closes with a plain statement of availability or interest, without pressure',
-  ],
-  recruiter_message: [
-    'reads as a direct message, not a letter: one greeting line, no address block, no formal sign-off beyond a name-less closing line',
-    'leads with the role and the one piece of the CV most relevant to it',
-    'ends with a single low-pressure ask, such as a short call or the next step in their process',
-  ],
-  short_application_message: [
-    'reads as the free-text box on an application form: no salutation, no sign-off, no letterhead',
-    'names the role and gives the two most relevant pieces of evidence from the CV, and nothing else',
-  ],
 };
 
 const TONE_BRIEF: Record<LetterTone, string> = {
@@ -65,36 +62,54 @@ const TONE_BRIEF: Record<LetterTone, string> = {
   concise: 'stripped back: short sentences, no throat-clearing, every sentence carrying new information',
 };
 
-/**
- * Length is relative to the document, not absolute: a "detailed" recruiter message is still far
- * shorter than a "short" motivation letter, and a single word range for all four types would make
- * one of them wrong.
- */
-const LENGTH_WORDS: Record<LetterType, Record<LetterLength, string>> = {
-  motivation_letter: { short: '180-250', standard: '250-350', detailed: '350-500' },
-  cover_letter: { short: '180-250', standard: '250-350', detailed: '350-500' },
-  recruiter_message: { short: '60-90', standard: '90-140', detailed: '140-200' },
-  short_application_message: { short: '40-70', standard: '70-110', detailed: '110-160' },
-};
-
 export interface LetterPromptOptions {
   type: LetterType;
   tone: LetterTone;
   length: LetterLength;
   /** The candidate's own free-text steer, e.g. "mention the referral from Marta". */
   instructions?: string;
+  /**
+   * The language to write in, from the candidate's own preferences. Empty or absent means no
+   * preference is configured, and the prompt follows the vacancy's own language instead of
+   * assuming one. Never defaulted to a specific language here.
+   */
+  documentLanguage?: string;
+  /**
+   * A hard character ceiling the target's application form imposes on this field, when it has
+   * one. Overrides the word range above, because one of them is a preference and the other is a
+   * rejection.
+   */
+  maxChars?: number | null;
+}
+
+/**
+ * The one language line every letter carries. Split out so the "no shipped language" property is a
+ * single reviewable function rather than a conditional buried in a template literal.
+ */
+export function languageDirective(documentLanguage?: string): string {
+  const preference = (documentLanguage ?? '').trim();
+  return preference.length > 0
+    ? `Write in natural, conversational ${preference}.`
+    : 'Write in natural, conversational prose, in the same language the vacancy itself is written in. Do not switch languages on the candidate’s behalf.';
 }
 
 export function buildLetterPrompt(
   cv: CvDocument,
   vacancy: SelectedVacancy,
   options: LetterPromptOptions,
+  context?: GenerationPromptContext,
 ): string {
   const documentName = DOCUMENT_NAME[options.type];
+  const lengths = DOCUMENT_LENGTH_WORDS[options.type];
   const requirements = [
     ...DOCUMENT_SHAPE[options.type],
     `reads in a tone that is ${TONE_BRIEF[options.tone]}`,
-    `runs roughly ${LENGTH_WORDS[options.type][options.length]} words in total`,
+    ...(lengths === null ? [] : [`runs roughly ${lengths[options.length]} words in total`]),
+    ...(options.maxChars === undefined || options.maxChars === null
+      ? []
+      : [
+          `fits inside ${options.maxChars.toLocaleString('en-US')} characters, because that is the hard limit of the form field it goes into; if it cannot say everything within that, say less rather than claiming more`,
+        ]),
   ]
     .map((line) => `- ${line};`)
     .join('\n');
@@ -110,8 +125,8 @@ ${GROUNDING_RULES}
 Do not invent a hiring manager, recruiter, or contact name: address it generically (for example "Dear hiring team,"). Do not invent an address block, reference number, or date.
 Do not produce a template with placeholders such as [Your Name] or [Company]: every sentence must be usable as written, drawing on the CV and the vacancy details below.
 Avoid stock phrases such as "I am passionate about", "proven track record" and "team player".
-Write in natural, conversational English. Do not use em dashes. Avoid jargon and buzzwords. Do not be sycophantic or overly flattering.
-
+${languageDirective(options.documentLanguage)} Do not use em dashes. Avoid jargon and buzzwords. Do not be sycophantic or overly flattering.
+${promptContextRules(context)}
 Write it so that it:
 ${requirements}
 ${instructionBlock}
@@ -120,6 +135,6 @@ Output the document text only: no title, no commentary before or after it, no Ma
 === VACANCY ===
 ${formatVacancy(vacancy)}
 
-=== CANDIDATE CV (${fieldPromptText(cv.fileName)}) ===
+${promptContextBlocks(context)}=== CANDIDATE CV (${fieldPromptText(cv.fileName)}) ===
 ${clampPromptText(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }

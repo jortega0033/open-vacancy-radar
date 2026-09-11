@@ -1443,6 +1443,47 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     expect(result).toEqual({ ok: false, reason: 'stale_snapshot_generation', detail: 'targets generation 1, current is 2' });
   });
 
+  it('applyFieldMap passes confirmed attachments through, and drops anything path-shaped main did not promise (#273)', async () => {
+    invoke.mockResolvedValue({
+      ok: true,
+      appliedCount: 1,
+      attachments: [
+        {
+          artifactId: 'artifact-1',
+          fieldRef: 'f0000000000000001',
+          fileName: 'resume.pdf',
+          attachedFileName: 'abc123-resume.pdf',
+          // Not part of the contract: a path must never survive this bridge even if main sent one.
+          localFilePath: '/staged/attempt-1/abc123-resume.pdf',
+        },
+      ],
+    });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
+    expect(result).toEqual({
+      ok: true,
+      appliedCount: 1,
+      attachments: [{ artifactId: 'artifact-1', fieldRef: 'f0000000000000001', fileName: 'resume.pdf', attachedFileName: 'abc123-resume.pdf' }],
+    });
+  });
+
+  it('applyFieldMap surfaces a manual upload handoff rather than a bare refusal (#273)', async () => {
+    invoke.mockResolvedValue({
+      ok: false,
+      reason: 'attachment_requires_manual_handoff',
+      detail: 'target policy "x" does not permit automated uploads',
+      manualHandoff: { fieldRef: 'f0000000000000001', artifactId: 'artifact-1', fileName: 'resume.pdf', reason: 'unsupported_control' },
+    });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
+    expect(result).toEqual({
+      ok: false,
+      reason: 'attachment_requires_manual_handoff',
+      detail: 'target policy "x" does not permit automated uploads',
+      manualHandoff: { fieldRef: 'f0000000000000001', artifactId: 'artifact-1', fileName: 'resume.pdf', reason: 'unsupported_control' },
+    });
+  });
+
   it('applyFieldMap throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
     invoke.mockResolvedValue({ nonsense: true });
     const api = await loadPreload('applicationExecutor');

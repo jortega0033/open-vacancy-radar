@@ -252,7 +252,14 @@ export type ApplicationAttemptCheckpoint =
   | 'needs_user'
   | 'skipped'
   | 'failed'
-  | 'submission_unknown';
+  | 'submission_unknown'
+  /**
+   * A person told the app they completed this application themselves (#271). Kept strictly
+   * distinct from `submitted`, which since #271 means "this app observed a real receipt": folding
+   * a person's own statement into the evidence-backed value would make that value unfalsifiable.
+   * Never downgraded to `failed` by the absence of a confirmation email -- silence is not evidence.
+   */
+  | 'user_reported';
 
 /** Checkpoints for which a dedup check refuses a second concurrent attempt at the same vacancy.
  * `submission_unknown` is deliberately included even though it is not really "still in progress":
@@ -260,7 +267,12 @@ export type ApplicationAttemptCheckpoint =
  * attempt at that exact vacancy risks a second real submission on top of one that already
  * succeeded. Per #198's own framing, the realistic way to resolve that is asking the user --
  * which here means the user has to pass `force: true`, the same escape hatch as any other
- * deliberate re-attempt, not that this checkpoint is silently treated as safely closed out. */
+ * deliberate re-attempt, not that this checkpoint is silently treated as safely closed out.
+ *
+ * `user_reported` is deliberately absent, exactly like `submitted`: both mean this vacancy has
+ * been applied to and nothing is still in flight, so a genuinely later re-application is allowed
+ * without `force` -- unlike `submission_unknown`, where a second attempt risks doubling up on one
+ * that already succeeded. */
 export const NON_TERMINAL_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
   'queued',
   'reading_jd',
@@ -273,11 +285,54 @@ export const NON_TERMINAL_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckp
   'submission_unknown',
 ];
 
+/**
+ * Checkpoints that mean an application to this requisition is already done, for #275's
+ * completed-application lookup. Deliberately a *separate* set from the concurrency guard above,
+ * and deliberately overlapping it on `submission_unknown`, because the two answer different
+ * questions:
+ *
+ *  - The concurrency guard asks "is something already running for this vacancy?", and `force: true`
+ *    is the documented way for a user to say "yes, and start another anyway".
+ *  - This set asks "did an application already reach the employer?". `force` must NOT answer that
+ *    one: #198's escape hatch exists for re-attempting work that did not land, and letting it also
+ *    wave through a posting that already got a real submission is precisely the hole #275 closes.
+ *    The only way past this set is the explicit, recorded reapply path.
+ *
+ * `submission_unknown` is in both. It stays protected here so that clearing the concurrency guard
+ * with `force` cannot silently re-queue a posting that may already have been submitted; resolving
+ * it takes either reconciliation (patching the checkpoint to what actually happened, with a
+ * recorded reason) or a recorded reapply -- never a bare retry.
+ *
+ * `user_reported` is in this set and deliberately absent from the concurrency guard above, and the
+ * two facts are not in tension. #271 made `submitted` mean "this app observed a receipt", which
+ * moved a person's own "I applied to this by hand" onto its own checkpoint. That statement is
+ * still a completed application to this requisition -- #275's third acceptance case requires
+ * user-reported and receipt-confirmed completion to suppress a duplicate *equally* -- so leaving
+ * it out here would have reopened the exact hole #275 closes, for the one completion path a person
+ * is most likely to use. It stays out of the concurrency set for #271's reason: nothing is in
+ * flight, so it is not a concurrent attempt; it is a finished one, which is what this set is for.
+ */
+export const COMPLETED_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
+  'submitted',
+  'user_reported',
+  'submission_unknown',
+];
+
+/** What backs a completion claim. See `schema.ts`'s comment on `completion_evidence`: both values
+ * suppress duplicates identically, and the distinction is preserved rather than collapsed. */
+export type ApplicationCompletionEvidence = 'user_reported' | 'receipt_confirmed';
+
 export interface ApplicationAttemptRecord {
   id: string;
   applicationId: string | null;
   vacancyKey: string | null;
   canonicalUrl: string;
+  /** #275's derived requisition identity. Never supplied by a caller: `createApplicationAttempt`
+   * derives all three from `company`/`canonicalUrl` so two rows cannot disagree about what the
+   * same URL means. */
+  employerKey: string;
+  requisitionId: string | null;
+  canonicalUrlKey: string;
   company: string;
   role: string;
   sourceCvId: string | null;
@@ -302,6 +357,14 @@ export interface ApplicationAttemptRecord {
   scheduledAutomaticSubmitAt: string | null;
   /** Which path actually sent this attempt, set alongside `submittedAt`. Null until submitted. */
   submissionMode: 'manual' | 'automatic' | null;
+  /** What backs this attempt's completion claim (#275), or null when it was never recorded --
+   * which, on a `submitted` row, means "completed, evidence unrecorded", not "not completed". */
+  completionEvidence: ApplicationCompletionEvidence | null;
+  /** Set only on the explicit reapply path (#275): the completed attempt this one supersedes,
+   * why, and the document version that attempt carried. Null/empty on an ordinary attempt. */
+  supersedesAttemptId: string | null;
+  reapplyReason: string;
+  reapplyPreviousCvContentHash: string | null;
   /**
    * What the preparation pipeline (#272) committed to this attempt's form, or null for an attempt
    * no pipeline run has prepared. Read-only across the bridge: there is no patch field for it, so
@@ -363,10 +426,46 @@ export interface PreparedApplicationFields {
   fields: PreparedApplicationField[];
 }
 
+/**
+ * The one way past #275's completed-application guard: a deliberate, recorded decision to apply
+ * again to a requisition an earlier attempt already reached -- a corrected document, an updated
+ * CV, an employer who asked for a resubmission.
+ *
+ * Every field is required because the point is the record. `supersedesAttemptId` must name an
+ * attempt that is genuinely one of the completed matches for this identity, so naming an unrelated
+ * attempt cannot be used as a generic bypass, and `reason` must be non-empty so the row says why.
+ */
+export interface ApplicationReapplyRequest {
+  supersedesAttemptId: string;
+  reason: string;
+}
+
+/**
+ * One already-completed application found by #275's lookup. `matchedOn` says which identity
+ * actually matched, so a caller (and a human reading a refusal) can tell a confident ATS
+ * requisition match from the weaker URL fallback rather than being told only that something
+ * matched.
+ */
+export interface CompletedApplicationMatch {
+  attemptId: string;
+  /** `submitted`, or `submission_unknown` for an attempt whose outcome was never reconciled. */
+  checkpoint: ApplicationAttemptCheckpoint;
+  completionEvidence: ApplicationCompletionEvidence | null;
+  matchedOn: 'requisition' | 'canonical_url' | 'vacancy_key';
+  /** ISO-8601, or null for a `submission_unknown` attempt that never recorded a submit time. */
+  submittedAt: string | null;
+}
+
 export interface ApplicationAttemptInput {
   applicationId?: string | null;
   vacancyKey?: string | null;
   canonicalUrl?: string;
+  /**
+   * An employer/ATS requisition id the caller already has from a structured source. Only consulted
+   * when `canonicalUrl` is not a recognised ATS job URL, which is the case that can derive a better
+   * one on its own. Never trusted over the URL.
+   */
+  requisitionId?: string | null;
   company: string;
   role: string;
   sourceCvId?: string | null;
@@ -381,15 +480,27 @@ export interface ApplicationAttemptInput {
    * Bypasses the dedup refusal (an existing non-terminal attempt for the same `vacancyKey`) for
    * the one case #198 calls out explicitly: the user asking for a genuinely new attempt at a
    * vacancy they already tried. Defaults to false; a caller has to opt in.
+   *
+   * Scoped to the *concurrency* guard only. It has never meant "send a second application to a
+   * posting that already got one", and since #275 it cannot: a completed (or possibly-completed)
+   * application is refused regardless of this flag, and only `reapply` gets past that.
    */
   force?: boolean;
+  /**
+   * The explicit corrected-document/reapply path (#275). Present only when the user has decided to
+   * apply again to a requisition an earlier attempt already reached; the resulting row records the
+   * predecessor, the reason, and both document versions.
+   */
+  reapply?: ApplicationReapplyRequest;
 }
 
 /** Every field patchable except the identity/provenance fields (`vacancyKey`, `canonicalUrl`,
- * `company`, `role`, `sourceCvId`, `sourceCvContentHash`, `jdSnapshot`, `jdSnapshotHash`,
- * `workflowVersion`) -- an attempt's own record of what it was generated from must not silently
- * change after creation; only its progress (checkpoint, detail, linkage, completeness, submit
- * time) does. */
+ * `employerKey`, `requisitionId`, `canonicalUrlKey`, `company`, `role`, `sourceCvId`,
+ * `sourceCvContentHash`, `jdSnapshot`, `jdSnapshotHash`, `workflowVersion`) and the reapply record
+ * (`supersedesAttemptId`, `reapplyReason`, `reapplyPreviousCvContentHash`) -- an attempt's own
+ * record of what it was generated from, and of the decision that authorized it, must not silently
+ * change after creation; only its progress (checkpoint, detail, linkage, completeness, submit time,
+ * completion evidence) does. */
 export type ApplicationAttemptPatch = Partial<
   Pick<
     ApplicationAttemptInput,
@@ -400,6 +511,7 @@ export type ApplicationAttemptPatch = Partial<
   formStructureHash?: string | null;
   scheduledAutomaticSubmitAt?: string | null;
   submissionMode?: 'manual' | 'automatic' | null;
+  completionEvidence?: ApplicationCompletionEvidence | null;
 };
 
 export type ApplicationArtifactKind = 'cv_pdf' | 'cover_letter_pdf' | 'combined_pdf' | 'other';
@@ -425,6 +537,53 @@ export interface ApplicationArtifactInput {
   byteSize: number;
   contentHash: string;
   storagePath?: string;
+}
+
+/** #271. `user_reported` exists here as well as on the checkpoint enum because a receipt row
+ * records *one observation*, and "a person said they did this by hand" is one of the observations
+ * worth keeping -- recorded as its own outcome so it is never counted as observed delivery. */
+export type SubmissionReceiptOutcome = 'submitted' | 'rejected' | 'unknown' | 'user_reported';
+
+export type SubmissionReceiptSource = 'page_observation' | 'delayed_receipt' | 'user_reported';
+
+export type SubmissionReceiptEvidenceKind =
+  | 'confirmation_page'
+  | 'receipt_reference'
+  | 'delivery_receipt'
+  | 'user_statement'
+  | 'none';
+
+/**
+ * One durable record of what was actually observed about an attempt's delivery (#271). See
+ * `schema.ts`'s own comment on the table for why this is separate from the attempt's checkpoint.
+ * `evidenceReference` is untrusted third-party page text: display it, never act on it.
+ */
+export interface ApplicationSubmissionReceiptRecord {
+  id: string;
+  attemptId: string;
+  outcome: SubmissionReceiptOutcome;
+  source: SubmissionReceiptSource;
+  destination: string;
+  evidenceKind: SubmissionReceiptEvidenceKind;
+  evidenceReference: string;
+  detail: string;
+  /** ISO-8601 */
+  observedAt: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+export interface ApplicationSubmissionReceiptInput {
+  attemptId: string;
+  outcome: SubmissionReceiptOutcome;
+  source: SubmissionReceiptSource;
+  destination?: string;
+  evidenceKind: SubmissionReceiptEvidenceKind;
+  evidenceReference?: string;
+  detail?: string;
+  /** ISO-8601. Defaults to now, but the observer passes its own observation timestamp so the
+   * record carries when the evidence was seen, not when the row happened to be written. */
+  observedAt?: string;
 }
 
 /** An explicit grant of automatic-submission authority for one compiled target policy (#203). See

@@ -11,13 +11,24 @@ import { createWorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
 
 /**
- * Migration 0013 adds one column, `prepared_fields`, to `application_attempts` (#272) -- a plain
- * `ALTER TABLE ADD COLUMN` with a `''` default, no rebuild.
+ * Migration 0013 is the reconciliation of #271 and #275, which were built independently against
+ * the same master and each generated a migration numbered 0012. Neither number survived: #294
+ * landed the real 0012 (`cv_documents.source_cv`) first, so both were regenerated as this single
+ * migration rather than being applied as two competing ones.
  *
- * The half worth testing is what an existing attempt *means* afterwards. An attempt recorded before
- * this column existed was never prepared by the pipeline, and must come back saying exactly that:
- * `preparedFields: null`, so the review shows "this app has no record of filling this form" rather
- * than an empty answer list that reads like a form with nothing in it.
+ * It does exactly what the two separate migrations did between them, and nothing else:
+ *
+ *  - `CREATE TABLE application_submission_receipts` (#271), the durable evidence behind every claim
+ *    this app makes about an application having been delivered;
+ *  - seven `ALTER TABLE ... ADD COLUMN`s on `application_attempts` (#275), the derived requisition
+ *    identity, the completion evidence type, and the explicit reapply record.
+ *
+ * No table is rebuilt, so no existing row is touched -- asserted below against a real pre-0013
+ * database rather than by reading the schema module.
+ *
+ * The `user_reported` checkpoint value (#271) needs no schema change at all: the checkpoint
+ * column's `enum` is a Drizzle type-level constraint, never a SQL `CHECK`, so widening it is a
+ * TypeScript change and nothing more. This file proves that too, since a rebuild would show here.
  */
 
 const REAL_MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '..', 'electron', 'workspace', 'drizzle');
@@ -38,14 +49,37 @@ const PRE_0013_TAGS = [
   '0012_nosy_veda',
 ];
 
+/** The #275 columns, in the order migration 0013 adds them. */
+const ADDED_COLUMNS = [
+  'employer_key',
+  'requisition_id',
+  'canonical_url_key',
+  'completion_evidence',
+  'supersedes_attempt_id',
+  'reapply_reason',
+  'reapply_previous_cv_content_hash',
+];
+
 type JournalEntry = { idx: number; version: string; when: number; tag: string; breakpoints: boolean };
 type Journal = { version: string; dialect: string; entries: JournalEntry[] };
 
+function readJournal(): Journal {
+  return JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+}
+
+/** The single migration this file is about, resolved from the journal rather than hardcoded, so a
+ * regenerated migration with a different drizzle-kit name does not silently stop being tested. */
+function migration0013Tag(): string {
+  const entry = readJournal().entries[PRE_0013_TAGS.length];
+  expect(entry?.tag).toMatch(/^0013_/);
+  return entry!.tag;
+}
+
 function seedPre0013MigrationsFolder(root: string): string {
-  const journal = JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal;
+  const journal = readJournal();
   const kept = journal.entries.filter((entry) => PRE_0013_TAGS.includes(entry.tag));
   expect(kept.map((entry) => entry.tag)).toEqual(PRE_0013_TAGS);
-  expect(journal.entries[PRE_0013_TAGS.length]?.tag).toBe('0013_last_komodo');
+  expect(journal.entries[PRE_0013_TAGS.length]?.tag).toMatch(/^0013_/);
 
   const folder = join(root, 'drizzle-0012');
   mkdirSync(join(folder, 'meta'), { recursive: true });
@@ -63,17 +97,8 @@ function openRaw(databasePath: string): Database.Database {
   return connection;
 }
 
-/** The row a pre-#272 install would hold: an attempt with no prepared-fields column at all. */
-function insertLegacyAttempt(connection: Database.Database, id: string): void {
-  const now = Date.now();
-  connection
-    .prepare(
-      `INSERT INTO application_attempts
-         (id, canonical_url, company, role, source_cv_content_hash, jd_snapshot, jd_snapshot_hash, jd_complete,
-          workflow_version, checkpoint, checkpoint_detail, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, '', 'ready', '', ?, ?)`,
-    )
-    .run(id, 'https://jobs.example.invalid/apply/1', 'Northwind Freight', 'Logistics Platform Engineer', 'cv-hash', 'JD text', 'jd-hash', now, now);
+function attemptColumns(connection: Database.Database): string[] {
+  return (connection.prepare('PRAGMA table_info(application_attempts)').all() as { name: string }[]).map((c) => c.name);
 }
 
 let dir: string;
@@ -87,89 +112,171 @@ afterEach(() => {
 });
 
 describe('the seeded fixture really is a pre-0013 database', () => {
-  it('has no prepared_fields column yet', () => {
+  it('has no application_submission_receipts table yet (#271)', () => {
     const folder = seedPre0013MigrationsFolder(dir);
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       migrate(drizzle(connection), { migrationsFolder: folder });
-      const columns = connection.prepare('PRAGMA table_info(application_attempts)').all() as { name: string }[];
-      expect(columns.map((column) => column.name)).not.toContain('prepared_fields');
+      const tables = connection.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+      expect(tables.map((t) => t.name)).not.toContain('application_submission_receipts');
+    } finally {
+      connection.close();
+    }
+  });
+
+  it('has none of the #275 columns yet', () => {
+    const folder = seedPre0013MigrationsFolder(dir);
+    const connection = openRaw(join(dir, 'workspace.db'));
+    try {
+      migrate(drizzle(connection), { migrationsFolder: folder });
+      const columns = attemptColumns(connection);
+      for (const column of ADDED_COLUMNS) expect(columns).not.toContain(column);
+    } finally {
+      connection.close();
+    }
+  });
+
+  it('already has #294\'s 0012 applied, so 0013 really is the next number', () => {
+    const folder = seedPre0013MigrationsFolder(dir);
+    const connection = openRaw(join(dir, 'workspace.db'));
+    try {
+      migrate(drizzle(connection), { migrationsFolder: folder });
+      const columns = (connection.prepare('PRAGMA table_info(cv_documents)').all() as { name: string }[]).map((c) => c.name);
+      expect(columns).toContain('source_cv');
     } finally {
       connection.close();
     }
   });
 });
 
-describe('migration 0013 adds prepared_fields to application_attempts', () => {
-  it('is ALTER TABLE ADD COLUMN only, never a rebuild and never a drop', () => {
-    const sql = readFileSync(join(REAL_MIGRATIONS, '0013_last_komodo.sql'), 'utf8');
-    expect(sql).toMatch(/ALTER TABLE `application_attempts` ADD `prepared_fields`/);
+describe('migration 0013 combines the #271 receipts table and the #275 attempt columns', () => {
+  it('creates the receipts table and adds the attempt columns, without rebuilding anything', () => {
+    const sql = readFileSync(join(REAL_MIGRATIONS, `${migration0013Tag()}.sql`), 'utf8');
+
+    // #271: a plain CREATE TABLE.
+    expect(sql).toMatch(/CREATE TABLE `application_submission_receipts`/);
+    // #275: ADD COLUMN only, every one of them.
+    for (const column of ADDED_COLUMNS) {
+      expect(sql).toContain(`ALTER TABLE \`application_attempts\` ADD \`${column}\``);
+    }
+    // Neither ticket's migration rebuilt a table, and the combined one must not either: a rebuild
+    // is how an ALTER-only migration quietly turns into data loss on an existing workspace.
     expect(sql).not.toMatch(/CREATE TABLE `__new_/);
-    expect(sql).not.toMatch(/DROP/i);
+    expect(sql).not.toMatch(/DROP TABLE/);
   });
 
-  it('leaves an existing attempt intact, reporting honestly that nothing prepared it', () => {
+  it('is the only 0013, and nothing re-numbered an already-released migration', () => {
+    const entries = readJournal().entries;
+    const tags = entries.map((entry) => entry.tag);
+    expect(tags.filter((tag) => tag.startsWith('0013_'))).toHaveLength(1);
+    // The two superseded 0012s from the original branches must be gone, and #294's must stand.
+    expect(tags).toContain('0012_nosy_veda');
+    expect(tags).not.toContain('0012_many_jetstream');
+    expect(tags).not.toContain('0012_petite_doctor_faustus');
+    expect(entries.map((entry) => entry.idx)).toEqual(entries.map((_, index) => index));
+  });
+
+  it('applies onto a real pre-0013 database, leaving an existing attempt row untouched', () => {
     const folder = seedPre0013MigrationsFolder(dir);
     const seeded = openRaw(join(dir, 'workspace.db'));
     try {
       migrate(drizzle(seeded), { migrationsFolder: folder });
-      insertLegacyAttempt(seeded, 'attempt-legacy');
+      seeded
+        .prepare(
+          `INSERT INTO application_attempts
+             (id, vacancy_key, canonical_url, company, role, source_cv_content_hash, jd_snapshot_hash, checkpoint, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', 1788000000000, 1788000000000)`,
+        )
+        .run(
+          'legacy-attempt',
+          'scan-legacy',
+          'https://boards.greenhouse.io/northwindlabs/jobs/4012345',
+          'Northwind Labs',
+          'Platform Engineer',
+          'a'.repeat(64),
+          'b'.repeat(64),
+        );
     } finally {
       seeded.close();
     }
 
     const { db, close } = createWorkspaceDb(dir);
     try {
-      const migrated = workspace.getApplicationAttempt(db, 'attempt-legacy');
-      expect(migrated.company).toBe('Northwind Freight');
-      expect(migrated.checkpoint).toBe('ready');
-      expect(migrated.preparedFields).toBeNull();
+      const attempt = workspace.getApplicationAttempt(db, 'legacy-attempt');
+      // Everything it already had survives...
+      expect(attempt.checkpoint).toBe('submitted');
+      expect(attempt.company).toBe('Northwind Labs');
+      expect(attempt.canonicalUrl).toBe('https://boards.greenhouse.io/northwindlabs/jobs/4012345');
+      // ...the new #275 columns read back as the empty/unrecorded state, not as undefined...
+      expect(attempt.employerKey).toBe('');
+      expect(attempt.requisitionId).toBeNull();
+      expect(attempt.canonicalUrlKey).toBe('');
+      expect(attempt.completionEvidence).toBeNull();
+      expect(attempt.supersedesAttemptId).toBeNull();
+      expect(attempt.reapplyReason).toBe('');
+      expect(attempt.reapplyPreviousCvContentHash).toBeNull();
+      // ...and #271's receipts table exists and is empty for it.
+      expect(workspace.listApplicationSubmissionReceipts(db, 'legacy-attempt')).toEqual([]);
+
+      // An empty identity matches nothing: a different posting stays eligible...
+      expect(
+        workspace.findCompletedApplication(db, {
+          company: 'Someone Else',
+          canonicalUrl: 'https://boards.greenhouse.io/otherboard/jobs/999',
+        }),
+      ).toBeUndefined();
+      // ...while the row's own vacancy key still protects the posting it really was.
+      expect(
+        workspace.findCompletedApplication(db, {
+          company: 'Northwind Labs',
+          vacancyKey: 'scan-legacy',
+        }),
+      ).toMatchObject({ attemptId: 'legacy-attempt', matchedOn: 'vacancy_key' });
     } finally {
       close();
     }
   });
 
-  it('round-trips a prepared-fields record, and reads an unrecognisable one back as absent', () => {
+  it('cascades a receipt away with its attempt, the way an artifact already does', () => {
     const { db, close } = createWorkspaceDb(dir);
     try {
       const attempt = workspace.createApplicationAttempt(db, {
-        canonicalUrl: 'https://jobs.example.invalid/apply/2',
-        company: 'Northwind Freight',
-        role: 'Logistics Platform Engineer',
-        sourceCvContentHash: 'cv-hash',
-        jdSnapshotHash: 'jd-hash',
+        company: 'Fixture Employer',
+        role: 'Staff Engineer',
+        sourceCvContentHash: 'a'.repeat(64),
+        jdSnapshotHash: 'b'.repeat(64),
       });
-
-      const stored = workspace.recordPreparedApplicationFields(db, attempt.id, {
-        version: 1,
-        preparedAt: '2026-09-11T12:00:00.000Z',
-        company: 'Northwind Freight',
-        role: 'Logistics Platform Engineer',
-        verification: 'applied',
-        fields: [{ label: 'fullName', controlType: 'text', required: true, status: 'committed', value: 'Jamie Rivera', provenance: 'cv' }],
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'unknown',
+        source: 'page_observation',
+        evidenceKind: 'none',
+        detail: 'nothing conclusive was observed',
       });
-      expect(stored.preparedFields?.fields[0]).toMatchObject({ value: 'Jamie Rivera', provenance: 'cv' });
-      expect(workspace.getApplicationAttempt(db, attempt.id).preparedFields?.fields).toHaveLength(1);
+      expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toHaveLength(1);
 
-      // Fail closed, not half-parsed: a record this build cannot interpret is no record at all,
-      // rather than a partially-read one presented as what the app committed. Written through a
-      // second raw connection, because there is no repository call that could store one.
-      const tamper = (value: string): void => {
-        const raw = openRaw(join(dir, 'workspace.db'));
-        try {
-          raw.prepare('UPDATE application_attempts SET prepared_fields = ? WHERE id = ?').run(value, attempt.id);
-        } finally {
-          raw.close();
-        }
-      };
+      workspace.deleteApplicationAttempt(db, attempt.id);
+      expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toEqual([]);
+    } finally {
+      close();
+    }
+  });
 
-      tamper('{"version":99}');
-      expect(workspace.getApplicationAttempt(db, attempt.id).preparedFields).toBeNull();
-
-      tamper('not json at all');
-      expect(workspace.getApplicationAttempt(db, attempt.id).preparedFields).toBeNull();
-
-      expect(workspace.recordPreparedApplicationFields(db, attempt.id, null).preparedFields).toBeNull();
+  it('accepts the new user_reported checkpoint without any SQL constraint standing in the way', () => {
+    const { db, close } = createWorkspaceDb(dir);
+    try {
+      const attempt = workspace.createApplicationAttempt(db, {
+        company: 'Fixture Employer',
+        role: 'Staff Engineer',
+        sourceCvContentHash: 'a'.repeat(64),
+        jdSnapshotHash: 'b'.repeat(64),
+      });
+      const updated = workspace.updateApplicationAttempt(db, attempt.id, {
+        checkpoint: 'user_reported',
+        completionEvidence: 'user_reported',
+      });
+      expect(updated.checkpoint).toBe('user_reported');
+      expect(updated.completionEvidence).toBe('user_reported');
     } finally {
       close();
     }
@@ -182,8 +289,7 @@ describe('migration 0013 adds prepared_fields to application_attempts', () => {
     const connection = openRaw(join(dir, 'workspace.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      const realMigrationCount = (JSON.parse(readFileSync(join(REAL_MIGRATIONS, 'meta', '_journal.json'), 'utf8')) as Journal).entries.length;
-      expect(applied.n).toBe(realMigrationCount);
+      expect(applied.n).toBe(readJournal().entries.length);
     } finally {
       connection.close();
     }

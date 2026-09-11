@@ -66,6 +66,7 @@ import {
   evaluateAndScheduleAutomaticSubmission,
   fireDueAutomaticSubmissions,
   openApplicationReview,
+  showApplicationReviewForHandoff,
   submitApplicationReview,
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
@@ -1353,7 +1354,15 @@ guardedIpc.handle('application-executor:open-review', async (_event, input: unkn
 });
 
 guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
-  return applyApplicationFieldMap(parseApplyFieldMapInput(input));
+  const parsed = parseApplyFieldMapInput(input);
+  const result = await applyApplicationFieldMap(await ensureWorkspaceDb(), parsed);
+  // An upload control the executor may not drive is handed to the user as a real, visible page
+  // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
+  // still carries `manualHandoff` so the review UI can say which document to pick.
+  if (result.manualHandoff && mainWindow) {
+    showApplicationReviewForHandoff(parsed.attemptId, mainWindow);
+  }
+  return result;
 });
 
 guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {

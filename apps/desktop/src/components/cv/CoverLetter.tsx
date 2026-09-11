@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import type { CvProfile, CvSourceDocument } from '../../window.js';
+import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
+import { buildBundledDocumentPrompt } from '../generation/prompts.js';
 import { AiOutput } from './AiOutput.js';
-import { buildCoverLetterPrompt } from './prompts.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 export interface CoverLetterProps {
   cv: CvDocument | null;
   vacancy: VacancyLead | null;
+  /** #274's reviewed structured source, when this CV has one. Read-only here. */
+  sourceCv?: CvSourceDocument | null;
+  /** The corrected private profile, when one has been confirmed for this CV. */
+  profile?: CvProfile | null;
   /** Optional provider model id (e.g. 'sonnet'); omitted means the CLI's own default. */
   model?: string;
   /** Which installed CLI to run through; omitted means Claude Code. */
@@ -27,7 +33,7 @@ const COPY_FEEDBACK_MS = 2_000;
  * is independent, so a bad one can simply be discarded, and no conversation state has to be kept
  * alive between them.
  */
-export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) {
+export function CoverLetter({ cv, vacancy, sourceCv, profile, model, provider }: CoverLetterProps) {
   const run = useAgentRun();
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
@@ -47,11 +53,21 @@ export function CoverLetter({ cv, vacancy, model, provider }: CoverLetterProps) 
     if (!cv || !vacancy) return;
     setCopyState('idle');
     setCopyError(undefined);
-    void run.start(buildCoverLetterPrompt(cv, vacancy), {
+    // #281: the motivation letter is now one document type on the shared generation bundle, so it
+    // carries the same corrected facts, critical requirements and completeness ledger the CV and
+    // the Letters page do instead of its own separately-assembled prompt.
+    const bundle = buildGenerationInputBundle({
+      documentType: 'motivation_letter',
+      cv,
+      vacancy,
+      sourceCv: sourceCv ?? null,
+      profile: profile ?? null,
+    });
+    void run.start(buildBundledDocumentPrompt(bundle), {
       ...(model ? { model } : {}),
       ...(provider ? { provider } : {}),
     });
-  }, [cv, vacancy, model, provider, run]);
+  }, [cv, vacancy, sourceCv, profile, model, provider, run]);
 
   const handleCopy = useCallback(async () => {
     if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);

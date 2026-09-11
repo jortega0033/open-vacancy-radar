@@ -491,7 +491,7 @@ async function fillApplicationForm(
   }
 
   const sanitised = sanitiseGeneratedFieldMap(parsed);
-  const applied = await applyApplicationFieldMap({
+  const applied = await applyApplicationFieldMap(deps.db, {
     attemptId,
     // Still raw as far as the executor is concerned: `validateFieldMap` inside `applyApplicationFieldMap`
     // re-checks every rule from scratch against the live snapshot. The narrowing above removes
