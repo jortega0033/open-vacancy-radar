@@ -14,6 +14,13 @@ import type { ProviderCapabilities } from '@agent-dock/shared';
  * - modelCatalog (ADI-22a): `CodexProvider.fetchModelCatalog()` (adapter.ts) wraps the same live
  *   `model/list` RPC and `parseCodexModelCatalog` parser `app-server/transport.ts` already uses
  *   before every real session -- see `app-server/model-catalog.ts`.
+ *
+ * `hardenedNoNetwork` (#284) is **absent, permanently**, and that absence is a statement rather
+ * than an omission: `buildCodexArgs` never reads `opts.hardened`, so a Codex session asked for the
+ * `'no-network'` profile would get exactly the same argv as one that asked for nothing. Declaring
+ * the flag here would make the stage router believe a restriction that no code applies. The day
+ * Codex's CLI grows a real equivalent, this key is added in the same change as the argv that
+ * implements it, never before.
  */
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
   resume: true,
