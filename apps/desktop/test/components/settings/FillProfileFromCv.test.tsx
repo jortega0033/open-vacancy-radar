@@ -25,6 +25,7 @@ const CV: CvDocumentRecord = {
   targetRole: '',
   text: 'Senior Frontend Engineer at Redwood. Angular, TypeScript, RxJS. Eight years.',
   profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  source: null,
   isDefault: true,
   uploadedAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',

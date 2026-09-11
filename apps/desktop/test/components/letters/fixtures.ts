@@ -22,6 +22,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
       summary: 'Frontend engineer.',
       auth: 'EU citizen',
     },
+    source: null,
     isDefault: true,
     uploadedAt: '2026-08-01T09:00:00.000Z',
     updatedAt: '2026-08-01T09:00:00.000Z',

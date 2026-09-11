@@ -31,7 +31,10 @@ function blankPdf(): Uint8Array {
 const RESUME: TailoredResume = {
   contact: { name: 'Jamie Rivera', title: '', location: '', email: '', phone: '', links: [] },
   summary: '',
-  experience: [{ company: 'Redwood Software', title: 'Senior Frontend Engineer', dates: '', bullets: [] }],
+  experience: [
+    { company: 'Redwood Software', title: 'Senior Frontend Engineer', dates: '', engagement: 'employment', client: '', bullets: [] },
+  ],
+  projects: [],
   skills: [],
   education: [],
 };

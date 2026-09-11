@@ -13,6 +13,8 @@
  *    surface has to be a deliberate edit here.
  */
 
+import type { CvSourceDocument } from './cv-source-schema.js';
+
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
 export type ApplicationStatus =
@@ -49,6 +51,19 @@ export interface CvProfile {
   summary: string;
   auth: string;
 }
+
+/** #274's structured source CV, re-exported here so the renderer reaches it through the same
+ * module every other workspace record type comes from. Defined in `cv-source-schema.ts` for the
+ * same reason `CvProfile`'s field list lives in `cv-profile-schema.ts`: validation, prompting and
+ * response coercion all need it, and one definition is what keeps those three from drifting. */
+export type {
+  CvEngagementType,
+  CvSourceContact,
+  CvSourceDocument,
+  CvSourceEducationEntry,
+  CvSourceExperienceEntry,
+  CvSourceProjectEntry,
+} from './cv-source-schema.js';
 
 export interface SavedJobRecord {
   id: string;
@@ -145,6 +160,14 @@ export interface CvDocumentRecord {
   targetRole: string;
   text: string;
   profile: CvProfile;
+  /**
+   * #274: the reviewed full structured source CV (employers, dates, engagement types, education,
+   * contact details, links, projects). Null for every record created before this existed and for
+   * every one whose source has not been extracted and reviewed yet -- which is a real, honest
+   * state, not a defect: export falls back to the thin `profile` mapping rather than fabricating
+   * the sections this record genuinely does not have.
+   */
+  source: CvSourceDocument | null;
   isDefault: boolean;
   /** ISO-8601 */
   uploadedAt: string;
@@ -158,6 +181,13 @@ export interface CvDocumentInput {
   targetRole?: string;
   text?: string;
   profile?: Partial<CvProfile>;
+  /**
+   * The reviewed structured source CV. Sending it is what marks it reviewed: `reviewedAt` is
+   * stamped by the main process from its own clock, never taken from here, for the same reason
+   * `SavedJobInput` has no `gapAnalysisAt` -- a renderer that could set it could claim a record
+   * was confirmed at a time nobody confirmed it. Sending an explicit `null` clears it.
+   */
+  source?: CvSourceDocument | null;
   /** When true (or when this is the first CV in the library) the new row becomes the default. */
   isDefault?: boolean;
 }

@@ -27,6 +27,15 @@ function contactLine(resume: TailoredResume): string {
   return parts.map(escapeHtml).join(' &nbsp;&middot;&nbsp; ');
 }
 
+/** #274: a contract delivered for an end client is labelled as one, and the end client is never
+ * written where the direct employer goes. A resume that lists a client as an employer is a factual
+ * misstatement about the candidate's own history, which is exactly what this ticket exists to stop. */
+function engagementNote(entry: TailoredResume['experience'][number]): string {
+  if (entry.engagement !== 'client_engagement') return '';
+  const label = entry.client.trim().length > 0 ? `client engagement: ${entry.client}` : 'client engagement';
+  return `<p class="entry-note">${escapeHtml(label)}</p>`;
+}
+
 function experienceSection(resume: TailoredResume): string {
   if (resume.experience.length === 0) return '';
   const entries = resume.experience
@@ -37,11 +46,36 @@ function experienceSection(resume: TailoredResume): string {
         <span class="entry-title">${escapeHtml(entry.title)}${entry.title && entry.company ? ', ' : ''}${escapeHtml(entry.company)}</span>
         <span class="entry-dates">${escapeHtml(entry.dates)}</span>
       </div>
+      ${engagementNote(entry)}
       ${entry.bullets.length > 0 ? `<ul>${entry.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')}</ul>` : ''}
     </article>`,
     )
     .join('');
   return `<section><h2>Experience</h2>${entries}</section>`;
+}
+
+function projectsSection(resume: TailoredResume): string {
+  if (resume.projects.length === 0) return '';
+  const entries = resume.projects
+    .map((project) => {
+      const context = [project.role, project.organization].filter((part) => part.trim().length > 0).join(', ');
+      const meta = [
+        project.technologies.length > 0 ? escapeHtml(project.technologies.join(', ')) : '',
+        project.links.length > 0 ? project.links.map(escapeHtml).join(' &nbsp;&middot;&nbsp; ') : '',
+      ].filter((part) => part.length > 0);
+      return `
+    <article class="entry">
+      <div class="entry-head">
+        <span class="entry-title">${escapeHtml(project.name)}</span>
+        <span class="entry-dates">${escapeHtml(project.dates)}</span>
+      </div>
+      ${context ? `<p class="entry-note">${escapeHtml(context)}</p>` : ''}
+      ${project.description.trim().length > 0 ? `<p class="project-description">${escapeHtml(project.description)}</p>` : ''}
+      ${meta.length > 0 ? `<p class="entry-note">${meta.join(' &nbsp;&middot;&nbsp; ')}</p>` : ''}
+    </article>`;
+    })
+    .join('');
+  return `<section><h2>Projects</h2>${entries}</section>`;
 }
 
 function educationSection(resume: TailoredResume): string {
@@ -90,6 +124,8 @@ section:first-of-type h2 { margin-top: 0; }
 .entry-dates { font-weight: normal; color: #555; white-space: nowrap; }
 ul { margin: 4px 0 0; padding-left: 18px; }
 li { margin-bottom: 2px; }
+.entry-note { margin: 2px 0 0; font-size: 9.5pt; color: #555; }
+.project-description { margin: 3px 0 0; }
 .summary { margin: 0; }
 .skills { margin: 0; }
 </style></head>
@@ -101,6 +137,7 @@ li { margin-bottom: 2px; }
 </header>
 ${summarySection(resume)}
 ${experienceSection(resume)}
+${projectsSection(resume)}
 ${skillsSection(resume)}
 ${educationSection(resume)}
 </body></html>`;

@@ -1,4 +1,9 @@
 import { CV_PROFILE_FIELD_DESCRIPTIONS, CV_PROFILE_FIELD_ORDER } from '../../../electron/workspace/cv-profile-schema.js';
+import {
+  CV_SOURCE_JSON_SHAPE,
+  selectSourceProjects,
+  type CvSourceDocument,
+} from '../../../electron/workspace/cv-source-schema.js';
 import { RESUME_JSON_SHAPE } from '../../../electron/resume-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
@@ -23,6 +28,19 @@ import type { CvDocument, VacancyLead } from './types.js';
  *    application as their own factual record.
  */
 export const MAX_CV_PROMPT_CHARS = 14_000;
+/**
+ * The source-CV extraction path (#274) reads the CV end to end rather than through the 14,000
+ * character clamp above, for the reason that ticket is about: a CV long enough that its projects
+ * and later roles sit past 14,000 characters had them silently dropped, and a document exported
+ * from the result looked complete while missing real evidence.
+ *
+ * Raising the bound here is safe for the same reason `MAX_UNATTENDED_VACANCY_TEXT_CHARS` is: this
+ * budget only ever reaches a text-only extraction session (no tools, no browser), and the input is
+ * the user's own CV rather than a scraped third-party page. Still finite -- 200,000 characters is
+ * far beyond any real CV, and `wasCvTextTruncated` below means anything past it is *recorded* as
+ * unread rather than dropped in silence.
+ */
+export const MAX_SOURCE_CV_PROMPT_CHARS = 200_000;
 export const MAX_VACANCY_TEXT_CHARS = 6_000;
 /**
  * The unattended structured-resume path (#199) reads the full job description rather than this
@@ -49,6 +67,16 @@ function clamp(text: string, limit: number): string {
  * #199) can persist an honest `jdComplete` flag on the attempt record rather than silently dropping
  * requirements past a character limit with no record that it happened.
  */
+/**
+ * Whether a CV's text would be truncated at the given limit -- the same computation `clamp` makes
+ * internally, exposed for the same reason `wasVacancyTextTruncated` is: the caller has to be able
+ * to persist an honest "this was not read to the end" flag on the record instead of losing the
+ * later sections with nothing to show it happened (#274).
+ */
+export function wasCvTextTruncated(text: string, limit: number): boolean {
+  return text.trim().length > limit;
+}
+
 export function wasVacancyTextTruncated(vacancy: VacancyLead, limit: number): boolean {
   const requirements = vacancy.requirements?.filter((line) => line.trim().length > 0) ?? [];
   const body = [vacancy.description ?? '', requirements.map((line) => `- ${line}`).join('\n')]
@@ -233,6 +261,93 @@ ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
 }
 
 /**
+ * The two rules #274 adds to the structured tailoring task, kept as one shared block for the same
+ * reason `GROUNDING_RULES` is: a rule paraphrased per prompt drifts.
+ *
+ * Both are also enforced structurally after the answer comes back
+ * (`reconcileTailoredResumeWithSource`), which is what actually guarantees them -- a prompt
+ * instruction sits in the same context as the model's own reasoning and is one layer, not a
+ * control. Saying them here still earns its place: it makes the cooperative case produce the right
+ * answer first time instead of one the reconciliation has to correct.
+ */
+const ENGAGEMENT_AND_PROJECT_RULES = [
+  'Keep client engagements distinct from direct employment. If the CV says a role was a contract, consultancy or agency placement delivered for an end client, set "engagement": "client_engagement" and put the end client in "client" -- never move the end client into "company", and never present such a role as direct employment at that client.',
+  'Projects come only from the reviewed source below. Include every project marked PINNED, in addition to any others you select. Never add a project the source does not list, and never merge two of them into one.',
+].join('\n');
+
+/**
+ * Renders the reviewed source CV as a labelled block (#274): the structured facts a person has
+ * already confirmed, alongside the raw CV text the prompt still carries.
+ *
+ * Both are present on purpose. The raw text is what the wording and emphasis are drawn from; this
+ * block is what the employer names, dates, engagement types and the project selection are *fixed*
+ * to, and it is short enough to survive intact in a long prompt where the interesting projects
+ * might otherwise sit thousands of characters down the raw text.
+ */
+export function formatSourceCv(source: CvSourceDocument): string {
+  const experience = source.experience.map((entry) => {
+    const kind =
+      entry.engagement === 'client_engagement'
+        ? `client engagement${entry.client ? ` for ${entry.client}` : ''}`
+        : 'direct employment';
+    return `- ${entry.title || '(no title)'} at ${entry.company || '(no employer)'} (${entry.dates || 'dates not stated'}) [${kind}]`;
+  });
+  const projects = selectSourceProjects(source).map((project) => {
+    const context = [project.role, project.organization].filter((part) => part.trim().length > 0).join(', ');
+    return `- ${project.pinned ? 'PINNED ' : ''}${project.name || '(unnamed)'}${context ? ` (${context})` : ''}${project.dates ? ` (${project.dates})` : ''}`;
+  });
+  const education = source.education.map(
+    (entry) => `- ${entry.credential || '(no credential)'}, ${entry.institution || '(no institution)'} (${entry.dates || 'dates not stated'})`,
+  );
+  return [
+    '=== REVIEWED SOURCE CV (confirmed by the candidate: these facts are authoritative) ===',
+    `Name: ${source.contact.name || 'not stated'}`,
+    `Location: ${source.contact.location || 'not stated'}`,
+    `Email: ${source.contact.email || 'not stated'}`,
+    `Phone: ${source.contact.phone || 'not stated'}`,
+    `Links: ${source.contact.links.length > 0 ? source.contact.links.join(', ') : 'none'}`,
+    '',
+    'Employment history:',
+    experience.length > 0 ? experience.join('\n') : '- (none recorded)',
+    '',
+    `Projects the candidate chose to include${source.maxProjects > 0 ? ` (at most ${source.maxProjects})` : ''}:`,
+    projects.length > 0 ? projects.join('\n') : '- (none recorded)',
+    '',
+    'Education:',
+    education.length > 0 ? education.join('\n') : '- (none recorded)',
+  ].join('\n');
+}
+
+/**
+ * Reads one CV end to end and returns the full structured source record (#274): employers with
+ * their own dates and engagement type, education, contact details and links, and project entries.
+ *
+ * Unlike `buildCvParsePrompt` above -- which asks for the seven flat `CvProfile` summary fields and
+ * is happy with the first 14,000 characters, because a summary of the top of a CV is still a fair
+ * summary -- this one has to see the whole document: the projects it exists to capture are usually
+ * the last section, which is exactly the content the old clamp silently discarded. Hence
+ * `MAX_SOURCE_CV_PROMPT_CHARS`, and hence `wasCvTextTruncated` at the call site, which records the
+ * shortfall on the record instead of letting a partially-read CV pass as a whole one.
+ *
+ * The result is never saved directly: the caller routes it into the review drawer for the candidate
+ * to correct and confirm, so a wrong or thin answer costs a glance, not their data.
+ */
+export function buildSourceCvPrompt(fileName: string, text: string): string {
+  return `You extract one candidate's complete CV into structured records. Read the whole CV below and reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
+
+${GROUNDING_RULES}
+Never invent a value: if a field is not stated in the CV, use an empty string ("") or an empty array ([]) for it, do not guess. Do not summarise, merge or improve anything -- preserve the CV's own wording for every role, date, project and bullet point.
+Include every role and every project the CV contains, including the ones near the end. Do not stop early and do not skip a section because it looks repetitive.
+"engagement" is "client_engagement" when the CV presents a role as a contract, consultancy, freelance or agency placement delivered for an end client, and "employment" otherwise. For a client engagement, "company" is the employer, agency or own company, and "client" is the end client -- never put the end client in "company".
+
+Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
+${CV_SOURCE_JSON_SHAPE}
+
+=== CANDIDATE CV (${field(fileName)}) ===
+${clamp(text, MAX_SOURCE_CV_PROMPT_CHARS)}`;
+}
+
+/**
  * The unattended counterpart to `buildCvTailorPrompt` above (#199, resolving #156's open
  * structured-vs-plain-text question): same reordering/re-emphasis task, same no-invention
  * guarantee, but a single complete JSON object instead of streamed prose, and the full job
@@ -242,7 +357,11 @@ ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
  * prompt above unchanged, since a JSON object streamed token by token reads as broken fragments
  * until the closing brace arrives.
  */
-export function buildStructuredResumePrompt(cv: CvDocument, vacancy: VacancyLead): string {
+export function buildStructuredResumePrompt(
+  cv: CvDocument,
+  vacancy: VacancyLead,
+  source?: CvSourceDocument | null,
+): string {
   return `You are helping a candidate tailor their CV for one specific vacancy, using their real CV as the only source of content. Reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
 
 ${GROUNDING_RULES}
@@ -250,15 +369,15 @@ This is a reordering and re-emphasis task, not a rewriting task: every employer,
 Order experience entries so the ones most relevant to this vacancy come first, and re-word bullet points (without inventing) to foreground the framing, terminology and emphasis this vacancy asks for, drawing only on what the CV already says.
 Keep the candidate's real employers, titles, dates and structure intact: this is the same CV, re-emphasized for one posting, not a new document with different facts.
 Never invent a value for a field the CV does not state: use an empty string ("") or an empty array ([]) for it, do not guess. A candidate whose CV has no phone number gets "phone": "", not a placeholder.
-
+${ENGAGEMENT_AND_PROJECT_RULES}
 Reply with exactly this JSON shape (all keys required, using the empty values above where unknown):
 ${RESUME_JSON_SHAPE}
 
 === VACANCY ===
 ${formatVacancy(vacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)}
-
+${source ? `\n${formatSourceCv(source)}\n` : ''}
 === CANDIDATE CV (${field(cv.fileName)}) ===
-${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
+${clamp(cv.text, source ? MAX_SOURCE_CV_PROMPT_CHARS : MAX_CV_PROMPT_CHARS)}`;
 }
 
 export function buildCoverLetterPrompt(cv: CvDocument, vacancy: VacancyLead): string {

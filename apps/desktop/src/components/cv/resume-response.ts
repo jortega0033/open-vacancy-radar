@@ -1,4 +1,11 @@
-import { RESUME_LIMITS, EMPTY_TAILORED_RESUME, type ResumeEducationEntry, type ResumeExperienceEntry, type TailoredResume } from '../../../electron/resume-schema.js';
+import {
+  RESUME_LIMITS,
+  EMPTY_TAILORED_RESUME,
+  type ResumeEducationEntry,
+  type ResumeExperienceEntry,
+  type ResumeProjectEntry,
+  type TailoredResume,
+} from '../../../electron/resume-schema.js';
 import { extractAiJsonPayload } from '../cv-library/cv-ai-parse.js';
 
 function stringField(value: unknown, limit: number): string {
@@ -22,11 +29,36 @@ function toExperienceEntry(value: unknown): ResumeExperienceEntry | undefined {
   // An entry naming neither a company nor a title is not a real experience entry -- most likely a
   // malformed or hallucinated array element, dropped rather than kept as an empty row.
   if (!company && !title) return undefined;
+  // #274: anything but the exact `client_engagement` marker is read as direct employment. The
+  // safe default here is the conservative one -- a client engagement wrongly read as employment is
+  // corrected by `reconcileTailoredResumeWithSource` from the reviewed source, whereas trusting a
+  // malformed value would let an unreviewed claim about how a role was held reach the document.
+  const engagement = record.engagement === 'client_engagement' ? 'client_engagement' : 'employment';
   return {
     company,
     title,
     dates: stringField(record.dates, RESUME_LIMITS.shortField),
+    engagement,
+    client: engagement === 'client_engagement' ? stringField(record.client, RESUME_LIMITS.shortField) : '',
     bullets: stringArray(record.bullets, RESUME_LIMITS.bullet, RESUME_LIMITS.bulletsPerEntry),
+  };
+}
+
+function toProjectEntry(value: unknown): ResumeProjectEntry | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const name = stringField(record.name, RESUME_LIMITS.shortField);
+  // A project with no name cannot be matched back to the source CV, so it cannot be shown to have
+  // come from it -- dropped rather than rendered as an anonymous block of unattributable claims.
+  if (!name) return undefined;
+  return {
+    name,
+    role: stringField(record.role, RESUME_LIMITS.shortField),
+    dates: stringField(record.dates, RESUME_LIMITS.shortField),
+    organization: stringField(record.organization, RESUME_LIMITS.shortField),
+    description: stringField(record.description, RESUME_LIMITS.projectDescription),
+    technologies: stringArray(record.technologies, RESUME_LIMITS.listItem, RESUME_LIMITS.technologiesPerProject),
+    links: stringArray(record.links, RESUME_LIMITS.listItem, RESUME_LIMITS.linksPerProject),
   };
 }
 
@@ -74,10 +106,18 @@ export function toTailoredResume(value: unknown): TailoredResume {
         .slice(0, RESUME_LIMITS.educationEntries)
     : [];
 
+  const projects = Array.isArray(record.projects)
+    ? record.projects
+        .map(toProjectEntry)
+        .filter((entry): entry is ResumeProjectEntry => entry !== undefined)
+        .slice(0, RESUME_LIMITS.projectEntries)
+    : [];
+
   return {
     contact,
     summary: stringField(record.summary, RESUME_LIMITS.summary),
     experience,
+    projects,
     skills: stringArray(record.skills, RESUME_LIMITS.listItem, RESUME_LIMITS.skills),
     education,
   };

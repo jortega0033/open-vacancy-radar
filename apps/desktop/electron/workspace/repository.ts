@@ -11,6 +11,7 @@
  */
 
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
 import type { WorkspaceDb } from './client.js';
 import { appSettings, applicationArtifacts, applicationAttempts, applications, automationGrants, cvDocuments, letters, savedJobs } from './schema.js';
 import {
@@ -74,6 +75,19 @@ const EMPTY_PROFILE: CvProfile = {
 
 function iso(value: Date): string {
   return value.toISOString();
+}
+
+/**
+ * Dates a structured source CV with this process's own clock at the moment it is written (#274).
+ *
+ * The write only ever happens from the review drawer, so "written here" and "a person looked at
+ * this and pressed Save" are the same event -- and `describeCvSourceGaps` refuses to let an
+ * unreviewed source back a final export. That gate is only worth anything if the timestamp behind
+ * it cannot be supplied by the caller, which is why `validate.ts` drops any incoming `reviewedAt`
+ * and this is the one place it is set, mirroring `savedJobs.gapAnalysisAt` exactly.
+ */
+function stampReviewed(source: CvSourceDocument | null): CvSourceDocument | null {
+  return source ? { ...source, reviewedAt: new Date().toISOString() } : null;
 }
 
 // ---------------------------------------------------------------------------- saved jobs
@@ -256,6 +270,27 @@ export function deleteApplication(db: WorkspaceDb, id: string): DeleteResult {
 
 type CvDocumentRow = typeof cvDocuments.$inferSelect;
 
+/**
+ * #274: the reviewed structured source CV, filled in from `EMPTY_CV_SOURCE` for the same reason
+ * `profile` is filled in from `EMPTY_PROFILE` -- a row written by an older build (or hand-edited)
+ * can be missing a field the renderer treats as required.
+ *
+ * The one thing this never does is invent a *section*. A row with no `source_cv` at all comes back
+ * as `null`, not as an empty-but-present structure: "this CV has never had its source extracted" and
+ * "this CV's source was extracted and genuinely has no projects" are different facts, and every
+ * record that predates this column is the first one. Collapsing them would make a pre-#274 profile
+ * look like a reviewed, complete source with nothing in it, which is precisely the fabricated state
+ * this ticket's migration criterion forbids.
+ */
+function toCvSource(value: CvSourceDocument | null): CvSourceDocument | null {
+  if (!value) return null;
+  return {
+    ...EMPTY_CV_SOURCE,
+    ...value,
+    contact: { ...EMPTY_CV_SOURCE.contact, ...(value.contact ?? {}) },
+  };
+}
+
 function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
   return {
     id: row.id,
@@ -266,6 +301,7 @@ function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
     // `profile` is a JSON column: an older row (or a hand-edited database) could be missing
     // fields the renderer treats as required, so it is filled in rather than trusted.
     profile: { ...EMPTY_PROFILE, ...(row.profile ?? {}) },
+    source: toCvSource(row.sourceCv ?? null),
     isDefault: row.isDefault,
     uploadedAt: iso(row.uploadedAt),
     updatedAt: iso(row.updatedAt),
@@ -308,6 +344,7 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
         targetRole: input.targetRole ?? '',
         text: input.text ?? '',
         profile: { ...EMPTY_PROFILE, ...(input.profile ?? {}) },
+        sourceCv: stampReviewed(input.source ?? null),
         isDefault: shouldBeDefault,
       })
       .returning()
@@ -329,6 +366,11 @@ export function updateCvDocument(db: WorkspaceDb, id: string, values: CvDocument
   // field in the CV drawer cannot silently wipe the others.
   if (values.profile !== undefined) {
     set.profile = { ...EMPTY_PROFILE, ...(existing.profile ?? {}), ...values.profile };
+  }
+  // Replaced whole, not merged: see `parseCvDocumentPatch`'s own comment for why a source CV's
+  // arrays cannot be merged entry by entry without making a deletion during review unexpressible.
+  if (values.source !== undefined) {
+    set.sourceCv = stampReviewed(values.source);
   }
 
   const [row] = db.update(cvDocuments).set(set).where(eq(cvDocuments.id, id)).returning().all();

@@ -85,6 +85,13 @@
       "when": 1788648009623,
       "tag": "0011_mixed_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789110302195,
+      "tag": "0012_nosy_veda",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,14 @@
  */
 
 import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from './cv-profile-schema.js';
+import { CV_ENGAGEMENT_TYPES, CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from './cv-source-schema.js';
+import type {
+  CvEngagementType,
+  CvSourceDocument,
+  CvSourceEducationEntry,
+  CvSourceExperienceEntry,
+  CvSourceProjectEntry,
+} from './cv-source-schema.js';
 import type {
   ApplicationArtifactInput,
   ApplicationArtifactKind,
@@ -329,6 +337,147 @@ function parseProfile(value: unknown): Partial<CvProfile> {
   return out;
 }
 
+/**
+ * #274's structured source CV, checked field by field like everything else in this file.
+ *
+ * Two rules specific to this payload, on top of the file's usual three:
+ *
+ *  - **`reviewedAt` is not in the allow-list.** It is stamped by the main process from its own
+ *    clock when this value is written (see `repository.ts`), exactly as `savedJobs.gapAnalysisAt`
+ *    already is: a renderer that could set it could claim a CV was confirmed by a person at a time
+ *    nobody confirmed it, and "a human reviewed this" is the one claim the export gate relies on.
+ *  - **Every array is bounded, entry by entry.** A source CV is the largest structured value this
+ *    database holds, and it is written straight from an AI answer the user has reviewed; a bound
+ *    per entry as well as per array is what keeps a malformed answer from becoming a disk write.
+ */
+function boundedArray(value: unknown, field: string, max: number): unknown[] {
+  if (!Array.isArray(value)) fail(`"${field}" must be an array`);
+  if (value.length > max) fail(`"${field}" must have at most ${max} entries`);
+  return value;
+}
+
+function stringList(value: unknown, field: string, maxItems: number, maxChars: number): string[] {
+  return boundedArray(value, field, maxItems).map((entry, index) => str(entry, `${field}[${index}]`, maxChars));
+}
+
+function parseSourceExperience(value: unknown, index: number): CvSourceExperienceEntry {
+  const entry = asRecord(value, `"source.experience[${index}]"`);
+  const engagement: CvEngagementType =
+    entry.engagement === undefined
+      ? 'employment'
+      : oneOf(entry.engagement, `source.experience[${index}].engagement`, CV_ENGAGEMENT_TYPES);
+  return {
+    company: str(entry.company ?? '', `source.experience[${index}].company`, CV_SOURCE_LIMITS.shortField),
+    title: str(entry.title ?? '', `source.experience[${index}].title`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.experience[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+    engagement,
+    // Only a client engagement carries a client. Blanked rather than rejected for direct
+    // employment, so a stale value left over from a mis-typed entry cannot survive a correction.
+    client:
+      engagement === 'client_engagement'
+        ? str(entry.client ?? '', `source.experience[${index}].client`, CV_SOURCE_LIMITS.shortField)
+        : '',
+    bullets: stringList(
+      entry.bullets ?? [],
+      `source.experience[${index}].bullets`,
+      CV_SOURCE_LIMITS.bulletsPerEntry,
+      CV_SOURCE_LIMITS.bullet,
+    ),
+  };
+}
+
+function parseSourceEducation(value: unknown, index: number): CvSourceEducationEntry {
+  const entry = asRecord(value, `"source.education[${index}]"`);
+  return {
+    institution: str(entry.institution ?? '', `source.education[${index}].institution`, CV_SOURCE_LIMITS.shortField),
+    credential: str(entry.credential ?? '', `source.education[${index}].credential`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.education[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+  };
+}
+
+function parseSourceProject(value: unknown, index: number): CvSourceProjectEntry {
+  const entry = asRecord(value, `"source.projects[${index}]"`);
+  const id = str(entry.id ?? '', `source.projects[${index}].id`, LIMITS.short).trim();
+  return {
+    id: id.length > 0 ? id : `project-${index + 1}`,
+    name: str(entry.name ?? '', `source.projects[${index}].name`, CV_SOURCE_LIMITS.shortField),
+    role: str(entry.role ?? '', `source.projects[${index}].role`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.projects[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+    organization: str(
+      entry.organization ?? '',
+      `source.projects[${index}].organization`,
+      CV_SOURCE_LIMITS.shortField,
+    ),
+    description: str(
+      entry.description ?? '',
+      `source.projects[${index}].description`,
+      CV_SOURCE_LIMITS.projectDescription,
+    ),
+    technologies: stringList(
+      entry.technologies ?? [],
+      `source.projects[${index}].technologies`,
+      CV_SOURCE_LIMITS.technologiesPerProject,
+      CV_SOURCE_LIMITS.listItem,
+    ),
+    links: stringList(
+      entry.links ?? [],
+      `source.projects[${index}].links`,
+      CV_SOURCE_LIMITS.linksPerProject,
+      CV_SOURCE_LIMITS.listItem,
+    ),
+    pinned: entry.pinned === undefined ? false : bool(entry.pinned, `source.projects[${index}].pinned`),
+  };
+}
+
+function nonNegativeInt(value: unknown, field: string, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    fail(`"${field}" must be a non-negative integer`);
+  }
+  if (value > max) fail(`"${field}" must be at most ${max}`);
+  return value;
+}
+
+export function parseCvSource(value: unknown): CvSourceDocument | null {
+  if (value === null || value === undefined) return null;
+  const input = asRecord(value, '"source"');
+  const contact = asRecord(input.contact ?? {}, '"source.contact"');
+  const complete = input.complete === undefined ? true : bool(input.complete, 'source.complete');
+  return {
+    contact: {
+      name: str(contact.name ?? '', 'source.contact.name', CV_SOURCE_LIMITS.shortField),
+      title: str(contact.title ?? '', 'source.contact.title', CV_SOURCE_LIMITS.shortField),
+      location: str(contact.location ?? '', 'source.contact.location', CV_SOURCE_LIMITS.shortField),
+      email: str(contact.email ?? '', 'source.contact.email', CV_SOURCE_LIMITS.shortField),
+      phone: str(contact.phone ?? '', 'source.contact.phone', CV_SOURCE_LIMITS.shortField),
+      links: stringList(contact.links ?? [], 'source.contact.links', CV_SOURCE_LIMITS.links, CV_SOURCE_LIMITS.listItem),
+    },
+    summary: str(input.summary ?? '', 'source.summary', CV_SOURCE_LIMITS.summary),
+    experience: boundedArray(input.experience ?? [], 'source.experience', CV_SOURCE_LIMITS.experienceEntries).map(
+      parseSourceExperience,
+    ),
+    education: boundedArray(input.education ?? [], 'source.education', CV_SOURCE_LIMITS.educationEntries).map(
+      parseSourceEducation,
+    ),
+    projects: boundedArray(input.projects ?? [], 'source.projects', CV_SOURCE_LIMITS.projectEntries).map(
+      parseSourceProject,
+    ),
+    maxProjects:
+      input.maxProjects === undefined
+        ? PROJECTS_UNLIMITED
+        : nonNegativeInt(input.maxProjects, 'source.maxProjects', CV_SOURCE_LIMITS.maxProjectsSetting),
+    complete,
+    // A reason only means something for an incomplete record; keeping one on a complete record
+    // would let a stale "…was truncated" line outlive the truncation it described.
+    incompleteReason: complete
+      ? ''
+      : str(input.incompleteReason ?? '', 'source.incompleteReason', CV_SOURCE_LIMITS.incompleteReason),
+    coveredChars: input.coveredChars === undefined ? 0 : nonNegativeInt(input.coveredChars, 'source.coveredChars', LIMITS.cvText),
+    sourceChars: input.sourceChars === undefined ? 0 : nonNegativeInt(input.sourceChars, 'source.sourceChars', LIMITS.cvText),
+    // Stamped by the repository, never accepted from the caller: see this function's own comment.
+    reviewedAt: '',
+  };
+}
+
 export function parseCvDocumentInput(value: unknown): CvDocumentInput {
   const input = asRecord(value, 'CV document');
   return {
@@ -337,6 +486,7 @@ export function parseCvDocumentInput(value: unknown): CvDocumentInput {
     targetRole: input.targetRole === undefined ? '' : str(input.targetRole, 'targetRole', LIMITS.short),
     text: input.text === undefined ? '' : str(input.text, 'text', LIMITS.cvText),
     profile: input.profile === undefined ? {} : parseProfile(input.profile),
+    source: input.source === undefined ? null : parseCvSource(input.source),
     isDefault: input.isDefault === undefined ? false : bool(input.isDefault, 'isDefault'),
   };
 }
@@ -348,6 +498,10 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
   patch(input, out, 'targetRole', (v) => str(v, 'targetRole', LIMITS.short));
   patch(input, out, 'text', (v) => str(v, 'text', LIMITS.cvText));
   patch(input, out, 'profile', (v) => parseProfile(v));
+  // Replaced wholesale, not merged like `profile`: the drawer always sends the entire reviewed
+  // source back, and merging arrays entry by entry would make "I deleted a project during review"
+  // impossible to express. An explicit `null` clears it.
+  patch(input, out, 'source', (v) => parseCvSource(v));
   // `isDefault` is deliberately NOT patchable: promoting a CV has to go through
   // `workspace:cv-documents:set-default`, which demotes the previous default in the same
   // transaction. Allowing it here would let the library end up with two defaults, or none.

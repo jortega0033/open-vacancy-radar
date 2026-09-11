@@ -34,6 +34,13 @@ export interface ResumeExperienceEntry {
   /** Free text, e.g. "Jan 2021 - Present": CVs write dates too many different ways to parse into
    * a structured range without risking a wrong inference the source CV never stated. */
   dates: string;
+  /** How the role was held (#274). Separate from `company` so a contract delivered for an end
+   * client can never be rendered as direct employment at that client. `CvEngagementType`'s two
+   * values, spelled out locally for the same reason every other enum in this file's neighbours is:
+   * this module stays dependency-free. */
+  engagement: 'employment' | 'client_engagement';
+  /** The end client, for a `client_engagement`. Empty for direct employment. */
+  client: string;
   bullets: string[];
 }
 
@@ -43,10 +50,24 @@ export interface ResumeEducationEntry {
   dates: string;
 }
 
+/** One project record (#274). The structured tailored-resume shape had no projects section at all,
+ * so a CV's project evidence could not survive tailoring or export even when the source CV had it. */
+export interface ResumeProjectEntry {
+  name: string;
+  role: string;
+  dates: string;
+  /** The employer, client or context the project was delivered under, when the source CV states one. */
+  organization: string;
+  description: string;
+  technologies: string[];
+  links: string[];
+}
+
 export interface TailoredResume {
   contact: ResumeContact;
   summary: string;
   experience: ResumeExperienceEntry[];
+  projects: ResumeProjectEntry[];
   skills: string[];
   education: ResumeEducationEntry[];
 }
@@ -61,11 +82,16 @@ export const RESUME_LIMITS = {
   /** each bullet point */
   bullet: 1_000,
   summary: 4_000,
+  /** one project's description */
+  projectDescription: 4_000,
   links: 10,
   skills: 100,
   experienceEntries: 30,
   bulletsPerEntry: 20,
   educationEntries: 15,
+  projectEntries: 60,
+  technologiesPerProject: 40,
+  linksPerProject: 5,
 } as const;
 
 /** An empty `TailoredResume`: every field present, nothing invented. The safe value to fall back
@@ -74,6 +100,7 @@ export const EMPTY_TAILORED_RESUME: TailoredResume = {
   contact: { name: '', title: '', location: '', email: '', phone: '', links: [] },
   summary: '',
   experience: [],
+  projects: [],
   skills: [],
   education: [],
 };
@@ -84,6 +111,7 @@ export const EMPTY_TAILORED_RESUME: TailoredResume = {
 export const RESUME_JSON_SHAPE =
   '{"contact": {"name": string, "title": string, "location": string, "email": string, "phone": string, "links": string[]}, ' +
   '"summary": string, ' +
-  '"experience": [{"company": string, "title": string, "dates": string, "bullets": string[]}], ' +
+  '"experience": [{"company": string, "title": string, "dates": string, "engagement": "employment" | "client_engagement", "client": string, "bullets": string[]}], ' +
+  '"projects": [{"name": string, "role": string, "dates": string, "organization": string, "description": string, "technologies": string[], "links": string[]}], ' +
   '"skills": string[], ' +
   '"education": [{"institution": string, "credential": string, "dates": string}]}';
