@@ -352,6 +352,21 @@ describe('workspace application attempts (#198)', () => {
     ).toThrow(/"completionEvidence" must be one of/);
   });
 
+  it('#271 + #275: the user_reported checkpoint carries the same evidence default, and still cannot claim a receipt', () => {
+    // #271 gave a person's own "I applied to this myself" its own checkpoint, so this -- not
+    // `submitted` -- is where a renderer-side completion now lands. It has to default its evidence
+    // the same way: #275's lookup suppresses a duplicate for it, and an attempt that suppressed a
+    // duplicate with no recorded evidence type is indistinguishable from a pre-migration row.
+    expect(parseApplicationAttemptPatch({ checkpoint: 'user_reported' })).toEqual({
+      checkpoint: 'user_reported',
+      completionEvidence: 'user_reported',
+    });
+    // The boundary restriction is unchanged: the renderer cannot observe a receipt, on any checkpoint.
+    expect(() =>
+      parseApplicationAttemptPatch({ checkpoint: 'user_reported', completionEvidence: 'receipt_confirmed' }),
+    ).toThrow(/"completionEvidence" must be one of/);
+  });
+
   it('#275: does not invent completion evidence for a patch that is not a completion', () => {
     expect(parseApplicationAttemptPatch({ checkpoint: 'skipped' })).toEqual({ checkpoint: 'skipped' });
     expect(parseApplicationAttemptPatch({ completionEvidence: null })).toEqual({ completionEvidence: null });

@@ -505,7 +505,16 @@ export function recordUserReportedSubmission(
     detail,
     observedAt: now,
   });
-  workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'user_reported', checkpointDetail: detail });
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: 'user_reported',
+    checkpointDetail: detail,
+    // #275's other completion-evidence value, written here for the same reason the observer writes
+    // `receipt_confirmed`: this attempt is now a completed application to its requisition, and
+    // #275's lookup must suppress a duplicate for it just as hard as for an observed one, while
+    // still being able to say *which* kind of completion it was. Recording the checkpoint without
+    // this would leave the lookup unable to tell a person's report from an unrecorded legacy row.
+    completionEvidence: 'user_reported',
+  });
   return { ok: true };
 }
 

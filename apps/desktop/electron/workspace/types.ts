@@ -302,9 +302,19 @@ export const NON_TERMINAL_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckp
  * with `force` cannot silently re-queue a posting that may already have been submitted; resolving
  * it takes either reconciliation (patching the checkpoint to what actually happened, with a
  * recorded reason) or a recorded reapply -- never a bare retry.
+ *
+ * `user_reported` is in this set and deliberately absent from the concurrency guard above, and the
+ * two facts are not in tension. #271 made `submitted` mean "this app observed a receipt", which
+ * moved a person's own "I applied to this by hand" onto its own checkpoint. That statement is
+ * still a completed application to this requisition -- #275's third acceptance case requires
+ * user-reported and receipt-confirmed completion to suppress a duplicate *equally* -- so leaving
+ * it out here would have reopened the exact hole #275 closes, for the one completion path a person
+ * is most likely to use. It stays out of the concurrency set for #271's reason: nothing is in
+ * flight, so it is not a concurrent attempt; it is a finished one, which is what this set is for.
  */
 export const COMPLETED_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
   'submitted',
+  'user_reported',
   'submission_unknown',
 ];
 

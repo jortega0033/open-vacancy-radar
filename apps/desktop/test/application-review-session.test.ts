@@ -381,8 +381,14 @@ describe('application-review-session', () => {
     it('does not require a CV-only attempt to name the employer being applied to (#276)', async () => {
       // Before #276 this attempt refused with `company_not_found_in_documents`, and the only way to
       // make it pass was for the CV to claim the prospective employer somewhere in its own history.
+      //
+      // The confirmation page is #271's doing, not #276's: this test is about the *pre-submit gate*
+      // letting a CV-only attempt through, and since #271 getting past the gate no longer implies
+      // `ok: true` on its own -- a click onto a form that is still standing now resolves to
+      // `submission_unknown` rather than to a submission nobody observed. Handing the fixture a
+      // real confirmation keeps the assertion below testing the gate, which is what it is for.
       const { openApplicationReview, submitApplicationReview } = await importSession();
-      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE));
+      createApplicationView.mockImplementation(() => fakeView(SUBMIT_TREE, { afterSubmitTree: CONFIRMATION_TREE }));
       await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
 
       workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
@@ -457,6 +463,10 @@ describe('application-review-session', () => {
         submittedAt: expect.any(String),
         submissionMode: 'manual',
         formStructureHash: expect.any(String),
+        // #271 + #275 reconciled: the observer established a real receipt, so this is the one path
+        // entitled to assert #275's `receipt_confirmed`. See the write site in
+        // `application-review-session.ts` for why no other caller may.
+        completionEvidence: 'receipt_confirmed',
       });
       const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
       expect(calledMethods).toContain('Input.dispatchMouseEvent'); // the real submit click
@@ -470,7 +480,7 @@ describe('application-review-session', () => {
     describe('submission receipts (#271)', () => {
       function readyToSubmit() {
         workspaceMock.getApplicationAttempt.mockReturnValue(withRealJdHash(fakeAttempt()));
-        workspaceMock.listApplicationArtifacts.mockReturnValue([{ kind: 'cv_pdf', storagePath: '/fake/resume.pdf' }]);
+        workspaceMock.listApplicationArtifacts.mockReturnValue([stagedArtifact('cv_pdf', '/fake/resume.pdf')]);
         extractPdfText.mockResolvedValue('Acme Corp Senior Engineer');
       }
 
@@ -585,8 +595,18 @@ describe('application-review-session', () => {
         expect(workspaceMock.updateApplicationAttempt).toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, {
           checkpoint: 'user_reported',
           checkpointDetail: 'I finished this one in the browser myself.',
+          // #275's evidence type, recorded alongside #271's checkpoint so the completed-application
+          // lookup suppresses a duplicate for this attempt and can still say the completion came
+          // from the person rather than from an observed receipt.
+          completionEvidence: 'user_reported',
         });
         expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(FAKE_DB, ATTEMPT_ID, expect.objectContaining({ checkpoint: 'submitted' }));
+        // ...and never the value only a real observation may assert.
+        expect(workspaceMock.updateApplicationAttempt).not.toHaveBeenCalledWith(
+          FAKE_DB,
+          ATTEMPT_ID,
+          expect.objectContaining({ completionEvidence: 'receipt_confirmed' }),
+        );
         expect(workspaceMock.createApplicationSubmissionReceipt).toHaveBeenCalledWith(
           FAKE_DB,
           expect.objectContaining({ outcome: 'user_reported', source: 'user_reported', evidenceKind: 'user_statement' }),

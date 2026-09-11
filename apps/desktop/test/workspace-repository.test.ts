@@ -8,6 +8,7 @@ import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/clien
 import * as workspace from '../electron/workspace/repository.js';
 import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
 import * as schema from '../electron/workspace/schema.js';
+import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
@@ -414,12 +415,26 @@ const NORTHWIND = {
 } as const;
 
 /** Takes an attempt all the way to a completed application with the given evidence. */
+/**
+ * Completes an attempt the way the app really completes one, which since #271 depends on *how* it
+ * was completed:
+ *
+ *  - `receipt_confirmed` lands on `submitted`, which now means "this app observed a receipt" and is
+ *    written only by the post-click observer in `application-review-session.ts`;
+ *  - `user_reported` lands on the `user_reported` checkpoint, because a person's own statement is
+ *    deliberately not `submitted` -- that is #271's fourth acceptance case.
+ *
+ * #275 was written against a codebase with no `user_reported` checkpoint, so this helper originally
+ * put both on `submitted`. Keeping it that way would have made #275's third acceptance case pass
+ * without ever exercising the checkpoint a user-reported completion actually lands on, hiding
+ * whether `COMPLETED_ATTEMPT_CHECKPOINTS` covers it -- which is the one thing that case is for.
+ */
 function completeAttempt(
   attemptId: string,
   completionEvidence: 'user_reported' | 'receipt_confirmed',
 ): void {
   workspace.updateApplicationAttempt(db, attemptId, {
-    checkpoint: 'submitted',
+    checkpoint: completionEvidence === 'user_reported' ? 'user_reported' : 'submitted',
     submittedAt: '2026-09-01T09:00:00.000Z',
     submissionMode: 'manual',
     completionEvidence,
@@ -517,6 +532,64 @@ describe('completed-application dedup (#275)', () => {
     // Stored, not merely reported through the error: the distinction survives on the row.
     expect(workspace.getApplicationAttempt(db, reported.id).completionEvidence).toBe('user_reported');
     expect(workspace.getApplicationAttempt(db, confirmed.id).completionEvidence).toBe('receipt_confirmed');
+
+    // The two completions really do sit on different checkpoints since #271 -- which is the whole
+    // reason this case needs `COMPLETED_ATTEMPT_CHECKPOINTS` to cover both.
+    expect(workspace.getApplicationAttempt(db, reported.id).checkpoint).toBe('user_reported');
+    expect(workspace.getApplicationAttempt(db, confirmed.id).checkpoint).toBe('submitted');
+  });
+
+  /**
+   * The #271/#275 reconciliation invariant, pinned on its own rather than left implicit in the
+   * cases above.
+   *
+   * #271 and #275 were built independently against the same master. #271 moved a person's
+   * self-reported completion off `submitted` onto a new `user_reported` checkpoint; #275's
+   * completed-application lookup keys off a set of checkpoints that, as written, listed only
+   * `submitted` and `submission_unknown`. Merging the two without noticing leaves the single most
+   * common completion path -- a person saying "I already applied to this one" -- matching neither
+   * guard, and the vacancy silently re-queueable. That is precisely the bug #275 exists to fix,
+   * reintroduced by the merge rather than by either change.
+   *
+   * `force` must not get past it either: #198's escape hatch is for work that did not land.
+   */
+  it('#271 + #275: a user_reported completion is a completed application, and force does not get past it', () => {
+    const reported = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(reported.id, 'user_reported');
+    expect(workspace.getApplicationAttempt(db, reported.id).checkpoint).toBe('user_reported');
+
+    // The set itself, so a future edit that drops the value fails here and says why.
+    expect(COMPLETED_ATTEMPT_CHECKPOINTS).toContain('user_reported');
+    // ...and it stays out of the concurrency guard, which is a different question (#271).
+    expect(NON_TERMINAL_ATTEMPT_CHECKPOINTS).not.toContain('user_reported');
+
+    // Re-importing the same posting is refused...
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
+    // ...including from a different source, with different tracking parameters...
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        vacancyKey: 'a-different-scan-entirely',
+        canonicalUrl: `${GREENHOUSE_JOB}?utm_source=newsletter`,
+      }),
+    ).toThrow(workspace.ApplicationAlreadyCompletedError);
+    // ...and `force: true` is not the way past a completed application.
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB, force: true })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
+
+    // Only the explicit, recorded reapply path gets through.
+    const reapplied = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      canonicalUrl: GREENHOUSE_JOB,
+      reapply: { supersedesAttemptId: reported.id, reason: 'The employer asked me to resend with a corrected CV' },
+    });
+    expect(reapplied.supersedesAttemptId).toBe(reported.id);
+
+    // A different opening at the same employer was never in scope and stays eligible.
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB })).not.toThrow();
   });
 
   it('acceptance 4: an explicit reapply records its predecessor, its reason and both document versions', () => {
