@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
-import { AcceptedBytesChangedError, readAcceptedArtifactBytes } from './application-artifact-staging.js';
 import { createApplicationView, type ApplicationView } from './application-view.js';
+import { AcceptedBytesChangedError, readAcceptedArtifactBytes } from './document-readiness.js';
 import { resolveApplicationTargetPolicy, resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { runPreSubmitGate, type PreSubmitGateRefusalReason } from './application-submit-gate.js';
 import {

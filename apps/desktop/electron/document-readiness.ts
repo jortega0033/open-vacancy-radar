@@ -1,4 +1,5 @@
-import type { DocumentArtifactKind, DocumentTarget } from './document-acceptance.js';
+import { readFile } from 'node:fs/promises';
+import { hashDocumentBytes, type DocumentArtifactKind, type DocumentTarget } from './document-acceptance.js';
 
 /**
  * Binds "this attempt's documents are ready" to the exact bytes an acceptance check actually
@@ -18,8 +19,12 @@ import type { DocumentArtifactKind, DocumentTarget } from './document-acceptance
  *    attachment step uses is this same accepted hash, never one re-derived from the file it is
  *    about to upload.
  *
- * Pure, with no filesystem or database access of its own, matching `application-submit-gate.ts`'s
- * discipline: the caller reads the bytes and recomputes the hash, and gets back a plain verdict.
+ * `checkDocumentReadiness` is pure, matching `application-submit-gate.ts`'s discipline: the caller
+ * supplies the hashes and gets back a plain verdict. `readAcceptedArtifactBytes` below is the one
+ * thing here that touches disk, and it lives with the rule rather than in the staging module so
+ * that reading an accepted artifact never drags Electron in: `application-review-session.ts` needs
+ * exactly this and nothing else from the staging path, and importing that module would pull the
+ * `electron` package into an otherwise Electron-free import chain.
  */
 
 export type DocumentReadinessRefusal =
@@ -130,4 +135,42 @@ export function checkDocumentReadiness(input: DocumentReadinessInput): DocumentR
 
   if (refusals.length > 0) return { ok: false, refusals, verifiedContentHashes: [] };
   return { ok: true, refusals, verifiedContentHashes };
+}
+
+/** The identifying fields of one staged artifact: what it is called, where it lives, and the hash
+ * of the bytes the acceptance contract passed. Structural rather than `ApplicationArtifactRecord`
+ * so this module stays free of the workspace schema. */
+export interface AcceptedArtifactFile {
+  fileName: string;
+  contentHash: string;
+  storagePath: string;
+}
+
+/** Thrown when the file behind an artifact record is no longer the file that was accepted. */
+export class AcceptedBytesChangedError extends Error {
+  constructor(
+    public readonly record: AcceptedArtifactFile,
+    public readonly currentContentHash: string,
+  ) {
+    super(
+      `"${record.fileName}" no longer matches the bytes that were validated (accepted ${record.contentHash.slice(0, 12)}, found ${currentContentHash.slice(0, 12)})`,
+    );
+    this.name = 'AcceptedBytesChangedError';
+  }
+}
+
+/**
+ * Reads a staged artifact and refuses unless the bytes still hash to what was accepted (#276).
+ *
+ * The one function anything downstream should use to get an artifact's bytes. Reading the file
+ * directly and re-deriving a hash from what came back proves nothing: it would agree with itself
+ * whatever the file now contains. Comparing against the hash written at acceptance time is what
+ * makes a changed file invalidate the earlier "validated" verdict instead of silently inheriting
+ * it, and what makes the bytes handed on for attachment provably the reviewed document.
+ */
+export async function readAcceptedArtifactBytes(record: AcceptedArtifactFile): Promise<Buffer> {
+  const bytes = await readFile(record.storagePath);
+  const currentContentHash = hashDocumentBytes(bytes);
+  if (currentContentHash !== record.contentHash) throw new AcceptedBytesChangedError(record, currentContentHash);
+  return bytes;
 }

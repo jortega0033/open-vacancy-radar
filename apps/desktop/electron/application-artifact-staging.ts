@@ -1,9 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BrowserWindow } from 'electron';
 import {
   acceptRenderedDocument,
-  hashDocumentBytes,
   type DocumentAcceptance,
   type DocumentAcceptanceContract,
   type DocumentArtifactKind,
@@ -330,33 +329,3 @@ export async function stageApplicationDocuments(options: StageApplicationDocumen
   return { records: staged.map((document) => document.record), readiness };
 }
 
-/** Thrown when the file behind an artifact record is no longer the file that was accepted. */
-export class AcceptedBytesChangedError extends Error {
-  constructor(
-    public readonly record: Pick<ApplicationArtifactRecord, 'id' | 'fileName' | 'contentHash' | 'storagePath'>,
-    public readonly currentContentHash: string,
-  ) {
-    super(
-      `"${record.fileName}" no longer matches the bytes that were validated (accepted ${record.contentHash.slice(0, 12)}, found ${currentContentHash.slice(0, 12)})`,
-    );
-    this.name = 'AcceptedBytesChangedError';
-  }
-}
-
-/**
- * Reads a staged artifact and refuses unless the bytes still hash to what was accepted (#276).
- *
- * The one function anything downstream should use to get an artifact's bytes. Reading the file
- * directly and re-deriving a hash from what came back proves nothing: it would agree with itself
- * whatever the file now contains. Comparing against the hash written at acceptance time is what
- * makes a changed file invalidate the earlier "validated" verdict instead of silently inheriting
- * it, and what makes the bytes handed on for attachment provably the reviewed document.
- */
-export async function readAcceptedArtifactBytes(
-  record: Pick<ApplicationArtifactRecord, 'id' | 'fileName' | 'contentHash' | 'storagePath'>,
-): Promise<Buffer> {
-  const bytes = await readFile(record.storagePath);
-  const currentContentHash = hashDocumentBytes(bytes);
-  if (currentContentHash !== record.contentHash) throw new AcceptedBytesChangedError(record, currentContentHash);
-  return bytes;
-}
