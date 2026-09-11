@@ -6,7 +6,7 @@ import type {
 } from '../../window.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
-import { ConfirmDialog } from '../shell/index.js';
+import { ConfirmDialog, ErrorBanner, PageLoading } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
@@ -355,8 +355,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   if (loadError) {
     return (
       <div>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <div className="alert alert-error mt-4">{loadError}</div>
+        <ErrorBanner className="mt-4">{loadError}</ErrorBanner>
       </div>
     );
   }
@@ -364,8 +363,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   if (!settings) {
     return (
       <div>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <div className="alert alert-info mt-4">Loading settings…</div>
+        <PageLoading label="Loading settings…" />
       </div>
     );
   }
@@ -374,8 +372,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-lg font-semibold">Settings</h2>
-      <p className="mt-1 text-sm text-base-content/60">
+      <p className="text-sm text-base-content/60">
         Changes are saved automatically as you make them.
       </p>
 

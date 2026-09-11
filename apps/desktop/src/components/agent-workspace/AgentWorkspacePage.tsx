@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
+import { ErrorBanner, PageLoading } from '../shell/index.js';
 import { NewSessionPanel } from './NewSessionPanel.js';
 import { CapacityLine, SessionList } from './SessionList.js';
 import { SessionDetail } from './SessionDetail.js';
@@ -72,7 +73,6 @@ export function AgentWorkspacePage({ defaultProvider }: AgentWorkspacePageProps)
     <div className="flex min-h-0 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">AI Workspace</h2>
           <CapacityLine capacity={state.capacity} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -94,13 +94,13 @@ export function AgentWorkspacePage({ defaultProvider }: AgentWorkspacePageProps)
       </div>
 
       {state.listStatus === 'error' && state.listError !== undefined && (
-        <div className="alert alert-error alert-soft mt-4 text-sm">{state.listError}</div>
+        <ErrorBanner className="mt-4">{state.listError}</ErrorBanner>
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-[18rem_1fr]">
         <div className="min-w-0">
           {state.listStatus === 'loading' && state.order.length === 0 ? (
-            <p className="p-3 text-sm text-base-content/60">Loading sessions…</p>
+            <PageLoading label="Loading sessions…" />
           ) : (
             <SessionList
               state={state}

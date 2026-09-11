@@ -91,18 +91,18 @@ describe('SettingsPage', () => {
     expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
 
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
+    expect(headingsNow()).toEqual(['Startup', 'Appearance']);
 
     openTab('Search');
     await waitFor(() =>
-      expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Search profile', 'Company roster']),
+      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company roster']),
     );
 
     openTab('Workspace');
-    expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
+    expect(headingsNow()).toEqual(['Documents', 'Applications']);
 
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['Settings', 'AI runtime', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Data management', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {

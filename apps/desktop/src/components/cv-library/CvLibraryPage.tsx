@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
-import { ConfirmDialog, EmptyState } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
@@ -164,10 +164,7 @@ export function CvLibraryPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">CV library</h2>
-          {hasAnyDocuments && <p className="mt-1 text-sm text-base-content/60">{documents?.length} on file</p>}
-        </div>
+        <div>{hasAnyDocuments && <p className="text-sm text-base-content/60">{documents?.length} on file</p>}</div>
         <div className="flex items-center gap-2">
           <CvUploadAction onSaved={() => void reloadDocuments()} />
           <button className="btn btn-outline btn-sm" type="button" onClick={openAddDrawer}>
@@ -176,10 +173,10 @@ export function CvLibraryPage() {
         </div>
       </div>
 
-      {loadError && <div className="alert alert-error mt-4">{loadError}</div>}
-      {actionError && <div className="alert alert-error mt-4">{actionError}</div>}
+      {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 
-      {isLoading && !loadError && <div className="alert alert-info mt-4">Loading your CV library…</div>}
+      {isLoading && !loadError && <PageLoading label="Loading your CV library…" />}
 
       {!isLoading && !hasAnyDocuments && (
         <EmptyState
