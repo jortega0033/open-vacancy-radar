@@ -44,7 +44,7 @@ describe('requiredScanQuery', () => {
 
   it('guards the IPC argument before main process scan setup can initialize the engine', () => {
     expect(source('main.ts')).toMatch(
-      /guardedIpc\.handle\(\s*'vacancy:run-scan'[\s\S]*runVacancyScan\(requiredScanQuery\(query\)\)/,
+      /guardedIpc\.handle\(\s*'vacancy:run-scan'[\s\S]*runVacancyScan\(parseVacancyScanRequest\(request\)\)/,
     );
   });
 });
@@ -81,7 +81,7 @@ describe('scheduledScanQueryFromProfile', () => {
 
   it('keeps scheduled scans wired when a saved role or keyword exists', () => {
     expect(source('main.ts')).toMatch(
-      /scheduledScanQueryFromProfile\(profile\)[\s\S]*runVacancyScan\(query\)[\s\S]*isExpectedScanBusyError\(error\)/,
+      /scheduledScanQueryFromProfile\(profile\)[\s\S]*runVacancyScan\(\{ mode: 'query', query \}\)[\s\S]*isExpectedScanBusyError\(error\)/,
     );
   });
 });

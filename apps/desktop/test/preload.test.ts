@@ -231,6 +231,13 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
   });
 
+  it('runScan forwards an explicit browse-all request unchanged', async () => {
+    invoke.mockResolvedValue({ runId: 'run-1' });
+    const api = await loadPreload('vacancyRadar');
+    await (api.runScan as (request: { mode: 'browse_all' }) => Promise<unknown>)({ mode: 'browse_all' });
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', { mode: 'browse_all' });
+  });
+
   it('onScanProgress subscribes to vacancy:scan-progress and forwards a well-formed payload', async () => {
     const api = await loadPreload('vacancyRadar');
     const received: unknown[] = [];

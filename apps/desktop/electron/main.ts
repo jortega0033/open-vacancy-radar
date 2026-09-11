@@ -1723,10 +1723,23 @@ guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ sca
  * a `vacancy:get-scan-status` poll, for a page that reattaches mid-scan) still is.
  */
 const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
+const BROWSE_ALL_RESULT_CAP = 5_000;
+
+type VacancyScanRequest = { mode: 'query'; query: string } | { mode: 'browse_all' };
+
+function parseVacancyScanRequest(value: unknown): VacancyScanRequest {
+  if (typeof value === 'string') return { mode: 'query', query: requiredScanQuery(value) };
+  if (value && typeof value === 'object') {
+    const request = value as { mode?: unknown; query?: unknown };
+    if (request.mode === 'query') return { mode: 'query', query: requiredScanQuery(request.query) };
+    if (request.mode === 'browse_all') return { mode: 'browse_all' };
+  }
+  throw new Error('Unsupported vacancy scan request.');
+}
 
 /**
- * Shared scan body for user-triggered vacancy discovery: the caller must supply a role or keyword
- * before the engine opens any upstream provider request.
+ * Shared scan body for user-triggered vacancy discovery. A normal scan must supply a role or
+ * keyword; browse-all must be explicit and gets capped below.
  *
  * `onProgress` (#252) pushes each discovery sub-source's own rows to the renderer the moment that
  * source resolves, well before this whole function's promise settles -- purely an additional,
@@ -1734,13 +1747,15 @@ const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
  * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
  * unconditional rather than gated on "is anyone currently on the Search page".
  */
-async function runVacancyScan(query: string): Promise<GlobalRemoteReport> {
+async function runVacancyScan(request: VacancyScanRequest): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
-        query: requiredScanQuery(query),
+        ...(request.mode === 'query'
+          ? { query: request.query }
+          : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
         onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
       });
       latestVacancyReport = result.report;
@@ -1750,8 +1765,8 @@ async function runVacancyScan(query: string): Promise<GlobalRemoteReport> {
   );
 }
 
-guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>
-  runVacancyScan(requiredScanQuery(query)),
+guardedIpc.handle('vacancy:run-scan', (_event, request: unknown): Promise<GlobalRemoteReport> =>
+  runVacancyScan(parseVacancyScanRequest(request)),
 );
 
 /**
@@ -1821,7 +1836,7 @@ function scheduleBackgroundScanTick(): void {
           console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
           return null;
         }
-        return runVacancyScan(query);
+        return runVacancyScan({ mode: 'query', query });
       })
       .catch((error: unknown) => {
         if (isExpectedScanBusyError(error)) return;

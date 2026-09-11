@@ -35,6 +35,7 @@ type EngineState = 'checking' | 'ready' | 'unavailable';
 const PAGE_SIZE = 25;
 
 const SALARY_NOTE = 'Salary shown only where advertised';
+const BROWSE_ALL_RESULT_CAP = 5_000;
 
 /**
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
@@ -199,6 +200,7 @@ export function SearchPage({
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
+  const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
   const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
   const [searchProfileError, setSearchProfileError] = useState<string>();
 
@@ -559,7 +561,10 @@ export function SearchPage({
   const profileNotConfigured = reportHasOnlyUnscoredRows && searchProfile !== null && !currentProfileConfigured;
   const reportNeedsRescore = reportHasOnlyUnscoredRows && currentProfileConfigured;
   const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
-  const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
+  const sourceWarnings =
+    worldwideReport?.discoverySources.filter((source) => source.status !== 'success' || source.complete === false) ?? [];
+  const scanBounds = worldwideReport?.scanBounds;
+  const scanIncomplete = scanBounds?.complete === false;
   const hasReport = worldwideReport !== null;
   const liveProgressCount = partialVacancies.length;
   // A scan is running and has pushed at least one row, but has not produced its final report yet:
@@ -588,7 +593,7 @@ export function SearchPage({
     // events build a clean list rather than mixing in a previous run's provisional rows.
     setPartialVacancies([]);
     try {
-      setWorldwideReport(await window.vacancyRadar.runScan(query));
+      setWorldwideReport(await window.vacancyRadar.runScan({ mode: 'query', query }));
       hasHydrated.current = true;
       setScanning(false);
       setPartialVacancies([]);
@@ -609,6 +614,29 @@ export function SearchPage({
     }
   }, [filters.query, waitForScanToFinish]);
 
+  const runBrowseAllScan = useCallback(async () => {
+    setConfirmBrowseAll(false);
+    setScanning(true);
+    setScanError(undefined);
+    setScanGuard(undefined);
+    setLoadError(undefined);
+    setPartialVacancies([]);
+    try {
+      setWorldwideReport(await window.vacancyRadar.runScan({ mode: 'browse_all' }));
+      hasHydrated.current = true;
+      setScanning(false);
+      setPartialVacancies([]);
+    } catch (error) {
+      const message = describeError(error, 'scan failed');
+      if (message.includes('already running')) {
+        waitForScanToFinish();
+      } else {
+        setScanning(false);
+        setScanError(message);
+      }
+    }
+  }, [waitForScanToFinish]);
+
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
     if (!query) return;
@@ -624,6 +652,10 @@ export function SearchPage({
     setAppliedFilters(filters);
     void runScan();
   }, [filters, runScan]);
+
+  const handleBrowseAll = useCallback(() => {
+    setConfirmBrowseAll(true);
+  }, []);
 
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
@@ -698,6 +730,7 @@ export function SearchPage({
         filters={filters}
         onFiltersChange={handleFiltersChange}
         onSearch={handleSearch}
+        onBrowseAll={handleBrowseAll}
         onClear={handleClearFilters}
         sources={sources}
         employmentTypes={employmentTypes}
@@ -768,6 +801,12 @@ export function SearchPage({
                 Browse saved report
               </button>
             )}
+          </div>
+        )}
+        {scanIncomplete && (
+          <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+            {scanBounds.completenessReason ??
+              `Browse-all scan is capped at ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} rows, so this report is not exhaustive.`}
           </div>
         )}
         {loadError && (
@@ -897,6 +936,29 @@ export function SearchPage({
         </>
       )}
 
+      {confirmBrowseAll && (
+        <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="browse-all-title">
+          <div className="modal-box max-w-lg">
+            <h3 id="browse-all-title" className="text-base font-semibold">
+              Browse all vacancies?
+            </h3>
+            <p className="mt-2 text-sm text-base-content/70">
+              This starts a broad live scan without a role or keyword. It can take longer and hit
+              more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
+            </p>
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
+                Browse all vacancies
+              </button>
+            </div>
+          </div>
+          <button type="button" className="modal-backdrop" aria-label="Close" onClick={() => setConfirmBrowseAll(false)} />
+        </div>
+      )}
+
       {/* A quiet status strip, not a page footer: always visible without scrolling (this row sits
           outside the scrollable results/detail area above), for diagnostic/provenance metadata
           that's useful on demand but not worth greeting every visit with above the results. */}
@@ -918,7 +980,7 @@ export function SearchPage({
                   <div>
                     {sourceWarnings.map((source) => (
                       <span key={source.id} className="block">
-                        {discoveryProviderLabel(source.provider)}: {source.error ?? source.status}
+                        {discoveryProviderLabel(source.provider)}: {source.completenessReason ?? source.error ?? source.status}
                       </span>
                     ))}
                   </div>
@@ -929,6 +991,9 @@ export function SearchPage({
           {worldwideReport && (
             <p className="px-2 pb-1.5 text-xs text-base-content/60">
               Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
+              {scanBounds?.mode === 'browse_all'
+                ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
+                : ''}
             </p>
           )}
         </div>

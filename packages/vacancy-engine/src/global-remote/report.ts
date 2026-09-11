@@ -147,6 +147,16 @@ function sponsorMatchCoverage(stats: GlobalRemoteReport['statistics']): string {
   return `${checked.toLocaleString('en-US')}/${eligible.toLocaleString('en-US')}`;
 }
 
+function scanBoundsNotice(report: GlobalRemoteReport): string {
+  const bounds = report.scanBounds;
+  if (!bounds || bounds.mode !== 'browse_all') return '';
+  const cap = bounds.resultCap?.toLocaleString('en-US') ?? 'unbounded';
+  const count = bounds.resultCountBeforeCap.toLocaleString('en-US');
+  const state = bounds.complete ? 'Complete within cap' : 'Incomplete';
+  const reason = bounds.completenessReason ?? `Browse-all scan found ${count} vacancies with cap ${cap}.`;
+  return `<p class="warning"><strong>${escapeHtml(state)} browse-all report.</strong> ${escapeHtml(reason)}</p>`;
+}
+
 export function renderGlobalRemoteHtml(report: GlobalRemoteReport): string {
   const stats = report.statistics;
   return `<!doctype html>
@@ -157,6 +167,7 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
 </style></head><body>
 <h1>Global Remote Frontend Radar</h1>
 <p>Generated ${escapeHtml(report.generatedAt)} · Run ${escapeHtml(report.runId)}</p>
+${scanBoundsNotice(report)}
 <p class="warning">A discovery-board label is never treated as final proof. Strict matches require a current official employer/ATS source, fully remote work from the Netherlands, no US-only authorization gate, and a guaranteed USD annual base floor of ${money(report.criteria.minimumAnnualBaseUsd)}.</p>
 <div class="cards">
   <div class="card"><div class="number">${stats.strictMatches}</div>strict matches</div>
