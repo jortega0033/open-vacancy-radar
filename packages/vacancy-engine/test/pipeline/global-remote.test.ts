@@ -21,6 +21,7 @@ import {
   type DatabaseClient,
 } from '../../src/db/client.js';
 import { indSponsors } from '../../src/db/schema.js';
+import { applyFocusedScanCriteria } from '../../src/global-remote/focused-scan.js';
 import {
   applyWorkEligibilityEvidence,
   applyBrowseAllResultCap,
@@ -101,6 +102,26 @@ describe('global remote discovery aggregation', () => {
       provider: 'workable_global',
       title: 'Official title',
     });
+  });
+
+  it('retains duplicate role and employment metadata before focused filtering', () => {
+    const url = 'https://apply.workable.com/j/FRONTEND123';
+    const [merged] = uniqueDiscovery([
+      vacancy('jobicy', 'jobicy:duplicate', url, 'Engineer', {
+        description: 'TypeScript and frontend platform work.',
+        employmentType: 'full_time',
+      }),
+      vacancy('workable_global', 'workable_global:FRONTEND123', `${url}#details`, 'Engineer', {
+        description: 'Platform engineering role.',
+        employmentType: 'contract',
+      }),
+    ]);
+
+    expect(merged?.searchableText).toContain('Engineer TypeScript and frontend platform work.');
+    expect(merged?.employmentTypes).toEqual(['contract', 'full_time']);
+    expect(applyFocusedScanCriteria([merged!], {
+      role: 'typescript', country: null, employment: 'full_time',
+    }).vacancies).toHaveLength(1);
   });
 
   // Issue #278 acceptance checks: canonical job identity, sourceUrl/applyUrl semantics, and merged

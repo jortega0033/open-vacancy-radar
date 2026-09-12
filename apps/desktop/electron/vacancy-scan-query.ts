@@ -1,11 +1,43 @@
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 
+export type VacancyScanRequest =
+  | { mode: 'query'; query: string; country?: string; employment?: string }
+  | { mode: 'browse_all' };
+
 export function requiredScanQuery(query: unknown): string {
   const trimmed = typeof query === 'string' ? query.trim() : '';
   if (!trimmed) {
     throw new Error('Add a role or keyword before starting a new worldwide scan.');
   }
   return trimmed;
+}
+
+function optionalFocusedCriterion(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`${name} must be a string.`);
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  if (normalized.length > 100) throw new Error(`${name} is too long.`);
+  return normalized;
+}
+
+export function parseVacancyScanRequest(value: unknown): VacancyScanRequest {
+  if (typeof value === 'string') return { mode: 'query', query: requiredScanQuery(value) };
+  if (value && typeof value === 'object') {
+    const request = value as { mode?: unknown; query?: unknown; country?: unknown; employment?: unknown };
+    if (request.mode === 'query') {
+      const country = optionalFocusedCriterion(request.country, 'Country');
+      const employment = optionalFocusedCriterion(request.employment, 'Employment type');
+      return {
+        mode: 'query',
+        query: requiredScanQuery(request.query),
+        ...(country ? { country } : {}),
+        ...(employment ? { employment } : {}),
+      };
+    }
+    if (request.mode === 'browse_all') return { mode: 'browse_all' };
+  }
+  throw new Error('Unsupported vacancy scan request.');
 }
 
 function firstNonBlank(values: readonly string[]): string | null {

@@ -355,6 +355,54 @@ describe('SearchPage', () => {
     expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
   });
 
+  it('routes selected country and employment through a focused scan request', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+    render(<SearchPage />);
+    await screen.findByText('Remote Frontend Engineer');
+
+    enterSearchQuery('frontend');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), { target: { value: 'full_time' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({
+      mode: 'query', query: 'frontend', country: 'Germany', employment: 'full_time',
+    }));
+  });
+
+  it('only labels an engine-reported count as matching the focused scan', async () => {
+    const legacyReport = makeWorldwideReport([makeWorldwideVacancy()]);
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(legacyReport) });
+
+    render(<SearchPage />);
+    await screen.findByText('Remote Frontend Engineer');
+    expect(screen.queryByText(/matching the focused scan/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show a focused count for a browse-all report even when legacy data contains one', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+    report.scanBounds = { mode: 'browse_all', resultCap: 5_000, resultCountBeforeCap: 1, complete: true, completenessReason: null };
+    report.statistics.focusedMatches = 1;
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+    render(<SearchPage />);
+    await screen.findByText('Remote Frontend Engineer');
+    expect(screen.queryByText(/matching the focused scan/i)).not.toBeInTheDocument();
+  });
+
+  it('renders raw and focused counts supplied by the engine', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+    report.statistics.rawRowsFetched = 12;
+    report.statistics.focusedMatches = 3;
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+    render(<SearchPage />);
+    expect(await screen.findByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
+  });
+
   it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
     const report = makeWorldwideReport([makeWorldwideVacancy()]);
     const getReport = vi.fn().mockResolvedValue(report);

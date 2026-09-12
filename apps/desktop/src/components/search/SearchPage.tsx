@@ -650,9 +650,7 @@ export function SearchPage({
     if (!query) {
       setScanning(false);
       setScanError(undefined);
-      setScanGuard(
-        'Add a role or keyword before starting a new worldwide scan. Country, source, date and employment filters narrow the report already loaded here; they do not reduce the upstream network scan yet.',
-      );
+      setScanGuard('Add a role or keyword before starting a new worldwide scan.');
       return;
     }
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -666,7 +664,7 @@ export function SearchPage({
     // events build a clean list rather than mixing in a previous run's provisional rows.
     setPartialVacancies([]);
     try {
-      const report = await window.vacancyRadar.runScan({ mode: 'query', query });
+      const report = await window.vacancyRadar.runScan({ mode: 'query', query, ...(scanFilters.country !== 'all' ? { country: scanFilters.country } : {}), ...(scanFilters.employment !== 'any' ? { employment: scanFilters.employment } : {}) });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
         ...current,
@@ -760,7 +758,7 @@ export function SearchPage({
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
     setFilters((current) => ({ ...current, ...patch }));
-    const changesScanCriteria = patch.query !== undefined || patch.employment !== undefined;
+    const changesScanCriteria = patch.query !== undefined || patch.country !== undefined || patch.employment !== undefined;
     if (changesScanCriteria) return;
     setAppliedFilters((current) => ({ ...current, ...patch }));
     setPendingScanFilters((current) => (current ? { ...current, ...patch } : null));
@@ -1038,6 +1036,11 @@ export function SearchPage({
               Cached vacancies are browseable, but the app could not check whether the current
               search profile can score this report: {searchProfileError}
             </div>
+          )}
+          {worldwideReport && (
+            <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
+              {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+            </p>
           )}
           <div
             className={`mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0 ${scanning ? 'opacity-60 transition-opacity' : ''}`}

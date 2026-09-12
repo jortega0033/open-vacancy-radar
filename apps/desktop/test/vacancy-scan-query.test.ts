@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
-import { requiredScanQuery, scheduledScanQueryFromProfile } from '../electron/vacancy-scan-query.js';
+import { parseVacancyScanRequest, requiredScanQuery, scheduledScanQueryFromProfile } from '../electron/vacancy-scan-query.js';
 
 const ELECTRON_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'electron');
 
@@ -46,6 +46,14 @@ describe('requiredScanQuery', () => {
     expect(source('main.ts')).toMatch(
       /guardedIpc\.handle\(\s*'vacancy:run-scan'[\s\S]*runVacancyScan\(parseVacancyScanRequest\(request\)\)/,
     );
+  });
+
+  it('parses focused criteria and rejects malformed IPC payloads before scanning', () => {
+    expect(parseVacancyScanRequest({
+      mode: 'query', query: '  frontend  ', country: ' Netherlands ', employment: ' full_time ',
+    })).toEqual({ mode: 'query', query: 'frontend', country: 'Netherlands', employment: 'full_time' });
+    expect(parseVacancyScanRequest({ mode: 'browse_all' })).toEqual({ mode: 'browse_all' });
+    expect(() => parseVacancyScanRequest({ mode: 'query', query: 'frontend', country: 42 })).toThrow('Country must be a string.');
   });
 });
 
