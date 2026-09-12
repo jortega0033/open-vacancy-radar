@@ -39,7 +39,12 @@ export interface LettersLibraryProps {
  * The row is not itself clickable: the actions are real buttons, and a `<tr onClick>` wrapping
  * them would make "Duplicate" ambiguously also mean "Open" for keyboard and screen-reader users.
  */
-export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged }: LettersLibraryProps) {
+export function LettersLibrary({
+  refreshToken = 0,
+  onOpen,
+  onNew,
+  onCountChanged,
+}: LettersLibraryProps) {
   const [letters, setLetters] = useState<LetterRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
@@ -139,8 +144,11 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
       )}
 
       {rows.length > 0 && (
-        <div className="mt-4 overflow-x-auto">
-          <table className="table">
+        <div
+          className="ovr-responsive-table mt-4 overflow-x-auto"
+          data-testid="letters-responsive-table"
+        >
+          <table className="table ovr-responsive-table__table">
             <thead>
               <tr>
                 <th>Title</th>
@@ -155,21 +163,41 @@ export function LettersLibrary({ refreshToken = 0, onOpen, onNew, onCountChanged
             <tbody>
               {rows.map((letter) => (
                 <tr key={letter.id} className="ovr-row hover:bg-base-200">
-                  <td className="font-medium">{letter.title}</td>
-                  <td className="text-base-content/80">{letter.company || '—'}</td>
-                  <td className="text-base-content/80">{letter.role || '—'}</td>
-                  <td className="whitespace-nowrap text-base-content/70">
+                  <td className="ovr-responsive-table__cell font-medium" data-label="Title">
+                    {letter.title}
+                  </td>
+                  <td
+                    className="ovr-responsive-table__cell text-base-content/80"
+                    data-label="Company"
+                  >
+                    {letter.company || '—'}
+                  </td>
+                  <td className="ovr-responsive-table__cell text-base-content/80" data-label="Role">
+                    {letter.role || '—'}
+                  </td>
+                  <td
+                    className="ovr-responsive-table__cell whitespace-nowrap text-base-content/70"
+                    data-label="Type"
+                  >
                     {labelFor(LETTER_TYPE_OPTIONS, letter.type)}
                   </td>
-                  <td className="whitespace-nowrap text-base-content/60">
+                  <td
+                    className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
+                    data-label="Updated"
+                  >
                     {formatUpdatedAt(letter.updatedAt)}
                   </td>
-                  <td>
-                    <span className={`${LETTER_STATUS_BADGE_CLASS[letter.status]} whitespace-nowrap`}>
+                  <td className="ovr-responsive-table__cell" data-label="Status">
+                    <span
+                      className={`${LETTER_STATUS_BADGE_CLASS[letter.status]} whitespace-nowrap`}
+                    >
                       {labelFor(LETTER_STATUS_OPTIONS, letter.status)}
                     </span>
                   </td>
-                  <td className="text-right whitespace-nowrap">
+                  <td
+                    className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                    data-label="Actions"
+                  >
                     <button
                       className="btn btn-ghost btn-xs"
                       type="button"
