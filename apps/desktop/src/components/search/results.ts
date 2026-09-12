@@ -1,11 +1,13 @@
+import type {
+  DiscoveryVacancyAudit,
+  OfficialVacancyAudit,
+  GlobalRemoteReport,
+} from '@open-vacancy-radar/vacancy-engine';
 import {
   assessSalary,
   parseMinimumAnnualSalary,
-  type DiscoveryVacancyAudit,
-  type OfficialVacancyAudit,
-  type GlobalRemoteReport,
   type SalaryFilterCriteria,
-} from '@open-vacancy-radar/vacancy-engine';
+} from '@open-vacancy-radar/vacancy-engine/salary';
 import type { VacancyLead } from '../cv/types.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 

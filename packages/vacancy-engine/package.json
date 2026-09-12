@@ -6,6 +6,10 @@
   "description": "Deterministic vacancy-discovery engine for the worldwide job-board/official-source pipeline, with a best-effort Netherlands IND sponsor check, backed by an embedded SQLite store for standalone desktop distribution.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./salary": "./src/global-remote/salary.ts"
+  },
   "engines": {
     "node": ">=22"
   },
