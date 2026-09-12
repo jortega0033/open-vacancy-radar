@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { WorkspaceCounts } from './window.js';
 import { PROVIDER_LABEL } from './provider-labels.js';
-import { SearchPage } from './components/search/index.js';
+import { SearchPage, createSearchSessionState } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
@@ -38,7 +38,7 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
-  const [searchSelectedKey, setSearchSelectedKey] = useState<string | null>(null);
+  const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
 
@@ -133,7 +133,7 @@ export function App() {
     hasNavigatedRef.current = true;
     setPendingVacancy(vacancy);
     setLetterReturnAttemptId(null);
-    setSearchSelectedKey(vacancy.key ?? null);
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
     setNav('letters');
     void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
     void refreshCounts();
@@ -162,7 +162,7 @@ export function App() {
       void refreshCounts();
       return;
     }
-    setSearchSelectedKey(vacancy.key ?? null);
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
     setNav('search');
     void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
     void refreshCounts();
@@ -271,7 +271,8 @@ export function App() {
               onOpenSearchProfile={() => handleNavigate('settings')}
               onSavedJobsChanged={refreshCounts}
               onViewApplicationAttempt={handleViewApplicationAttempt}
-              preferredSelectedKey={searchSelectedKey}
+              session={searchSession}
+              onSessionChange={setSearchSession}
             />
           )}
           {nav === 'saved' && (

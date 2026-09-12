@@ -1,7 +1,12 @@
+import { StrictMode, useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
-import { SearchPage } from '../../../src/components/search/index.js';
+import {
+  SearchPage,
+  createSearchSessionState,
+  type SearchSessionState,
+} from '../../../src/components/search/index.js';
 import type { SavedJobRecord, VacancyEngineStatus, VacancyRadarBridge } from '../../../src/window.js';
 import type { ApplicationPipelineBridge } from '../../../electron/application-pipeline-types.js';
 import { installBridges } from '../../cv-bridges.js';
@@ -112,6 +117,11 @@ function enterSearchQuery(value = 'frontend engineer') {
   fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
     target: { value },
   });
+}
+
+function SearchSessionHarness({ initialSession }: { initialSession: SearchSessionState }) {
+  const [session, setSession] = useState(initialSession);
+  return <SearchPage session={session} onSessionChange={setSession} />;
 }
 
 /**
@@ -251,7 +261,19 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
     expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
 
-    vi.mocked(bridge.getReport).mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })]));
+    let resolveFinalReport: (report: GlobalRemoteReport) => void = () => {};
+    vi.mocked(bridge.getReport).mockReturnValue(new Promise((resolve) => {
+      resolveFinalReport = resolve;
+    }));
+
+    await waitFor(() => expect(bridge.getReport).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+    expect(screen.getByRole('button', { name: 'Run new scan' })).toBeDisabled();
+
+    resolveFinalReport({
+      ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Rescanned Role' })]),
+      runId: 'ww-run-2',
+      generatedAt: '2026-08-29T12:00:00.000Z',
+    });
 
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0), { timeout: 10_000 });
     expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument();
@@ -431,6 +453,52 @@ describe('SearchPage', () => {
     expect(screen.queryByText('Frontend Engineer')).not.toBeInTheDocument();
   });
 
+  it('merges delayed default-location hydration without clobbering edits already made', async () => {
+    let resolveSettings: (settings: typeof DEFAULT_SETTINGS) => void = () => {};
+    installBridges();
+    installWorkspaceBridge({
+      getSettings: vi.fn().mockReturnValue(new Promise((resolve) => {
+        resolveSettings = resolve;
+      })),
+    });
+    installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([
+          makeWorldwideVacancy({ title: 'Remote Engineer', location: 'Berlin, Germany' }),
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Engineer').length).toBeGreaterThan(0));
+    enterSearchQuery('Remote');
+    resolveSettings({ ...DEFAULT_SETTINGS, defaultLocation: 'Germany' });
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany'));
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+    expect(screen.getAllByText('Remote Engineer').length).toBeGreaterThan(0);
+  });
+
+  it('still completes a scan after React StrictMode replays effect cleanup', async () => {
+    installAllBridges({
+      runScan: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy({ title: 'Strict Mode Role' })]),
+      ),
+    });
+
+    render(
+      <StrictMode>
+        <SearchPage />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('Strict');
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+
+    await waitFor(() => expect(screen.getAllByText('Strict Mode Role').length).toBeGreaterThan(0));
+  });
+
   it('clicking Run new scan refreshes external sources while a report is already loaded', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
@@ -467,10 +535,10 @@ describe('SearchPage', () => {
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
   });
 
-  it('filters the loaded report while typing without starting a fresh scan', async () => {
+  it('keeps the applied report stable while editing a draft query', async () => {
     const bothVacancies = makeWorldwideReport([
       makeWorldwideVacancy(),
-      makeWorldwideVacancy({ key: 'ww-2', title: 'Frontend Developer', company: 'Freeday' }),
+      makeWorldwideVacancy({ key: 'ww-2', provider: 'dice', title: 'Frontend Developer', company: 'Freeday' }),
     ]);
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(bothVacancies),
@@ -486,7 +554,7 @@ describe('SearchPage', () => {
     });
 
     expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
-    await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
@@ -504,12 +572,17 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Dice Frontend Role').length).toBeGreaterThan(0);
 
+    const resultsScroller = screen.getByLabelText('Vacancy results');
+    Object.defineProperty(resultsScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
+    fireEvent.scroll(resultsScroller);
+
     fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
       target: { value: 'dice' },
     });
 
     await waitFor(() => expect(screen.queryByText('Remote Frontend Engineer')).not.toBeInTheDocument());
     expect(screen.getAllByText('Dice Frontend Role').length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(0);
     expect(bridge.runScan).not.toHaveBeenCalled();
   });
 
@@ -533,7 +606,7 @@ describe('SearchPage', () => {
   it('Clear filters applies immediately, with no separate Search click needed', async () => {
     const bothVacancies = makeWorldwideReport([
       makeWorldwideVacancy(),
-      makeWorldwideVacancy({ key: 'ww-2', title: 'Frontend Developer', company: 'Freeday' }),
+      makeWorldwideVacancy({ key: 'ww-2', provider: 'dice', title: 'Frontend Developer', company: 'Freeday' }),
     ]);
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(bothVacancies),
@@ -543,8 +616,8 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
-      target: { value: 'Remote' },
+    fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
+      target: { value: 'remotive' },
     });
     await waitFor(() => expect(screen.queryByText('Frontend Developer')).not.toBeInTheDocument());
 
@@ -591,6 +664,35 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
     expect(screen.getAllByText('Z Frontend Role 29').length).toBeGreaterThan(0);
+  });
+
+  it('clamps a stale page and selects the first vacancy on the surviving page', async () => {
+    const vacancies = Array.from({ length: 30 }, (_, index) =>
+      makeWorldwideVacancy({
+        key: `ww-${index}`,
+        title: `Frontend Role ${String(index).padStart(2, '0')}`,
+      }),
+    );
+    const getReport = vi.fn();
+    installAllBridges({ getReport });
+    const initialSession: SearchSessionState = {
+      ...createSearchSessionState(),
+      report: makeWorldwideReport(vacancies),
+      reportHydrated: true,
+      settingsHydrated: true,
+      selectedKey: 'removed-vacancy',
+      page: 99,
+      listScrollTop: 88,
+      detailScrollTop: 144,
+    };
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 25' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(0);
+    expect(screen.getByLabelText('Vacancy details').scrollTop).toBe(0);
+    expect(getReport).not.toHaveBeenCalled();
   });
 
   it('surfaces partial worldwide source health and snapshot age', async () => {
@@ -785,6 +887,70 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Run the first scan' })).toBeEnabled();
+  });
+
+  it('keeps the existing report, selection, page and scroll after a rescan fails', async () => {
+    const vacancies = Array.from({ length: 30 }, (_, index) =>
+      makeWorldwideVacancy({
+        key: `ww-${index}`,
+        title: `Frontend Role ${String(index).padStart(2, '0')}`,
+      }),
+    );
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport(vacancies)),
+      runScan: vi.fn().mockRejectedValue(new Error('network unreachable')),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+    enterSearchQuery('Frontend');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
+
+    const listScroller = screen.getByLabelText('Vacancy results');
+    Object.defineProperty(listScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
+    fireEvent.scroll(listScroller);
+    const detailScroller = screen.getByLabelText('Vacancy details');
+    Object.defineProperty(detailScroller, 'scrollTop', { configurable: true, value: 128, writable: true });
+    fireEvent.scroll(detailScroller);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+
+    await waitFor(() => expect(screen.getByText(/scan failed: network unreachable/i)).toBeInTheDocument());
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(84);
+    expect(screen.getByLabelText('Vacancy details').scrollTop).toBe(128);
+  });
+
+  it('does not resurrect scan-start filters when Clear filters is clicked during the scan', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy({ title: 'Previous Frontend Role' })]),
+      ),
+      runScan: vi.fn().mockReturnValue(scanPromise),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Previous Frontend Role').length).toBeGreaterThan(0));
+    enterSearchQuery('Frontend');
+    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    resolveScan({
+      ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Backend Role' })]),
+      runId: 'ww-run-2',
+      generatedAt: '2026-08-29T12:00:00.000Z',
+    });
+
+    await waitFor(() => expect(screen.getAllByText('Backend Role').length).toBeGreaterThan(0));
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
   });
 
   it('a scan-failure Retry button re-runs the scan and clears the error on success', async () => {
