@@ -295,6 +295,9 @@ const workspaceApi: WorkspaceBridge = {
   getCounts() {
     return ipcRenderer.invoke('workspace:counts:get');
   },
+  resetApplicationData() {
+    return ipcRenderer.invoke('workspace:data:reset');
+  },
 
   listSavedJobs() {
     return ipcRenderer.invoke('workspace:saved-jobs:list');

@@ -50,8 +50,8 @@ On top of that, the desktop app is a full personal tracker:
 - **Letters:** generate motivation letters, cover letters, recruiter messages, or short
   application-form blurbs from a CV + vacancy pair, in a chosen tone and length, with a library of
   saved drafts.
-- **Settings:** theme (light/dark/system), density, default market, and data export/reset, all
-  persisted locally.
+- **Settings:** theme (light/dark/system), density, default market, application-data reset, and
+  documented manual backup, all persisted locally.
 - **AI Runtime:** the AgentDock provider panel: pick a provider (Claude Code, Codex) and, where
   supported, a specific model, and watch a run's events stream live.
 

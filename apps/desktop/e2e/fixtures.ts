@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,11 @@ export const test = base.extend<Fixtures>({
   // eslint-disable-next-line no-empty-pattern
   electronApp: async ({}, use) => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'ovr-e2e-'));
-    const app = await launchApp(userDataDir);
+    const vacancyEngineDataRoot = join(userDataDir, 'vacancy-engine');
+    cpSync(fileURLToPath(new URL('../../../packages/vacancy-engine/config', import.meta.url)), join(vacancyEngineDataRoot, 'config'), {
+      recursive: true,
+    });
+    const app = await launchApp(userDataDir, { vacancyEngineDataRoot });
     await use(app);
     await app.close();
     rmSync(userDataDir, { recursive: true, force: true });

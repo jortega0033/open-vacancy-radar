@@ -47,6 +47,7 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
+import { ApplicationDataResetGate } from './application-data-reset-gate.js';
 import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
 import {
   recoverInterruptedApplicationAttempts,
@@ -995,6 +996,8 @@ const guardedIpc = createGuardedIpc(ipcMain, {
     console.warn(`[ipc-sender-guard] refused an invoke on '${channel}' from an unverified sender`),
 });
 
+const applicationDataResetGate = new ApplicationDataResetGate();
+
 guardedIpc.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
 
 guardedIpc.handle('daemon:list-providers', async () => {
@@ -1255,10 +1258,12 @@ function parseAttemptId(value: unknown): string {
 }
 
 guardedIpc.handle('application-queue:enqueue', async (_event, input: unknown) => {
-  const attemptId = parseAttemptId(input);
-  const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
-  if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
-  return ((await res.json()) as { entry: unknown }).entry;
+  return applicationDataResetGate.runMutation(async () => {
+    const attemptId = parseAttemptId(input);
+    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+    return ((await res.json()) as { entry: unknown }).entry;
+  });
 });
 
 /**
@@ -1276,10 +1281,18 @@ async function applicationQueueTransition(verb: 'pause' | 'resume' | 'skip' | 'c
   if (!res.ok) throw new Error(await applicationQueueRefusal(res, `could not ${verb} this attempt`));
   return ((await res.json()) as { entry: unknown }).entry;
 }
-guardedIpc.handle('application-queue:pause', (_event, input: unknown) => applicationQueueTransition('pause', input));
-guardedIpc.handle('application-queue:resume', (_event, input: unknown) => applicationQueueTransition('resume', input));
-guardedIpc.handle('application-queue:skip', (_event, input: unknown) => applicationQueueTransition('skip', input));
-guardedIpc.handle('application-queue:cancel', (_event, input: unknown) => applicationQueueTransition('cancel', input));
+guardedIpc.handle('application-queue:pause', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('pause', input)),
+);
+guardedIpc.handle('application-queue:resume', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('resume', input)),
+);
+guardedIpc.handle('application-queue:skip', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('skip', input)),
+);
+guardedIpc.handle('application-queue:cancel', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('cancel', input)),
+);
 
 guardedIpc.handle('application-queue:get-status', async () => {
   const body = await daemonGetJson('/v2/applications');
@@ -1364,23 +1377,27 @@ function parseApplyFieldMapInput(input: unknown): ApplyApplicationFieldMapInput 
 }
 
 guardedIpc.handle('application-executor:open-review', async (_event, input: unknown) => {
-  return openApplicationReview(parseOpenReviewInput(input));
+  return applicationDataResetGate.runMutation(() => openApplicationReview(parseOpenReviewInput(input)));
 });
 
 guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
-  const parsed = parseApplyFieldMapInput(input);
-  const result = await applyApplicationFieldMap(await ensureWorkspaceDb(), parsed);
-  // An upload control the executor may not drive is handed to the user as a real, visible page
-  // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
-  // still carries `manualHandoff` so the review UI can say which document to pick.
-  if (result.manualHandoff && mainWindow) {
-    showApplicationReviewForHandoff(parsed.attemptId, mainWindow, await ensureWorkspaceDb());
-  }
-  return result;
+  return applicationDataResetGate.runMutation(async () => {
+    const parsed = parseApplyFieldMapInput(input);
+    const result = await applyApplicationFieldMap(await ensureWorkspaceDb(), parsed);
+    // An upload control the executor may not drive is handed to the user as a real, visible page
+    // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
+    // still carries `manualHandoff` so the review UI can say which document to pick.
+    if (result.manualHandoff && mainWindow) {
+      showApplicationReviewForHandoff(parsed.attemptId, mainWindow, await ensureWorkspaceDb());
+    }
+    return result;
+  });
 });
 
 guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {
-  return submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () =>
+    submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
 });
 
 guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: unknown) => {
@@ -1417,29 +1434,37 @@ function parseRequestAutomationGrantInput(input: unknown): { policyId: string; d
 }
 
 guardedIpc.handle('application-executor:request-automation-grant', async (_event, input: unknown) => {
-  const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
-  const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
-  return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+  return applicationDataResetGate.runMutation(async () => {
+    const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
+    const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
+    return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+  });
 });
 
 guardedIpc.handle('application-executor:schedule-automatic-submission', async (_event, input: unknown) => {
-  return evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () =>
+    evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
 });
 
 guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', async (_event, input: unknown) => {
-  cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () => {
+    cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  });
 });
 
 guardedIpc.handle('application-executor:record-user-reported-submission', async (_event, input: unknown) => {
-  const db = await ensureWorkspaceDb();
-  const attemptId = parseAttemptId(input);
-  const attempt = workspace.getApplicationAttempt(db, attemptId);
-  const manualState = attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user';
-  const artifacts = workspace.listApplicationArtifacts(db, attemptId);
-  if (!manualState || resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) !== undefined || artifacts.length === 0) {
-    throw new Error('this attempt is not in a prepared manual-application state');
-  }
-  return recordUserReportedSubmission(db, attemptId);
+  return applicationDataResetGate.runMutation(async () => {
+    const db = await ensureWorkspaceDb();
+    const attemptId = parseAttemptId(input);
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    const manualState = attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user';
+    const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+    if (!manualState || resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) !== undefined || artifacts.length === 0) {
+      throw new Error('this attempt is not in a prepared manual-application state');
+    }
+    return recordUserReportedSubmission(db, attemptId);
+  });
 });
 
 guardedIpc.handle('application-executor:save-artifact', async (_event, input: unknown) => {
@@ -1627,35 +1652,39 @@ async function startPipelineForSavedJob(savedJobId: string) {
 }
 
 guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const savedJobId = parseId(source.savedJobId, 'savedJobId');
-  return startPipelineForSavedJob(savedJobId);
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const savedJobId = parseId(source.savedJobId, 'savedJobId');
+    return startPipelineForSavedJob(savedJobId);
+  });
 });
 
 guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
-  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
-  if (!row) throw new Error('this vacancy is no longer available in the latest report');
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
+    const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+    if (!row) throw new Error('this vacancy is no longer available in the latest report');
 
-  const db = await ensureWorkspaceDb();
-  let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
-  const created = savedJob === undefined;
-  savedJob ??= workspace.createSavedJob(db, {
-    role: row.title,
-    company: row.company,
-    location: row.location,
-    vacancyKey: row.key,
-    matchPercent: row.profileScore,
-    sourceUrl: row.url,
-    status: 'considering',
+    const db = await ensureWorkspaceDb();
+    let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
+    const created = savedJob === undefined;
+    savedJob ??= workspace.createSavedJob(db, {
+      role: row.title,
+      company: row.company,
+      location: row.location,
+      vacancyKey: row.key,
+      matchPercent: row.profileScore,
+      sourceUrl: row.url,
+      status: 'considering',
+    });
+
+    const result = await startPipelineForSavedJob(savedJob.id);
+    if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
+      return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
+    }
+    return { ...result, savedJobId: savedJob.id, created };
   });
-
-  const result = await startPipelineForSavedJob(savedJob.id);
-  if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
-    return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
-  }
-  return { ...result, savedJobId: savedJob.id, created };
 });
 
 async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
@@ -1665,20 +1694,26 @@ async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
 }
 
 guardedIpc.handle('application-pipeline:retry-tailoring', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  return restartTailoring(parseId(source.attemptId, 'attemptId'), 'ai');
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'ai');
+  });
 });
 
 guardedIpc.handle('application-pipeline:use-original-cv', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  return restartTailoring(parseId(source.attemptId, 'attemptId'), 'original');
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'original');
+  });
 });
 
 guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) => {
-  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
-  const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
-  if (result.ok) void runApplicationPipelineTick();
-  return result;
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+    if (result.ok) void runApplicationPipelineTick();
+    return result;
+  });
 });
 
 guardedIpc.handle('dialog:select-directory', async () => {
@@ -1962,10 +1997,10 @@ let automaticSubmissionTickInFlight = false;
  */
 function scheduleAutomaticSubmissionTick(): void {
   setInterval(() => {
-    if (automaticSubmissionTickInFlight) return;
+    if (automaticSubmissionTickInFlight || applicationDataResetGate.isResetting) return;
     automaticSubmissionTickInFlight = true;
-    void ensureWorkspaceDb()
-      .then((db) => fireDueAutomaticSubmissions(db))
+    void applicationDataResetGate
+      .runMutation(async () => fireDueAutomaticSubmissions(await ensureWorkspaceDb()))
       .catch((error: unknown) => {
         console.error('[automatic-submission] scheduled tick failed', error);
       })
@@ -1991,19 +2026,21 @@ let applicationPipelineTickInFlight = false;
  * a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
  * surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read. */
 async function runApplicationPipelineTick(): Promise<void> {
-  if (applicationPipelineTickInFlight) return;
+  if (applicationPipelineTickInFlight || applicationDataResetGate.isResetting) return;
   applicationPipelineTickInFlight = true;
   try {
-    const deps = await applicationPipelineDeps();
-    const { result } = await runNextApplicationAttempt(deps);
-    if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
-      const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
-      notifyApplicationPreparation({
-        company: attempt.company,
-        role: attempt.role,
-        needsUser: result.checkpoint === 'needs_user',
-      });
-    }
+    await applicationDataResetGate.runMutation(async () => {
+      const deps = await applicationPipelineDeps();
+      const { result } = await runNextApplicationAttempt(deps);
+      if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
+        const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
+        notifyApplicationPreparation({
+          company: attempt.company,
+          role: attempt.role,
+          needsUser: result.checkpoint === 'needs_user',
+        });
+      }
+    });
   } catch (error: unknown) {
     console.error('[application-pipeline] preparation tick failed', error);
   } finally {
@@ -2026,7 +2063,9 @@ function scheduleApplicationPipelineTick(): void {
  */
 async function recoverApplicationPipelineOnStartup(): Promise<void> {
   try {
-    const recovered = await recoverInterruptedApplicationAttempts(await applicationPipelineDeps());
+    const recovered = await applicationDataResetGate.runMutation(async () =>
+      recoverInterruptedApplicationAttempts(await applicationPipelineDeps()),
+    );
     if (recovered.length > 0) {
       console.warn('[application-pipeline] re-queued interrupted application attempts', { count: recovered.length });
     }
@@ -2083,24 +2122,26 @@ function nextProfileVersion(): string {
  * stale scores survive a profile edit.
  */
 guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
-  const patch = parseCandidateProfilePatch(rawPatch);
-  return withProfileSaveQueue(async () => {
-    const path = await candidateProfilePath();
-    const current = await loadCandidateProfile(path);
-    const next: CandidateProfile = candidateProfileSchema.parse({
-      ...current,
-      ...patch,
-      constraints: { ...current.constraints, ...patch.constraints },
-      profileVersion: nextProfileVersion(),
+  return applicationDataResetGate.runMutation(() => {
+    const patch = parseCandidateProfilePatch(rawPatch);
+    return withProfileSaveQueue(async () => {
+      const path = await candidateProfilePath();
+      const current = await loadCandidateProfile(path);
+      const next: CandidateProfile = candidateProfileSchema.parse({
+        ...current,
+        ...patch,
+        constraints: { ...current.constraints, ...patch.constraints },
+        profileVersion: nextProfileVersion(),
+      });
+      const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+        await rename(temporary, path);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+      return next;
     });
-    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-      await rename(temporary, path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-    return next;
   });
 });
 
@@ -2120,29 +2161,97 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
 guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
-  const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
-  // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
-  minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
-  autoScanEnabled = updated.autoScanEnabled;
-  return updated;
+  return applicationDataResetGate.runMutation(async () => {
+    const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
+    // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
+    minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
+    autoScanEnabled = updated.autoScanEnabled;
+    return updated;
+  });
 });
 
 /** Badge counts for the sidebar: a dedicated read so the shell never has to fetch three lists. */
 guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
 
+guardedIpc.handle('workspace:data:reset', async () => {
+  return applicationDataResetGate.runReset(async () => {
+    if (applicationPipelineTickInFlight || automaticSubmissionTickInFlight) {
+      throw new Error('wait for the active application task to finish before resetting data');
+    }
+
+    closeAllApplicationReviews();
+    const queueStatus = await daemonGetJson('/v2/applications');
+    const lease = queueStatus?.lease;
+    const expectedLeaseId =
+      lease && typeof lease === 'object' && typeof (lease as { leaseId?: unknown }).leaseId === 'string'
+        ? (lease as { leaseId: string }).leaseId
+        : null;
+    const queueReset = await daemonFetch('/v2/applications', { method: 'DELETE', body: { expectedLeaseId } });
+    if (!queueReset.ok) throw new Error('the application queue could not be reset');
+
+    const result = workspace.resetApplicationData(await ensureWorkspaceDb());
+    try {
+      await rm(applicationArtifactStorageRoot(), { recursive: true, force: true });
+
+      await withProfileSaveQueue(async () => {
+        const path = await candidateProfilePath();
+        const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+        const emptyProfile: CandidateProfile = candidateProfileSchema.parse({
+          profileVersion: nextProfileVersion(),
+          candidateName: '',
+          currentRole: '',
+          location: '',
+          experienceYears: 0,
+          strongestSkills: [],
+          additionalSkills: [],
+          targetRoles: [],
+          consideredRoles: [],
+          excludedRoleFamilies: [],
+          constraints: {
+            professionalLanguage: 'English',
+            dutchRequired: false,
+            primaryCountry: '',
+            allowRemoteEuSupportingNetherlands: false,
+            minimumMonthlyBaseEur: 0,
+          },
+        });
+        await mkdir(dirname(path), { recursive: true });
+        try {
+          await writeFile(temporary, `${JSON.stringify(emptyProfile, null, 2)}\n`, 'utf8');
+          await rename(temporary, path);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      });
+    } catch {
+      throw new Error('application records were reset, but local files could not be cleared; close open files and retry');
+    }
+
+    minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
+    autoScanEnabled = result.settings.autoScanEnabled;
+    return result;
+  });
+});
+
 guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
-  workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
-  workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) =>
@@ -2150,35 +2259,49 @@ guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) 
 );
 
 guardedIpc.handle('workspace:applications:create', async (_event, input: unknown) =>
-  workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:applications:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
-  workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
-  workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
-  workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
-  workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /**
@@ -2245,20 +2368,28 @@ guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:letters:create', async (_event, input: unknown) =>
-  workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:letters:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:letters:delete', async (_event, input: unknown) =>
-  workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
-  workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /**
@@ -2276,8 +2407,10 @@ guardedIpc.handle('workspace:application-attempts:get', async (_event, input: un
 );
 
 guardedIpc.handle('workspace:application-attempts:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: unknown) => {
@@ -2294,7 +2427,9 @@ guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: 
 guardedIpc.handle('workspace:automation-grants:list', async () => workspace.listAutomationGrants(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:automation-grants:revoke', async (_event, input: unknown) =>
-  workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /*

@@ -14,6 +14,9 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/coverage/**',
       '**/release/**',
+      '**/.claude/worktrees/**',
+      '**/.codex/worktrees/**',
+      '**/artifacts/**',
     ],
   },
   {

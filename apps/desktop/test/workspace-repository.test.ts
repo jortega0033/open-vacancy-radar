@@ -59,6 +59,80 @@ describe('settings', () => {
     // sidebar before anything has called getSettings).
     expect(workspace.updateSettings(db, { sidebarCollapsed: true }).sidebarCollapsed).toBe(true);
   });
+
+  it('resets all personal records and recreates settings from schema defaults', () => {
+    const job = workspace.createSavedJob(db, { ...JOB, location: 'Amsterdam' });
+    const cv = workspace.createCvDocument(db, {
+      name: 'Resume',
+      kind: 'manual',
+      isDefault: true,
+      profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    });
+    const letter = workspace.createLetter(db, {
+      title: 'Letter',
+      company: JOB.company,
+      role: JOB.role,
+      type: 'cover_letter',
+      tone: 'natural',
+      length: 'standard',
+      cvId: cv.id,
+    });
+    workspace.createApplication(db, {
+      savedJobId: job.id,
+      role: JOB.role,
+      company: JOB.company,
+      cvId: cv.id,
+      letterId: letter.id,
+    });
+    const attempt = workspace.createApplicationAttempt(db, {
+      company: JOB.company,
+      role: JOB.role,
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshotHash: 'b'.repeat(64),
+    });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 4,
+      contentHash: 'c'.repeat(64),
+    });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'user_reported',
+      source: 'user_reported',
+      destination: 'https://example.invalid/apply',
+      evidenceKind: 'user_statement',
+      evidenceReference: 'submitted manually',
+    });
+    workspace.createAutomationGrant(db, {
+      policyId: 'fixture-policy',
+      expiresAt: '2026-12-01T00:00:00.000Z',
+    });
+    workspace.updateSettings(db, { theme: 'dark', defaultCvId: cv.id });
+
+    const result = workspace.resetApplicationData(db);
+
+    expect(result.deleted).toEqual({
+      savedJobs: 1,
+      applications: 1,
+      cvDocuments: 1,
+      letters: 1,
+      applicationAttempts: 1,
+      applicationArtifacts: 1,
+      submissionReceipts: 1,
+      automationGrants: 1,
+    });
+    expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null });
+    expect(workspace.listSavedJobs(db)).toEqual([]);
+    expect(workspace.listApplications(db)).toEqual([]);
+    expect(workspace.listCvDocuments(db)).toEqual([]);
+    expect(workspace.listLetters(db)).toEqual([]);
+    expect(workspace.listApplicationAttempts(db)).toEqual([]);
+    expect(workspace.listAutomationGrants(db)).toEqual([]);
+    expect(db.select().from(schema.applicationArtifacts).all()).toEqual([]);
+    expect(db.select().from(schema.applicationSubmissionReceipts).all()).toEqual([]);
+  });
 });
 
 describe('saved jobs', () => {

@@ -654,6 +654,21 @@ export interface WorkspaceCounts {
   letters: number;
 }
 
+/** Result of the main-process-owned destructive reset. */
+export interface ApplicationDataResetResult {
+  settings: AppSettingsRecord;
+  deleted: {
+    savedJobs: number;
+    applications: number;
+    cvDocuments: number;
+    letters: number;
+    applicationAttempts: number;
+    applicationArtifacts: number;
+    submissionReceipts: number;
+    automationGrants: number;
+  };
+}
+
 /**
  * The `window.workspace` capability list, declared here (not in preload.ts) so the renderer can
  * refer to it without a type reference into the preload module itself. preload.ts implements this
@@ -669,6 +684,7 @@ export interface WorkspaceBridge {
   getSettings(): Promise<AppSettingsRecord>;
   updateSettings(patch: AppSettingsPatch): Promise<AppSettingsRecord>;
   getCounts(): Promise<WorkspaceCounts>;
+  resetApplicationData(): Promise<ApplicationDataResetResult>;
 
   listSavedJobs(): Promise<SavedJobRecord[]>;
   createSavedJob(input: SavedJobInput): Promise<SavedJobRecord>;

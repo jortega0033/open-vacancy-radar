@@ -92,8 +92,8 @@ case, fall back to the manual command it automates:
       `package-windows.yml` runs on every push/PR), computes its SHA-256, and publishes both as a
       GitHub Release -- using `docs/release-notes-v<version>.md` from step 1 as the release notes
       if that file exists, or `gh`'s auto-generated notes otherwise. Watch the workflow run to
-      confirm it succeeds; if it fails, the release was not published and nothing needs rolling
-      back.
+      confirm it succeeds. The publish step is idempotent: rerunning for an existing tag updates
+      its notes and replaces both assets instead of failing because the release already exists.
 - [ ] Confirm the published release: the installer and a matching `.sha256` file are both attached,
       and the release notes are what step 1 wrote (not the auto-generated fallback, unless that was
       intended).

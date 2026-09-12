@@ -29,10 +29,10 @@ Everything the app stores lives in Electron's per-user application-data director
   stage the attempt has reached, and records of the tailored CV/cover-letter files staged for it.
   This is the same category of personal/third-party data `workspace.db` already holds (your CV
   content, in this case a full third-party job posting's text), stored so a crash or a closed
-  window can never silently duplicate or lose an in-progress application. Nothing in this table
-  causes an application to be sent — as of this stage of the feature, nothing reads a browser,
-  fills a form, or submits anything at all; see the auto-apply tracking issues for what each
-  later stage adds and when.
+  window doesn't silently duplicate or lose an in-progress application. Real employer URLs stop
+  at explicit human review and continue on the employer site. Automated form filling and
+  submission are enabled only for the bundled test fixture; no production target policy permits
+  them in this release.
 
   Since #275 each attempt also stores a derived *requisition identity* — the employer and job id
   read out of the apply URL, plus that URL reduced to the parts that identify the posting — so the
@@ -172,9 +172,10 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   actually done, and quietly discarding it would undermine the very durability #198 exists to
   provide. Deleting the `applications` row an attempt is linked to does not delete the attempt
   itself (`on delete set null`); deleting `workspace.db` removes the database records, but not the
-  generated files under `application-artifacts/` themselves — those are only removed by deleting
-  that directory, or (for one attempt's files) by the app's own artifact-deletion path. Generated
-  artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
+  generated files under `application-artifacts/` themselves. Settings > Advanced > Reset
+  application data deletes all attempt rows, submission receipts, automation grants, queue ids,
+  generated files and the search profile together with saved jobs, applications, CVs and letters.
+  Generated artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
   row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
   runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they
   are bounded per attempt by a fixed count quota, are never pruned on their own, and are deleted
@@ -209,7 +210,7 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
 - It cannot audit or control what an installed `claude`/`codex` CLI, or an MCP provider you
   connect, does with data once it leaves this app's process — that's between you and that
   provider.
-- There is currently no built-in export or backup tool beyond copying the files above yourself; see
+- There is currently no built-in export or backup tool beyond copying the documented files yourself; see
   [docs/troubleshooting.md#backing-up-and-restoring-your-workspace](troubleshooting.md#backing-up-and-restoring-your-workspace).
 
 ## Questions or a data-handling concern
