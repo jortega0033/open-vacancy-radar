@@ -1568,6 +1568,14 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
         prompt,
       });
     },
+    async generateCoverLetter(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
     loadProfile: loadApplicationValueProfile,
     log: (message, meta) => console.warn(`[application-pipeline] ${message}`, meta ?? {}),
   };

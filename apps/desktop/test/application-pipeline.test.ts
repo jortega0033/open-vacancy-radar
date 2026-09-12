@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jsPDF } from 'jspdf';
@@ -453,6 +453,15 @@ function resumePdf(): Uint8Array {
   return new Uint8Array(doc.output('arraybuffer'));
 }
 
+function coverLetterPdf(): Uint8Array {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  doc.setProperties({ title: 'Cover Letter' });
+  doc.setFontSize(11);
+  ['Cover Letter', 'Dear Northwind Freight hiring team,', 'I am applying for the Logistics Platform Engineer role.', 'Jamie Rivera']
+    .forEach((line, index) => doc.text(line, 56, 60 + index * 18));
+  return new Uint8Array(doc.output('arraybuffer'));
+}
+
 let dir: string;
 let db: WorkspaceDb;
 let closeDb: () => void;
@@ -460,6 +469,7 @@ let queue: FakeQueue;
 let deps: ApplicationPipelineDeps;
 let generateFieldMap: ReturnType<typeof vi.fn>;
 let generateTailoredResume: ReturnType<typeof vi.fn>;
+let generateCoverLetter: ReturnType<typeof vi.fn>;
 
 function makeDeps(database: WorkspaceDb): ApplicationPipelineDeps {
   return {
@@ -468,6 +478,7 @@ function makeDeps(database: WorkspaceDb): ApplicationPipelineDeps {
     queue: queue.port,
     generateFieldMap: generateFieldMap as unknown as ApplicationPipelineDeps['generateFieldMap'],
     generateTailoredResume: generateTailoredResume as unknown as ApplicationPipelineDeps['generateTailoredResume'],
+    generateCoverLetter: generateCoverLetter as unknown as ApplicationPipelineDeps['generateCoverLetter'],
     loadProfile: async () => ({
       candidateName: 'Jamie Rivera',
       currentRole: 'Senior Engineer',
@@ -508,6 +519,10 @@ beforeEach(() => {
       education: [],
     }),
   }));
+  generateCoverLetter = vi.fn(async () => ({
+    ok: true,
+    text: '{"factIds":["summary","experience-1","skill-1"]}',
+  }));
   queue = new FakeQueue();
   deps = makeDeps(db);
   seedCv(db);
@@ -519,15 +534,15 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** Every run needs one PDF per document staged; this application asks for a CV and nothing else. */
-function queueOneCvRender(): void {
-  printQueue.push(resumePdf());
+/** Every normal run stages the attempt's tailored CV and its generated or requested letter. */
+function queueApplicationDocumentRenders(): void {
+  printQueue.push(resumePdf(), coverLetterPdf());
 }
 
 async function prepareOneApplication(): Promise<string> {
   const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
   if (!started.ok || !started.attemptId) throw new Error(`start refused: ${started.reason ?? 'unknown'}`);
-  queueOneCvRender();
+  queueApplicationDocumentRenders();
   await pipeline.runNextApplicationAttempt(deps);
   return started.attemptId;
 }
@@ -544,7 +559,7 @@ describe('acceptance 1: the production entry point reaches ready-for-review', ()
     expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpoint).toBe('queued');
     expect(createApplicationView).not.toHaveBeenCalled();
 
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
     expect(ticked.result?.outcome).toBe('ready');
 
@@ -561,7 +576,7 @@ describe('acceptance 1: the production entry point reaches ready-for-review', ()
 
     // A real CV PDF was staged, accepted, and registered against this attempt.
     const artifacts = workspace.listApplicationArtifacts(db, attempt.id);
-    expect(artifacts.map((artifact) => artifact.kind)).toEqual(['cv_pdf']);
+    expect(artifacts.map((artifact) => artifact.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
     expect(artifacts[0]!.byteSize).toBeGreaterThan(0);
 
     // The queue lease was taken and given back.
@@ -690,7 +705,7 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
       expect(attempt.checkpoint).toBe('ready');
       expect(attempt.preparedFields?.company).toBe(VACANCY.company);
       expect(attempt.preparedFields?.fields.find((field) => field.label === 'fullName')?.value).toBe('Jamie Rivera');
-      expect(workspace.listApplicationArtifacts(reopened.db, attemptId)).toHaveLength(1);
+      expect(workspace.listApplicationArtifacts(reopened.db, attemptId)).toHaveLength(2);
     } finally {
       reopened.close();
     }
@@ -709,7 +724,7 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
     // A pause is durable across a restart in the same way everything else here is: it is the
     // daemon's own queue state plus this attempt's own checkpoint, both of them written down.
     queue.resume(started.attemptId!);
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const resumed = await pipeline.runNextApplicationAttempt(deps);
     expect(resumed.result?.outcome).toBe('ready');
   });
@@ -757,6 +772,38 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
     expect(afterRecovery.checkpoint).toBe('needs_user');
     expect(afterRecovery.checkpointDetail).toBe('apply on the site yourself');
     expect(queue.enqueued).not.toContain(blocked.id);
+  });
+
+  it('replaces staged documents after an interrupted run instead of duplicating them', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    let stateReads = 0;
+    const interruptedDeps: ApplicationPipelineDeps = {
+      ...deps,
+      queue: {
+        ...queue.port,
+        entryState: async (attemptId) => {
+          stateReads += 1;
+          if (stateReads === 2) throw new Error('simulated interruption after staging');
+          return queue.port.entryState(attemptId);
+        },
+      },
+    };
+    queueApplicationDocumentRenders();
+
+    await expect(pipeline.runApplicationAttempt(interruptedDeps, started.attemptId!))
+      .rejects.toThrow('simulated interruption after staging');
+    const firstArtifacts = workspace.listApplicationArtifacts(db, started.attemptId!);
+    expect(firstArtifacts.map((artifact) => artifact.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpoint).toBe('rendering');
+
+    await pipeline.recoverInterruptedApplicationAttempts(deps);
+    queueApplicationDocumentRenders();
+    await expect(pipeline.runApplicationAttempt(deps, started.attemptId!)).resolves.toMatchObject({ outcome: 'ready' });
+
+    const currentArtifacts = workspace.listApplicationArtifacts(db, started.attemptId!);
+    expect(currentArtifacts.map((artifact) => artifact.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
+    expect(currentArtifacts.map((artifact) => artifact.id)).not.toEqual(firstArtifacts.map((artifact) => artifact.id));
+    expect(readdirSync(join(dir, 'application-artifacts', started.attemptId!))).toHaveLength(2);
   });
 
   it('re-queues an attempt the daemon never heard about, without touching a paused one', async () => {
@@ -809,7 +856,7 @@ describe('acceptance 3: the review shows this attempt\'s own documents and answe
       jdSnapshotHash: 'hash',
     });
 
-    expect(workspace.listApplicationArtifacts(db, attemptId)).toHaveLength(1);
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toHaveLength(2);
     expect(workspace.listApplicationArtifacts(db, other.id)).toHaveLength(0);
     expect(other.preparedFields).toBeNull();
   });
@@ -822,7 +869,7 @@ describe('acceptance 3: the review shows this attempt\'s own documents and answe
     // left with no answers at all rather than the ones from the run before.
     workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'queued', checkpointDetail: '' });
     generateFieldMap.mockResolvedValueOnce({ ok: false, text: '', error: 'the session failed' });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
 
     const rerun = await pipeline.runApplicationAttempt(deps, attemptId);
     expect(rerun.outcome).toBe('needs_user');
@@ -835,19 +882,65 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     const started = await pipeline.startApplicationAttempt(deps, {
       vacancy: { ...VACANCY, vacancyKey: 'vac-live', applyUrl: 'https://jobs.example.invalid/apply/123' },
     });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
     expect(ticked.result?.outcome).toBe('needs_user');
     const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
     expect(attempt.checkpoint).toBe('needs_user');
     expect(attempt.checkpointDetail).toContain('apply on the site yourself');
-    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(1);
+    expect(workspace.listApplicationArtifacts(db, attempt.id).map((artifact) => artifact.kind))
+      .toEqual(['cv_pdf', 'cover_letter_pdf']);
+    expect(generateCoverLetter).toHaveBeenCalledTimes(1);
 
     // Nothing was opened, nothing was typed, and no policy was resolved for it: an unsupported
     // destination does not inherit the fixture's allowlist, actions, or kill-switch settings.
     expect(createApplicationView).not.toHaveBeenCalled();
     expect(insertedText()).toEqual([]);
+  });
+
+  it('keeps the tailored CV and manual handoff when an unsupported target gets an unsafe generated letter', async () => {
+    generateCoverLetter.mockResolvedValueOnce({
+      ok: true,
+      text: '{"factIds":["experience-99"]}',
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-unsupported-claim', applyUrl: 'https://jobs.example.invalid/apply/claim' },
+    });
+    queueApplicationDocumentRenders();
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail)
+      .toMatch(/unsupported source facts.*experience-99/iu);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('Your tailored CV is ready.');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('Use Generate letter');
+    expect(workspace.listApplicationArtifacts(db, started.attemptId!).map((artifact) => artifact.kind)).toEqual(['cv_pdf']);
+    expect(createApplicationView).not.toHaveBeenCalled();
+  });
+
+  it('stages a requested final letter without replacing it with automatic generation', async () => {
+    workspace.createLetter(db, {
+      title: 'Cover Letter',
+      company: VACANCY.company,
+      role: VACANCY.role,
+      type: 'cover_letter',
+      status: 'final',
+      vacancyKey: VACANCY.vacancyKey,
+      body: 'Dear Northwind Freight hiring team,\n\nI am applying for the Logistics Platform Engineer role.\n\nJamie Rivera',
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, applyUrl: 'https://jobs.example.invalid/apply/requested-letter' },
+    });
+    queueApplicationDocumentRenders();
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(generateCoverLetter).not.toHaveBeenCalled();
+    expect(workspace.listApplicationArtifacts(db, started.attemptId!).map((artifact) => artifact.kind))
+      .toEqual(['cv_pdf', 'cover_letter_pdf']);
   });
 
   it('offers a durable retry after tailoring fails', async () => {
@@ -862,7 +955,7 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(restarted).toMatchObject({ ok: true, tailoringMode: 'ai' });
     expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'queued', tailoringMode: 'ai' });
 
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const second = await pipeline.runNextApplicationAttempt(deps);
     expect(second.result?.outcome).toBe('ready');
     expect(generateTailoredResume).toHaveBeenCalledTimes(2);
@@ -913,7 +1006,7 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(restarted).toMatchObject({ ok: true, tailoringMode: 'original' });
     expect(workspace.getApplicationAttempt(db, started.attemptId!).tailoringMode).toBe('original');
 
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const second = await pipeline.runNextApplicationAttempt(deps);
     expect(second.result?.outcome).toBe('ready');
     expect(generateTailoredResume).toHaveBeenCalledTimes(1);
@@ -947,7 +1040,7 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
     const started = await pipeline.startApplicationAttempt(deps, {
       vacancy: { ...VACANCY, vacancyKey: 'vac-upload', applyUrl: FIXTURE_FORM_URLS.withUpload },
     });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
     expect(ticked.result?.outcome).toBe('ready');
@@ -960,17 +1053,37 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
     expect(byLabel.get('resume')?.value).toContain('resume.pdf');
   });
 
-  it('stops with a specific recovery when the form requires a letter that was not staged', async () => {
+  it('generates, validates, stages, and attaches a cover letter when the live form requires one', async () => {
     createApplicationView.mockReset().mockImplementation(() => fakeView(requiredCoverLetterFormTree()));
     const started = await pipeline.startApplicationAttempt(deps, {
       vacancy: { ...VACANCY, vacancyKey: 'vac-cover-letter', applyUrl: FIXTURE_FORM_URLS.withUpload },
     });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
 
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
+    expect(ticked.result?.outcome).toBe('ready');
+    expect(generateCoverLetter).toHaveBeenCalledTimes(1);
+    expect(generateCoverLetter.mock.calls[0]?.[0]).toContain(VACANCY.description);
+    expect(workspace.listApplicationArtifacts(db, started.attemptId!).map((artifact) => artifact.kind))
+      .toEqual(['cv_pdf', 'cover_letter_pdf']);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).preparedFields?.fields.some(
+      (field) => field.label === 'coverLetter' && field.status === 'committed' && field.required,
+    )).toBe(true);
+  });
+
+  it('keeps the required-letter recovery path when automatic generation fails', async () => {
+    createApplicationView.mockReset().mockImplementation(() => fakeView(requiredCoverLetterFormTree()));
+    generateCoverLetter.mockResolvedValueOnce({ ok: false, text: '', error: 'provider unavailable' });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-cover-letter-failed', applyUrl: FIXTURE_FORM_URLS.withUpload },
+    });
+    queueApplicationDocumentRenders();
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
     expect(ticked.result?.outcome).toBe('needs_user');
-    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toMatch(/requires "coverLetter"/);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('provider unavailable');
+    expect(workspace.listApplicationArtifacts(db, started.attemptId!).map((artifact) => artifact.kind)).toEqual(['cv_pdf']);
     expect(generateFieldMap).not.toHaveBeenCalled();
   });
 
@@ -985,7 +1098,7 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
       }),
     );
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: { ...VACANCY, vacancyKey: 'vac-captcha' } });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
     expect(ticked.result?.outcome).toBe('needs_user');
@@ -1013,7 +1126,7 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
     });
 
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
-    queueOneCvRender();
+    queueApplicationDocumentRenders();
     const ticked = await pipeline.runNextApplicationAttempt(deps);
 
     expect(ticked.result?.outcome).toBe('needs_user');

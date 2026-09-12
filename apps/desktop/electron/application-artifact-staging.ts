@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { BrowserWindow } from 'electron';
 import {
   acceptRenderedDocument,
@@ -130,12 +130,30 @@ interface WriteAndRegisterOptions {
  * already produced and accepted the actual PDF bytes. */
 async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promise<ApplicationArtifactRecord> {
   const storagePath = stagedArtifactPath(options.storageRoot, options.attemptId, options.contentHash, options.fileName);
+  const workspaceKind = WORKSPACE_KIND[options.kind];
+  const storageRoot = resolve(options.storageRoot);
+  const attemptStorage = resolve(storageRoot, options.attemptId);
+  if (dirname(attemptStorage) !== storageRoot) throw new Error('invalid application artifact attempt directory');
+
+  // An interrupted run may have registered this logical document before the attempt was requeued.
+  // Replace that registration only after the new PDF has passed acceptance, and remove its old
+  // attempt-owned file, so retries expose one current artifact instead of an accumulating history.
+  const superseded = workspace
+    .listApplicationArtifacts(options.db, options.attemptId)
+    .filter((artifact) => artifact.kind === workspaceKind && artifact.fileName === options.fileName);
+  for (const artifact of superseded) {
+    if (artifact.storagePath && dirname(resolve(artifact.storagePath)) === attemptStorage) {
+      await rm(artifact.storagePath, { force: true });
+    }
+    workspace.deleteApplicationArtifact(options.db, artifact.id);
+  }
+
   await mkdir(join(options.storageRoot, options.attemptId), { recursive: true });
   await writeFile(storagePath, options.pdf);
 
   return workspace.createApplicationArtifact(options.db, {
     attemptId: options.attemptId,
-    kind: WORKSPACE_KIND[options.kind],
+    kind: workspaceKind,
     fileName: options.fileName,
     mimeType: 'application/pdf',
     byteSize: options.pdf.byteLength,
