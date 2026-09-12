@@ -87,6 +87,19 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       const window = await electronApp.firstWindow();
       await window.waitForLoadState('domcontentloaded');
       await ensureLightTheme(window);
+      await window.evaluate(() =>
+        self.workspace.createCvDocument({
+          name: 'Layout QA CV',
+          kind: 'manual',
+          text: 'Senior Frontend Engineer with eight years building Angular and TypeScript interfaces.',
+          profile: {
+            title: 'Senior Frontend Engineer',
+            years: '8',
+            skills: ['Angular', 'TypeScript', 'Accessibility'],
+            summary: 'Builds accessible product interfaces and design systems.',
+          },
+        }),
+      );
       await goto(window, 'Search');
       await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
       await expect(window.getByText(/^Daemon unavailable:/)).toHaveCount(0);
@@ -214,6 +227,51 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
               );
           }
         }
+      }
+
+      await window.getByRole('button', { name: 'Use for AI' }).click();
+      await expect(window.getByRole('heading', { name: 'CV assistant' })).toBeVisible();
+      await expect(window.getByRole('heading', { name: 'CV-only tools' })).toBeVisible();
+      await expect(window.getByRole('heading', { name: 'Vacancy tools' })).toBeVisible();
+      await expect(window.getByRole('tab', { name: 'Resume audit' })).toBeVisible();
+      await expect(window.getByRole('tab', { name: 'Improve achievements' })).toBeVisible();
+      await expect(window.getByRole('tab', { name: 'Best-fit roles' })).toBeVisible();
+      await expect(window.getByRole('button', { name: 'Check ATS fit' })).toBeVisible();
+      await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeVisible();
+
+      for (const viewport of [
+        { name: 'assistant-minimum', width: 640, height: 480 },
+        { name: 'assistant-desktop', width: 1000, height: 720 },
+      ]) {
+        await electronApp.evaluate(
+          ({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds),
+          viewport,
+        );
+        await window.waitForTimeout(100);
+        const tablist = window.getByRole('tablist', { name: 'CV review mode' });
+        await tablist.scrollIntoViewIfNeeded();
+        const geometry = await tablist.evaluate((tablist) => {
+          const rect = tablist.getBoundingClientRect();
+          const buttons = [...tablist.querySelectorAll('button')];
+          return {
+            left: rect.left,
+            right: rect.right,
+            viewportWidth: document.documentElement.clientWidth,
+            pageOverflow:
+              document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            tabOverflow: tablist.scrollWidth - tablist.clientWidth,
+            buttonOverflow: buttons.some((button) => button.scrollWidth > button.clientWidth),
+          };
+        });
+        expect(geometry.left).toBeGreaterThanOrEqual(0);
+        expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
+        expect(geometry.pageOverflow).toBeLessThanOrEqual(0);
+        expect(geometry.tabOverflow).toBeLessThanOrEqual(0);
+        expect(geometry.buttonOverflow).toBe(false);
+
+        const screenshotPath = test.info().outputPath(`${viewport.name}.png`);
+        await window.screenshot({ animations: 'disabled', path: screenshotPath });
+        await test.info().attach(viewport.name, { path: screenshotPath, contentType: 'image/png' });
       }
     } finally {
       await electronApp.close();

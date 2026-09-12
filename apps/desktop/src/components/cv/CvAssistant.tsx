@@ -6,20 +6,21 @@ import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
+import { ResumeToolkit } from './ResumeToolkit.js';
 import { TailorCv } from './TailorCv.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
  *
- * It owns exactly one piece of shared state (the loaded CV) so the three AI features below it read
+ * It owns exactly one piece of shared state (the loaded CV) so every AI feature below it reads
  * the same document without the user uploading it three times. Everything else (session lifecycle,
  * streaming, errors) belongs to the individual feature components, which each run their own
  * session: gap analysis reports, the cover letter drafts new prose, and the tailored CV re-orders
  * the document itself.
  */
 export interface CvAssistantProps {
-  /** The vacancy all three features work against; null until the Vacancy Leads screen selects one. */
+  /** The vacancy-specific features work against this; null until Search selects one. */
   vacancy: VacancyLead | null;
   /** Optional: skip the model picker and pin a model. */
   model?: string;
@@ -85,7 +86,8 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
         }
       })
       .catch((err) => {
-        if (!cancelled) setLibraryError(err instanceof Error ? err.message : 'could not load your CV library');
+        if (!cancelled)
+          setLibraryError(err instanceof Error ? err.message : 'could not load your CV library');
       });
     return () => {
       cancelled = true;
@@ -98,6 +100,9 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
   const providerLabel = PROVIDER_LABEL[provider];
   const usableLibraryCvs = libraryCvs.filter((doc) => doc.text.trim().length > 0);
   const unusableLibraryCvs = libraryCvs.length - usableLibraryCvs.length;
+  const selectedLibraryCv = usableLibraryCvs.find((doc) => doc.id === selectedLibraryCvId);
+  const selectedSourceCv = selectedLibraryCv?.source ?? null;
+  const selectedProfile = selectedLibraryCv?.profile ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -136,7 +141,9 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
                 className="select w-full"
                 value={selectedLibraryCvId}
                 onChange={(event) => {
-                  const selected = usableLibraryCvs.find((doc) => doc.id === event.currentTarget.value);
+                  const selected = usableLibraryCvs.find(
+                    (doc) => doc.id === event.currentTarget.value,
+                  );
                   setSelectedLibraryCvId(event.currentTarget.value);
                   if (selected) setCv(cvDocumentFromLibrary(selected));
                 }}
@@ -150,11 +157,14 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
               </select>
             </label>
           ) : (
-            <p className="text-sm text-base-content/60">No saved CV with extracted text is available yet.</p>
+            <p className="text-sm text-base-content/60">
+              No saved CV with extracted text is available yet.
+            </p>
           )}
           {unusableLibraryCvs > 0 && (
             <p className="text-xs text-base-content/50">
-              {unusableLibraryCvs} saved CV {unusableLibraryCvs === 1 ? 'is' : 'are'} unavailable because no text was extracted.
+              {unusableLibraryCvs} saved CV {unusableLibraryCvs === 1 ? 'is' : 'are'} unavailable
+              because no text was extracted.
             </p>
           )}
         </div>
@@ -186,7 +196,11 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
       {!pinnedModel && availableModels.length > 0 && (
         <label className="block">
           <span className="mb-1 block text-sm font-medium">Model</span>
-          <select className="select w-full" value={model} onChange={(e) => setModel(e.target.value)}>
+          <select
+            className="select w-full"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          >
             <option value="">Provider default</option>
             {availableModels.map((id) => (
               <option key={id} value={id}>
@@ -197,24 +211,56 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
         </label>
       )}
 
-      <GapAnalysis
-        cv={cv}
-        vacancy={vacancy}
-        provider={provider}
-        {...(effectiveModel ? { model: effectiveModel } : {})}
-      />
-      <CoverLetter
-        cv={cv}
-        vacancy={vacancy}
-        provider={provider}
-        {...(effectiveModel ? { model: effectiveModel } : {})}
-      />
-      <TailorCv
-        cv={cv}
-        vacancy={vacancy}
-        provider={provider}
-        {...(effectiveModel ? { model: effectiveModel } : {})}
-      />
+      <section className="flex flex-col gap-3" aria-labelledby="cv-only-tools-heading">
+        <div>
+          <h3 id="cv-only-tools-heading" className="text-base font-semibold">
+            CV-only tools
+          </h3>
+          <p className="mt-1 text-sm text-base-content/60">
+            Review and improve the selected CV without a vacancy.
+          </p>
+        </div>
+        <ResumeToolkit
+          cv={cv}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+      </section>
+
+      <section className="flex flex-col gap-3" aria-labelledby="vacancy-tools-heading">
+        <div>
+          <h3 id="vacancy-tools-heading" className="text-base font-semibold">
+            Vacancy tools
+          </h3>
+          <p className="mt-1 text-sm text-base-content/60">
+            Compare or draft for the selected vacancy.
+          </p>
+        </div>
+        <GapAnalysis
+          cv={cv}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          profile={selectedProfile}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+        <TailorCv
+          cv={cv}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          profile={selectedProfile}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+        <CoverLetter
+          cv={cv}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          profile={selectedProfile}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+      </section>
     </div>
   );
 }
