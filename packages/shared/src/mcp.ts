@@ -16,6 +16,13 @@ export const mcpCredentialInputSchema = z.object({
 }).strict();
 export type McpCredentialInput = z.infer<typeof mcpCredentialInputSchema>;
 
+/** A single-listing detail lookup, the `get_job` counterpart to `mcpSearchRequestSchema`'s `search_jobs`. */
+export const mcpJobDetailRequestSchema = z.object({
+  providerId: mcpProviderIdSchema,
+  externalId: z.string().trim().min(1).max(200),
+}).strict();
+export type McpJobDetailRequest = z.infer<typeof mcpJobDetailRequestSchema>;
+
 export const mcpVacancySchema = z.object({
   externalId: z.string().trim().min(1).max(200),
   title: z.string().trim().min(1).max(300),

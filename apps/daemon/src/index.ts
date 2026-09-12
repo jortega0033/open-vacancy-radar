@@ -20,20 +20,37 @@ import type { McpCredentialStore } from './mcp/types.js';
 import { OsMcpCredentialStore } from './mcp/credential-store.js';
 import { McpConnectionManager } from './mcp/manager.js';
 import { McpSdkConnectorFactory } from './mcp/sdk-connector.js';
+import { infosecJobBoardMcpPolicy } from './mcp/providers/infosec-job-board.js';
 
 /**
- * Extracted from `main()` so the empty-policy invariant below can be asserted against the real,
+ * Extracted from `main()` so the reviewed-policy allowlist below can be asserted against the real,
  * constructed manager (`buildMcpManager(...).providerIds()`) rather than pinned by matching the
- * source text of `main()` itself, which a harmless refactor (renaming an inline `[]` into a named
+ * source text of `main()` itself, which a harmless refactor (renaming an inline array into a named
  * constant, reordering constructor args) could silently defeat without the invariant actually
  * changing. See apps/daemon/test/index.test.ts and
  * docs/adr-agentdock-v2-provenance.md#the-mcp-foundation-ships-dormant-on-purpose.
+ *
+ * The registry started life empty on purpose: "provider-specific policies (starting with #29) will
+ * inject an `OAuthClientProvider` here, and keeping the registry empty until then means an OAuth
+ * server can never be contacted before its redirect URI, PKCE/token persistence, terms, tool, and
+ * retention policy have all been reviewed together." InfoSec Job Board (#48) is the first policy
+ * added to it -- and, being a no-auth (`transport.auth: 'none'`) public MCP server, it needs no
+ * `OAuthClientProvider` at all, so it carries none of the OAuth-onboarding risk that invariant was
+ * guarding against. Every other item in `docs/mcp-source-policy.md`'s "required review record"
+ * (source URL, attribution, terms/policy version, review date, retention, the two allowlisted
+ * tools, fixed argument mappers, strict output parsers, a payload limit, a timeout, and independent
+ * kill switches) was reviewed for it in #48; see `mcp/providers/infosec-job-board.ts` for that
+ * record and `docs/mcp-source-policy.md`'s provider-decision table for the tracking entry. A future
+ * OAuth-requiring provider (#29 Upwork and later) still injects its `OAuthClientProvider` here, and
+ * still must not be added except as its own explicit, reviewed change to this function's body.
  */
 export function buildMcpManager(mcpCredentials: McpCredentialStore, logger: Logger): McpConnectionManager {
-  // Provider-specific policies (starting with #29) inject their OAuthClientProvider here. Keeping
-  // the registry empty means an OAuth server can never be contacted before its redirect URI,
-  // PKCE/token persistence, terms, tool, and retention policy have all been reviewed together.
-  return new McpConnectionManager([], new McpSdkConnectorFactory(mcpCredentials), mcpCredentials, logger);
+  return new McpConnectionManager(
+    [infosecJobBoardMcpPolicy],
+    new McpSdkConnectorFactory(mcpCredentials),
+    mcpCredentials,
+    logger,
+  );
 }
 
 async function main() {

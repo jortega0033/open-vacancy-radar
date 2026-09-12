@@ -7,6 +7,16 @@ import { mcpProviderResultSchema, type McpCredentialStore, type McpProviderPolic
 
 const TOKEN = 'daemon-test-token';
 const credential = 'secret-api-key';
+const job = {
+  externalId: 'job-1',
+  title: 'Security Analyst',
+  company: 'Example BV',
+  url: 'https://jobs.example.test/job-1',
+  location: 'Remote',
+  description: null,
+  employmentType: 'full-time',
+  publishedAt: '2026-08-30T10:00:00.000Z',
+};
 
 function setup() {
   const registry = new ProviderRegistry();
@@ -20,8 +30,8 @@ function setup() {
   };
   const session: McpSession = {
     connect: vi.fn(async () => undefined),
-    listTools: vi.fn(async () => [{ name: 'search_jobs' }]),
-    callTool: vi.fn(async () => ({ jobs: [] })),
+    listTools: vi.fn(async () => [{ name: 'search_jobs' }, { name: 'get_job' }]),
+    callTool: vi.fn(async (name: string) => (name === 'get_job' ? job : { jobs: [] })),
     close: vi.fn(async () => undefined),
   };
   const policy: McpProviderPolicy = {
@@ -31,6 +41,9 @@ function setup() {
     searchTool: 'search_jobs',
     mapSearchArguments: ({ query, limit }) => ({ query, limit }),
     parseResult: (value) => mcpProviderResultSchema.parse(value).jobs,
+    detailTool: 'get_job',
+    mapDetailArguments: ({ externalId }) => ({ id: externalId }),
+    parseDetailResult: (value) => value,
     sourceUrl: 'https://approved.example.test/jobs',
     attribution: 'Approved jobs',
     policyVersion: '1',
@@ -90,5 +103,30 @@ describe('typed MCP daemon routes', () => {
     const approved = await app.inject({ method: 'POST', url: '/mcp/search', headers: auth, payload: { providerId: 'approved', query: 'frontend', limit: 10 } });
     expect(approved.statusCode).toBe(200);
     expect(session.callTool).toHaveBeenCalledWith('search_jobs', { query: 'frontend', limit: 10 }, expect.any(AbortSignal));
+  });
+
+  it('serves the get_job detail route for an allowlisted provider and externalId, calling only the reviewed detail tool', async () => {
+    const { app, session } = setup();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/mcp/providers/approved/jobs/job-1',
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ...job, providerId: 'approved' });
+    expect(session.callTool).toHaveBeenCalledWith('get_job', { id: 'job-1' }, expect.any(AbortSignal));
+  });
+
+  it('404s the detail route for an unknown provider without connecting', async () => {
+    const { app, session } = setup();
+    const response = await app.inject({ method: 'GET', url: '/mcp/providers/unknown/jobs/job-1', headers: auth });
+    expect(response.statusCode).toBe(404);
+    expect(session.connect).not.toHaveBeenCalled();
+  });
+
+  it('requires daemon authentication on the detail route', async () => {
+    const { app } = setup();
+    const response = await app.inject({ method: 'GET', url: '/mcp/providers/approved/jobs/job-1' });
+    expect(response.statusCode).toBe(401);
   });
 });

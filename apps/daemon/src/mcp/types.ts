@@ -1,12 +1,13 @@
-export { mcpProviderIdSchema, mcpProviderResultSchema, mcpSearchRequestSchema } from '@agent-dock/shared';
+export { mcpJobDetailRequestSchema, mcpProviderIdSchema, mcpProviderResultSchema, mcpSearchRequestSchema } from '@agent-dock/shared';
 export type {
   McpConnectionStatus,
+  McpJobDetailRequest,
   McpProviderId,
   McpSearchRequest,
   McpVacancy,
   McpVacancyResult,
 } from '@agent-dock/shared';
-import type { McpProviderId, McpSearchRequest, McpVacancy } from '@agent-dock/shared';
+import type { McpJobDetailRequest, McpProviderId, McpSearchRequest, McpVacancy } from '@agent-dock/shared';
 
 export type McpTool = { name: string; inputSchema?: unknown };
 export interface McpSession {
@@ -37,6 +38,16 @@ export type McpProviderPolicy = {
   searchTool: string;
   mapSearchArguments(request: Pick<McpSearchRequest, 'query' | 'limit'>): Record<string, unknown>;
   parseResult(value: unknown): McpVacancy[];
+  /**
+   * Optional second allowlisted tool ("get_job" and equivalents) for an on-demand single-listing
+   * lookup. All three of `detailTool`/`mapDetailArguments`/`parseDetailResult` are provided together
+   * or not at all -- a policy that never sets them simply has no detail capability, and
+   * `McpConnectionManager#getJob` refuses to call anything for it. This is still exactly two
+   * hardcoded, policy-authored tool names ever reachable per provider, never a caller-suppliable one.
+   */
+  detailTool?: string;
+  mapDetailArguments?(request: Pick<McpJobDetailRequest, 'externalId'>): Record<string, unknown>;
+  parseDetailResult?(value: unknown): unknown;
   sourceUrl: string;
   attribution: string;
   policyVersion: string;

@@ -5,12 +5,19 @@ import {
   type McpConnectionStatus,
   type McpConnectorFactory,
   type McpCredentialStore,
+  type McpJobDetailRequest,
   type McpProviderId,
   type McpProviderPolicy,
   type McpSearchRequest,
   type McpSession,
+  type McpVacancy,
   type McpVacancyResult,
 } from './types.js';
+
+/** Same shape as one entry of `mcpProviderResultSchema`'s `jobs` array -- reused to validate the
+ * single job a `get_job` detail lookup returns, since `McpVacancy` has no schema of its own to
+ * import directly (only the array-wrapped `mcpProviderResultSchema` is exported from shared). */
+const mcpVacancySchema = mcpProviderResultSchema.shape.jobs.element;
 
 const MAX_POLICIES = 32;
 
@@ -54,6 +61,7 @@ function safeProviderFailure(error: unknown, signal: AbortSignal): { category: s
   }
   const policyMessages = [
     'approved MCP search tool is unavailable',
+    'approved MCP detail tool is unavailable',
     'MCP payload exceeds provider limit',
     'MCP result is not serializable',
   ];
@@ -129,6 +137,100 @@ export class McpConnectionManager {
     if (!policy.killSwitches.connection) throw new Error('MCP provider connection is disabled');
     if (!policy.killSwitches.search) throw new Error('MCP provider search is disabled');
 
+    const { result: vacancies, generation } = await this.#invoke(
+      policy,
+      policy.searchTool,
+      policy.mapSearchArguments({ query: request.query, limit: request.limit }),
+      'approved MCP search tool is unavailable',
+      'MCP provider search failed',
+      (raw) => {
+        const parsedEnvelope = mcpProviderResultSchema.safeParse(raw);
+        return parsedEnvelope.success
+          ? parsedEnvelope.data.jobs
+          : mcpProviderResultSchema.parse({ jobs: policy.parseResult(raw) }).jobs;
+      },
+      externalSignal,
+    );
+    const fetchedAt = this.now();
+    const expiresAt = new Date(fetchedAt.getTime() + policy.retentionMs);
+    const rows = vacancies.slice(0, request.limit).map((vacancy) => ({
+      ...vacancy,
+      providerId: policy.id,
+      sourceUrl: policy.sourceUrl,
+      attribution: policy.attribution,
+      policyVersion: policy.policyVersion,
+      policyReviewedAt: policy.policyReviewedAt,
+      fetchedAt: fetchedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    }));
+    if (policy.killSwitches.persistence && (this.#generation.get(policy.id) ?? 0) === generation) {
+      this.#cache.replace(policy.id, rows);
+    }
+    this.logger.info('MCP provider search completed', { providerId: policy.id, resultCount: rows.length });
+    return rows;
+  }
+
+  /**
+   * The `get_job` counterpart to `search`: an on-demand single-listing lookup through the second
+   * (and last) tool a policy may allowlist. A policy that never set `detailTool` simply cannot be
+   * asked for one -- this never falls back to `searchTool` or any other name. Unlike `search`, a
+   * successful lookup is not written into the persistence cache: it is a point lookup, not a corpus
+   * scan, so there is nothing here for `killSwitches.persistence` or `cached()` to own.
+   */
+  async getJob(request: McpJobDetailRequest, externalSignal?: AbortSignal): Promise<McpVacancyResult> {
+    const policy = this.#policy(request.providerId);
+    const { detailTool, mapDetailArguments, parseDetailResult } = policy;
+    if (!detailTool || !mapDetailArguments || !parseDetailResult) {
+      throw new Error('MCP provider does not support job detail lookups');
+    }
+    if (this.#closed) throw new Error('MCP connection manager is closed');
+    if (this.#removing.has(policy.id)) throw new Error('MCP provider connection is being removed');
+    if (!policy.killSwitches.connection) throw new Error('MCP provider connection is disabled');
+    if (!policy.killSwitches.search) throw new Error('MCP provider search is disabled');
+
+    const { result: vacancy } = await this.#invoke(
+      policy,
+      detailTool,
+      mapDetailArguments({ externalId: request.externalId }),
+      'approved MCP detail tool is unavailable',
+      'MCP provider job detail lookup failed',
+      (raw) => mcpVacancySchema.parse(parseDetailResult(raw)) as McpVacancy,
+      externalSignal,
+    );
+    const fetchedAt = this.now();
+    const expiresAt = new Date(fetchedAt.getTime() + policy.retentionMs);
+    this.logger.info('MCP provider job detail lookup completed', { providerId: policy.id });
+    return {
+      ...vacancy,
+      providerId: policy.id,
+      sourceUrl: policy.sourceUrl,
+      attribution: policy.attribution,
+      policyVersion: policy.policyVersion,
+      policyReviewedAt: policy.policyReviewedAt,
+      fetchedAt: fetchedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Shared session lifecycle for exactly one bounded tool call: connect, confirm the caller-named
+   * tool is one `tools/list` actually advertises (never call a tool the server didn't just tell us
+   * about), call it with the policy's own fixed argument mapping, enforce the payload ceiling, then
+   * let `parse` turn the raw result into whatever the caller needs -- still inside the same
+   * try/catch, so a malformed response is sanitized and logged exactly like a transport failure
+   * rather than leaking a raw provider error past this boundary. Active-operation tracking, session
+   * tracking, and teardown are identical for `search` and `getJob`, which is the only reason this
+   * exists: two hardcoded tool names, one lifecycle.
+   */
+  async #invoke<T>(
+    policy: McpProviderPolicy,
+    toolName: string,
+    toolArguments: Record<string, unknown>,
+    unavailableMessage: string,
+    failureLogMessage: string,
+    parse: (raw: unknown) => T,
+    externalSignal?: AbortSignal,
+  ): Promise<{ result: T; generation: number }> {
     const operation = abortAfter(policy.timeoutMs, externalSignal);
     const generation = this.#generation.get(policy.id) ?? 0;
     const active = this.#active.get(policy.id) ?? new Set();
@@ -146,39 +248,15 @@ export class McpConnectionManager {
       operation.signal.throwIfAborted();
       await session.connect(operation.signal);
       const tools = await session.listTools(operation.signal);
-      const approved = tools.find((tool) => tool.name === policy.searchTool);
-      if (!approved) throw new Error('approved MCP search tool is unavailable');
-      const raw = await session.callTool(
-        policy.searchTool,
-        policy.mapSearchArguments({ query: request.query, limit: request.limit }),
-        operation.signal,
-      );
+      const approved = tools.find((tool) => tool.name === toolName);
+      if (!approved) throw new Error(unavailableMessage);
+      const raw = await session.callTool(toolName, toolArguments, operation.signal);
       operation.signal.throwIfAborted();
       if (serializedSize(raw) > policy.maximumPayloadBytes) throw new Error('MCP payload exceeds provider limit');
-      const parsedEnvelope = mcpProviderResultSchema.safeParse(raw);
-      const vacancies = parsedEnvelope.success
-        ? parsedEnvelope.data.jobs
-        : mcpProviderResultSchema.parse({ jobs: policy.parseResult(raw) }).jobs;
-      const fetchedAt = this.now();
-      const expiresAt = new Date(fetchedAt.getTime() + policy.retentionMs);
-      const rows = vacancies.slice(0, request.limit).map((vacancy) => ({
-        ...vacancy,
-        providerId: policy.id,
-        sourceUrl: policy.sourceUrl,
-        attribution: policy.attribution,
-        policyVersion: policy.policyVersion,
-        policyReviewedAt: policy.policyReviewedAt,
-        fetchedAt: fetchedAt.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      }));
-      if (policy.killSwitches.persistence && (this.#generation.get(policy.id) ?? 0) === generation) {
-        this.#cache.replace(policy.id, rows);
-      }
-      this.logger.info('MCP provider search completed', { providerId: policy.id, resultCount: rows.length });
-      return rows;
+      return { result: parse(raw), generation };
     } catch (error) {
       const failure = safeProviderFailure(error, operation.signal);
-      this.logger.warn('MCP provider search failed', {
+      this.logger.warn(failureLogMessage, {
         providerId: policy.id,
         reason: failure.category,
       });
