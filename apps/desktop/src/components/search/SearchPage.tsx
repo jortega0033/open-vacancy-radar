@@ -114,7 +114,7 @@ export function savedJobInputFor(result: SearchResult): SavedJobInput {
  */
 function SearchLoadingSkeleton() {
   return (
-    <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row" aria-hidden="true">
+    <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0" aria-hidden="true">
       <div className="flex flex-none flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
         {Array.from({ length: 6 }, (_, index) => (
           <div key={index} className="ovr-row space-y-2 border-b border-base-300 px-4">
@@ -869,21 +869,23 @@ export function SearchPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <SearchFilterBar
-        onLocationChange={handleLocationChange}
-        filters={filters}
-        onFiltersChange={handleFiltersChange}
-        onSearch={handleSearch}
-        onBrowseAll={handleBrowseAll}
-        onClear={handleClearFilters}
-        sources={sources}
-        employmentTypes={employmentTypes}
-        busy={busy}
-        salaryNote={SALARY_NOTE}
-        hasReport={hasReport}
-      />
+      <div className="px-6">
+        <SearchFilterBar
+          onLocationChange={handleLocationChange}
+          filters={filters}
+          onFiltersChange={handleFiltersChange}
+          onSearch={handleSearch}
+          onBrowseAll={handleBrowseAll}
+          onClear={handleClearFilters}
+          sources={sources}
+          employmentTypes={employmentTypes}
+          busy={busy}
+          salaryNote={SALARY_NOTE}
+          hasReport={hasReport}
+        />
+      </div>
 
-      <div className="flex-none">
+      <div className="flex-none px-6">
         {engineState === 'unavailable' && (
           <ErrorBanner
             className="mt-3"
@@ -977,7 +979,7 @@ export function SearchPage({
 
       {hydrating && !hasReport ? (
         <>
-          <div className="alert alert-info mt-3 text-sm">
+          <div className="alert alert-info mx-6 mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             Loading the latest report…
           </div>
@@ -988,16 +990,18 @@ export function SearchPage({
         // or otherwise, so this is still the plain loading state.
         <SearchLoadingSkeleton />
       ) : !hasReport && !isStreamingPartial ? (
-        <EmptyState
-          illustration={emptySearchIllustration}
-          title="No search yet"
-          description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
-          action={
-            <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
-              Run the first scan
-            </button>
-          }
-        />
+        <div className="min-h-0 flex-1 px-6">
+          <EmptyState
+            illustration={emptySearchIllustration}
+            title="No search yet"
+            description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
+            action={
+              <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                Run the first scan
+              </button>
+            }
+          />
+        </div>
       ) : (
         // Dimmed, not hidden or disabled, while a rescan is in flight: the results/detail pane
         // still shows the last-known data (real, just about to be replaced), and staying
@@ -1005,7 +1009,7 @@ export function SearchPage({
         // couple of minutes, rather than locking the page for that whole time.
         <>
           {profileNotConfigured && (
-            <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+            <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
                 {results.length.toLocaleString()} vacancies were found, but none were scored because
                 the search profile has no target roles or strongest skills. You can still browse,
@@ -1019,7 +1023,7 @@ export function SearchPage({
             </div>
           )}
           {reportNeedsRescore && (
-            <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+            <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
                 Search profile is saved, but this report was generated before it could be scored.
                 Cached vacancies remain browseable; rescan to score them with the current profile.
@@ -1030,13 +1034,13 @@ export function SearchPage({
             </div>
           )}
           {profileScoringUnknown && (
-            <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+            <div className="alert alert-warning alert-soft mx-6 mt-3 text-sm" role="status">
               Cached vacancies are browseable, but the app could not check whether the current
               search profile can score this report: {searchProfileError}
             </div>
           )}
           <div
-            className={`mt-3 flex min-h-0 flex-1 flex-col lg:flex-row ${scanning ? 'opacity-60 transition-opacity' : ''}`}
+            className={`mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0 ${scanning ? 'opacity-60 transition-opacity' : ''}`}
           >
             <SearchResultList
               results={pageItems}
@@ -1121,7 +1125,7 @@ export function SearchPage({
           outside the scrollable results/detail area above), for diagnostic/provenance metadata
           that's useful on demand but not worth greeting every visit with above the results. */}
       {(sourceWarnings.length > 0 || worldwideReport) && (
-        <div className="flex-none border-t border-base-300 px-1 pt-2">
+        <div className="flex-none border-t border-base-300 px-6 pt-2">
           {sourceWarnings.length > 0 && (
             <>
               <button
@@ -1147,7 +1151,7 @@ export function SearchPage({
             </>
           )}
           {worldwideReport && (
-            <p className="px-2 pb-1.5 text-xs text-base-content/60">
+            <p className="pb-1.5 text-xs text-base-content/60">
               Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
               {scanBounds?.mode === 'browse_all'
                 ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`

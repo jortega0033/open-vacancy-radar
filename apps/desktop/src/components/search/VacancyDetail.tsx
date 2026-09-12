@@ -116,7 +116,7 @@ export function VacancyDetail({
             <div className="mt-1 text-xs text-base-content/60">{subtitle}</div>
           </div>
 
-          <div className="flex flex-none flex-wrap gap-2">
+          <div className="flex max-w-full flex-none flex-wrap gap-2">
             <button
               className="btn btn-primary btn-sm"
               type="button"

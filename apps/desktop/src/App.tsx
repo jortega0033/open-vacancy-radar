@@ -257,13 +257,23 @@ export function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <WorkspaceHeader title={title} subtitle={subtitle} />
 
-        <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <main
+          className={`min-h-0 flex-1 py-6 ${
+            nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
+          }`}
+        >
           {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
               destination you are on, "the CLI runtime is not running" is worth knowing. */}
-          {daemonState === 'connecting' && <div className="alert alert-info mb-5">Connecting to local daemon…</div>}
-          {daemonState === 'unavailable' && (
-            <ErrorBanner className="mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</ErrorBanner>
-          )}
+          <div className={nav === 'search' ? 'px-6' : undefined}>
+            {daemonState === 'connecting' && (
+              <div className="alert alert-info mb-5">Connecting to local daemon…</div>
+            )}
+            {daemonState === 'unavailable' && (
+              <ErrorBanner className="mb-5">
+                Daemon unavailable: {daemonError ?? 'unknown error'}
+              </ErrorBanner>
+            )}
+          </div>
 
           {nav === 'search' && (
             <SearchPage

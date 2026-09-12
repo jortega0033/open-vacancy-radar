@@ -299,6 +299,10 @@ let vacancyEngineDataRootInit: Promise<void> | undefined;
  * every scan for the rest of the process's lifetime.
  */
 async function vacancyEngineDataRoot(): Promise<string> {
+  // Real Electron layout tests seed an isolated report tree. Keep that fixture out of the
+  // developer's repository report directory, and never honor the hook in a packaged build.
+  const e2eDataRoot = process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT?.trim();
+  if (!app.isPackaged && e2eDataRoot) return e2eDataRoot;
   const root = resolveVacancyEngineDataRoot({
     vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
     isPackaged: app.isPackaged,

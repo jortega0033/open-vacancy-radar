@@ -130,6 +130,32 @@ afterEach(() => {
  * App.tsx's own behavior.
  */
 describe('App', () => {
+  it('gives only Search an edge-to-edge, independently scrolling workspace', async () => {
+    installVacancyRadarBridge({
+      getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    const { container } = render(<App />);
+    await waitFor(() => expect(screen.getByLabelText('Vacancy details')).toBeInTheDocument());
+
+    const main = container.querySelector('main');
+    const resultsScroller = screen.getByLabelText('Vacancy results');
+    const detailScroller = screen.getByLabelText('Vacancy details');
+    const workspace = resultsScroller.parentElement?.parentElement;
+
+    expect(main).toHaveClass('overflow-hidden');
+    expect(main).not.toHaveClass('px-6');
+    expect(workspace).toHaveClass('px-6', 'lg:px-0');
+    expect(resultsScroller).toHaveClass('overflow-y-auto');
+    expect(detailScroller).toHaveClass('overflow-y-auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+    expect(main).toHaveClass('overflow-y-auto', 'px-6');
+    expect(main).not.toHaveClass('overflow-hidden');
+  });
+
   it('shows the daemon-unavailable banner when the daemon reports an error', async () => {
     let statusCallback: ((status: DaemonStatus) => void) | undefined;
     installBridge({
