@@ -324,7 +324,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
   return (
     <div className="modal modal-open" role="dialog" aria-modal="true">
-      <div className="modal-box max-w-lg">
+      <div className="modal-box max-h-[calc(100vh-2rem)] max-w-md overflow-y-auto p-4">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
