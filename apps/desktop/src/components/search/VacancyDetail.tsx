@@ -13,7 +13,9 @@ export type PrepareState = 'idle' | 'preparing';
 function Card({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex h-full flex-col rounded-box border border-base-300 p-3.5">
-      <div className="text-xs font-semibold tracking-wide text-base-content/60 uppercase">{label}</div>
+      <div className="text-xs font-semibold tracking-wide text-base-content/60 uppercase">
+        {label}
+      </div>
       {children}
     </div>
   );
@@ -27,15 +29,19 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     { k: 'Source', v: discoveryProviderLabel(result.provider) },
     {
       k: 'Salary source',
-      v: vacancy.salaryProvider === null || vacancy.salaryProvider === undefined
-        ? 'Not recorded'
-        : `${discoveryProviderLabel(vacancy.salaryProvider)}${vacancy.salarySourceKey ? ` (${vacancy.salarySourceKey})` : ''}`,
+      v:
+        vacancy.salaryProvider === null || vacancy.salaryProvider === undefined
+          ? 'Not recorded'
+          : `${discoveryProviderLabel(vacancy.salaryProvider)}${vacancy.salarySourceKey ? ` (${vacancy.salarySourceKey})` : ''}`,
     },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
     {
       k: 'Annualised minimum (USD)',
-      v: vacancy.annualizedMinimumUsd == null ? 'Not derivable' : vacancy.annualizedMinimumUsd.toLocaleString(),
+      v:
+        vacancy.annualizedMinimumUsd == null
+          ? 'Not derivable'
+          : vacancy.annualizedMinimumUsd.toLocaleString(),
     },
     {
       k: 'Comparable annual minimum',
@@ -48,7 +54,8 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     {
       k: 'Posted',
       v: vacancy.postedAt
-        ? formatDate(vacancy.postedAt) + (isStalePosting(vacancy.postedAt) ? ' (over a month old)' : '')
+        ? formatDate(vacancy.postedAt) +
+          (isStalePosting(vacancy.postedAt) ? ' (over a month old)' : '')
         : 'Not stated by this source',
     },
     { k: 'Discovery decision', v: vacancy.decision.replace(/_/g, ' ') },
@@ -109,7 +116,8 @@ export function VacancyDetail({
 }: VacancyDetailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
+    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop)
+      scrollRef.current.scrollTop = scrollTop;
   }, [scrollTop]);
   const subtitle = [orNotStated(result.location), result.salary]
     .filter((part): part is string => !!part)
@@ -119,45 +127,71 @@ export function VacancyDetail({
     <div
       ref={scrollRef}
       aria-label="Vacancy details"
-      className="min-w-0 flex-1 overflow-y-auto"
+      className="ovr-vacancy-details min-w-0 flex-1 overflow-y-auto"
       onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
     >
       <div className="max-w-3xl px-6 py-5 pb-10">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-xl font-semibold">{result.title}</h2>
-            <div className="mt-0.5 text-sm font-medium text-base-content/80">{result.company}</div>
+            <h2 className="break-words text-xl font-semibold">{result.title}</h2>
+            <div className="mt-0.5 break-words text-sm font-medium text-base-content/80">
+              {result.company}
+            </div>
             <div className="mt-1 text-xs text-base-content/60">{subtitle}</div>
           </div>
 
           <div className="flex max-w-full flex-none flex-wrap gap-2">
             <button
-              className="btn btn-primary btn-sm"
+              className="btn btn-primary btn-sm whitespace-normal"
               type="button"
               onClick={onPrepare}
               disabled={prepareState === 'preparing' || !prepareAvailable}
               title={prepareAvailable ? undefined : 'Available when this scan finishes'}
             >
-              {prepareState === 'preparing' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-              {prepareState === 'preparing' ? 'Preparing…' : prepareAvailable ? 'Prepare application' : 'Finishing scan…'}
+              {prepareState === 'preparing' && (
+                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+              )}
+              {prepareState === 'preparing'
+                ? 'Preparing…'
+                : prepareAvailable
+                  ? 'Prepare application'
+                  : 'Finishing scan…'}
             </button>
             <button
-              className="btn btn-outline btn-sm"
+              className="btn btn-outline btn-sm whitespace-normal"
               type="button"
               onClick={onSave}
               disabled={saveState !== 'idle'}
             >
-              {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+              {saveState === 'saving' && (
+                <span
+                  className="loading loading-spinner loading-xs text-base-content"
+                  aria-hidden="true"
+                />
+              )}
               {saveState === 'saved' ? 'Saved' : 'Save job'}
             </button>
-            <button className="btn btn-outline btn-sm" type="button" onClick={onGenerateLetter}>
+            <button
+              className="btn btn-outline btn-sm whitespace-normal"
+              type="button"
+              onClick={onGenerateLetter}
+            >
               Generate Letter
             </button>
-            <button className="btn btn-outline btn-sm" type="button" onClick={onToggleAssistant}>
+            <button
+              className="btn btn-outline btn-sm whitespace-normal"
+              type="button"
+              onClick={onToggleAssistant}
+            >
               {assistantOpen ? 'Hide AI assistant' : 'Use for AI'}
             </button>
             {isWebUrl(result.url) ? (
-              <a className="btn btn-outline btn-sm" href={result.url} target="_blank" rel="noopener noreferrer">
+              <a
+                className="btn btn-outline btn-sm whitespace-normal"
+                href={result.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 Open job
               </a>
             ) : (
@@ -177,7 +211,7 @@ export function VacancyDetail({
           </div>
         )}
 
-        <div className="mt-4 grid grid-cols-1 gap-2.5 md:grid-cols-3">
+        <div className="ovr-vacancy-summary-grid mt-4 grid grid-cols-1 gap-2.5">
           <Card label="Employer verification">
             <div className="mt-1.5 flex items-center gap-2">
               {result.verification.tone !== null && (
@@ -188,9 +222,11 @@ export function VacancyDetail({
                   aria-hidden="true"
                 />
               )}
-              <span className="text-sm font-semibold">{result.verification.label}</span>
+              <span className="break-words text-sm font-semibold">{result.verification.label}</span>
             </div>
-            <p className="mt-1 text-xs leading-relaxed text-base-content/60">{result.verification.note}</p>
+            <p className="mt-1 text-xs leading-relaxed text-base-content/60">
+              {result.verification.note}
+            </p>
           </Card>
 
           <Card label="CV match">
@@ -200,13 +236,19 @@ export function VacancyDetail({
               against {defaultCvName ? `your default CV (${defaultCvName})` : 'a CV you load'} using
               your own {providerLabel} CLI.
             </p>
-            <button className="btn btn-outline btn-xs mt-auto self-start" type="button" onClick={onToggleAssistant}>
+            <button
+              className="btn btn-outline btn-xs mt-auto self-start"
+              type="button"
+              onClick={onToggleAssistant}
+            >
               Analyse against my CV
             </button>
           </Card>
 
           <Card label="Vacancy source">
-            <div className="mt-1.5 text-sm font-semibold">{discoveryProviderLabel(result.provider)}</div>
+            <div className="mt-1.5 break-words text-sm font-semibold">
+              {discoveryProviderLabel(result.provider)}
+            </div>
             <p className="mt-1 text-xs leading-relaxed text-base-content/60">
               Discovery feed. Most sources here do not report a posting date, so check freshness on
               the vacancy itself when the date above is unknown.
@@ -224,10 +266,16 @@ export function VacancyDetail({
             <div className="mt-3 flex flex-col items-center gap-2 rounded-box border border-dashed border-base-300 py-8 text-center">
               <FileDashed size={28} className="text-base-content/30" aria-hidden="true" />
               <p className="text-sm text-base-content/60">
-                {discoveryProviderLabel(result.provider)} did not include description text for this vacancy.
+                {discoveryProviderLabel(result.provider)} did not include description text for this
+                vacancy.
               </p>
               {isWebUrl(result.url) && (
-                <a className="link link-primary text-sm" href={result.url} target="_blank" rel="noopener noreferrer">
+                <a
+                  className="link link-primary text-sm"
+                  href={result.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   Read the full posting at the source
                 </a>
               )}
@@ -237,23 +285,29 @@ export function VacancyDetail({
 
         <section className="mt-6">
           <SectionHeading>Overview</SectionHeading>
-          <dl className="mt-1 grid grid-cols-1 gap-x-8 md:grid-cols-2">
+          <dl className="ovr-vacancy-overview mt-1 grid grid-cols-1 gap-x-8">
             {overviewPairs(result).map((pair) => (
-              <div key={pair.k} className="flex justify-between gap-3 border-b border-base-300 py-2 text-sm">
+              <div
+                key={pair.k}
+                className="flex justify-between gap-3 border-b border-base-300 py-2 text-sm"
+              >
                 <dt className="flex-none text-base-content/60">{pair.k}</dt>
-                <dd className="text-right font-medium">{pair.v}</dd>
+                <dd className="min-w-0 break-words text-right font-medium">{pair.v}</dd>
               </div>
             ))}
           </dl>
         </section>
 
         <section className="mt-6">
-          <SectionHeading aside="No strong-match / gap breakdown in this pipeline">Why this matches you</SectionHeading>
+          <SectionHeading aside="No strong-match / gap breakdown in this pipeline">
+            Why this matches you
+          </SectionHeading>
 
           <p className="mt-3 text-sm text-base-content/70">
             The worldwide pipeline scores a single overall match percentage against your search
             profile (shown in the results list), but does not break it down into individual strong
-            matches or gaps. Use the AI gap analysis for a real, detailed comparison against your CV.
+            matches or gaps. Use the AI gap analysis for a real, detailed comparison against your
+            CV.
           </p>
 
           {result.reasons.length > 0 && (

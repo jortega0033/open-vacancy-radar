@@ -3,9 +3,12 @@ import { formatDate, type SearchResult } from './results.js';
 
 function KeyValue({ items }: { items: { k: string; v: string }[] }) {
   return (
-    <dl className="mt-1 grid grid-cols-1 gap-x-8 md:grid-cols-2">
+    <dl className="ovr-vacancy-verification mt-1 grid grid-cols-1 gap-x-8">
       {items.map((item) => (
-        <div key={item.k} className="flex justify-between gap-3 border-b border-base-300 py-2 text-sm">
+        <div
+          key={item.k}
+          className="flex justify-between gap-3 border-b border-base-300 py-2 text-sm"
+        >
           <dt className="flex-none text-base-content/60">{item.k}</dt>
           <dd className="text-right font-medium">{item.v}</dd>
         </div>
@@ -17,7 +20,9 @@ function KeyValue({ items }: { items: { k: string; v: string }[] }) {
 export function SectionHeading({ children, aside }: { children: string; aside?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-base-300 pb-2">
-      <h3 className="text-xs font-semibold tracking-wide text-base-content/70 uppercase">{children}</h3>
+      <h3 className="text-xs font-semibold tracking-wide text-base-content/70 uppercase">
+        {children}
+      </h3>
       {aside && <span className="text-xs text-base-content/50">{aside}</span>}
     </div>
   );
@@ -65,8 +70,8 @@ export function VerificationSection({ result }: VerificationSectionProps) {
         {official ? (
           <>
             <p className="mt-1.5 text-sm text-base-content/70">
-              This exact URL was also fetched from an official employer/ATS source in this run:
-              a check on the <em>vacancy</em>, not on the employer.
+              This exact URL was also fetched from an official employer/ATS source in this run: a
+              check on the <em>vacancy</em>, not on the employer.
             </p>
             <KeyValue
               items={[
