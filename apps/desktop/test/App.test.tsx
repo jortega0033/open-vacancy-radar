@@ -196,6 +196,145 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText(/codex ready/i)).toBeInTheDocument());
   });
 
+  describe('Search navigation session (issue #324)', () => {
+    it('restores filters, page, selection, scroll and report without reloading it', async () => {
+      const vacancies = Array.from({ length: 30 }, (_, index) =>
+        makeWorldwideVacancy({
+          key: `ww-${index}`,
+          title: `Frontend Role ${String(index).padStart(2, '0')}`,
+          company: index === 29 ? 'Selected Company' : `Company ${index}`,
+        }),
+      );
+      const getReport = vi.fn().mockResolvedValue(makeWorldwideReport(vacancies));
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport,
+      });
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+        target: { value: 'Frontend' },
+      });
+      fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
+        target: { value: 'remotive' },
+      });
+      fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), {
+        target: { value: 'full_time' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
+      fireEvent.click(screen.getByRole('button', { name: /analyse against my cv/i }));
+      await waitFor(() => expect(screen.getByText('CV assistant')).toBeInTheDocument());
+
+      const resultsScroller = screen.getByLabelText('Vacancy results');
+      Object.defineProperty(resultsScroller, 'scrollTop', { configurable: true, value: 84, writable: true });
+      fireEvent.scroll(resultsScroller);
+      const detailScroller = screen.getByLabelText('Vacancy details');
+      Object.defineProperty(detailScroller, 'scrollTop', { configurable: true, value: 128, writable: true });
+      fireEvent.scroll(detailScroller);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend');
+      expect(screen.getByRole('combobox', { name: 'Job source' })).toHaveValue('remotive');
+      expect(screen.getByRole('combobox', { name: 'Employment type' })).toHaveValue('full_time');
+      expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Vacancy results').scrollTop).toBe(84);
+      expect(screen.getByLabelText('Vacancy details').scrollTop).toBe(128);
+      expect(screen.getByText('CV assistant')).toBeInTheDocument();
+      expect(getReport).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns from Letters to the originating vacancy and preserved Search view', async () => {
+      const vacancies = Array.from({ length: 30 }, (_, index) =>
+        makeWorldwideVacancy({
+          key: `ww-${index}`,
+          title: `Frontend Role ${String(index).padStart(2, '0')}`,
+          company: `Company ${index}`,
+        }),
+      );
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport(vacancies)),
+      });
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Back to Frontend Role 29' }));
+
+      await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+      expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
+    });
+
+    it('starts a new transient session after the App root remounts', async () => {
+      const getReport = vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()]));
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport,
+      });
+
+      const first = render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+        target: { value: 'Remote' },
+      });
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+      first.unmount();
+
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+      expect(getReport).toHaveBeenCalledTimes(2);
+    });
+
+    it('installs a scan that finished while Search was unmounted', async () => {
+      const previousReport = makeWorldwideReport([makeWorldwideVacancy({ title: 'Previous Role' })]);
+      const nextReport = {
+        ...makeWorldwideReport([makeWorldwideVacancy({ title: 'Role Finished While Away' })]),
+        runId: 'ww-run-2',
+        generatedAt: '2026-08-29T12:00:00.000Z',
+      };
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      const runScan = vi.fn().mockReturnValue(new Promise<GlobalRemoteReport>((resolve) => {
+        resolveScan = resolve;
+      }));
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
+        getReport: vi.fn().mockResolvedValueOnce(previousReport).mockResolvedValue(nextReport),
+        runScan,
+      });
+
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText('Previous Role').length).toBeGreaterThan(0));
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+        target: { value: 'Role' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      await waitFor(() => expect(runScan).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      resolveScan(nextReport);
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+      await waitFor(() => expect(screen.getAllByText('Role Finished While Away').length).toBeGreaterThan(0));
+      expect(screen.queryByText('Previous Role')).not.toBeInTheDocument();
+    });
+  });
+
   /**
    * Issue #178: before this fix, `counts` defaulted to a zeroed `WorkspaceCounts`, so "not loaded
    * yet" and "genuinely zero" rendered identically -- a "0" badge, a "0 saved" subtitle. Neither

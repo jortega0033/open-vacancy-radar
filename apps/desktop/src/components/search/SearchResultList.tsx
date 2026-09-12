@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useLayoutEffect, useRef } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
@@ -113,6 +113,8 @@ export interface SearchResultListProps {
   page: number;
   pageCount: number;
   onPageChange: (page: number) => void;
+  scrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
 }
 
 export const SearchResultList = memo(function SearchResultList({
@@ -125,7 +127,13 @@ export const SearchResultList = memo(function SearchResultList({
   page,
   pageCount,
   onPageChange,
+  scrollTop = 0,
+  onScrollTopChange,
 }: SearchResultListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
+  }, [scrollTop]);
   // `flex-1` below `lg`, `flex-none` from `lg` up. `SearchPage` stacks this pane above
   // `VacancyDetail` in a column flex below `lg` -- and the app's own default window is 1000px wide,
   // narrower than `lg`'s 1024px, so that stacked layout is what a user gets out of the box.
@@ -143,7 +151,12 @@ export const SearchResultList = memo(function SearchResultList({
         {summary}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        aria-label="Vacancy results"
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+      >
         {results.length === 0 ? (
           <EmptyState
             illustration={noResultsIllustration}

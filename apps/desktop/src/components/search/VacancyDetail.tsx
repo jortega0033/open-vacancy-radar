@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { FileDashed } from '@phosphor-icons/react';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
@@ -60,6 +60,8 @@ export interface VacancyDetailProps {
   onGenerateLetter: () => void;
   assistantOpen: boolean;
   onToggleAssistant: () => void;
+  scrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
   /** The CV assistant, rendered by the page so this component stays presentational. */
   assistant: ReactNode;
 }
@@ -87,14 +89,25 @@ export function VacancyDetail({
   onGenerateLetter,
   assistantOpen,
   onToggleAssistant,
+  scrollTop = 0,
+  onScrollTopChange,
   assistant,
 }: VacancyDetailProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
+  }, [scrollTop]);
   const subtitle = [orNotStated(result.location), result.salary]
     .filter((part): part is string => !!part)
     .join(' · ');
 
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto">
+    <div
+      ref={scrollRef}
+      aria-label="Vacancy details"
+      className="min-w-0 flex-1 overflow-y-auto"
+      onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+    >
       <div className="max-w-3xl px-6 py-5 pb-10">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">

@@ -147,11 +147,11 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  for (const harness of harnesses) {
+  await Promise.all(harnesses.map(async (harness) => {
     await harness.manager.cancelAll(500).catch(() => {});
     await harness.app.close().catch(() => {});
     rmSync(harness.stateRoot, { recursive: true, force: true });
-  }
+  }));
   harnesses = [];
   rmSync(cwd, { recursive: true, force: true });
 });

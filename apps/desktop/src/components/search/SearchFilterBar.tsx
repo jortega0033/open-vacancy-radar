@@ -5,9 +5,9 @@ import { countryOptions, type SearchFilters } from './results.js';
 export interface SearchFilterBarProps {
   filters: SearchFilters;
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
-  /** The country filter: a plain, instant, client-side narrowing of whatever is already loaded. */
+  /** Updates the draft country criterion; a successful scan commits it. */
   onLocationChange: (value: string) => void;
-  /** Starts a fresh upstream scan. Filtering the loaded report happens through `onFiltersChange`. */
+  /** Starts a fresh upstream scan and commits its criteria with the completed report. */
   onSearch: () => void;
   /** Starts the deliberate broad scan flow. */
   onBrowseAll: () => void;
