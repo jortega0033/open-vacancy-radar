@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { RESUME_JSON_SHAPE } from '../electron/resume-schema.js';
 import {
+  buildAchievementRewritePrompt,
+  buildAtsFitPrompt,
+  buildBestFitRolesPrompt,
   buildCoverLetterPrompt,
   buildCvParsePrompt,
   buildCvTailorPrompt,
   buildGapAnalysisPrompt,
+  buildResumeAuditPrompt,
   buildStructuredResumePrompt,
   formatVacancy,
   GROUNDING_RULES,
@@ -30,7 +34,12 @@ const VACANCY: VacancyLead = {
 
 describe('prompt builders', () => {
   it('states an undisclosed salary explicitly rather than omitting the field', () => {
-    const block = formatVacancy({ ...VACANCY, advertisedMinimum: null, currency: null, salaryPeriod: null });
+    const block = formatVacancy({
+      ...VACANCY,
+      advertisedMinimum: null,
+      currency: null,
+      salaryPeriod: null,
+    });
     expect(block).toContain('Advertised salary: not disclosed in the posting');
   });
 
@@ -54,7 +63,10 @@ describe('prompt builders', () => {
     const huge = { fileName: 'cv.pdf', text: 'x'.repeat(MAX_CV_PROMPT_CHARS + 5_000) };
     // Every builder that echoes the CV shares one clamp; the tailoring prompt is checked too
     // because it is the one that asks for the whole document back, not a paragraph about it.
-    for (const prompt of [buildGapAnalysisPrompt(huge, VACANCY), buildCvTailorPrompt(huge, VACANCY)]) {
+    for (const prompt of [
+      buildGapAnalysisPrompt(huge, VACANCY),
+      buildCvTailorPrompt(huge, VACANCY),
+    ]) {
       expect(prompt).toContain('…truncated at');
       expect(prompt.length).toBeLessThan(MAX_CV_PROMPT_CHARS + 4_000);
     }
@@ -70,6 +82,9 @@ describe('prompt builders', () => {
       buildCvTailorPrompt(CV, VACANCY),
       buildCvParsePrompt(CV.fileName, CV.text),
       buildStructuredResumePrompt(CV, VACANCY),
+      buildResumeAuditPrompt(CV),
+      buildAchievementRewritePrompt(CV),
+      buildBestFitRolesPrompt(CV),
     ]) {
       expect(prompt).toContain(GROUNDING_RULES);
     }
@@ -132,10 +147,47 @@ describe('prompt builders', () => {
   });
 
   it('asks the gap analysis for the four fixed sections', () => {
-    const prompt = buildGapAnalysisPrompt(CV, VACANCY);
-    for (const heading of ['## Strengths', '## Gaps', '## How to close the gaps', '## Overall fit']) {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    for (const heading of [
+      '## Strengths',
+      '## Gaps',
+      '## How to close the gaps',
+      '## Overall fit',
+    ]) {
       expect(prompt).toContain(heading);
     }
+    expect(prompt).toContain('Do not claim to simulate, predict or guarantee');
+  });
+
+  it('keeps the resume audit grounded and organized around actionable review', () => {
+    const prompt = buildResumeAuditPrompt(CV);
+    for (const heading of [
+      '## Summary',
+      '## What works',
+      '## Risks and weak spots',
+      '## Priority fixes',
+    ]) {
+      expect(prompt).toContain(heading);
+    }
+    expect(prompt).toContain('Do not assume a target vacancy');
+    expect(prompt).toContain(CV.text);
+  });
+
+  it('separates achievement rewrites from their evidence and missing evidence', () => {
+    const prompt = buildAchievementRewritePrompt(CV);
+    expect(prompt).toContain('**Original:**');
+    expect(prompt).toContain('**Supported rewrite:**');
+    expect(prompt).toContain('**Evidence used:**');
+    expect(prompt).toContain('**Missing evidence:**');
+    expect(prompt).toContain('Do not add numbers');
+  });
+
+  it('frames best-fit roles as realistic search directions rather than outcomes', () => {
+    const prompt = buildBestFitRolesPrompt(CV);
+    expect(prompt).toContain('## Best-fit role directions');
+    expect(prompt).toContain('## Stretch directions');
+    expect(prompt).toContain('## Search focus');
+    expect(prompt).toContain('not a guaranteed fit, interview or job outcome');
   });
 
   it('asks the cover letter for a generic salutation and no placeholder template', () => {
@@ -149,13 +201,17 @@ describe('prompt builders', () => {
   it('asks the tailored CV for reordering/re-emphasis only, never new facts or a new shape', () => {
     const prompt = buildCvTailorPrompt(CV, VACANCY);
     expect(prompt).toContain('reordering and re-emphasis task, not a rewriting task');
-    expect(prompt).toContain('Keep the candidate\'s real employers, titles, dates and structure intact');
+    expect(prompt).toContain(
+      "Keep the candidate's real employers, titles, dates and structure intact",
+    );
     expect(prompt).toContain('no Markdown headings');
     expect(prompt).toContain('Angular architect. 8 years of frontend work.');
     // The failure mode this feature invites, spelled out: a vacancy that asks for a skill the CV
     // does not evidence must not become a skill the tailored draft claims.
     expect(prompt).toContain('even if the vacancy asks for it and the CV is silent on it');
-    expect(prompt).toContain('Do not add a single fact, skill, tool, employer, title, date or metric');
+    expect(prompt).toContain(
+      'Do not add a single fact, skill, tool, employer, title, date or metric',
+    );
     expect(prompt).toContain('drawing only on what the CV already says');
   });
 
@@ -164,7 +220,9 @@ describe('prompt builders', () => {
     expect(prompt).toContain(RESUME_JSON_SHAPE);
     expect(prompt).toContain('no Markdown code fence');
     expect(prompt).toContain('do not guess');
-    expect(prompt).toContain('Do not add a single fact, skill, tool, employer, title, date or metric');
+    expect(prompt).toContain(
+      'Do not add a single fact, skill, tool, employer, title, date or metric',
+    );
     expect(prompt).toContain('Angular architect. 8 years of frontend work.');
   });
 
@@ -184,7 +242,10 @@ describe('prompt builders', () => {
 
   it('reports whether the vacancy text would be truncated at a given limit', () => {
     expect(wasVacancyTextTruncated(VACANCY, MAX_UNATTENDED_VACANCY_TEXT_CHARS)).toBe(false);
-    const longVacancy = { ...VACANCY, description: 'x'.repeat(MAX_UNATTENDED_VACANCY_TEXT_CHARS + 1) };
+    const longVacancy = {
+      ...VACANCY,
+      description: 'x'.repeat(MAX_UNATTENDED_VACANCY_TEXT_CHARS + 1),
+    };
     expect(wasVacancyTextTruncated(longVacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)).toBe(true);
   });
 

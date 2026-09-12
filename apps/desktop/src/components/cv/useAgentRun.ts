@@ -4,7 +4,7 @@ import type { AgentEvent, ProviderId } from '@agent-dock/shared';
 /**
  * One-shot "send a prompt, stream the answer back" runner on top of the AgentDock bridge.
  *
- * This exists because both AI features need exactly the same lifecycle and exactly the same
+ * This exists because the AI features need exactly the same lifecycle and exactly the same
  * failure discipline, and because that lifecycle has three ways to hang that a naive
  * `createSession` + `onSessionEvent` wiring gets wrong:
  *
@@ -18,7 +18,8 @@ import type { AgentEvent, ProviderId } from '@agent-dock/shared';
  *   filtered against a ref holding *this* run's session id, so a stale session (or the other
  *   feature's session) can never append text to this one.
  */
-export type AgentRunStatus = 'idle' | 'starting' | 'streaming' | 'completed' | 'failed' | 'cancelled';
+export type AgentRunStatus =
+  'idle' | 'starting' | 'streaming' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentRunOptions {
   model?: string;
@@ -64,7 +65,9 @@ export const RUN_TIMEOUT_MS = 240_000;
 export function describeError(err: unknown, fallback: string): string {
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   if (!message) return fallback;
-  const match = /Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?(.*)$/s.exec(message);
+  const match = /Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?(.*)$/s.exec(
+    message,
+  );
   return (match?.[1] ?? message).trim() || fallback;
 }
 
@@ -180,7 +183,9 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           if (sessionIdRef.current !== session.id) return;
           sessionIdRef.current = undefined;
           setStatus('failed');
-          setError(`no response after ${Math.round(RUN_TIMEOUT_MS / 1000)}s: the run was stopped; try again`);
+          setError(
+            `no response after ${Math.round(RUN_TIMEOUT_MS / 1000)}s: the run was stopped; try again`,
+          );
           void window.agentDock.cancelSession(session.id).catch(() => {});
         }, RUN_TIMEOUT_MS);
       } catch (err) {
@@ -211,5 +216,13 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
     setStatus('idle');
   }, [clearWatchdog]);
 
-  return { status, text, error, isBusy: status === 'starting' || status === 'streaming', start, cancel, reset };
+  return {
+    status,
+    text,
+    error,
+    isBusy: status === 'starting' || status === 'streaming',
+    start,
+    cancel,
+    reset,
+  };
 }

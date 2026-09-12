@@ -6,6 +6,15 @@ import { installBridges, TEST_VACANCY } from './cv-bridges.js';
 
 const CV: CvDocument = { fileName: 'cv.pdf', text: 'Angular architect. 8 years of frontend work.' };
 
+function stubClipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+    writable: true,
+  });
+  return writeText;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -14,15 +23,15 @@ describe('GapAnalysis', () => {
   it('keeps the run button disabled until both a CV and a vacancy are present', () => {
     installBridges();
     const { rerender } = render(<GapAnalysis cv={null} vacancy={null} />);
-    expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /check ats fit/i })).toBeDisabled();
     expect(screen.getByText(/load a cv above/i)).toBeInTheDocument();
 
     rerender(<GapAnalysis cv={CV} vacancy={null} />);
-    expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /check ats fit/i })).toBeDisabled();
     expect(screen.getByText(/select a vacancy/i)).toBeInTheDocument();
 
     rerender(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    expect(screen.getByRole('button', { name: /analyse gaps/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /check ats fit/i })).toBeEnabled();
   });
 
   it("shows the actually-configured provider in the 'starting' status, not a hardcoded Claude Code", async () => {
@@ -32,7 +41,7 @@ describe('GapAnalysis', () => {
     });
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} provider="codex" />);
 
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
 
     expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
   });
@@ -41,7 +50,7 @@ describe('GapAnalysis', () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} model="sonnet" />);
 
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
 
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
 
@@ -54,19 +63,29 @@ describe('GapAnalysis', () => {
     expect(input?.prompt).toContain('## Gaps');
     expect(input?.prompt).toContain('Senior Frontend Engineer');
     expect(input?.prompt).toContain('Angular architect. 8 years of frontend work.');
+    expect(input?.prompt).toContain('=== INPUT COMPLETENESS ===');
+    expect(input?.prompt).toContain('=== CRITICAL REQUIREMENTS FROM THE FULL POSTING ===');
 
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/starting claude code|analysing/i));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/starting claude code|checking/i),
+    );
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
 
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: '## Strengths' });
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Eight years of Angular.' });
 
-    await waitFor(() => expect(screen.getByRole('log', { name: /gap analysis/i })).toHaveTextContent('## Strengths'));
-    expect(screen.getByRole('log', { name: /gap analysis/i })).toHaveTextContent('Eight years of Angular.');
+    await waitFor(() =>
+      expect(screen.getByRole('log', { name: /ats fit/i })).toHaveTextContent('## Strengths'),
+    );
+    expect(screen.getByRole('log', { name: /ats fit/i })).toHaveTextContent(
+      'Eight years of Angular.',
+    );
 
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /re-run analysis/i })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /re-run ats fit/i })).toBeEnabled(),
+    );
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   });
@@ -74,7 +93,7 @@ describe('GapAnalysis', () => {
   it('ignores events belonging to another session', async () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
     bridges.emit('some-other-session', { type: 'assistant.message', text: 'should not appear' });
@@ -86,20 +105,22 @@ describe('GapAnalysis', () => {
   it('surfaces session.failed as an error state without crashing', async () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
     bridges.emit('sess-cv-1', { type: 'session.failed', message: 'claude exited with code 1' });
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('claude exited with code 1');
-    expect(screen.getByRole('button', { name: /re-run analysis/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /re-run ats fit/i })).toBeEnabled();
   });
 
   it('surfaces a rejected createSession as an error state instead of an endless spinner', async () => {
-    installBridges({ agentDock: { createSession: vi.fn().mockRejectedValue(new Error('daemon is not ready yet')) } });
+    installBridges({
+      agentDock: { createSession: vi.fn().mockRejectedValue(new Error('daemon is not ready yet')) },
+    });
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('daemon is not ready yet');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
@@ -108,7 +129,7 @@ describe('GapAnalysis', () => {
   it('treats a completed run that produced no text as a failure, not an empty success', async () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
     bridges.emit('sess-cv-1', { type: 'session.completed' });
@@ -119,7 +140,7 @@ describe('GapAnalysis', () => {
   it('cancels the running session through the bridge', async () => {
     const bridges = installBridges();
     render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
-    fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled());
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -127,5 +148,20 @@ describe('GapAnalysis', () => {
 
     bridges.emit('sess-cv-1', { type: 'session.cancelled' });
     expect(await screen.findByText(/^Cancelled\.$/)).toBeInTheDocument();
+  });
+
+  it('keeps the ATS result copyable without changing the CV', async () => {
+    const bridges = installBridges();
+    const writeText = stubClipboard();
+    render(<GapAnalysis cv={CV} vacancy={TEST_VACANCY} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Grounded ATS result.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /copy to clipboard/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Grounded ATS result.'));
+    expect(screen.getByText('Copied')).toBeInTheDocument();
   });
 });

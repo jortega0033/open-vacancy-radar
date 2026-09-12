@@ -85,11 +85,13 @@ function installStore(rows: SavedJobRecord[]) {
 
 /** Runs an analysis to completion in a freshly rendered `GapAnalysis`. */
 async function runAnalysis(bridges: ReturnType<typeof installBridges>) {
-  fireEvent.click(screen.getByRole('button', { name: /analyse gaps/i }));
+  fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
   await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
   bridges.emit('sess-cv-1', { type: 'assistant.message', text: ANALYSIS });
   bridges.emit('sess-cv-1', { type: 'session.completed' });
-  await waitFor(() => expect(screen.getByRole('button', { name: /re-run analysis/i })).toBeEnabled());
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /re-run ats fit/i })).toBeEnabled(),
+  );
 }
 
 afterEach(() => {
@@ -151,7 +153,11 @@ describe('saving a gap analysis onto its saved job', () => {
   it('does not resend the analysis when the drawer itself is saved, so an edit cannot rewrite it', () => {
     installWorkspaceBridge();
     const onSave = vi.fn();
-    const kept: SavedJobRecord = { ...SAVED_JOB, gapAnalysis: ANALYSIS, gapAnalysisAt: '2026-09-01T09:00:00.000Z' };
+    const kept: SavedJobRecord = {
+      ...SAVED_JOB,
+      gapAnalysis: ANALYSIS,
+      gapAnalysisAt: '2026-09-01T09:00:00.000Z',
+    };
 
     render(<SavedJobDrawer job={kept} onSave={onSave} onClose={vi.fn()} />);
     fireEvent.change(screen.getByDisplayValue('Recruiter replied within a day.'), {
@@ -167,7 +173,11 @@ describe('saving a gap analysis onto its saved job', () => {
   });
 
   it('keeps a stored analysis through the delete-undo recreate', () => {
-    const kept: SavedJobRecord = { ...SAVED_JOB, gapAnalysis: ANALYSIS, gapAnalysisAt: '2026-09-01T09:00:00.000Z' };
+    const kept: SavedJobRecord = {
+      ...SAVED_JOB,
+      gapAnalysis: ANALYSIS,
+      gapAnalysisAt: '2026-09-01T09:00:00.000Z',
+    };
     expect(toSavedJobInput(kept).gapAnalysis).toBe(ANALYSIS);
   });
 
@@ -220,14 +230,27 @@ describe('matching a vacancy to the saved job it is about', () => {
   });
 
   it('does not match a different vacancy at the same company', () => {
-    const other: SavedJobRecord = { ...SAVED_JOB, sourceUrl: 'https://example.invalid/jobs/other', role: 'Designer' };
+    const other: SavedJobRecord = {
+      ...SAVED_JOB,
+      sourceUrl: 'https://example.invalid/jobs/other',
+      role: 'Designer',
+    };
     expect(matchSavedJob([other], lead)).toBeNull();
   });
 });
 
 describe('docs/privacy.md discloses the new stored field', () => {
   const privacy = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', 'docs', 'privacy.md'),
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      '..',
+      '..',
+      'docs',
+      'privacy.md',
+    ),
     'utf8',
   );
 
