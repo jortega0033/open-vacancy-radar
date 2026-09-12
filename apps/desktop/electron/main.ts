@@ -839,6 +839,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
+    minWidth: 760,
+    minHeight: 600,
     ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
