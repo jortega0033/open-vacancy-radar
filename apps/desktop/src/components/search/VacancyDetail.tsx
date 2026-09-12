@@ -25,12 +25,26 @@ function overviewPairs(result: SearchResult): { k: string; v: string }[] {
     { k: 'Company', v: result.company },
     { k: 'Location', v: orNotStated(result.location) },
     { k: 'Source', v: discoveryProviderLabel(result.provider) },
+    {
+      k: 'Salary source',
+      v: vacancy.salaryProvider === null || vacancy.salaryProvider === undefined
+        ? 'Not recorded'
+        : `${discoveryProviderLabel(vacancy.salaryProvider)}${vacancy.salarySourceKey ? ` (${vacancy.salarySourceKey})` : ''}`,
+    },
     { k: 'Employment type', v: orNotStated(vacancy.employmentType) },
     { k: 'Advertised salary', v: result.salary ?? 'Not disclosed' },
     {
       k: 'Annualised minimum (USD)',
       v: vacancy.annualizedMinimumUsd == null ? 'Not derivable' : vacancy.annualizedMinimumUsd.toLocaleString(),
     },
+    {
+      k: 'Comparable annual minimum',
+      v:
+        vacancy.normalizedAnnualMinimum == null || vacancy.normalizedCurrency == null
+          ? 'Not comparable'
+          : `${vacancy.normalizedCurrency} ${vacancy.normalizedAnnualMinimum.toLocaleString()}`,
+    },
+    { k: 'Normalization', v: vacancy.normalizationMethod?.replace(/_/g, ' ') ?? 'Not recorded' },
     {
       k: 'Posted',
       v: vacancy.postedAt

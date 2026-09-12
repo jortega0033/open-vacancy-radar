@@ -150,6 +150,7 @@ function normalizeAiDevJob(
     currency,
     salaryPeriod,
     advertisedMinimum,
+    salaryProvenance: 'reviewed_structured',
     description,
     postedAt: isoPostedAt(stringValue(job.published_at)) ?? isoPostedAt(stringValue(job.created_at)),
     raw,

@@ -107,6 +107,13 @@ describe('Remoote linked-index discovery', () => {
         salaryPeriod: 'year',
         advertisedMinimum: 120_000,
         annualizedMinimumUsd: 120_000,
+        normalizedAnnualMinimum: 120_000,
+        normalizedCurrency: 'USD',
+        normalizationMethod: 'advertised_annual',
+        salaryProvenance: 'reviewed_structured',
+        salaryProvider: 'remoote',
+        salarySourceKey: 'remoote:12345',
+        salarySourceUrl: 'https://remoote.app/jobs/12345-senior-frontend-engineer',
       }),
     ]);
     expect(http.requestedUrls).toEqual([REMOOTE_SEARCH_URL]);

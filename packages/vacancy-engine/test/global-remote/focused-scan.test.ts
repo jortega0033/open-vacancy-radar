@@ -80,6 +80,22 @@ describe('focused scan capability contract', () => {
     ]);
   });
 
+  it('audits salary as deferred until a source has reviewed salary semantics', () => {
+    const planned = withFocusedScanPlan(source, {
+      role: 'frontend',
+      country: null,
+      employment: null,
+      salary: { minimumAnnual: 60_000, currency: 'EUR', includeUnknown: true },
+    });
+    expect(planned.focusedScan?.requested.salary).toBe('EUR 60000');
+    expect(planned.focusedScan?.applied).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ criterion: 'salary' })]),
+    );
+    expect(planned.focusedScan?.deferred).toEqual([
+      expect.objectContaining({ criterion: 'salary', reason: expect.any(String) }),
+    ]);
+  });
+
   it('maps countries only for sources with a documented vocabulary and leaves Unspecified local', () => {
     for (const country of ALL_COUNTRIES) {
       expect(upstreamCountryFor('himalayas', country)).toMatch(/^[A-Z]{2}$/);
@@ -158,5 +174,33 @@ describe('applyFocusedScanCriteria', () => {
     expect(applyFocusedScanCriteria([vacancy({ key: 'other', title: 'Operations Manager' })], {
       role: '', country: null, employment: null,
     }).vacancies.map((item) => item.key)).toEqual(['other']);
+  });
+
+  it('filters below-floor comparable rows while retaining unknown salaries by default', () => {
+    const result = applyFocusedScanCriteria(
+      [
+        vacancy({ key: 'at-floor', normalizedAnnualMinimum: 60_000, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' }),
+        vacancy({ key: 'below', normalizedAnnualMinimum: 59_999, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' }),
+        vacancy({ key: 'unknown' }),
+      ],
+      {
+        role: '',
+        country: null,
+        employment: null,
+        salary: { minimumAnnual: 60_000, currency: 'EUR', includeUnknown: true },
+      },
+    );
+    expect(result.vacancies.map((item) => item.key)).toEqual(['at-floor', 'unknown']);
+    expect(result.salaryComparable).toBe(2);
+    expect(result.salaryUnknown).toBe(1);
+    expect(result.salaryBelowMinimum).toBe(1);
+    expect(
+      applyFocusedScanCriteria([vacancy({ key: 'unknown' })], {
+        role: '',
+        country: null,
+        employment: null,
+        salary: { minimumAnnual: 60_000, currency: 'EUR', includeUnknown: false },
+      }).vacancies,
+    ).toEqual([]);
   });
 });

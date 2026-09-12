@@ -6,6 +6,7 @@ import {
   descriptionExcerpt,
   filterSearchResultIndex,
   filterResults,
+  salaryCounts,
   countryOptions,
   formatDiscoverySalary,
   isStalePosting,
@@ -155,6 +156,39 @@ describe('filterResults: sponsorOnly', () => {
 
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
+  });
+});
+
+describe('filterResults: salary floor', () => {
+  it('keeps comparable rows at or above the floor and includes unknown rows by default', () => {
+    const atFloor = worldwideResult({ key: 'at-floor', location: 'Amsterdam, Netherlands' });
+    atFloor.raw = discoveryVacancy({ normalizedAnnualMinimum: 60_000, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' });
+    const below = worldwideResult({ key: 'below', location: 'Amsterdam, Netherlands' });
+    below.raw = discoveryVacancy({ normalizedAnnualMinimum: 59_999, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' });
+    const unknown = worldwideResult({ key: 'unknown', location: 'Amsterdam, Netherlands' });
+    unknown.raw = discoveryVacancy({ salaryPeriod: 'weekly' });
+    const filters = { ...DEFAULT_FILTERS, salaryMinimum: '60000' };
+
+    expect(filterResults([atFloor, below, unknown], filters).map((result) => result.key)).toEqual([
+      'at-floor',
+      'unknown',
+    ]);
+    expect(salaryCounts([atFloor, below, unknown], filters)).toEqual({ comparable: 2, unknown: 1 });
+    expect(
+      filterResults([atFloor, below, unknown], { ...filters, includeUnknownSalary: false }).map(
+        (result) => result.key,
+      ),
+    ).toEqual(['at-floor']);
+  });
+
+  it('does not compare a raw USD value as EUR', () => {
+    const usd = worldwideResult({ key: 'usd', location: 'Remote' });
+    usd.raw = discoveryVacancy({ normalizedAnnualMinimum: 100_000, normalizedCurrency: 'USD', salaryProvenance: 'reviewed_structured' });
+    expect(filterResults([usd], { ...DEFAULT_FILTERS, salaryMinimum: '60000' })).toEqual([usd]);
+    expect(salaryCounts([usd], { ...DEFAULT_FILTERS, salaryMinimum: '60000' })).toEqual({
+      comparable: 0,
+      unknown: 1,
+    });
   });
 });
 

@@ -124,6 +124,59 @@ describe('global remote discovery aggregation', () => {
     }).vacancies).toHaveLength(1);
   });
 
+  it('preserves the provider and source key for salary evidence selected during deduplication', () => {
+    const url = 'https://apply.workable.com/j/SALARY123';
+    const [merged] = uniqueDiscovery([
+      vacancy('workable_global', 'workable_global:SALARY123', url, 'Engineer'),
+      vacancy('himalayas', 'himalayas:salary-copy', `${url}#copy`, 'Engineer', {
+        advertisedMinimum: 70_000,
+        currency: 'EUR',
+        salaryPeriod: 'annual',
+        salaryProvenance: 'reviewed_structured',
+        normalizedAnnualMinimum: 70_000,
+        normalizedCurrency: 'EUR',
+        normalizationMethod: 'advertised_annual',
+        assumptionProvenance: 'Advertised annual period.',
+        salaryProvider: 'himalayas',
+        salarySourceKey: 'himalayas:salary-copy',
+        salarySourceUrl: `${url}#copy`,
+      }),
+    ]);
+
+    expect(merged).toMatchObject({
+      salaryProvider: 'himalayas',
+      salarySourceKey: 'himalayas:salary-copy',
+      salarySourceUrl: `${url}#copy`,
+      salaryProvenance: 'reviewed_structured',
+      normalizedAnnualMinimum: 70_000,
+    });
+  });
+
+  it('keeps a secondary loose salary explicitly unknown instead of making it comparable', () => {
+    const url = 'https://apply.workable.com/j/UNKNOWN123';
+    const [merged] = uniqueDiscovery([
+      vacancy('workable_global', 'workable_global:UNKNOWN123', url, 'Engineer'),
+      vacancy('himalayas', 'himalayas:loose-copy', `${url}#copy`, 'Engineer', {
+        advertisedMinimum: 70_000,
+        currency: 'EUR',
+        salaryPeriod: 'annual',
+        salaryProvenance: 'loose_text',
+        normalizationMethod: 'unreviewed_source',
+        salaryProvider: 'himalayas',
+        salarySourceKey: 'himalayas:loose-copy',
+        salarySourceUrl: `${url}#copy`,
+      }),
+    ]);
+
+    expect(merged).toMatchObject({
+      salaryProvider: 'himalayas',
+      salarySourceKey: 'himalayas:loose-copy',
+      salaryProvenance: 'loose_text',
+      normalizedAnnualMinimum: undefined,
+      normalizationMethod: 'unreviewed_source',
+    });
+  });
+
   // Issue #278 acceptance checks: canonical job identity, sourceUrl/applyUrl semantics, and merged
   // source references. Each `it` below is named after (and maps directly to) one acceptance check
   // from the issue.

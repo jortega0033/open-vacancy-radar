@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Info } from '@phosphor-icons/react';
 import type { ProviderId } from '@agent-dock/shared';
+import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
@@ -20,6 +21,7 @@ import {
   employmentOptions,
   filterSearchResultIndex,
   isWebUrl,
+  salaryCounts,
   sortSearchResultIndex,
   sourceOptions,
   toPartialResults,
@@ -653,6 +655,13 @@ export function SearchPage({
       setScanGuard('Add a role or keyword before starting a new worldwide scan.');
       return;
     }
+    const salaryMinimum = scanFilters.salaryMinimum ?? '';
+    try {
+      parseMinimumAnnualSalary(salaryMinimum);
+    } catch (error) {
+      setScanError(describeError(error, 'invalid minimum annual salary'));
+      return;
+    }
     const requestGeneration = ++reportRequestGenerationRef.current;
     setScanning(true);
     setScanError(undefined);
@@ -664,7 +673,21 @@ export function SearchPage({
     // events build a clean list rather than mixing in a previous run's provisional rows.
     setPartialVacancies([]);
     try {
-      const report = await window.vacancyRadar.runScan({ mode: 'query', query, ...(scanFilters.country !== 'all' ? { country: scanFilters.country } : {}), ...(scanFilters.employment !== 'any' ? { employment: scanFilters.employment } : {}) });
+      const report = await window.vacancyRadar.runScan({
+        mode: 'query',
+        query,
+        ...(scanFilters.country !== 'all' ? { country: scanFilters.country } : {}),
+        ...(scanFilters.employment !== 'any' ? { employment: scanFilters.employment } : {}),
+        ...(salaryMinimum.trim()
+          ? {
+              salary: {
+                minimumAnnual: salaryMinimum,
+                currency: scanFilters.salaryCurrency ?? 'EUR',
+                includeUnknown: scanFilters.includeUnknownSalary ?? true,
+              },
+            }
+          : {}),
+      });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
         ...current,
@@ -758,7 +781,13 @@ export function SearchPage({
   const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
     if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
     setFilters((current) => ({ ...current, ...patch }));
-    const changesScanCriteria = patch.query !== undefined || patch.country !== undefined || patch.employment !== undefined;
+    const changesScanCriteria =
+      patch.query !== undefined ||
+      patch.country !== undefined ||
+      patch.employment !== undefined ||
+      patch.salaryMinimum !== undefined ||
+      patch.salaryCurrency !== undefined ||
+      patch.includeUnknownSalary !== undefined;
     if (changesScanCriteria) return;
     setAppliedFilters((current) => ({ ...current, ...patch }));
     setPendingScanFilters((current) => (current ? { ...current, ...patch } : null));
@@ -860,6 +889,11 @@ export function SearchPage({
   // the latter isn't a number a user can do anything with here (there is no "browse everything"
   // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
   // rather than useful context.
+  const reportSalaryCounts = useMemo(() => salaryCounts(results, appliedFilters), [appliedFilters, results]);
+  const salaryNote = appliedFilters.salaryMinimum?.trim()
+    ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
+    : SALARY_NOTE;
+
   const summary =
     hasReport || isStreamingPartial
       ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
@@ -878,7 +912,7 @@ export function SearchPage({
           sources={sources}
           employmentTypes={employmentTypes}
           busy={busy}
-          salaryNote={SALARY_NOTE}
+          salaryNote={salaryNote}
           hasReport={hasReport}
         />
       </div>

@@ -93,7 +93,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
-import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type VacancyScanRequest } from './vacancy-scan-query.js';
+import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
@@ -1841,14 +1841,14 @@ const BROWSE_ALL_RESULT_CAP = 5_000;
  * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
  * unconditional rather than gated on "is anyone currently on the Search page".
  */
-async function runVacancyScan(request: VacancyScanRequest): Promise<GlobalRemoteReport> {
+async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
         ...(request.mode === 'query'
-          ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}) }
+          ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
           : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
         onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
       });

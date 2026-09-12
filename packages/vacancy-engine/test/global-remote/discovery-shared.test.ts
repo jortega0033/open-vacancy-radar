@@ -61,6 +61,47 @@ describe('discoveryAudit', () => {
     const audit = discoveryAudit({ ...baseInput, url });
     expect(audit.key).toBe(baseInput.key);
   });
+
+  it('records audited annual salary fields without applying FX', () => {
+    const audit = discoveryAudit({
+      ...baseInput,
+      url: 'https://acme.com/jobs/123',
+      currency: 'usd',
+      salaryPeriod: 'month',
+      advertisedMinimum: 10_000,
+      salaryProvenance: 'reviewed_structured',
+    });
+    expect(audit).toMatchObject({
+      advertisedMinimum: 10_000,
+      normalizedAnnualMinimum: 120_000,
+      normalizedCurrency: 'USD',
+      normalizationMethod: 'monthly_to_annual',
+      salaryProvenance: 'reviewed_structured',
+      salaryProvider: 'himalayas',
+      salarySourceKey: baseInput.key,
+      salarySourceUrl: 'https://acme.com/jobs/123',
+    });
+  });
+
+  it('does not normalize numbers loosely extracted from descriptions', () => {
+    const looseSalary = parseSalaryText('15,000 employees. Estimated EUR 70,000 per year.');
+    const audit = discoveryAudit({
+      ...baseInput,
+      url: 'https://acme.com/jobs/estimated',
+      currency: looseSalary.currency,
+      salaryPeriod: looseSalary.period,
+      advertisedMinimum: looseSalary.minimum,
+      salaryProvenance: 'loose_text',
+      description: '15,000 employees. Estimated EUR 70,000 per year.',
+    });
+    expect(audit).toMatchObject({
+      advertisedMinimum: 15_000,
+      normalizedAnnualMinimum: null,
+      normalizedCurrency: null,
+      normalizationMethod: 'unreviewed_source',
+      salaryProvenance: 'loose_text',
+    });
+  });
 });
 
 describe('stringValue', () => {
@@ -178,6 +219,19 @@ describe('parseSalaryText', () => {
     expect(
       parseSalaryText('Contract runs for a full year. Weekly rate: $1,200 per week.'),
     ).toMatchObject({ minimum: 1_200, currency: 'USD', period: 'weekly' });
+  });
+
+  it('keeps the lower bound, currency, and period together for salary ranges', () => {
+    expect(parseSalaryText('EUR 60,000 - 80,000 per year')).toMatchObject({
+      minimum: 60_000,
+      currency: 'EUR',
+      period: 'annual',
+    });
+    expect(parseSalaryText('USD 5,000 - 6,000 monthly')).toMatchObject({
+      minimum: 5_000,
+      currency: 'USD',
+      period: 'monthly',
+    });
   });
 
   it('returns a null period when no known period word is present', () => {

@@ -658,6 +658,7 @@ async function discoverRemoteFirstJobs(
           currency: minimum !== null && minimum > 0 ? 'USD' : null,
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+          salaryProvenance: 'reviewed_structured',
           description: stringValue(job.description),
           postedAt: isoPostedAt(stringValue(job.published_at)),
           raw,
@@ -745,6 +746,7 @@ async function discoverJobRemotely(
           currency: stringValue(salary?.currency)?.toUpperCase() ?? null,
           salaryPeriod: numberValue(salary?.min) === null ? null : 'annual',
           advertisedMinimum: numberValue(salary?.min),
+          salaryProvenance: 'reviewed_structured',
           description: Array.isArray(job.skillsRequired)
             ? job.skillsRequired.filter((value): value is string => typeof value === 'string').join(' ')
             : null,
@@ -820,6 +822,7 @@ async function discoverRemoteOk(
         currency: minimum !== null && minimum > 0 ? 'USD' : null,
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.description),
         postedAt: isoPostedAt(stringValue(job.date)),
         raw,
