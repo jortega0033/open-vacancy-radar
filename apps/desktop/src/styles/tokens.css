@@ -296,3 +296,144 @@
   width: 2.75rem;
   height: 2.75rem;
 }
+
+/* Saved Jobs keeps the comparison table on wide desktop, then turns each native table row into
+   a labeled record before the shell leaves enough room for every low-priority column. */
+.saved-jobs-table-shell {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.saved-jobs-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.saved-jobs-table :is(th, td) {
+  min-width: 0;
+  padding-block: var(--ovr-row-padding);
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.saved-jobs-table .badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.saved-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+
+.saved-job-actions .btn {
+  white-space: nowrap;
+}
+
+@media (min-width: 80rem) {
+  /* The action column gets enough room for its three labeled controls; metadata takes the
+     remaining space and is allowed to wrap rather than pushing the primary controls away. */
+  .saved-job-col-role {
+    width: 14%;
+  }
+  .saved-job-col-company {
+    width: 12%;
+  }
+  .saved-job-col-location {
+    width: 8%;
+  }
+  .saved-job-col-salary {
+    width: 6%;
+  }
+  .saved-job-col-arrangement {
+    width: 7%;
+  }
+  .saved-job-col-verification {
+    width: 7%;
+  }
+  .saved-job-col-match {
+    width: 4%;
+  }
+  .saved-job-col-saved {
+    width: 6%;
+  }
+  .saved-job-col-notes {
+    width: 3%;
+  }
+  .saved-job-col-status {
+    width: 10%;
+  }
+  .saved-job-col-actions {
+    width: 23%;
+  }
+
+  .saved-job-actions-cell {
+    padding-inline: 0.5rem !important;
+  }
+}
+
+@media (max-width: 79.99rem) {
+  .saved-jobs-table,
+  .saved-jobs-table tbody,
+  .saved-jobs-table tr,
+  .saved-jobs-table td {
+    display: block;
+  }
+
+  .saved-jobs-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .saved-jobs-table tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .saved-jobs-table tr {
+    padding: var(--ovr-row-padding) 0.875rem;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--radius-box);
+  }
+
+  .saved-jobs-table td {
+    display: grid;
+    grid-template-columns: minmax(6rem, 31%) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: start;
+    padding-block: 0.3rem;
+  }
+
+  .saved-jobs-table td::before {
+    content: attr(data-label);
+    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .saved-jobs-table .saved-job-status-cell .select {
+    width: min(100%, 13rem);
+  }
+
+  .saved-jobs-table .saved-job-actions-cell {
+    align-items: center;
+    padding-top: 0.7rem;
+  }
+
+  .saved-jobs-table .saved-job-actions {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+}

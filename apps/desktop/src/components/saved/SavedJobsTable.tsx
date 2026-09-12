@@ -36,41 +36,70 @@ export function SavedJobsTable({
   preparingJobId,
 }: SavedJobsTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="table">
+    <div className="saved-jobs-table-shell">
+      <table className="table saved-jobs-table" aria-label="Saved jobs">
+        <colgroup>
+          <col className="saved-job-col-role" />
+          <col className="saved-job-col-company" />
+          <col className="saved-job-col-location" />
+          <col className="saved-job-col-salary" />
+          <col className="saved-job-col-arrangement" />
+          <col className="saved-job-col-verification" />
+          <col className="saved-job-col-match" />
+          <col className="saved-job-col-saved" />
+          <col className="saved-job-col-notes" />
+          <col className="saved-job-col-status" />
+          <col className="saved-job-col-actions" />
+        </colgroup>
         <thead>
           <tr>
-            <th>Role</th>
-            <th>Company</th>
-            <th>Location</th>
-            <th>Salary</th>
-            <th>Arrangement</th>
-            <th>Verification</th>
-            <th>Match</th>
-            <th>Saved</th>
-            <th>Notes</th>
-            <th>Status</th>
-            <th className="text-right">Actions</th>
+            <th scope="col">Role</th>
+            <th scope="col">Company</th>
+            <th scope="col">Location</th>
+            <th scope="col">Salary</th>
+            <th scope="col">Arrangement</th>
+            <th scope="col">Verification</th>
+            <th scope="col">Match</th>
+            <th scope="col">Saved</th>
+            <th scope="col">Notes</th>
+            <th scope="col">Status</th>
+            <th scope="col" className="text-right">
+              Actions
+            </th>
           </tr>
         </thead>
         <tbody>
           {jobs.map((job) => (
             <tr key={job.id} className="ovr-row hover:bg-base-200">
-              <td className="font-medium">{job.role}</td>
-              <td className="text-base-content/80">{job.company}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.location || '—'}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.salary ?? '—'}</td>
-              <td className="whitespace-nowrap text-base-content/70">{job.arrangement ?? '—'}</td>
-              <td>
+              <td data-label="Role" className="font-medium">
+                {job.role}
+              </td>
+              <td data-label="Company" className="text-base-content/80">
+                {job.company}
+              </td>
+              <td data-label="Location" className="text-base-content/70">
+                {job.location || '—'}
+              </td>
+              <td data-label="Salary" className="text-base-content/70">
+                {job.salary ?? '—'}
+              </td>
+              <td data-label="Arrangement" className="text-base-content/70">
+                {job.arrangement ?? '—'}
+              </td>
+              <td data-label="Verification">
                 {job.verification ? (
-                  <span className="badge badge-outline whitespace-nowrap">{job.verification}</span>
+                  <span className="badge badge-outline">{job.verification}</span>
                 ) : (
                   <span className="text-base-content/50">Not verified</span>
                 )}
               </td>
-              <td className="font-mono">{job.matchPercent != null ? `${job.matchPercent}%` : '—'}</td>
-              <td className="whitespace-nowrap text-base-content/60">{formatSavedAt(job.savedAt)}</td>
-              <td>
+              <td data-label="Match" className="font-mono">
+                {job.matchPercent != null ? `${job.matchPercent}%` : '—'}
+              </td>
+              <td data-label="Saved" className="text-base-content/60">
+                {formatSavedAt(job.savedAt)}
+              </td>
+              <td data-label="Notes">
                 {job.notes.trim() !== '' ? (
                   <span className="badge badge-ghost badge-sm" title={job.notes}>
                     Notes
@@ -79,7 +108,7 @@ export function SavedJobsTable({
                   <span className="text-base-content/40">—</span>
                 )}
               </td>
-              <td>
+              <td data-label="Status" className="saved-job-status-cell">
                 <select
                   className="select select-sm"
                   aria-label={`Status for ${job.role}`}
@@ -93,25 +122,35 @@ export function SavedJobsTable({
                   ))}
                 </select>
               </td>
-              <td className="text-right whitespace-nowrap">
-                <button
-                  className="btn btn-outline btn-xs"
-                  type="button"
-                  disabled={preparingJobId !== null}
-                  onClick={() => onPrepareApplication(job)}
-                >
-                  {preparingJobId === job.id ? <span className="loading loading-spinner loading-xs" /> : 'Prepare application'}
-                </button>
-                <button className="btn btn-ghost btn-xs" type="button" onClick={() => onEdit(job)}>
-                  Edit
-                </button>
-                <button
-                  className="btn btn-ghost btn-xs text-error"
-                  type="button"
-                  onClick={() => onDelete(job)}
-                >
-                  Delete
-                </button>
+              <td data-label="Actions" className="saved-job-actions-cell text-right">
+                <div className="saved-job-actions">
+                  <button
+                    className="btn btn-outline btn-xs"
+                    type="button"
+                    disabled={preparingJobId !== null}
+                    onClick={() => onPrepareApplication(job)}
+                  >
+                    {preparingJobId === job.id ? (
+                      <span className="loading loading-spinner loading-xs" />
+                    ) : (
+                      'Prepare application'
+                    )}
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    type="button"
+                    onClick={() => onEdit(job)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs text-error"
+                    type="button"
+                    onClick={() => onDelete(job)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
