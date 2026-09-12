@@ -105,18 +105,23 @@ plain SQLite files under Electron's per-user data directory (`app.getPath('userD
 Windows, `%APPDATA%\Open Vacancy Radar\`); see [privacy.md](privacy.md#what-is-stored-and-where)
 for exactly what each file holds.
 
-**To back up**: close the app, then copy `workspace.db` (your saved jobs, applications, CV
-library, and letters — the file worth backing up) somewhere safe. `vacancy-engine.db` is a
-disposable cache of public vacancy data and doesn't need backing up.
+**To back up**: close the app, then copy these items together:
 
-**To restore**: close the app, replace `workspace.db` in the userData directory with your backup
-copy, then relaunch. There is no in-app restore flow or format migration for a backup taken from
-an older version — if the schema has changed since your backup, this is unverified and may not
-work.
+- `workspace.db` for saved jobs, applications, attempts, CVs, letters and settings.
+- `application-artifacts/` for generated application PDFs.
+- `vacancy-engine/config/candidate-profile-v1.json` for your search profile.
 
-**Moving to a new machine**: install the app, then copy your backed-up `workspace.db` into the new
-machine's userData directory before first launch (or after, replacing the fresh empty one, with
-the app closed).
+`vacancy-engine.db`, reports and `.cache/http` contain public vacancy data and can be rebuilt, so
+they don't need backing up. `agentdock-state/` contains runtime recovery metadata rather than CV or
+letter content; include it only if you want to preserve local AI-session history and folder trust.
+
+**To restore**: close the app, restore all three items to the same locations, then relaunch. Keep
+`workspace.db` and `application-artifacts/` from the same backup so artifact records don't point to
+files from a different snapshot. There is no in-app restore flow or verified cross-version backup
+migration.
+
+**Moving to a new machine**: install the app, close it, then restore the same three items into the
+new machine's userData directory before relaunching.
 
 ## Testing without a real Claude/Codex account
 

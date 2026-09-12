@@ -69,6 +69,19 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     getSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     updateSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     getCounts: vi.fn().mockResolvedValue(DEFAULT_COUNTS),
+    resetApplicationData: vi.fn().mockResolvedValue({
+      settings: DEFAULT_SETTINGS,
+      deleted: {
+        savedJobs: 0,
+        applications: 0,
+        cvDocuments: 0,
+        letters: 0,
+        applicationAttempts: 0,
+        applicationArtifacts: 0,
+        submissionReceipts: 0,
+        automationGrants: 0,
+      },
+    }),
 
     listSavedJobs: vi.fn().mockResolvedValue([]),
     createSavedJob: vi.fn(),

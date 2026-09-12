@@ -303,6 +303,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'getSettings',
     'updateSettings',
     'getCounts',
+    'resetApplicationData',
     'listSavedJobs',
     'createSavedJob',
     'updateSavedJob',
@@ -330,7 +331,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'revokeAutomationGrant',
   ];
 
-  it('exposes exactly the twenty-eight documented capability functions and nothing else', async () => {
+  it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -354,6 +355,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     const cases: [name: string, channel: string, call: (fn: never) => Promise<unknown>][] = [
       ['getSettings', 'workspace:settings:get', (fn: never) => (fn as () => Promise<unknown>)()],
       ['getCounts', 'workspace:counts:get', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['resetApplicationData', 'workspace:data:reset', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listSavedJobs', 'workspace:saved-jobs:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listCvDocuments', 'workspace:cv-documents:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listLetters', 'workspace:letters:list', (fn: never) => (fn as () => Promise<unknown>)()],
@@ -619,6 +621,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getSettings',
     'updateSettings',
     'getCounts',
+    'resetApplicationData',
     'listSavedJobs',
     'createSavedJob',
     'updateSavedJob',

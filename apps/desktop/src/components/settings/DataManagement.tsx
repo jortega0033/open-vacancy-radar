@@ -8,8 +8,8 @@ export interface DataManagementProps {
 }
 
 /**
- * The data-management section. Two of the prototype's actions are real today (reset settings,
- * reset application data: both run entirely over the existing workspace IPC); export/import are
+ * The data-management section. Two actions are real today (reset settings and application data);
+ * export/import are
  * shown disabled with an explanation, because doing them properly needs native save/open dialogs
  * that the fixed-capability bridge does not expose yet. Per the page's one rule, a control either
  * works or visibly says it doesn't. These say it.
@@ -59,7 +59,7 @@ export function DataManagement({ busy, onRequestResetSettings, onRequestResetDat
 
       <SettingsRow
         label="Reset application data"
-        description="Permanently delete every saved job, application, CV and letter, and restore default settings."
+        description="Delete personal application records, generated files and the search profile. Restore default settings. Public vacancy data stays cached."
       >
         <button
           type="button"

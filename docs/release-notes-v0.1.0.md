@@ -57,4 +57,4 @@ leaves your machine. Full detail in [privacy.md](privacy.md).
 - macOS/Linux packaging and code signing.
 - In-app backup/export/restore.
 - Vacancy-cache pruning/retention limits.
-- Branch-protection and CI release-gating policy decisions.
+- Additional release automation beyond the checks documented for this build.

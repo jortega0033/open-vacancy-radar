@@ -30,6 +30,7 @@ import {
   NON_TERMINAL_ATTEMPT_CHECKPOINTS,
   type ApplicationArtifactInput,
   type ApplicationArtifactRecord,
+  type ApplicationDataResetResult,
   type ApplicationAttemptCheckpoint,
   type ApplicationAttemptInput,
   type ApplicationAttemptPatch,
@@ -1392,6 +1393,37 @@ export function updateSettings(db: WorkspaceDb, values: AppSettingsPatch): AppSe
     .all();
   if (!row) throw new Error('failed to update app settings');
   return toSettings(row);
+}
+
+/** Deletes every personal application record and recreates settings from schema defaults. */
+export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResult {
+  return db.transaction((tx) => {
+    const deleted = {
+      savedJobs: tx.select({ id: savedJobs.id }).from(savedJobs).all().length,
+      applications: tx.select({ id: applications.id }).from(applications).all().length,
+      cvDocuments: tx.select({ id: cvDocuments.id }).from(cvDocuments).all().length,
+      letters: tx.select({ id: letters.id }).from(letters).all().length,
+      applicationAttempts: tx.select({ id: applicationAttempts.id }).from(applicationAttempts).all().length,
+      applicationArtifacts: tx.select({ id: applicationArtifacts.id }).from(applicationArtifacts).all().length,
+      submissionReceipts: tx
+        .select({ id: applicationSubmissionReceipts.id })
+        .from(applicationSubmissionReceipts)
+        .all().length,
+      automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
+    };
+
+    tx.delete(applicationAttempts).run();
+    tx.delete(applications).run();
+    tx.delete(letters).run();
+    tx.delete(savedJobs).run();
+    tx.delete(appSettings).run();
+    tx.delete(cvDocuments).run();
+    tx.delete(automationGrants).run();
+
+    const [settings] = tx.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
+    if (!settings) throw new Error('failed to restore default app settings');
+    return { settings: toSettings(settings), deleted };
+  });
 }
 
 /** Convenience for the badge counts the sidebar shows; one round trip instead of three lists. */

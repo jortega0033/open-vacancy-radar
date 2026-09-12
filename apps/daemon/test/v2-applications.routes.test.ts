@@ -93,6 +93,49 @@ describe('v2 application queue routes: enqueue, list, get', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().code).toBe('application_not_found');
   });
+
+  it('clears every idle entry for an application-data reset', async () => {
+    const { app } = setup();
+    await app.inject({ method: 'POST', url: '/v2/applications', headers: AUTH, payload: { attemptId: 'attempt-1' } });
+    await app.inject({ method: 'POST', url: '/v2/applications', headers: AUTH, payload: { attemptId: 'attempt-2' } });
+
+    const cleared = await app.inject({
+      method: 'DELETE',
+      url: '/v2/applications',
+      headers: AUTH,
+      payload: { expectedLeaseId: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ schemaVersion: 1, cleared: 2 });
+
+    const list = await app.inject({ method: 'GET', url: '/v2/applications', headers: AUTH });
+    expect(list.json()).toMatchObject({ entries: [], lease: null });
+  });
+
+  it('refuses to clear a queue with an active lease', async () => {
+    const { app } = setup();
+    await app.inject({ method: 'POST', url: '/v2/applications', headers: AUTH, payload: { attemptId: 'attempt-1' } });
+    await app.inject({ method: 'POST', url: '/v2/applications/lease/acquire', headers: AUTH });
+
+    const cleared = await app.inject({
+      method: 'DELETE',
+      url: '/v2/applications',
+      headers: AUTH,
+      payload: { expectedLeaseId: null },
+    });
+    expect(cleared.statusCode).toBe(409);
+    expect(cleared.json()).toMatchObject({ code: 'application_queue_busy' });
+
+    const status = await app.inject({ method: 'GET', url: '/v2/applications', headers: AUTH });
+    const leaseId = status.json().lease.leaseId as string;
+    const coordinated = await app.inject({
+      method: 'DELETE',
+      url: '/v2/applications',
+      headers: AUTH,
+      payload: { expectedLeaseId: leaseId },
+    });
+    expect(coordinated.statusCode).toBe(200);
+  });
 });
 
 describe('v2 application queue routes: pause/resume/skip/cancel', () => {

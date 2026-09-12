@@ -23,7 +23,7 @@ jobs:
     name: Build and publish the Windows installer
     # node-gyp 11 does not recognize the Visual Studio 18 image currently behind windows-latest.
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -36,6 +36,21 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Electron end-to-end tests
+        run: pnpm --filter @agent-dock/desktop test:e2e
 
       - name: Package (electron-builder, NSIS)
         run: pnpm package:win
@@ -65,9 +80,15 @@ jobs:
       # by hand still gets its written notes attached rather than gh's auto-generated commit list.
       - name: Resolve release notes
         id: notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            Write-Error "Release tag must be a semantic version beginning with v."
+            exit 1
+          }
+          $version = $env:RELEASE_TAG -replace '^v', ''
           $notesPath = "docs/release-notes-v$version.md"
           if (Test-Path $notesPath) {
             Write-Host "Using $notesPath"
@@ -81,6 +102,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES_PATH: ${{ steps.notes.outputs.path }}
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: pwsh
         run: |
           # PowerShell does not glob-expand a bare "*" the way a POSIX shell would, so the
@@ -89,12 +111,24 @@ jobs:
           $installer = (Get-ChildItem -Path "dist-packages" -Filter "Open Vacancy Radar-Setup-*.exe").FullName
           $checksum = "$installer.sha256"
 
-          $args = @('release', 'create', '${{ github.ref_name }}',
-            $installer, $checksum,
-            '--title', '${{ github.ref_name }}')
-          if ($env:NOTES_PATH -ne '') {
-            $args += @('--notes-file', $env:NOTES_PATH)
+          $tag = $env:RELEASE_TAG
+          gh release view $tag *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists) {
+            $args = @('release', 'edit', $tag, '--title', $tag)
+            if ($env:NOTES_PATH -ne '') {
+              $args += @('--notes-file', $env:NOTES_PATH)
+            }
+            gh @args
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release upload $tag $installer $checksum --clobber
           } else {
-            $args += '--generate-notes'
+            $args = @('release', 'create', $tag, $installer, $checksum, '--title', $tag)
+            if ($env:NOTES_PATH -ne '') {
+              $args += @('--notes-file', $env:NOTES_PATH)
+            } else {
+              $args += '--generate-notes'
+            }
+            gh @args
           }
-          gh @args

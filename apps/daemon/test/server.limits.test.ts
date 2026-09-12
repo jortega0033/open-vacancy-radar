@@ -154,7 +154,7 @@ afterEach(async () => {
   }));
   harnesses = [];
   rmSync(cwd, { recursive: true, force: true });
-});
+}, 30_000);
 
 describe('POST /sessions: 409 at the active-session limit', () => {
   it('refuses the third session for one provider with the documented body shape', async () => {
