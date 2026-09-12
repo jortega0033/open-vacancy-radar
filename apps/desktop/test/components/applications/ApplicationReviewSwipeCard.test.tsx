@@ -27,9 +27,30 @@ const SNAPSHOT: FormSnapshot = {
   pageStateFingerprint: 'fingerprint',
   submitControls: [],
   fields: [
-    { fieldRef: 'f1', label: 'Full name', controlType: 'text', required: true, frameId: 0, active: true },
-    { fieldRef: 'f2', label: 'Email', controlType: 'text', required: true, frameId: 0, active: true },
-    { fieldRef: 'f3', label: 'Portfolio', controlType: 'text', required: false, frameId: 0, active: true },
+    {
+      fieldRef: 'f1',
+      label: 'Full name',
+      controlType: 'text',
+      required: true,
+      frameId: 0,
+      active: true,
+    },
+    {
+      fieldRef: 'f2',
+      label: 'Email',
+      controlType: 'text',
+      required: true,
+      frameId: 0,
+      active: true,
+    },
+    {
+      fieldRef: 'f3',
+      label: 'Portfolio',
+      controlType: 'text',
+      required: false,
+      frameId: 0,
+      active: true,
+    },
   ],
 };
 
@@ -66,7 +87,9 @@ function renderCard(overrides: Partial<Parameters<typeof ApplicationReviewSwipeC
 
 describe('ApplicationReviewSwipeCard (#277)', () => {
   it('reports verified-filled against discovered, never the discovered count on its own', () => {
-    renderCard({ readiness: readiness({ verifiedFilledCount: 1, ready: false, requiredFieldsSatisfied: 1 }) });
+    renderCard({
+      readiness: readiness({ verifiedFilledCount: 1, ready: false, requiredFieldsSatisfied: 1 }),
+    });
     expect(screen.getByText(/1 of 3 fields verified filled/i)).toBeInTheDocument();
   });
 
@@ -74,10 +97,15 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     // The exact case that used to read "3 fields filled": a snapshot found three fields, a
     // screenshot exists, and nothing has been written to anything.
     renderCard({
-      readiness: readiness({ verifiedFilledCount: 0, requiredFieldsSatisfied: 0, ready: false, blockers: [
-        { kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' },
-        { kind: 'required_field_empty', fieldRef: 'f2', label: 'Email' },
-      ] }),
+      readiness: readiness({
+        verifiedFilledCount: 0,
+        requiredFieldsSatisfied: 0,
+        ready: false,
+        blockers: [
+          { kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' },
+          { kind: 'required_field_empty', fieldRef: 'f2', label: 'Email' },
+        ],
+      }),
     });
     expect(screen.getByText(/0 of 3 fields verified filled/i)).toBeInTheDocument();
     expect(screen.queryByText(/3 fields filled/i)).not.toBeInTheDocument();
@@ -88,11 +116,26 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
 
   it('keeps the swipe target compact and puts the full review behind disclosures', () => {
     renderCard();
-    const swipeCard = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const swipeCard = screen.getByTestId('application-swipe-card');
     const preview = screen.getByRole('img', { name: /live application page preview/i });
     expect(swipeCard).not.toContainElement(preview);
-    expect(screen.getByText('Prepared application details').closest('details')).not.toHaveAttribute('open');
-    expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText('Prepared application details').closest('details')).not.toHaveAttribute(
+      'open',
+    );
+    expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute(
+      'open',
+    );
+  });
+
+  it('looks and behaves like the front card in a swipe deck', () => {
+    renderCard();
+    const cardBacks = screen.getAllByTestId('swipe-card-back');
+    expect(cardBacks).toHaveLength(2);
+    cardBacks.forEach((cardBack) => expect(cardBack).toHaveAttribute('aria-hidden', 'true'));
+    expect(screen.getByTestId('application-swipe-card')).toHaveAttribute(
+      'title',
+      'Drag left to skip or right to submit',
+    );
   });
 
   it('lists every blocker so a person can see what is actually wrong', () => {
@@ -101,7 +144,12 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         ready: false,
         blockers: [
           { kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' },
-          { kind: 'validation_error', fieldRef: 'f2', label: 'Email', message: 'Enter a valid email address.' },
+          {
+            kind: 'validation_error',
+            fieldRef: 'f2',
+            label: 'Email',
+            message: 'Enter a valid email address.',
+          },
           { kind: 'attachment_missing', fieldRef: 'f4', label: 'Resume' },
         ],
       }),
@@ -118,7 +166,10 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         attempt={ATTEMPT}
         snapshot={SNAPSHOT}
         screenshotBase64="ZmFrZQ=="
-        readiness={readiness({ ready: false, blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }] })}
+        readiness={readiness({
+          ready: false,
+          blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }],
+        })}
         onApprove={vi.fn()}
         onSkip={vi.fn()}
         onOpenLiveView={vi.fn()}
@@ -144,7 +195,14 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     renderCard({
       readiness: readiness({
         ready: false,
-        blockers: [{ kind: 'validation_error', fieldRef: 'f2', label: 'Email', message: '<img src=x onerror="alert(1)">' }],
+        blockers: [
+          {
+            kind: 'validation_error',
+            fieldRef: 'f2',
+            label: 'Email',
+            message: '<img src=x onerror="alert(1)">',
+          },
+        ],
       }),
     });
     expect(screen.getByText(/<img src=x onerror="alert\(1\)">/)).toBeInTheDocument();
@@ -152,14 +210,16 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
   });
 
   it('skip stays available on a form that is not ready, so a person is never stuck on it', () => {
-    const { onSkip } = renderCard({ readiness: readiness({ ready: false, blockers: [{ kind: 'challenge_detected' }] }) });
+    const { onSkip } = renderCard({
+      readiness: readiness({ ready: false, blockers: [{ kind: 'challenge_detected' }] }),
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
   it('maps right and left drags to submit and skip without stale drag state', () => {
     const { onApprove, onSkip } = renderCard();
-    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const card = screen.getByTestId('application-swipe-card');
     expect(card).not.toBeNull();
 
     function drag(type: string, clientX: number, pointerId: number) {
@@ -182,6 +242,39 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(onSkip).toHaveBeenCalledTimes(1);
   });
 
+  it('does not finish a drag after another decision makes the card busy', () => {
+    const onApprove = vi.fn();
+    const onSkip = vi.fn();
+    const props = {
+      attempt: ATTEMPT,
+      snapshot: SNAPSHOT,
+      screenshotBase64: 'ZmFrZQ==',
+      readiness: readiness(),
+      onApprove,
+      onSkip,
+      onOpenLiveView: vi.fn(),
+    };
+    const { rerender } = render(<ApplicationReviewSwipeCard {...props} />);
+    const card = screen.getByTestId('application-swipe-card');
+
+    function pointer(type: string, clientX: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, {
+        clientX: { value: clientX },
+        pointerId: { value: 1 },
+      });
+      fireEvent(card, event);
+    }
+
+    pointer('pointerdown', 100);
+    pointer('pointermove', 240);
+    rerender(<ApplicationReviewSwipeCard {...props} busy />);
+    pointer('pointerup', 240);
+
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+  });
+
   it('never submits from a right swipe while readiness blocks the button', () => {
     const { onApprove } = renderCard({
       readiness: readiness({
@@ -189,7 +282,7 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }],
       }),
     });
-    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const card = screen.getByTestId('application-swipe-card');
     expect(card).not.toBeNull();
 
     const down = new Event('pointerdown', { bubbles: true });

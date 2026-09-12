@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
@@ -90,7 +91,13 @@ export function ApplicationReviewSwipeCard({
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
+  const {
+    verifiedFilledCount,
+    discoveredFieldCount,
+    requiredFieldCount,
+    requiredFieldsSatisfied,
+    blockers,
+  } = readiness;
   const canSubmit = readiness.ready && !busy;
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -123,86 +130,140 @@ export function ApplicationReviewSwipeCard({
   }
 
   const rotation = Math.max(-MAX_ROTATION_DEG, Math.min(MAX_ROTATION_DEG, dragX / 10));
-  const approveOpacity = Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX));
+  const approveOpacity = canSubmit ? Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX)) : 0;
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
   const activeFields = snapshot.fields.filter((field) => field.active);
 
   return (
     <div className="mx-auto flex w-full max-w-sm flex-col gap-3">
-      <div
-        className="relative select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg"
-        style={{
-          transform: `translateX(${dragX}px) rotate(${rotation}deg)`,
-          transition: dragging ? 'none' : 'transform 200ms ease-out',
-          touchAction: 'pan-y',
-        }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <div
-          className="badge badge-success absolute left-4 top-4 z-10 rotate-[-8deg] text-sm font-semibold"
-          style={{ opacity: approveOpacity }}
-          aria-hidden="true"
-        >
-          Submit
-        </div>
-        <div
-          className="badge badge-neutral absolute right-4 top-4 z-10 rotate-[8deg] text-sm font-semibold"
-          style={{ opacity: skipOpacity }}
-          aria-hidden="true"
-        >
-          Skip
-        </div>
+      <div className="-mx-2 overflow-x-clip px-4 pb-2 pt-3">
+        <div className="relative px-2 pb-2">
+          <div
+            aria-hidden="true"
+            data-testid="swipe-card-back"
+            className="pointer-events-none absolute inset-x-6 bottom-0 top-3 rotate-[-2deg] rounded-lg border border-base-300 bg-base-300/70"
+          />
+          <div
+            aria-hidden="true"
+            data-testid="swipe-card-back"
+            className="pointer-events-none absolute inset-x-4 bottom-1 top-2 rotate-[2deg] rounded-lg border border-base-300 bg-base-200"
+          />
+          <div
+            data-testid="application-swipe-card"
+            role="group"
+            aria-label={`Application decision card for ${attempt.role} at ${attempt.company}`}
+            title="Drag left to skip or right to submit"
+            className={`relative z-10 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${
+              busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'
+            }`}
+            style={{
+              transform: `translateX(${dragX}px) rotate(${rotation}deg)`,
+              transition: dragging ? 'none' : 'transform 200ms ease-out',
+              touchAction: 'pan-y',
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            <div
+              aria-hidden="true"
+              className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20"
+            />
+            <div
+              className="badge badge-success absolute left-4 top-4 z-10 rotate-[-8deg] text-sm font-semibold"
+              style={{ opacity: approveOpacity }}
+              aria-hidden="true"
+            >
+              Submit
+            </div>
+            <div
+              className="badge badge-neutral absolute right-4 top-4 z-10 rotate-[8deg] text-sm font-semibold"
+              style={{ opacity: skipOpacity }}
+              aria-hidden="true"
+            >
+              Skip
+            </div>
 
-        <div className="px-4 py-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className={`badge badge-sm ${readiness.ready ? 'badge-success' : 'badge-warning badge-soft'}`}>
-              {readiness.ready ? 'Ready for review' : 'Needs your input'}
-            </span>
-            <span className="text-xs text-base-content/50">Final submission is always yours</span>
-          </div>
-          <h2 className="text-base font-semibold leading-snug">
-            {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
-          </h2>
-          <p className="mt-1 text-xs text-base-content/60">
-            {verifiedFilledCount} of {discoveredFieldCount} field{discoveredFieldCount === 1 ? '' : 's'} verified filled
-          </p>
-        </div>
-
-        <div className="grid grid-cols-3 divide-x divide-base-300 border-y border-base-300 bg-base-200/60">
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{verifiedFilledCount}</p>
-            <p className="mt-1 text-xs text-base-content/60">Verified</p>
-          </div>
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{documents.length}</p>
-            <p className="mt-1 text-xs text-base-content/60">Documents</p>
-          </div>
-          <div className="px-3 py-2.5 text-center">
-            <p className="text-lg font-semibold leading-none">{blockers.length}</p>
-            <p className="mt-1 text-xs text-base-content/60">Checks left</p>
-          </div>
-        </div>
-
-        <div className={`px-4 py-3 ${readiness.ready ? 'bg-success/10' : 'bg-warning/10'}`}>
-          {blockers.length > 0 ? (
-            <>
-              <p className="text-xs font-semibold">This form is not ready to submit</p>
-              <p className="mt-1 text-xs text-base-content/70">{describeBlocker(blockers[0]!)}</p>
-              {blockers.length > 1 ? <p className="mt-1 text-xs font-medium">+{blockers.length - 1} more in form checks</p> : null}
-            </>
-          ) : (
-            <>
-              <p className="text-xs font-semibold">Ready for your final confirmation</p>
-              <p className="mt-1 text-xs text-base-content/70">
-                {requiredFieldCount > 0
-                  ? `${requiredFieldsSatisfied} of ${requiredFieldCount} required answers verified.`
-                  : `${verifiedFilledCount} of ${discoveredFieldCount} fields verified filled.`}
+            <div className="px-4 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span
+                  className={`badge badge-sm ${readiness.ready ? 'badge-success' : 'badge-warning badge-soft'}`}
+                >
+                  {readiness.ready ? 'Ready for review' : 'Needs your input'}
+                </span>
+                <span className="text-xs text-base-content/50">
+                  Final submission is always yours
+                </span>
+              </div>
+              <h2 className="text-base font-semibold leading-snug">
+                {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
+              </h2>
+              <p className="mt-1 text-xs text-base-content/60">
+                {verifiedFilledCount} of {discoveredFieldCount} field
+                {discoveredFieldCount === 1 ? '' : 's'} verified filled
               </p>
-            </>
-          )}
+            </div>
+
+            <div className="grid grid-cols-3 divide-x divide-base-300 border-y border-base-300 bg-base-200/60">
+              <div className="px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold leading-none">{verifiedFilledCount}</p>
+                <p className="mt-1 text-xs text-base-content/60">Verified</p>
+              </div>
+              <div className="px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold leading-none">{documents.length}</p>
+                <p className="mt-1 text-xs text-base-content/60">Documents</p>
+              </div>
+              <div className="px-3 py-2.5 text-center">
+                <p className="text-lg font-semibold leading-none">{blockers.length}</p>
+                <p className="mt-1 text-xs text-base-content/60">Checks left</p>
+              </div>
+            </div>
+
+            <div className={`px-4 py-3 ${readiness.ready ? 'bg-success/10' : 'bg-warning/10'}`}>
+              {blockers.length > 0 ? (
+                <>
+                  <p className="text-xs font-semibold">This form is not ready to submit</p>
+                  <p className="mt-1 text-xs text-base-content/70">
+                    {describeBlocker(blockers[0]!)}
+                  </p>
+                  {blockers.length > 1 ? (
+                    <p className="mt-1 text-xs font-medium">
+                      +{blockers.length - 1} more in form checks
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <p className="text-xs font-semibold">Ready for your final confirmation</p>
+                  <p className="mt-1 text-xs text-base-content/70">
+                    {requiredFieldCount > 0
+                      ? `${requiredFieldsSatisfied} of ${requiredFieldCount} required answers verified.`
+                      : `${verifiedFilledCount} of ${discoveredFieldCount} fields verified filled.`}
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center border-t border-base-300 bg-base-100 px-4 py-2 text-xs font-semibold">
+              <span className="flex items-center gap-1 text-base-content/60">
+                <ArrowLeft size={15} weight="bold" aria-hidden="true" />
+                Skip
+              </span>
+              <ArrowsLeftRight
+                size={20}
+                weight="bold"
+                className="text-base-content/45"
+                aria-hidden="true"
+              />
+              <span
+                className={`flex items-center justify-self-end gap-1 ${canSubmit ? 'text-success' : 'text-base-content/30'}`}
+              >
+                Submit
+                <ArrowRight size={15} weight="bold" aria-hidden="true" />
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -210,14 +271,25 @@ export function ApplicationReviewSwipeCard({
         <button type="button" className="btn btn-outline flex-1" disabled={busy} onClick={onSkip}>
           Skip
         </button>
-        <button type="button" className="btn btn-success flex-1" disabled={!canSubmit} onClick={onApprove}>
+        <button
+          type="button"
+          className="btn btn-success flex-1"
+          disabled={!canSubmit}
+          onClick={onApprove}
+        >
           {busy ? <span className="loading loading-spinner loading-sm" /> : 'Submit application'}
         </button>
       </div>
 
       <details className="rounded-lg border border-base-300 bg-base-100">
-        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Prepared application details</summary>
-        <ApplicationPreparedSummary attempt={attempt} documents={documents} onOpenArtifact={onOpenArtifact} />
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">
+          Prepared application details
+        </summary>
+        <ApplicationPreparedSummary
+          attempt={attempt}
+          documents={documents}
+          onOpenArtifact={onOpenArtifact}
+        />
       </details>
 
       <details className="rounded-lg border border-base-300 bg-base-100">
@@ -233,7 +305,9 @@ export function ApplicationReviewSwipeCard({
             </ul>
           ) : (
             <p className="text-xs text-base-content/60">
-              {blockers.length === 1 ? 'The remaining check is shown on the card.' : 'No remaining form blockers.'}
+              {blockers.length === 1
+                ? 'The remaining check is shown on the card.'
+                : 'No remaining form blockers.'}
             </p>
           )}
           <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/60">
@@ -248,7 +322,9 @@ export function ApplicationReviewSwipeCard({
       </details>
 
       <details className="rounded-lg border border-base-300 bg-base-100">
-        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Review application form</summary>
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">
+          Review application form
+        </summary>
         <div className="max-h-72 overflow-auto border-t border-base-300 bg-base-200">
           <img
             src={`data:image/png;base64,${screenshotBase64}`}
@@ -259,7 +335,12 @@ export function ApplicationReviewSwipeCard({
         </div>
       </details>
 
-      <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onOpenLiveView}>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        disabled={busy}
+        onClick={onOpenLiveView}
+      >
         Open the live page to finish it yourself
       </button>
     </div>
