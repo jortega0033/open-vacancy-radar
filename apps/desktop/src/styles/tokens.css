@@ -188,6 +188,23 @@
   width: 4rem; /* 64px */
 }
 
+/* Search details use the pane's inline size because the shell's sidebar changes the available
+   content width without changing the browser viewport breakpoint. */
+.ovr-vacancy-details {
+  container-type: inline-size;
+}
+
+@container (min-width: 40rem) {
+  .ovr-vacancy-details .ovr-vacancy-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ovr-vacancy-details .ovr-vacancy-overview,
+  .ovr-vacancy-details .ovr-vacancy-verification {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @utility ovr-header {
   height: 3.25rem; /* 52px */
 }
