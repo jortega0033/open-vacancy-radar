@@ -1,12 +1,14 @@
 import type { DiscoveryProvider, DiscoverySourceAudit, DiscoveryVacancyAudit } from './models.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from '../geo/countries.js';
+import { assessSalary, type SalaryFilterCriteria } from './salary.js';
 
-export type FocusedCriterion = 'role' | 'country' | 'employment';
+export type FocusedCriterion = 'role' | 'country' | 'employment' | 'salary';
 
 export type FocusedScanCriteria = {
   role: string;
   country: string | null;
   employment: string | null;
+  salary?: SalaryFilterCriteria | null;
 };
 
 export type UpstreamFilterSupport = {
@@ -205,6 +207,7 @@ function requestedEntries(
     ...(criteria.role ? [['role', criteria.role] as const] : []),
     ...(criteria.country ? [['country', criteria.country] as const] : []),
     ...(criteria.employment ? [['employment', criteria.employment] as const] : []),
+    ...(criteria.salary ? [['salary', `${criteria.salary.currency} ${criteria.salary.minimumAnnual}`] as const] : []),
   ];
 }
 
@@ -220,7 +223,9 @@ export function withFocusedScanPlan(
       ? upstreamCountryFor(source.provider, value)
       : criterion === 'employment'
         ? upstreamEmploymentFor(source.provider, value)
-        : value;
+        : criterion === 'salary'
+          ? null
+          : value;
     const normalizedValue = normalizedRequestValue(criterion, value);
     const reason = support === undefined
       ? 'This source has no documented upstream parameter for this criterion.'
@@ -266,9 +271,15 @@ export function applyFocusedScanCriteria(
   vacancies: DiscoveryVacancyAudit[];
   unknownEmployment: number;
   explicitEmploymentMismatch: number;
+  salaryComparable: number;
+  salaryUnknown: number;
+  salaryBelowMinimum: number;
 } {
   let unknownEmployment = 0;
   let explicitEmploymentMismatch = 0;
+  let salaryComparable = 0;
+  let salaryUnknown = 0;
+  let salaryBelowMinimum = 0;
   const role = normalized(criteria.role);
   const employment = criteria.employment ? canonicalEmployment(criteria.employment) : null;
   return {
@@ -292,9 +303,24 @@ export function applyFocusedScanCriteria(
           return false;
         }
       }
-      return true;
+      const salaryAssessment = assessSalary(vacancy, criteria.salary);
+      if (salaryAssessment.kind === 'not_applicable') return true;
+      if (salaryAssessment.kind === 'comparable') {
+        salaryComparable += 1;
+        return true;
+      }
+      if (salaryAssessment.kind === 'below_floor') {
+        salaryComparable += 1;
+        salaryBelowMinimum += 1;
+        return false;
+      }
+      salaryUnknown += 1;
+      return criteria.salary?.includeUnknown ?? true;
     }),
     unknownEmployment,
     explicitEmploymentMismatch,
+    salaryComparable,
+    salaryUnknown,
+    salaryBelowMinimum,
   };
 }

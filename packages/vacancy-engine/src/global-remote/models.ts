@@ -237,6 +237,16 @@ export type DiscoveryVacancyAudit = {
   salaryPeriod: string | null;
   advertisedMinimum: number | null;
   annualizedMinimumUsd: number | null;
+  /** Audited comparison fields. Optional for reports written before issue #327. */
+  normalizedAnnualMinimum?: number | null;
+  normalizedCurrency?: string | null;
+  normalizationMethod?: import('./salary.js').SalaryNormalizationMethod;
+  assumptionProvenance?: string | null;
+  /** Explicit source audit for salary evidence. Missing provenance is never comparable. */
+  salaryProvenance?: import('./salary.js').SalaryProvenance;
+  salaryProvider?: DiscoveryProvider | null;
+  salarySourceKey?: string | null;
+  salarySourceUrl?: string | null;
   decision: DiscoveryDecision;
   reasons: string[];
   contentHash: string;
@@ -358,10 +368,10 @@ export type DiscoverySourceAudit = {
   continuationCursor: string | null;
   /** Per-source evidence of which focused criteria were actually sent upstream. */
   focusedScan?: {
-    requested: Partial<Record<'role' | 'country' | 'employment', string>>;
-    applied: { criterion: 'role' | 'country' | 'employment'; value: string; parameter: string; valueFormat: 'free_text' | 'exact' | 'enumerated'; pagination: 'filtered_pages' | 'not_applicable'; limitations: string }[];
-    deferred: { criterion: 'role' | 'country' | 'employment'; value: string; normalizedValue: string; reason: string }[];
-    unsupported: { criterion: 'role' | 'country' | 'employment'; value: string; normalizedValue: string; reason: string }[];
+    requested: Partial<Record<'role' | 'country' | 'employment' | 'salary', string>>;
+    applied: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; parameter: string; valueFormat: 'free_text' | 'exact' | 'enumerated'; pagination: 'filtered_pages' | 'not_applicable'; limitations: string }[];
+    deferred: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
+    unsupported: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
   };
 };
 
@@ -431,6 +441,11 @@ export type GlobalRemoteReport = {
     usCitizenshipRequired: false;
     minimumAnnualBaseUsd: number | null;
     currency: 'USD';
+    salary?: {
+      minimumAnnual: number | null;
+      currency: string;
+      includeUnknown: boolean;
+    };
   };
   statistics: {
     discoveryRequests: number;
@@ -490,6 +505,9 @@ export type GlobalRemoteReport = {
     focusedMatches?: number;
     focusedUnknownEmployment?: number;
     focusedEmploymentMismatches?: number;
+    focusedSalaryComparable?: number;
+    focusedSalaryUnknown?: number;
+    focusedSalaryBelowMinimum?: number;
   };
   sourceRegistry: SourceRegistryEntry[];
   discoverySources: DiscoverySourceAudit[];

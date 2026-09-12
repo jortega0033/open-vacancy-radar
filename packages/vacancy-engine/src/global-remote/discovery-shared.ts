@@ -5,6 +5,7 @@ import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import { decodeFeedEntities } from '../ats/shared.js';
 import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import { annualizedMinimumUsd, classifyDiscoveryVacancy } from './evaluation.js';
+import { normalizeSalary } from './salary.js';
 import type {
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
@@ -71,6 +72,14 @@ export function discoveryAudit(
     | 'decision'
     | 'reasons'
     | 'annualizedMinimumUsd'
+    | 'normalizedAnnualMinimum'
+    | 'normalizedCurrency'
+    | 'normalizationMethod'
+    | 'assumptionProvenance'
+    | 'salaryProvenance'
+    | 'salaryProvider'
+    | 'salarySourceKey'
+    | 'salarySourceUrl'
     | 'contentHash'
     | 'description'
     | 'postedAt'
@@ -85,6 +94,7 @@ export function discoveryAudit(
     minimumAnnualBaseUsd: number | null;
     description?: string | null;
     postedAt?: string | null;
+    salaryProvenance?: import('./salary.js').SalaryProvenance;
   },
 ): DiscoveryVacancyAudit {
   const annualized = annualizedMinimumUsd(
@@ -92,6 +102,12 @@ export function discoveryAudit(
     input.currency,
     input.salaryPeriod,
     input.employmentType,
+  );
+  const salaryNormalization = normalizeSalary(
+    input.advertisedMinimum,
+    input.currency,
+    input.salaryPeriod,
+    input.salaryProvenance,
   );
   const classification = classifyDiscoveryVacancy({
     title: input.title,
@@ -130,6 +146,10 @@ export function discoveryAudit(
     salaryPeriod: input.salaryPeriod,
     advertisedMinimum: input.advertisedMinimum,
     annualizedMinimumUsd: annualized,
+    salaryProvider: input.advertisedMinimum === null ? null : input.provider,
+    salarySourceKey: input.advertisedMinimum === null ? null : input.key,
+    salarySourceUrl: input.advertisedMinimum === null ? null : input.url,
+    ...salaryNormalization,
     decision: classification.decision,
     reasons: classification.reasons,
     contentHash: createHash('sha256').update(JSON.stringify(input.raw)).digest('hex'),

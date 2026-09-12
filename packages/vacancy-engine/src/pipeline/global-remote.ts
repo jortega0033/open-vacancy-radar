@@ -45,6 +45,7 @@ import {
   withFocusedScanPlan,
   type FocusedScanCriteria,
 } from '../global-remote/focused-scan.js';
+import { normalizeSalary, type SalaryFilterCriteria } from '../global-remote/salary.js';
 import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import {
   runWorkableGlobalDiscovery,
@@ -162,11 +163,32 @@ function mergeIdentityGroup(
   const employmentTypes = [...new Set(ordered.flatMap(({ vacancy }) =>
     vacancy.employmentTypes ?? (vacancy.employmentType ? [vacancy.employmentType] : []),
   ))];
+  const salaryEvidence =
+    ordered.find(({ vacancy }) =>
+      vacancy.normalizedAnnualMinimum != null && vacancy.salaryProvenance === 'reviewed_structured',
+    )?.vacancy ??
+    ordered.find(({ vacancy }) => vacancy.advertisedMinimum != null)?.vacancy;
   return {
     ...primary,
     locations,
     searchableText,
     employmentTypes,
+    ...(salaryEvidence && salaryEvidence !== primary
+      ? {
+          currency: salaryEvidence.currency,
+          salaryPeriod: salaryEvidence.salaryPeriod,
+          advertisedMinimum: salaryEvidence.advertisedMinimum,
+          annualizedMinimumUsd: salaryEvidence.annualizedMinimumUsd,
+          normalizedAnnualMinimum: salaryEvidence.normalizedAnnualMinimum,
+          normalizedCurrency: salaryEvidence.normalizedCurrency,
+          normalizationMethod: salaryEvidence.normalizationMethod,
+          assumptionProvenance: salaryEvidence.assumptionProvenance,
+          salaryProvenance: salaryEvidence.salaryProvenance,
+          salaryProvider: salaryEvidence.salaryProvider,
+          salarySourceKey: salaryEvidence.salarySourceKey,
+          salarySourceUrl: salaryEvidence.salarySourceUrl,
+        }
+      : {}),
     sourceUrl: primary.sourceUrl ?? primary.url,
     identity,
     applyUrl,
@@ -686,6 +708,8 @@ export type GlobalRemoteScanOptions = {
   query?: string;
   country?: string;
   employment?: string;
+  /** Optional salary floor. It is compared locally after all source rows are merged. */
+  salary?: SalaryFilterCriteria;
   /**
    * Fired once per discovery sub-source (and the Workable global source) as it resolves, well
    * before the whole scan's own promise settles -- see `ScanProgressEvent`'s doc comment for the
@@ -921,13 +945,26 @@ export async function runGlobalRemoteScan(
           sources: [...baseDiscovery.sources, ...workableGlobal.sources],
           vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
         };
+  const auditedDiscovery = {
+    ...discovery,
+    vacancies: discovery.vacancies.map((vacancy) => ({
+      ...vacancy,
+      ...normalizeSalary(
+        vacancy.advertisedMinimum,
+        vacancy.currency,
+        vacancy.salaryPeriod,
+        vacancy.salaryProvenance,
+      ),
+    })),
+  };
   const focusedCriteria: FocusedScanCriteria = {
     role: options.browseAll ? '' : profile.discovery.roleQuery,
     country: options.country?.trim() || null,
     employment: options.employment?.trim() || null,
+    salary: options.browseAll ? null : options.salary ?? null,
   };
   const discoverySources = discovery.sources.map((source) => withFocusedScanPlan(source, focusedCriteria));
-  const discoveryAudit = uniqueDiscovery(discovery.vacancies);
+  const discoveryAudit = uniqueDiscovery(auditedDiscovery.vacancies);
   const focused = applyFocusedScanCriteria(discoveryAudit, focusedCriteria);
   const scoredDiscoveryAudit = applyWorldwideProfileScores(
     focused.vacancies,
@@ -985,6 +1022,11 @@ export async function runGlobalRemoteScan(
       usCitizenshipRequired: false,
       minimumAnnualBaseUsd: profile.minimumAnnualBaseUsd,
       currency: 'USD',
+      salary: {
+        minimumAnnual: options.browseAll ? null : options.salary?.minimumAnnual ?? null,
+        currency: options.browseAll ? 'EUR' : options.salary?.currency ?? 'EUR',
+        includeUnknown: options.browseAll ? true : options.salary?.includeUnknown ?? true,
+      },
     },
     statistics: {
       discoveryRequests: discoverySources.reduce((sum, source) => sum + source.requests, 0),
@@ -994,6 +1036,9 @@ export async function runGlobalRemoteScan(
       ...(options.browseAll ? {} : { focusedMatches: focused.vacancies.length }),
       focusedUnknownEmployment: focused.unknownEmployment,
       focusedEmploymentMismatches: focused.explicitEmploymentMismatch,
+      focusedSalaryComparable: focused.salaryComparable,
+      focusedSalaryUnknown: focused.salaryUnknown,
+      focusedSalaryBelowMinimum: focused.salaryBelowMinimum,
       discoveryOfficialReviewCandidates: discoveryAudit.filter(
         (item) => item.decision === 'official_review_candidate',
       ).length,

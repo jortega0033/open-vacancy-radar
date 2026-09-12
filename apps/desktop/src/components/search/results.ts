@@ -1,4 +1,13 @@
-import type { DiscoveryVacancyAudit, OfficialVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  DiscoveryVacancyAudit,
+  OfficialVacancyAudit,
+  GlobalRemoteReport,
+} from '@open-vacancy-radar/vacancy-engine';
+import {
+  assessSalary,
+  parseMinimumAnnualSalary,
+  type SalaryFilterCriteria,
+} from '@open-vacancy-radar/vacancy-engine/salary';
 import type { VacancyLead } from '../cv/types.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 
@@ -285,6 +294,10 @@ export interface SearchFilters {
   /** Which country a vacancy's own `location` text normalizes to (see `countries.ts`). `'all'`
    * applies no filter. */
   country: string;
+  /** Draft input, parsed only when a scan is submitted. */
+  salaryMinimum: string;
+  salaryCurrency: string;
+  includeUnknownSalary: boolean;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -295,7 +308,36 @@ export const DEFAULT_FILTERS: SearchFilters = {
   source: 'all',
   employment: 'any',
   country: 'all',
+  salaryMinimum: '',
+  salaryCurrency: 'EUR',
+  includeUnknownSalary: true,
 };
+
+export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
+  const minimumAnnual = parseMinimumAnnualSalary(filters.salaryMinimum ?? '');
+  if (minimumAnnual === null) return null;
+  return {
+    minimumAnnual,
+    currency: filters.salaryCurrency ?? 'EUR',
+    includeUnknown: filters.includeUnknownSalary ?? true,
+  };
+}
+
+export function salaryCounts(
+  results: readonly SearchResult[],
+  filters: SearchFilters,
+): { comparable: number; unknown: number } {
+  const criteria = salaryCriteriaFromFilters(filters);
+  if (criteria === null) return { comparable: 0, unknown: 0 };
+  let comparable = 0;
+  let unknown = 0;
+  for (const result of results) {
+    const assessment = assessSalary(result.raw, criteria);
+    if (assessment.kind === 'comparable' || assessment.kind === 'below_floor') comparable += 1;
+    else if (assessment.kind === 'unknown') unknown += 1;
+  }
+  return { comparable, unknown };
+}
 
 /**
  * Every selectable country plus the honest fallback for a vacancy whose location text didn't
@@ -365,6 +407,7 @@ export function filterSearchResultIndex(
   const location = filters.location.trim().toLowerCase();
   const maximumAgeMs = filters.postedWithin === 'any' ? null : Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
   const nowMs = now.getTime();
+  const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
     if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query) && !entry.descriptionLower.includes(query)) return false;
@@ -386,6 +429,12 @@ export function filterSearchResultIndex(
 
     if (filters.country !== 'all') {
       if (filters.country === UNSPECIFIED_LOCATION ? entry.countries.length !== 0 : !entry.countries.includes(filters.country)) return false;
+    }
+
+    if (salary !== null) {
+      const assessment = assessSalary(entry.result.raw, salary);
+      if (assessment.kind === 'below_floor') return false;
+      if (assessment.kind === 'unknown' && !salary.includeUnknown) return false;
     }
 
     return true;

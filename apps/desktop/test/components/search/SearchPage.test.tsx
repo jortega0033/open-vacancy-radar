@@ -161,6 +161,38 @@ afterEach(() => {
 });
 
 describe('SearchPage', () => {
+  it('restores salary criteria from the shared session and submits them with a scan', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+    });
+    const initialSession = createSearchSessionState();
+    initialSession.filters = {
+      ...initialSession.filters,
+      query: 'frontend engineer',
+      salaryMinimum: '60 000',
+      salaryCurrency: 'EUR',
+      includeUnknownSalary: false,
+    };
+    initialSession.appliedFilters = { ...initialSession.filters };
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+
+    expect(screen.getByLabelText('Minimum annual salary')).toHaveValue('60 000');
+    expect(screen.getByLabelText('Include vacancies without comparable salary')).not.toBeChecked();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run scan' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+
+    await waitFor(() =>
+      expect(bridge.runScan).toHaveBeenCalledWith({
+        mode: 'query',
+        query: 'frontend engineer',
+        salary: { minimumAnnual: '60 000', currency: 'EUR', includeUnknown: false },
+      }),
+    );
+  });
+
   it('blocks a blank or whitespace-only query before any scan request', async () => {
     const bridge = installAllBridges({ runScan: vi.fn() });
 
@@ -1153,6 +1185,29 @@ describe('SearchPage', () => {
       advertisedMinimum: 120_000,
       key: 'ww-1',
     });
+  });
+
+  it('shows the salary evidence provider and source key separately from the result provider', async () => {
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([
+          makeWorldwideVacancy({
+            provider: 'workable_global',
+            salaryProvider: 'himalayas',
+            salarySourceKey: 'himalayas:salary-copy',
+            salarySourceUrl: 'https://example.invalid/himalayas/salary-copy',
+            salaryProvenance: 'reviewed_structured',
+            normalizedAnnualMinimum: 120_000,
+            normalizedCurrency: 'USD',
+            normalizationMethod: 'advertised_annual',
+          }),
+        ]),
+      ),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Remote Frontend Engineer' })).toBeInTheDocument());
+    expect(screen.getByText('Himalayas (himalayas:salary-copy)')).toBeInTheDocument();
   });
 
   it('"Generate Letter" is a harmless no-op when the page is used standalone, with no handler wired', async () => {

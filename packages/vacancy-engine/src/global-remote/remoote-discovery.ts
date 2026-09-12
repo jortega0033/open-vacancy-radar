@@ -195,6 +195,7 @@ function normalizeRemooteJob(
     currency,
     salaryPeriod,
     advertisedMinimum,
+    salaryProvenance: 'reviewed_structured',
     description,
     postedAt: hashEvidence.postedAt,
     raw: hashEvidence,

@@ -54,6 +54,14 @@ describe('requiredScanQuery', () => {
     })).toEqual({ mode: 'query', query: 'frontend', country: 'Netherlands', employment: 'full_time' });
     expect(parseVacancyScanRequest({ mode: 'browse_all' })).toEqual({ mode: 'browse_all' });
     expect(() => parseVacancyScanRequest({ mode: 'query', query: 'frontend', country: 42 })).toThrow('Country must be a string.');
+    expect(parseVacancyScanRequest({
+      mode: 'query', query: 'frontend', salary: { minimumAnnual: '60 000', currency: 'eur' },
+    })).toEqual({
+      mode: 'query', query: 'frontend', salary: { minimumAnnual: 60_000, currency: 'EUR', includeUnknown: true },
+    });
+    expect(() => parseVacancyScanRequest({
+      mode: 'query', query: 'frontend', salary: { minimumAnnual: '1,234', currency: 'EUR' },
+    })).toThrow();
   });
 });
 

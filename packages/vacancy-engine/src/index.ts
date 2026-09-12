@@ -17,6 +17,18 @@ export {
 export { readGlobalRemoteReport } from './global-remote/report.js';
 export { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
+  assessSalary,
+  normalizeSalary,
+  parseMinimumAnnualSalary,
+  DEFAULT_SALARY_HOURS_PER_WEEK,
+  DEFAULT_SALARY_WEEKS_PER_YEAR,
+  type SalaryAssessment,
+  type SalaryFilterCriteria,
+  type SalaryNormalization,
+  type SalaryNormalizationMethod,
+  type SalaryProvenance,
+} from './global-remote/salary.js';
+export {
   generateGapReportHtml,
   generateGapReportText,
 } from './global-remote/gap-report.js';

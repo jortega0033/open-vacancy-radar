@@ -344,6 +344,7 @@ export function normalizeTaiwanJob(
     currency,
     salaryPeriod,
     advertisedMinimum,
+    salaryProvenance: 'reviewed_structured',
     description: description.length === 0 ? null : description,
     postedAt: isoPostedAtFromYyyyMmDd(stringValue(raw.TRANDATE)),
     raw,
