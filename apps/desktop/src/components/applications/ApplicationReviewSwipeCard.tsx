@@ -90,13 +90,8 @@ export function ApplicationReviewSwipeCard({
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  const prepared = attempt.preparedFields;
-  const preparedMatchesAttempt = prepared != null && prepared.company === attempt.company && prepared.role === attempt.role;
-  const committedCount = preparedMatchesAttempt ? prepared.fields.filter((field) => field.status === 'committed').length : 0;
-  const awaitingCount = preparedMatchesAttempt
-    ? prepared.fields.filter((field) => field.status === 'awaiting_you' || field.status === 'pending_upload').length
-    : 0;
   const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
+  const canSubmit = readiness.ready && !busy;
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (busy) return;
@@ -120,7 +115,7 @@ export function ApplicationReviewSwipeCard({
     // progress. Without this, releasing that drag past the threshold would fire a second
     // approve/skip on top of the one already in flight.
     if (!busy) {
-      if (dragXRef.current > SWIPE_THRESHOLD_PX) onApprove();
+      if (dragXRef.current > SWIPE_THRESHOLD_PX && canSubmit) onApprove();
       else if (dragXRef.current < -SWIPE_THRESHOLD_PX) onSkip();
     }
     dragXRef.current = 0;
@@ -130,11 +125,12 @@ export function ApplicationReviewSwipeCard({
   const rotation = Math.max(-MAX_ROTATION_DEG, Math.min(MAX_ROTATION_DEG, dragX / 10));
   const approveOpacity = Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX));
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
+  const activeFields = snapshot.fields.filter((field) => field.active);
 
   return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-sm flex-col gap-3">
       <div
-        className="relative select-none overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-lg"
+        className="relative select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg"
         style={{
           transform: `translateX(${dragX}px) rotate(${rotation}deg)`,
           transition: dragging ? 'none' : 'transform 200ms ease-out',
@@ -160,60 +156,100 @@ export function ApplicationReviewSwipeCard({
           Skip
         </div>
 
-        <div className="border-b border-base-300 px-5 py-3.5">
-          <h2 className="text-sm font-semibold">
+        <div className="px-4 py-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className={`badge badge-sm ${readiness.ready ? 'badge-success' : 'badge-warning badge-soft'}`}>
+              {readiness.ready ? 'Ready for review' : 'Needs your input'}
+            </span>
+            <span className="text-xs text-base-content/50">Final submission is always yours</span>
+          </div>
+          <h2 className="text-base font-semibold leading-snug">
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
           </h2>
-          <p className="text-xs text-base-content/60">
-            {preparedMatchesAttempt
-              ? `${verifiedFilledCount} verified on page, ${committedCount} prepared by this app, ${awaitingCount} left for you`
-              : `${verifiedFilledCount} of ${discoveredFieldCount} field${discoveredFieldCount === 1 ? '' : 's'} verified filled`}
-            {requiredFieldCount > 0 ? `, ${requiredFieldsSatisfied} of ${requiredFieldCount} required answered` : ''}
+          <p className="mt-1 text-xs text-base-content/60">
+            {verifiedFilledCount} of {discoveredFieldCount} field{discoveredFieldCount === 1 ? '' : 's'} verified filled
           </p>
         </div>
 
-        <ApplicationPreparedSummary attempt={attempt} documents={documents} onOpenArtifact={onOpenArtifact} />
+        <div className="grid grid-cols-3 divide-x divide-base-300 border-y border-base-300 bg-base-200/60">
+          <div className="px-3 py-2.5 text-center">
+            <p className="text-lg font-semibold leading-none">{verifiedFilledCount}</p>
+            <p className="mt-1 text-xs text-base-content/60">Verified</p>
+          </div>
+          <div className="px-3 py-2.5 text-center">
+            <p className="text-lg font-semibold leading-none">{documents.length}</p>
+            <p className="mt-1 text-xs text-base-content/60">Documents</p>
+          </div>
+          <div className="px-3 py-2.5 text-center">
+            <p className="text-lg font-semibold leading-none">{blockers.length}</p>
+            <p className="mt-1 text-xs text-base-content/60">Checks left</p>
+          </div>
+        </div>
 
-        {blockers.length > 0 && (
-          <div className="border-b border-base-300 bg-warning/10 px-5 py-3">
-            <p className="text-xs font-semibold">This form is not ready to submit</p>
-            <ul className="mt-1 list-disc pl-4 text-xs text-base-content/70">
-              {blockers.map((blocker, index) => (
-                // Blocker text includes labels and validation messages the page itself wrote.
-                // Rendered as plain React children, so it is escaped text and never markup.
-                <li key={`${blocker.kind}-${index}`}>{describeBlocker(blocker)}</li>
+        <div className={`px-4 py-3 ${readiness.ready ? 'bg-success/10' : 'bg-warning/10'}`}>
+          {blockers.length > 0 ? (
+            <>
+              <p className="text-xs font-semibold">This form is not ready to submit</p>
+              <p className="mt-1 text-xs text-base-content/70">{describeBlocker(blockers[0]!)}</p>
+              {blockers.length > 1 ? <p className="mt-1 text-xs font-medium">+{blockers.length - 1} more in form checks</p> : null}
+            </>
+          ) : (
+            <>
+              <p className="text-xs font-semibold">Ready for your final confirmation</p>
+              <p className="mt-1 text-xs text-base-content/70">
+                {requiredFieldCount > 0
+                  ? `${requiredFieldsSatisfied} of ${requiredFieldCount} required answers verified.`
+                  : `${verifiedFilledCount} of ${discoveredFieldCount} fields verified filled.`}
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button type="button" className="btn btn-outline flex-1" disabled={busy} onClick={onSkip}>
+          Skip
+        </button>
+        <button type="button" className="btn btn-success flex-1" disabled={!canSubmit} onClick={onApprove}>
+          {busy ? <span className="loading loading-spinner loading-sm" /> : 'Submit application'}
+        </button>
+      </div>
+
+      <details className="rounded-lg border border-base-300 bg-base-100">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Prepared application details</summary>
+        <ApplicationPreparedSummary attempt={attempt} documents={documents} onOpenArtifact={onOpenArtifact} />
+      </details>
+
+      <details className="rounded-lg border border-base-300 bg-base-100">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">
+          Form checks ({blockers.length}) and fields ({activeFields.length})
+        </summary>
+        <div className="border-t border-base-300 px-4 py-3">
+          {blockers.length > 1 ? (
+            <ul className="list-disc space-y-1 pl-4 text-xs text-base-content/70">
+              {blockers.slice(1).map((blocker, index) => (
+                <li key={`${blocker.kind}-${index + 1}`}>{describeBlocker(blocker)}</li>
               ))}
             </ul>
-          </div>
-        )}
-
-        {/* The field inventory, kept and shown, but presented for what it is: a list of the
-          * controls found on the active form. It is deliberately separate from the verified count
-          * above, and collapsed by default, so that reading it can never be mistaken for reading a
-          * record of what was filled in (#277). */}
-        <details className="border-b border-base-300 px-5 py-2">
-          <summary className="cursor-pointer text-xs text-base-content/60">
-            Fields found on this form ({snapshot.fields.filter((field) => field.active).length})
-          </summary>
-          <ul className="mt-2 list-disc pl-4 text-xs text-base-content/60">
-            {snapshot.fields
-              .filter((field) => field.active)
-              .map((field) => (
-                <li key={field.fieldRef}>
-                  {field.label || 'Unlabelled field'} ({field.controlType}
-                  {field.required ? ', required' : ''})
-                </li>
-              ))}
+          ) : (
+            <p className="text-xs text-base-content/60">
+              {blockers.length === 1 ? 'The remaining check is shown on the card.' : 'No remaining form blockers.'}
+            </p>
+          )}
+          <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/60">
+            {activeFields.map((field) => (
+              <li key={field.fieldRef}>
+                {field.label || 'Unlabelled field'} ({field.controlType}
+                {field.required ? ', required' : ''})
+              </li>
+            ))}
           </ul>
-        </details>
+        </div>
+      </details>
 
-        <div className="bg-base-200">
-          {/* A live screenshot of the application page exactly as this review opened it -- not a
-           * re-description of it. Note what this is NOT: a screenshot is evidence that the page
-           * rendered, and nothing else. It is not evidence that any field holds a value, and since
-           * #277 it contributes nothing at all to the verified-filled count above, which comes
-           * only from committed values read back out of the browser. Use the live view button
-           * below to see and finish the real page yourself whenever this picture is not enough. */}
+      <details className="rounded-lg border border-base-300 bg-base-100">
+        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Review application form</summary>
+        <div className="max-h-72 overflow-auto border-t border-base-300 bg-base-200">
           <img
             src={`data:image/png;base64,${screenshotBase64}`}
             alt={`Live application page preview for ${attempt.role} at ${attempt.company}`}
@@ -221,20 +257,8 @@ export function ApplicationReviewSwipeCard({
             draggable={false}
           />
         </div>
-      </div>
+      </details>
 
-      <div className="flex gap-3">
-        <button type="button" className="btn btn-outline flex-1" disabled={busy} onClick={onSkip}>
-          Skip
-        </button>
-        <button type="button" className="btn btn-success flex-1" disabled={busy || !readiness.ready} onClick={onApprove}>
-          {busy ? <span className="loading loading-spinner loading-sm" /> : 'Submit application'}
-        </button>
-      </div>
-
-      {/* The live handoff. Always offered, not only when something is blocking: signing in, solving
-        * a CAPTCHA, or finishing a control this app cannot drive are all things a person may want
-        * to do on a form that otherwise looks fine. */}
       <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onOpenLiveView}>
         Open the live page to finish it yourself
       </button>

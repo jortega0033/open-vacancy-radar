@@ -81,10 +81,18 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     });
     expect(screen.getByText(/0 of 3 fields verified filled/i)).toBeInTheDocument();
     expect(screen.queryByText(/3 fields filled/i)).not.toBeInTheDocument();
-    // The screenshot is still shown; it just proves nothing about the fields.
+    // The screenshot is still available, but no longer makes the decision card itself enormous.
     expect(screen.getByRole('img', { name: /live application page preview/i })).toBeInTheDocument();
-    // And so is the field inventory, labelled as what it is rather than as a filled count.
-    expect(screen.getByText(/Fields found on this form \(3\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Form checks \(2\) and fields \(3\)/i)).toBeInTheDocument();
+  });
+
+  it('keeps the swipe target compact and puts the full review behind disclosures', () => {
+    renderCard();
+    const swipeCard = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    const preview = screen.getByRole('img', { name: /live application page preview/i });
+    expect(swipeCard).not.toContainElement(preview);
+    expect(screen.getByText('Prepared application details').closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute('open');
   });
 
   it('lists every blocker so a person can see what is actually wrong', () => {
@@ -172,5 +180,28 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     drag('pointermove', 90, 2);
     drag('pointerup', 90, 2);
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('never submits from a right swipe while readiness blocks the button', () => {
+    const { onApprove } = renderCard({
+      readiness: readiness({
+        ready: false,
+        blockers: [{ kind: 'required_field_empty', fieldRef: 'f1', label: 'Full name' }],
+      }),
+    });
+    const card = screen.getAllByText(/Senior Engineer/)[0]?.closest('div[class*="select-none"]');
+    expect(card).not.toBeNull();
+
+    const down = new Event('pointerdown', { bubbles: true });
+    Object.defineProperties(down, { clientX: { value: 100 }, pointerId: { value: 1 } });
+    const move = new Event('pointermove', { bubbles: true });
+    Object.defineProperties(move, { clientX: { value: 240 }, pointerId: { value: 1 } });
+    const up = new Event('pointerup', { bubbles: true });
+    Object.defineProperties(up, { clientX: { value: 240 }, pointerId: { value: 1 } });
+    fireEvent(card!, down);
+    fireEvent(card!, move);
+    fireEvent(card!, up);
+
+    expect(onApprove).not.toHaveBeenCalled();
   });
 });
