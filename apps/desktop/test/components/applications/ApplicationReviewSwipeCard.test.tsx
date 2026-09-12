@@ -95,6 +95,14 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     expect(screen.getByText('Review application form').closest('details')).not.toHaveAttribute('open');
   });
 
+  it('looks and behaves like the front card in a swipe deck', () => {
+    renderCard();
+    const cardBacks = screen.getAllByTestId('swipe-card-back');
+    expect(cardBacks).toHaveLength(2);
+    cardBacks.forEach((cardBack) => expect(cardBack).toHaveAttribute('aria-hidden', 'true'));
+    expect(screen.getByTestId('application-swipe-card')).toHaveAttribute('title', 'Drag left to skip or right to submit');
+  });
+
   it('lists every blocker so a person can see what is actually wrong', () => {
     renderCard({
       readiness: readiness({
@@ -180,6 +188,36 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
     drag('pointermove', 90, 2);
     drag('pointerup', 90, 2);
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not finish a drag after another decision makes the card busy', () => {
+    const onApprove = vi.fn();
+    const onSkip = vi.fn();
+    const props = {
+      attempt: ATTEMPT,
+      snapshot: SNAPSHOT,
+      screenshotBase64: 'ZmFrZQ==',
+      readiness: readiness(),
+      onApprove,
+      onSkip,
+      onOpenLiveView: vi.fn(),
+    };
+    const { rerender } = render(<ApplicationReviewSwipeCard {...props} />);
+    const card = screen.getByTestId('application-swipe-card');
+
+    function pointer(type: string, clientX: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, { clientX: { value: clientX }, pointerId: { value: 1 } });
+      fireEvent(card, event);
+    }
+
+    pointer('pointerdown', 100);
+    pointer('pointermove', 240);
+    rerender(<ApplicationReviewSwipeCard {...props} busy />);
+    pointer('pointerup', 240);
+
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
   });
 
   it('never submits from a right swipe while readiness blocks the button', () => {
