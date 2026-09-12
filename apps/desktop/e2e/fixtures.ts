@@ -13,8 +13,26 @@ export const MAIN_ENTRY = fileURLToPath(new URL('../dist-electron/main.js', impo
  * the exact launch args the `electronApp` fixture below uses, instead of a second copy that would
  * silently drift the moment one of the two picks up a new required flag.
  */
-export function launchApp(userDataDir: string): Promise<ElectronApplication> {
-  return electron.launch({ args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`, '--disable-gpu'] });
+export interface LaunchAppOptions {
+  appId?: string;
+  vacancyEngineDataRoot?: string;
+}
+
+export function launchApp(
+  userDataDir: string,
+  options: LaunchAppOptions = {},
+): Promise<ElectronApplication> {
+  const env = {
+    ...process.env,
+    ...(options.appId ? { AGENT_DOCK_APP_ID: options.appId } : {}),
+    ...(options.vacancyEngineDataRoot
+      ? { OVR_E2E_VACANCY_ENGINE_DATA_ROOT: options.vacancyEngineDataRoot }
+      : {}),
+  };
+  return electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`, '--disable-gpu'],
+    env,
+  });
 }
 
 interface Fixtures {
