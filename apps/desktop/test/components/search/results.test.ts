@@ -120,6 +120,28 @@ describe('filterResults: country filter', () => {
     const filtered = filterResults(results, { ...DEFAULT_FILTERS, country: UNSPECIFIED_LOCATION });
     expect(filtered.map((r) => r.key).sort()).toEqual(['1', '2']);
   });
+
+  it('matches every country retained after same-vacancy deduplication', () => {
+    const result = worldwideResult({ key: 'multi-country', location: 'Remote' });
+    result.raw = discoveryVacancy({ location: 'Remote', locations: ['Remote', 'Netherlands', 'Germany'] });
+    expect(filterResults([result], { ...DEFAULT_FILTERS, country: 'Netherlands' }).map((item) => item.key)).toEqual(['multi-country']);
+    expect(filterResults([result], { ...DEFAULT_FILTERS, country: 'Germany' }).map((item) => item.key)).toEqual(['multi-country']);
+  });
+
+  it('matches an employment filter against every retained duplicate employment type', () => {
+    const result = worldwideResult({ key: 'merged-employment', location: 'Worldwide' });
+    result.employmentType = 'contract';
+    result.raw = discoveryVacancy({ employmentType: 'contract', employmentTypes: ['contract', 'full_time'] });
+    expect(filterResults([result], { ...DEFAULT_FILTERS, employment: 'full_time' }).map((item) => item.key)).toEqual(['merged-employment']);
+  });
+});
+
+describe('filterResults: role search', () => {
+  it('matches a searchable description when the title does not contain the typed role', () => {
+    const result = worldwideResult({ key: 'description-role', location: 'Netherlands' });
+    result.description = 'Build accessible TypeScript interfaces.';
+    expect(filterResults([result], { ...DEFAULT_FILTERS, query: 'typescript' }).map((item) => item.key)).toEqual(['description-role']);
+  });
 });
 
 describe('filterResults: sponsorOnly', () => {

@@ -93,7 +93,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
-import { requiredScanQuery, scheduledScanQueryFromProfile } from './vacancy-scan-query.js';
+import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type VacancyScanRequest } from './vacancy-scan-query.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
@@ -1831,18 +1831,6 @@ guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ sca
 const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
 const BROWSE_ALL_RESULT_CAP = 5_000;
 
-type VacancyScanRequest = { mode: 'query'; query: string } | { mode: 'browse_all' };
-
-function parseVacancyScanRequest(value: unknown): VacancyScanRequest {
-  if (typeof value === 'string') return { mode: 'query', query: requiredScanQuery(value) };
-  if (value && typeof value === 'object') {
-    const request = value as { mode?: unknown; query?: unknown };
-    if (request.mode === 'query') return { mode: 'query', query: requiredScanQuery(request.query) };
-    if (request.mode === 'browse_all') return { mode: 'browse_all' };
-  }
-  throw new Error('Unsupported vacancy scan request.');
-}
-
 /**
  * Shared scan body for user-triggered vacancy discovery. A normal scan must supply a role or
  * keyword; browse-all must be explicit and gets capped below.
@@ -1860,7 +1848,7 @@ async function runVacancyScan(request: VacancyScanRequest): Promise<GlobalRemote
       const config = vacancyEngineConfig();
       const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
         ...(request.mode === 'query'
-          ? { query: request.query }
+          ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}) }
           : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
         onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
       });

@@ -71,6 +71,8 @@ export const globalRemoteConfigSchema = z.object({
     himalayasQueries: z.array(z.string().min(3)).max(10),
     /** Empty means worldwide/no country filter: the param is omitted from the request entirely. */
     himalayasCountry: z.string().max(30).default(''),
+    /** Himalayas' documented employment_type enum, omitted when no focused employment filter maps. */
+    himalayasEmploymentType: z.string().max(30).optional(),
     himalayasMaxPagesPerQuery: z.number().int().min(1).max(25),
     jobicyCount: z.number().int().min(1).max(100),
     freehireLimit: z.number().int().min(1).max(100),
@@ -224,6 +226,12 @@ export type DiscoveryVacancyAudit = {
   title: string;
   url: string;
   location: string;
+  /** Every location string retained when same-identity rows are merged. */
+  locations?: string[];
+  /** Role-search text retained from every same-identity discovery row. */
+  searchableText?: string[];
+  /** Employment labels retained from every same-identity discovery row. */
+  employmentTypes?: string[];
   employmentType: string | null;
   currency: string | null;
   salaryPeriod: string | null;
@@ -348,6 +356,13 @@ export type DiscoverySourceAudit = {
    * `null` whenever the source has nothing to resume from, including every `complete: true` row.
    */
   continuationCursor: string | null;
+  /** Per-source evidence of which focused criteria were actually sent upstream. */
+  focusedScan?: {
+    requested: Partial<Record<'role' | 'country' | 'employment', string>>;
+    applied: { criterion: 'role' | 'country' | 'employment'; value: string; parameter: string; valueFormat: 'free_text' | 'exact' | 'enumerated'; pagination: 'filtered_pages' | 'not_applicable'; limitations: string }[];
+    deferred: { criterion: 'role' | 'country' | 'employment'; value: string; normalizedValue: string; reason: string }[];
+    unsupported: { criterion: 'role' | 'country' | 'employment'; value: string; normalizedValue: string; reason: string }[];
+  };
 };
 
 export type DiscoveryRun = {
@@ -471,6 +486,10 @@ export type GlobalRemoteReport = {
      * new discovery requests either).
      */
     discoveryProgressiveRowsEmitted?: number;
+    rawRowsFetched?: number;
+    focusedMatches?: number;
+    focusedUnknownEmployment?: number;
+    focusedEmploymentMismatches?: number;
   };
   sourceRegistry: SourceRegistryEntry[];
   discoverySources: DiscoverySourceAudit[];

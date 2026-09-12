@@ -33,7 +33,7 @@ export interface AgentDockBridge {
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
-export type VacancyScanRequest = string | { mode: 'query'; query: string } | { mode: 'browse_all' };
+export type VacancyScanRequest = string | { mode: 'query'; query: string; country?: string; employment?: string } | { mode: 'browse_all' };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;

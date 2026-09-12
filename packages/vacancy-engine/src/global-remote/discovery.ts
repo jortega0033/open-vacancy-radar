@@ -70,6 +70,9 @@ export async function discoverHimalayas(
         if (config.discovery.himalayasCountry) {
           url.searchParams.set('country', config.discovery.himalayasCountry);
         }
+        if (config.discovery.himalayasEmploymentType) {
+          url.searchParams.set('employment_type', config.discovery.himalayasEmploymentType);
+        }
         url.searchParams.set('sort', 'salaryDesc');
         url.searchParams.set('page', String(page));
         lastUrl = url.toString();

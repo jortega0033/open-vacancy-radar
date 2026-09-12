@@ -15,6 +15,7 @@ export {
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
 export { readGlobalRemoteReport } from './global-remote/report.js';
+export { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
   generateGapReportHtml,
   generateGapReportText,

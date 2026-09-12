@@ -38,6 +38,13 @@ import {
 import { runOfficialGlobalRemoteSources } from '../global-remote/official.js';
 import { scoreWorldwideVacancy } from '../filtering/index.js';
 import { globalRemoteSourceRegistry } from '../global-remote/source-registry.js';
+import {
+  applyFocusedScanCriteria,
+  upstreamCountryFor,
+  upstreamEmploymentFor,
+  withFocusedScanPlan,
+  type FocusedScanCriteria,
+} from '../global-remote/focused-scan.js';
 import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import {
   runWorkableGlobalDiscovery,
@@ -148,7 +155,23 @@ function mergeIdentityGroup(
   // test fixture, may not carry either field yet, and the merged output must always expose both.
   const identity = vacancyIdentityFor(primary);
   const applyUrl = resolveApplyUrl(identity, primary.url);
-  return { ...primary, sourceUrl: primary.sourceUrl ?? primary.url, identity, applyUrl, sources };
+  const locations = [...new Set(ordered.flatMap(({ vacancy }) => vacancy.locations ?? [vacancy.location]))];
+  const searchableText = [...new Set(ordered.flatMap(({ vacancy }) =>
+    vacancy.searchableText ?? [`${vacancy.title} ${vacancy.description ?? ''}`.trim()],
+  ))];
+  const employmentTypes = [...new Set(ordered.flatMap(({ vacancy }) =>
+    vacancy.employmentTypes ?? (vacancy.employmentType ? [vacancy.employmentType] : []),
+  ))];
+  return {
+    ...primary,
+    locations,
+    searchableText,
+    employmentTypes,
+    sourceUrl: primary.sourceUrl ?? primary.url,
+    identity,
+    applyUrl,
+    sources,
+  };
 }
 
 /**
@@ -661,6 +684,8 @@ export type GlobalRemoteScanOptions = {
    * Ignored when empty/whitespace-only, which keeps the static default.
    */
   query?: string;
+  country?: string;
+  employment?: string;
   /**
    * Fired once per discovery sub-source (and the Workable global source) as it resolves, well
    * before the whole scan's own promise settles -- see `ScanProgressEvent`'s doc comment for the
@@ -823,6 +848,16 @@ export async function runGlobalRemoteScan(
     discovery: {
       ...loadedProfile.discovery,
       roleQuery: resolveRoleQuery(loadedProfile.discovery.roleQuery, options.query),
+      himalayasQueries: options.query?.trim() ? [resolveRoleQuery(loadedProfile.discovery.roleQuery, options.query)] : loadedProfile.discovery.himalayasQueries,
+      himalayasCountry: options.country === undefined
+        ? loadedProfile.discovery.himalayasCountry
+        : upstreamCountryFor('himalayas', options.country) ?? '',
+      himalayasEmploymentType: options.employment === undefined
+        ? loadedProfile.discovery.himalayasEmploymentType
+        : upstreamEmploymentFor('himalayas', options.employment) ?? undefined,
+      remooteCountry: options.country === undefined
+        ? loadedProfile.discovery.remooteCountry
+        : upstreamCountryFor('remoote', options.country) ?? '',
       adzunaAppId: appConfig.keyedDiscovery.adzunaAppId,
       adzunaAppKey: appConfig.keyedDiscovery.adzunaAppKey,
       joobleApiKey: appConfig.keyedDiscovery.joobleApiKey,
@@ -886,9 +921,16 @@ export async function runGlobalRemoteScan(
           sources: [...baseDiscovery.sources, ...workableGlobal.sources],
           vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
         };
+  const focusedCriteria: FocusedScanCriteria = {
+    role: options.browseAll ? '' : profile.discovery.roleQuery,
+    country: options.country?.trim() || null,
+    employment: options.employment?.trim() || null,
+  };
+  const discoverySources = discovery.sources.map((source) => withFocusedScanPlan(source, focusedCriteria));
   const discoveryAudit = uniqueDiscovery(discovery.vacancies);
+  const focused = applyFocusedScanCriteria(discoveryAudit, focusedCriteria);
   const scoredDiscoveryAudit = applyWorldwideProfileScores(
-    discoveryAudit,
+    focused.vacancies,
     candidateProfile,
     profile.minimumAnnualBaseUsd,
   );
@@ -945,9 +987,13 @@ export async function runGlobalRemoteScan(
       currency: 'USD',
     },
     statistics: {
-      discoveryRequests: discovery.sources.reduce((sum, source) => sum + source.requests, 0),
-      discoveryListings: discovery.sources.reduce((sum, source) => sum + source.listings, 0),
+      discoveryRequests: discoverySources.reduce((sum, source) => sum + source.requests, 0),
+      discoveryListings: discoverySources.reduce((sum, source) => sum + source.listings, 0),
       discoveryUniqueListings: discoveryAudit.length,
+      rawRowsFetched: discovery.vacancies.length,
+      ...(options.browseAll ? {} : { focusedMatches: focused.vacancies.length }),
+      focusedUnknownEmployment: focused.unknownEmployment,
+      focusedEmploymentMismatches: focused.explicitEmploymentMismatch,
       discoveryOfficialReviewCandidates: discoveryAudit.filter(
         (item) => item.decision === 'official_review_candidate',
       ).length,
@@ -968,12 +1014,12 @@ export async function runGlobalRemoteScan(
         sponsorMatched.statistics.cachedCompanies + sponsorMatched.statistics.lookedUpCompanies,
       sponsorMatchLookedUpCompanies: sponsorMatched.statistics.lookedUpCompanies,
       sponsorMatchUnverifiedCompanies: sponsorMatched.statistics.unverifiedCompanies,
-      discoveryNetworkAttempts: discovery.sources.reduce((sum, source) => sum + source.networkAttempts, 0),
-      discoveryRetries: discovery.sources.reduce((sum, source) => sum + source.retries, 0),
+      discoveryNetworkAttempts: discoverySources.reduce((sum, source) => sum + source.networkAttempts, 0),
+      discoveryRetries: discoverySources.reduce((sum, source) => sum + source.retries, 0),
       discoveryProgressiveRowsEmitted: progressiveRowTracker.count(),
     },
     sourceRegistry,
-    discoverySources: discovery.sources,
+    discoverySources,
     ...groups,
     officialAudit,
     discoveryAudit: assessedDiscoveryAudit,

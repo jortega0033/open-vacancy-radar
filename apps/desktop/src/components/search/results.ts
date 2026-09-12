@@ -312,7 +312,7 @@ export function sourceOptions(results: SearchResult[]): string[] {
 
 export function employmentOptions(results: SearchResult[]): string[] {
   const values = results
-    .map((result) => result.employmentType)
+    .flatMap((result) => result.raw.employmentTypes ?? (result.employmentType ? [result.employmentType] : []))
     .filter((value): value is string => !!value && value.trim().length > 0);
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
@@ -324,7 +324,9 @@ export interface SearchResultIndexEntry {
   titleLower: string;
   companyLower: string;
   locationLower: string;
-  country: string;
+  descriptionLower: string;
+  countries: string[];
+  employmentTypes: string[];
   postedAtMs: number | null;
 }
 
@@ -334,7 +336,9 @@ export function buildSearchResultIndex(results: SearchResult[]): SearchResultInd
     titleLower: result.title.toLowerCase(),
     companyLower: result.company.toLowerCase(),
     locationLower: (result.location ?? '').toLowerCase(),
-    country: normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION,
+    descriptionLower: (result.description ?? '').toLowerCase(),
+    countries: (result.raw.locations ?? [result.location ?? '']).map((location) => normalizeCountry(location)).filter((country): country is string => country !== null),
+    employmentTypes: result.raw.employmentTypes ?? (result.employmentType ? [result.employmentType] : []),
     postedAtMs: postedAtTimestamp(result.postedAt),
   }));
 }
@@ -363,7 +367,7 @@ export function filterSearchResultIndex(
   const nowMs = now.getTime();
 
   return index.filter((entry) => {
-    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query)) return false;
+    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query) && !entry.descriptionLower.includes(query)) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;
 
@@ -378,10 +382,10 @@ export function filterSearchResultIndex(
       if (nowMs - entry.postedAtMs > maximumAgeMs) return false;
     }
 
-    if (filters.employment !== 'any' && entry.result.employmentType !== filters.employment) return false;
+    if (filters.employment !== 'any' && !entry.employmentTypes.includes(filters.employment)) return false;
 
     if (filters.country !== 'all') {
-      if (entry.country !== filters.country) return false;
+      if (filters.country === UNSPECIFIED_LOCATION ? entry.countries.length !== 0 : !entry.countries.includes(filters.country)) return false;
     }
 
     return true;

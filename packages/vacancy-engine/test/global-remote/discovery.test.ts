@@ -83,6 +83,24 @@ describe('discoverHimalayas', () => {
     expect(result.sources[0]).toMatchObject({ id: 'himalayas:backend', status: 'success' });
   });
 
+  it('sends the mapped employment enum on every filtered Himalayas page request', async () => {
+    const routes = new Map([
+      [
+        'https://himalayas.app/jobs/api/search?q=backend&country=DE&employment_type=Full+Time&sort=salaryDesc&page=1',
+        JSON.stringify({ jobs: [], totalCount: 0 }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    await discoverHimalayas(http, config({
+      himalayasQueries: ['backend'], himalayasCountry: 'DE', himalayasEmploymentType: 'Full Time',
+    }));
+
+    expect(http.requestedUrls).toEqual([
+      'https://himalayas.app/jobs/api/search?q=backend&country=DE&employment_type=Full+Time&sort=salaryDesc&page=1',
+    ]);
+  });
+
   it('converts the unix-seconds pubDate to an ISO posting date', async () => {
     const routes = new Map([
       [
