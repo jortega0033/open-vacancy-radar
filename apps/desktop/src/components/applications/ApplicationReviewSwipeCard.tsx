@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
@@ -123,14 +124,21 @@ export function ApplicationReviewSwipeCard({
   }
 
   const rotation = Math.max(-MAX_ROTATION_DEG, Math.min(MAX_ROTATION_DEG, dragX / 10));
-  const approveOpacity = Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX));
+  const approveOpacity = canSubmit ? Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX)) : 0;
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
   const activeFields = snapshot.fields.filter((field) => field.active);
 
   return (
     <div className="mx-auto flex w-full max-w-sm flex-col gap-3">
+      <div className="-mx-2 grid overflow-x-clip px-4 pb-2 pt-3">
+      <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-6 translate-y-2 rotate-[-2deg] rounded-lg border border-base-300 bg-base-300/70" />
+      <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-4 translate-y-1 rotate-[2deg] rounded-lg border border-base-300 bg-base-200" />
       <div
-        className="relative select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg"
+        data-testid="application-swipe-card"
+        role="group"
+        aria-label={`Application decision card for ${attempt.role} at ${attempt.company}`}
+        title="Drag left to skip or right to submit"
+        className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
         style={{
           transform: `translateX(${dragX}px) rotate(${rotation}deg)`,
           transition: dragging ? 'none' : 'transform 200ms ease-out',
@@ -141,6 +149,7 @@ export function ApplicationReviewSwipeCard({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
+        <div aria-hidden="true" className="mx-auto mt-2 h-1 w-7 rounded-full bg-base-content/20" />
         <div
           className="badge badge-success absolute left-4 top-4 z-10 rotate-[-8deg] text-sm font-semibold"
           style={{ opacity: approveOpacity }}
@@ -204,6 +213,13 @@ export function ApplicationReviewSwipeCard({
             </>
           )}
         </div>
+
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center border-t border-base-300 bg-base-100 px-4 py-2 text-xs font-semibold">
+          <span className="flex items-center gap-1 text-base-content/60"><ArrowLeft size={15} weight="bold" aria-hidden="true" />Skip</span>
+          <ArrowsLeftRight size={20} weight="bold" className="text-base-content/45" aria-hidden="true" />
+          <span className={`flex items-center justify-self-end gap-1 ${canSubmit ? 'text-success' : 'text-base-content/30'}`}>Submit<ArrowRight size={15} weight="bold" aria-hidden="true" /></span>
+        </div>
+      </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
