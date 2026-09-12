@@ -40,8 +40,8 @@ export function CvLibraryTable({
   exportedId,
 }: CvLibraryTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="table">
+    <div className="ovr-responsive-table overflow-x-auto" data-testid="cv-responsive-table">
+      <table className="table ovr-responsive-table__table">
         <thead>
           <tr>
             <th>Name</th>
@@ -59,7 +59,7 @@ export function CvLibraryTable({
             const parseStatus = cvParseStatus(doc);
             return (
               <tr key={doc.id} className="ovr-row hover:bg-base-200">
-                <td className="font-medium">
+                <td className="ovr-responsive-table__cell font-medium" data-label="Name">
                   <button
                     type="button"
                     className="text-left hover:underline"
@@ -69,16 +69,36 @@ export function CvLibraryTable({
                     {doc.name}
                   </button>
                 </td>
-                <td>
-                  <span className="badge badge-outline whitespace-nowrap">{CV_KIND_LABEL[doc.kind]}</span>
+                <td className="ovr-responsive-table__cell" data-label="Kind">
+                  <span className="badge badge-outline whitespace-nowrap">
+                    {CV_KIND_LABEL[doc.kind]}
+                  </span>
                 </td>
-                <td className="text-base-content/80">{doc.targetRole || '—'}</td>
-                <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.uploadedAt)}</td>
-                <td className="whitespace-nowrap text-base-content/60">{formatCvDate(doc.updatedAt)}</td>
-                <td className={`whitespace-nowrap text-sm ${PARSE_STATUS_CLASS[parseStatus.tone]}`}>
+                <td
+                  className="ovr-responsive-table__cell text-base-content/80"
+                  data-label="Target role"
+                >
+                  {doc.targetRole || '—'}
+                </td>
+                <td
+                  className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
+                  data-label="Uploaded"
+                >
+                  {formatCvDate(doc.uploadedAt)}
+                </td>
+                <td
+                  className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"
+                  data-label="Updated"
+                >
+                  {formatCvDate(doc.updatedAt)}
+                </td>
+                <td
+                  className={`ovr-responsive-table__cell whitespace-nowrap text-sm ${PARSE_STATUS_CLASS[parseStatus.tone]}`}
+                  data-label="Parse status"
+                >
                   {parseStatus.label}
                 </td>
-                <td>
+                <td className="ovr-responsive-table__cell" data-label="Default">
                   {doc.isDefault ? (
                     <span className="badge badge-primary whitespace-nowrap">Default</span>
                   ) : (
@@ -92,7 +112,10 @@ export function CvLibraryTable({
                     </button>
                   )}
                 </td>
-                <td className="text-right whitespace-nowrap">
+                <td
+                  className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                  data-label="Actions"
+                >
                   {exportedId === doc.id && (
                     <span className="mr-2 text-xs text-success" role="status">
                       Exported
@@ -110,25 +133,44 @@ export function CvLibraryTable({
                       )}
                       Export
                     </button>
-                    <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-40 border border-base-300 p-2 shadow">
+                    <ul
+                      tabIndex={0}
+                      className="dropdown-content menu bg-base-100 rounded-box z-10 w-40 border border-base-300 p-2 shadow"
+                    >
                       <li>
                         {/* `blur()` on click: a daisyUI CSS-`:focus-within` dropdown otherwise stays
                             open indefinitely once a descendant (this button) holds focus, since
                             focus never leaves the wrapping `.dropdown` div on its own. Without this,
                             a second Export click on the same row is silently swallowed by the
                             still-open dropdown intercepting the click. */}
-                        <button type="button" onClick={(e) => { e.currentTarget.blur(); onExport(doc, 'pdf'); }}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.currentTarget.blur();
+                            onExport(doc, 'pdf');
+                          }}
+                        >
                           PDF (.pdf)
                         </button>
                       </li>
                       <li>
-                        <button type="button" onClick={(e) => { e.currentTarget.blur(); onExport(doc, 'docx'); }}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.currentTarget.blur();
+                            onExport(doc, 'docx');
+                          }}
+                        >
                           Word (.docx)
                         </button>
                       </li>
                     </ul>
                   </div>
-                  <button className="btn btn-ghost btn-xs" type="button" onClick={() => onEdit(doc)}>
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    type="button"
+                    onClick={() => onEdit(doc)}
+                  >
                     Edit
                   </button>
                   <button
