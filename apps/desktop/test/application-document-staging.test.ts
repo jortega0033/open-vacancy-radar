@@ -27,17 +27,39 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { createApplicationArtifact } = vi.hoisted(() => ({
-  createApplicationArtifact: vi.fn((_db: unknown, input: Record<string, unknown>) => ({
-    id: `artifact-${String(input.kind)}`,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    ...input,
-  })),
+const { artifacts, createApplicationArtifact, deleteApplicationArtifact, listApplicationArtifacts } = vi.hoisted(() => {
+  const artifacts: Array<Record<string, unknown>> = [];
+  return {
+    artifacts,
+    createApplicationArtifact: vi.fn((_db: unknown, input: Record<string, unknown>) => {
+      const artifact = {
+        id: `artifact-${artifacts.length + 1}`,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        ...input,
+      };
+      artifacts.push(artifact);
+      return artifact;
+    }),
+    deleteApplicationArtifact: vi.fn((_db: unknown, id: string) => {
+      const index = artifacts.findIndex((artifact) => artifact.id === id);
+      if (index >= 0) artifacts.splice(index, 1);
+      return { deleted: index >= 0 };
+    }),
+    listApplicationArtifacts: vi.fn(() => artifacts),
+  };
+});
+vi.mock('../electron/workspace/repository.js', () => ({
+  createApplicationArtifact,
+  deleteApplicationArtifact,
+  listApplicationArtifacts,
 }));
-vi.mock('../electron/workspace/repository.js', () => ({ createApplicationArtifact }));
 
-const { mkdir, writeFile } = vi.hoisted(() => ({ mkdir: vi.fn(async () => undefined), writeFile: vi.fn(async () => undefined) }));
-vi.mock('node:fs/promises', () => ({ mkdir, writeFile, readFile: vi.fn(), default: { mkdir, writeFile, readFile: vi.fn() } }));
+const { mkdir, rm, writeFile } = vi.hoisted(() => ({
+  mkdir: vi.fn(async () => undefined),
+  rm: vi.fn(async () => undefined),
+  writeFile: vi.fn(async () => undefined),
+}));
+vi.mock('node:fs/promises', () => ({ mkdir, rm, writeFile, readFile: vi.fn(), default: { mkdir, rm, writeFile, readFile: vi.fn() } }));
 
 function pdfContaining(lines: string[], title: string): Uint8Array {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -80,7 +102,10 @@ describe('stageApplicationDocuments (#276 acceptance check 3)', () => {
   beforeEach(() => {
     printQueue.length = 0;
     loadedUrls.length = 0;
+    artifacts.length = 0;
     createApplicationArtifact.mockClear();
+    deleteApplicationArtifact.mockClear();
+    listApplicationArtifacts.mockClear();
   });
 
   it('stages a CV and the requested cover letter, and reports the set ready', async () => {

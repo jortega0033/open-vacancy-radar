@@ -13,6 +13,7 @@ export interface ManualApplicationReviewCardProps {
   onStillInProgress: () => void;
   onSaveArtifact: (artifactId: string) => void;
   onOpenArtifact: (artifactId: string) => void;
+  onGenerateLetter?: () => void;
 }
 
 const SWIPE_THRESHOLD_PX = 120;
@@ -35,10 +36,13 @@ export function ManualApplicationReviewCard({
   onStillInProgress,
   onSaveArtifact,
   onOpenArtifact,
+  onGenerateLetter,
 }: ManualApplicationReviewCardProps) {
   const [dragX, setDragX] = useState(0);
   const originRef = useRef<number | null>(null);
   const dragXRef = useRef(0);
+  const letterBlocked = !documents.some((document) => document.kind === 'cover_letter_pdf' || document.kind === 'combined_pdf')
+    && /\b(?:cover|motivation) letter\b/iu.test(attempt.checkpointDetail);
 
   function endDrag() {
     if (originRef.current === null) return;
@@ -95,7 +99,9 @@ export function ManualApplicationReviewCard({
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
           </h2>
           <p className="mt-1 text-xs text-base-content/60">
-            This site is not approved for automated submission. Your documents are ready for you to use on the employer site.
+            {letterBlocked
+              ? 'This site is not approved for automated submission. Your tailored CV is ready, but the letter still needs attention.'
+              : 'This site is not approved for automated submission. Your documents are ready for you to use on the employer site.'}
           </p>
         </div>
 
@@ -129,6 +135,12 @@ export function ManualApplicationReviewCard({
           )}
         </div>
       </div>
+
+      {letterBlocked && onGenerateLetter && (
+        <button type="button" className="btn btn-primary w-full" disabled={busy} onClick={onGenerateLetter}>
+          Generate letter
+        </button>
+      )}
 
       {!continued ? (
         <div className="flex gap-3">

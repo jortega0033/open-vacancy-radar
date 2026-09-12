@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describeBlockers, parseFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
-import { stageApplicationDocuments } from './application-artifact-staging.js';
+import { stageApplicationDocuments, stageLetterArtifact } from './application-artifact-staging.js';
+import {
+  generateApplicationCoverLetter,
+  type ApplicationCoverLetterGenerationResult,
+} from './application-cover-letter.js';
 import {
   applyApplicationFieldMap,
   closeApplicationReview,
@@ -98,6 +102,8 @@ export interface ApplicationPipelineDeps {
   generateFieldMap(prompt: string): Promise<FieldMapGenerationOutcome>;
   /** Runs source-grounded, vacancy-specific CV tailoring in the app-owned scratch workspace. */
   generateTailoredResume(prompt: string): Promise<ApplicationTailoringGenerationResult>;
+  /** Runs source-grounded cover-letter generation when no final requested letter is available. */
+  generateCoverLetter(prompt: string): Promise<ApplicationCoverLetterGenerationResult>;
   /** The configured candidate profile, or null when there is none. Never defaulted: an unconfigured
    * profile contributes no values rather than assumed ones. */
   loadProfile(): Promise<ApplicationValueProfile | null>;
@@ -338,10 +344,8 @@ function cvContactOf(cv: CvDocumentRecord | undefined): ApplicationValueCvContac
   };
 }
 
-/** The letters this application asks for: ones the user actually wrote for this vacancy and marked
- * final. Never a letter generated here from the job description -- a letter this app composed on
- * its own is exactly the fabricated content #274/#281's structured-source model exists to prevent,
- * and this ticket does not add one. */
+/** The letters the user already wrote for this vacancy and marked final. These take precedence over
+ * automatic generation: the pipeline stages the person's requested final document as-is. */
 function requestedLetters(db: WorkspaceDb, attempt: ApplicationAttemptRecord): RequestedLetter[] {
   if (!attempt.vacancyKey) return [];
   const requested: RequestedLetter[] = [];
@@ -445,8 +449,26 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
 
   workspace.updateApplicationAttempt(deps.db, attemptId, { checkpoint: 'rendering', checkpointDetail: '' });
   let stagedRecords: ReturnType<typeof workspace.listApplicationArtifacts>;
-  let readinessRefusals: string[];
+  let letters = requestedLetters(deps.db, attempt);
+  let letterBlocker: string | null = null;
+  // Policy cannot truthfully be guessed from a URL before the policy resolver runs. #326 requires
+  // every unsupported-target handoff to contain a letter, so an absent user-final letter is the
+  // narrow pre-policy signal that this attempt needs an automatically generated cover letter.
+  if (letters.length === 0) {
+    try {
+      letters = [{
+        kind: 'cover_letter',
+        title: 'Cover Letter',
+        body: await generateApplicationCoverLetter(attempt, cv, deps.generateCoverLetter),
+      }];
+    } catch (err) {
+      letterBlocker = `automatic cover letter generation stopped: ${describeError(err)}`;
+    }
+  }
+
   try {
+    // Stage the useful CV independently. A failed letter must not erase the manual handoff an
+    // unsupported target can still offer with this accepted attempt-owned artifact.
     const staged = await stageApplicationDocuments({
       db: deps.db,
       attemptId,
@@ -456,15 +478,32 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
       // Employers the reviewed source CV attests to, so a genuine re-application to a previous
       // employer is not mistaken for a fabricated one by the acceptance contract.
       verifiedEmployers: (cv.source?.experience ?? []).map((entry) => entry.company),
-      letters: requestedLetters(deps.db, attempt),
+      letters: [],
     });
     stagedRecords = staged.records;
-    readinessRefusals = staged.readiness.ok ? [] : staged.readiness.refusals.map((refusal) => refusal.detail);
   } catch (err) {
-    return settle(deps, attemptId, 'needs_user', `the application documents could not be produced: ${describeError(err)}`, 'needs_user');
+    return settle(deps, attemptId, 'needs_user', `the tailored CV could not be produced: ${describeError(err)}`, 'needs_user');
   }
-  if (readinessRefusals.length > 0) {
-    return settle(deps, attemptId, 'needs_user', `the application documents are not ready: ${readinessRefusals.join('; ')}`, 'needs_user');
+
+  for (const letter of letters) {
+    if (letter.body.trim().length === 0) {
+      letterBlocker ??= `the requested ${letter.kind.replaceAll('_', ' ')} has no final content`;
+      continue;
+    }
+    try {
+      stagedRecords.push(await stageLetterArtifact({
+        db: deps.db,
+        attemptId,
+        kind: letter.kind,
+        title: letter.title,
+        body: letter.body,
+        candidateName: resume.contact.name,
+        target,
+        storageRoot: deps.storageRoot,
+      }));
+    } catch (err) {
+      letterBlocker ??= `the ${letter.kind.replaceAll('_', ' ')} could not be produced: ${describeError(err)}`;
+    }
   }
 
   // --------------------------------------------------------- 3. where this application goes
@@ -474,11 +513,24 @@ export async function runApplicationAttempt(deps: ApplicationPipelineDeps, attem
   // produced.
   const policyId = resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl);
   if (!policyId) {
+    const detail = letterBlocker
+      ? `${tailoringSummary} Your tailored CV is ready. Cover letter blocker: ${letterBlocker}. Use Generate letter to create and review one, then return here, or provide one on the employer site.`
+      : `${tailoringSummary} Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.`;
     return settle(
       deps,
       attemptId,
       'needs_user',
-      `${tailoringSummary} Your application documents are ready. This employer site is not approved for automated submission, so apply on the site yourself and mark the attempt when you finish.`,
+      detail,
+      'needs_user',
+    );
+  }
+
+  if (letterBlocker) {
+    return settle(
+      deps,
+      attemptId,
+      'needs_user',
+      `Automatic cover letter preparation stopped: ${letterBlocker}. Your tailored CV is ready. Generate and review a cover letter, then resume the application.`,
       'needs_user',
     );
   }
@@ -580,22 +632,6 @@ async function fillApplicationForm(
       attemptId,
       'needs_user',
       'this page is showing a CAPTCHA or bot check. This app never answers those; open the application yourself to continue.',
-      'needs_user',
-    );
-  }
-
-  const requiredLetterField = snapshot.fields.find(
-    (field) => field.active && field.required && field.controlType === 'file' && /\b(?:cover\s*letter|motivation\s*letter)\b/iu.test(field.label),
-  );
-  const hasLetter = input.stagedArtifacts.some(
-    (artifact) => artifact.kind === 'cover_letter_pdf' || artifact.kind === 'combined_pdf',
-  );
-  if (requiredLetterField && !hasLetter) {
-    return settle(
-      deps,
-      attemptId,
-      'needs_user',
-      `this form requires "${requiredLetterField.label}", but no final cover or motivation letter is saved for this vacancy. Generate and review one, then resume the application.`,
       'needs_user',
     );
   }

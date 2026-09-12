@@ -80,11 +80,17 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         const policyId = await window.applicationExecutor.resolveTargetPolicyId(attempt.canonicalUrl);
         if (cancelled) return;
         if (!policyId) {
-          if (attempt.checkpoint === 'needs_user' && !attempt.checkpointDetail.includes('Your application documents are ready.')) {
+          const hasUsefulManualDocuments = attempt.checkpointDetail.includes('Your application documents are ready.')
+            || attempt.checkpointDetail.includes('Your tailored CV is ready.');
+          if (attempt.checkpoint === 'needs_user' && !hasUsefulManualDocuments) {
             setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
             return;
           }
           setState({ phase: 'ineligible', continued: false, busy: false });
+          return;
+        }
+        if (attempt.checkpoint === 'needs_user') {
+          setState({ phase: 'preparation_blocked', message: attempt.checkpointDetail, busy: false });
           return;
         }
         policyIdRef.current = policyId;
@@ -353,6 +359,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             onStillInProgress={() => onClose('dismissed')}
             onSaveArtifact={(artifactId) => void handleSaveArtifact(artifactId)}
             onOpenArtifact={(artifactId) => void handleOpenArtifact(artifactId)}
+            onGenerateLetter={onGenerateLetter ? handleGenerateLetter : undefined}
           />
         )}
 

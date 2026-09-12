@@ -7,16 +7,17 @@ const attempt = {
   id: 'attempt-1', company: 'Example BV', role: 'Frontend Engineer', checkpointDetail: 'Documents are ready.',
 } as ApplicationAttemptRecord;
 
-function renderCard(overrides: { continued?: boolean } = {}) {
+function renderCard(overrides: { continued?: boolean; attempt?: ApplicationAttemptRecord; onGenerateLetter?: () => void } = {}) {
   const actions = {
     onContinue: vi.fn(), onSkip: vi.fn(), onMarkApplied: vi.fn(), onStillInProgress: vi.fn(), onSaveArtifact: vi.fn(), onOpenArtifact: vi.fn(),
   };
   render(
     <ManualApplicationReviewCard
-      attempt={attempt}
+      attempt={overrides.attempt ?? attempt}
       documents={[{ id: 'artifact-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'resume.pdf' } as never]}
       busy={false}
       continued={overrides.continued ?? false}
+      onGenerateLetter={overrides.onGenerateLetter}
       {...actions}
     />,
   );
@@ -51,6 +52,22 @@ describe('ManualApplicationReviewCard', () => {
     const actions = renderCard();
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(actions.onOpenArtifact).toHaveBeenCalledWith('artifact-1');
+  });
+
+  it('keeps the tailored CV visible and offers letter recovery when generation was blocked', () => {
+    const onGenerateLetter = vi.fn();
+    renderCard({
+      attempt: {
+        ...attempt,
+        checkpointDetail: 'Your tailored CV is ready. Cover letter blocker: unsupported source facts.',
+      },
+      onGenerateLetter,
+    });
+
+    expect(screen.getByText(/tailored CV is ready, but the letter still needs attention/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
+    expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('resume.pdf')).toBeInTheDocument();
   });
 
   it('maps right and left drags to the same visible decisions', () => {

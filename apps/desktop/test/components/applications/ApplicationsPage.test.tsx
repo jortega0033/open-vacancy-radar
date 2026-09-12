@@ -617,6 +617,33 @@ describe('ApplicationsPage', () => {
       }), attempt.id);
     });
 
+    it('opens the manual card with the tailored CV and letter recovery after safe generation stops', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: 'Your tailored CV is ready. Cover letter blocker: unsupported source facts. Use Generate letter.',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([
+          { id: 'cv-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'resume.pdf' },
+        ]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+      const onGenerateLetter = vi.fn();
+
+      render(<ApplicationsPage onGenerateLetter={onGenerateLetter} />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(await within(dialog).findByText('resume.pdf')).toBeInTheDocument();
+      expect(within(dialog).getByText(/tailored CV is ready, but the letter still needs attention/i)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
+      expect(onGenerateLetter).toHaveBeenCalledWith(expect.objectContaining({ key: attempt.vacancyKey }), attempt.id);
+    });
+
     it('disables the close button and backdrop while a decision is in flight, so closing mid-submit cannot tear down the view under it', async () => {
       // Real gap found during #202's own review: destroying the view mid-click could turn a clean
       // submit into a forced submission_unknown purely because the close affordance wasn't
