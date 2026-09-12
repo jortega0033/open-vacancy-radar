@@ -11,7 +11,8 @@ test.describe('app shell', () => {
     // `WorkspaceHeader`'s title is the one `<h1>` in the shell; a page's own content heading (e.g.
     // Applications' `<h2>`) can legitimately repeat the same text, so the level distinguishes them
     // without needing to know which pages happen to duplicate their title and which (Search) don't.
-    const headerTitle = (name: string) => window.getByRole('heading', { level: 1, name, exact: true });
+    const headerTitle = (name: string) =>
+      window.getByRole('heading', { level: 1, name, exact: true });
     await expect(headerTitle('Search Jobs')).toBeVisible();
 
     const destinations: Array<[label: string, heading: string]> = [
@@ -68,6 +69,48 @@ test.describe('app shell', () => {
     expect(menu).toBeNull();
   });
 
+  test('enforces the minimum supported window size', async ({ electronApp, window }) => {
+    await expect(window.getByRole('heading', { name: 'Search Jobs' })).toBeVisible();
+    const state = await electronApp.evaluate(({ BrowserWindow }) => {
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (!mainWindow) throw new Error('Main window was not created');
+      mainWindow.setBounds({ width: 1000, height: 720 });
+      mainWindow.setBounds({ width: 640, height: 480 });
+      return { bounds: mainWindow.getBounds(), minimumSize: mainWindow.getMinimumSize() };
+    });
+
+    expect(state.minimumSize).toEqual([760, 600]);
+    expect(state.bounds.width).toBeGreaterThanOrEqual(760);
+    expect(state.bounds.height).toBeGreaterThanOrEqual(600);
+
+    await goto(window, 'Applications');
+    await window.getByRole('button', { name: /add application/i }).click();
+    const dialog = window.getByRole('dialog').filter({ hasText: 'New application' });
+    await expect(dialog).toBeVisible();
+    const dialogBounds = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        viewportWidth: document.documentElement.clientWidth,
+        viewportHeight: document.documentElement.clientHeight,
+      };
+    });
+    expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.top).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.right).toBeLessThanOrEqual(dialogBounds.viewportWidth);
+    expect(dialogBounds.bottom).toBeLessThanOrEqual(dialogBounds.viewportHeight);
+
+    const screenshotPath = test.info().outputPath('minimum-window-application-dialog.png');
+    await window.screenshot({ animations: 'disabled', path: screenshotPath });
+    await test.info().attach('minimum-window-application-dialog', {
+      path: screenshotPath,
+      contentType: 'image/png',
+    });
+  });
+
   test('grants only the clipboard-write permission the UI actually uses, denies everything else', async ({
     window,
     electronApp,
@@ -80,7 +123,9 @@ test.describe('app shell', () => {
     // Positive case: the "Copy to clipboard" features (CoverLetter.tsx, LetterGenerator.tsx,
     // AboutSection.tsx) all call `navigator.clipboard.writeText`, which requests exactly
     // `clipboard-sanitized-write`. main.ts's permission handler must keep granting this.
-    await expect(window.evaluate(() => navigator.clipboard.writeText('e2e-permission-check'))).resolves.toBeUndefined();
+    await expect(
+      window.evaluate(() => navigator.clipboard.writeText('e2e-permission-check')),
+    ).resolves.toBeUndefined();
 
     // Negative case: nothing in this app asks for geolocation, so it must still be denied, proving
     // the fix is a narrow allowlist for the one permission actually used, not a blanket grant.
@@ -104,6 +149,8 @@ test.describe('app shell', () => {
     // whatever the main content pane happens to be showing.
     await ensureLightTheme(window);
     await window.getByRole('button', { name: 'Collapse sidebar' }).click();
-    await expect(window.getByRole('complementary', { name: 'Main' })).toHaveScreenshot('sidebar-collapsed.png');
+    await expect(window.getByRole('complementary', { name: 'Main' })).toHaveScreenshot(
+      'sidebar-collapsed.png',
+    );
   });
 });
