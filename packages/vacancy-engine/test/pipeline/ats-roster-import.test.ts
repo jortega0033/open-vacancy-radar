@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { atsRosterCsvUrl } from '../../src/companies/ats-roster-source.js';
-import { loadAtsRoster } from '../../src/companies/ats-roster-repository.js';
+import { loadAtsRoster, writeAtsRoster } from '../../src/companies/ats-roster-repository.js';
 import { loadConfig } from '../../src/config.js';
 import type { Database } from '../../src/db/client.js';
 import type { DnsResolver } from '../../src/crawler/url-safety.js';
@@ -132,5 +132,33 @@ describe('runAtsRosterImport', () => {
     for (const entry of roster) {
       expect(Object.keys(entry)).not.toContain('country');
     }
+  });
+
+  it('preserves locally promoted tenants while refreshing the upstream roster', async () => {
+    await writeAtsRoster(projectRoot, [{
+      provider: 'greenhouse',
+      slug: 'local-source',
+      baseUrl: 'https://job-boards.greenhouse.io',
+      company: 'Local Source',
+    }], { greenhouse: 1 });
+    const fetchFn = asFetch((input) => {
+      if (input.toString() === atsRosterCsvUrl('greenhouse')) {
+        return Promise.resolve(
+          new Response(csvFor('Acme Corp,acme,https://job-boards.greenhouse.io/acme'), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response('name,slug,url\n', { status: 200 }));
+    });
+
+    const result = await runAtsRosterImport(
+      noDatabase,
+      loadConfig({}, projectRoot),
+      silentLogger(),
+      projectRoot,
+      { fetchFn, resolver: publicResolver },
+    );
+
+    expect(result.totalEntries).toBe(2);
+    expect((await loadAtsRoster(projectRoot)).map((entry) => entry.slug)).toEqual(['acme', 'local-source']);
   });
 });

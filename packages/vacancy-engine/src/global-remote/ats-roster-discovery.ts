@@ -5,6 +5,16 @@ import {
   type AtsRosterEntry,
   type AtsRosterProvider,
 } from '../companies/ats-roster-source.js';
+import {
+  classifyAtsSourceFailure,
+  emptyAtsSourceObservationFile,
+  loadAtsSourceObservations,
+  planAtsRosterScan,
+  recordAtsSourceObservation,
+  writeAtsSourceObservations,
+  type AtsRosterScanPlan,
+  type AtsSourceFailureCategory,
+} from '../companies/ats-source-observation-repository.js';
 import type { CareerSourceDescriptor, NormalizedVacancy, VacancyAdapter } from '../domain/models.js';
 import {
   attributeNetworkRequests,
@@ -94,12 +104,19 @@ function emptyTally(): ProviderTally {
 
 function sourceAuditFor(
   provider: AtsRosterProvider,
+  providerRosterSize: number,
   companiesAttempted: number,
   tally: ProviderTally,
   counters: NetworkAttemptCounters,
+  scanMode: AtsRosterScanPlan['mode'],
+  rosterScan?: DiscoverySourceAudit['rosterScan'],
 ): DiscoverySourceAudit {
   const discoveryProvider = rosterDiscoveryProvider(provider);
   if (companiesAttempted === 0) {
+    const noEntries = providerRosterSize === 0;
+    const message = noEntries
+      ? 'No imported roster entries for this provider yet; run the ats-roster:import CLI command first.'
+      : 'No ATS roster tenants were due for this provider in the current incremental scan.';
     return {
       id: `${discoveryProvider}:roster-scan`,
       provider: discoveryProvider,
@@ -107,10 +124,13 @@ function sourceAuditFor(
       requests: 0,
       listings: 0,
       status: 'success',
-      error: 'No imported roster entries for this provider yet; run the ats-roster:import CLI command first.',
+      error: message,
       ...networkAttemptFields(counters),
       // Nothing was skipped or capped -- there was simply nothing to scan for this provider.
-      ...completeAudit(),
+      ...(noEntries || scanMode === 'complete'
+        ? completeAudit()
+        : incompleteAudit(message, rosterScan?.checkpoint.toString() ?? null)),
+      ...(rosterScan === undefined ? {} : { rosterScan }),
     };
   }
   const status: DiscoverySourceAudit['status'] =
@@ -134,21 +154,27 @@ function sourceAuditFor(
     status,
     error,
     ...networkAttemptFields(counters),
-    // Every roster company for this provider was attempted (a per-company failure is folded into
-    // `tally`, not skipped) -- so this provider's own partition of the roster is always fully
-    // walked. A per-company failure still shows up as `status !== 'success'`/`error` above; it is
-    // not the kind of "stopped early" gap `complete`/`completenessReason` exist to describe.
-    ...(tally.companiesFailed === companiesAttempted && companiesAttempted > 0
-      ? incompleteAudit(error ?? 'All attempted companies failed for this provider.')
-      : completeAudit()),
+    // A complete scan walks the provider partition. A focused scan is deliberately marked
+    // incomplete because its due queue and exploration budget cover only a bounded tenant batch.
+    ...(tally.companiesFailed > 0
+      ? incompleteAudit(error ?? 'One or more attempted companies failed for this provider.')
+      : scanMode === 'incremental'
+        ? incompleteAudit(
+            'Focused ATS roster discovery attempted a bounded due batch.',
+            rosterScan?.checkpoint.toString() ?? null,
+          )
+        : completeAudit()),
+    ...(rosterScan === undefined ? {} : { rosterScan }),
   };
 }
 
 /**
- * Scans every company in the imported ATS roster (`companies/ats-roster-repository.ts`) through this
+ * Scans imported ATS tenants (`companies/ats-roster-repository.ts`) through this
  * repo's existing, previously-orphaned ATS parsers (`ats/factory.ts#createVacancyAdapter`) -- exactly
  * the call `global-remote/official.ts` already makes for one curated vacancy, just looped over a
- * roster instead of a reviewed review list. Bounded worker-pool concurrency
+ * roster instead of a reviewed list. Unfocused scans preserve the complete-roster behavior;
+ * focused scans use persisted health observations, due scheduling, and a reserved exploration
+ * budget. Bounded worker-pool concurrency
  * (`config.discovery.atsRosterConcurrency`), mirroring `applyWorldwideSponsorMatches` in
  * `pipeline/global-remote.ts`, since the roster can hold thousands of companies. One company's
  * failure (a stale/renamed board, a block, a timeout) never aborts the rest of the scan
@@ -165,7 +191,23 @@ export async function runAtsRosterDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
   roster: readonly AtsRosterEntry[],
+  projectRoot?: string,
 ): Promise<DiscoveryRun> {
+  let observationState = projectRoot === undefined
+    ? emptyAtsSourceObservationFile()
+    : await loadAtsSourceObservations(projectRoot);
+  const plan: AtsRosterScanPlan = planAtsRosterScan(roster, observationState, {
+    roleQuery: config.discovery.roleQuery,
+    country: config.discovery.atsRosterFocusCountry ?? '',
+    maxSources: config.discovery.atsRosterMaxSourcesPerFocusedScan ?? 200,
+    explorationBudget: config.discovery.atsRosterExplorationBudget ?? 80,
+  });
+  observationState = plan.nextState;
+  // Reserve the cursor before issuing requests. A crash may defer a reserved tenant until the next
+  // cursor cycle, but it cannot restart the same exploration batch indefinitely.
+  if (projectRoot !== undefined && plan.mode === 'incremental') {
+    await writeAtsSourceObservations(projectRoot, observationState);
+  }
   // One `NetworkAttemptCounters` per provider, not per company: every company of a given provider
   // shares one `DiscoverySourceAudit` row (see the module doc comment above), so their attempts are
   // meant to accumulate together -- what must not happen is a *different provider's* attempts
@@ -190,14 +232,16 @@ export async function runAtsRosterDiscovery(
     ATS_ROSTER_PROVIDERS.map((provider) => [provider, emptyTally()]),
   );
   const vacancies: DiscoveryVacancyAudit[] = [];
+  const failuresByCategory: Partial<Record<AtsSourceFailureCategory, number>> = {};
+  let newlyVerifiedSources = 0;
 
   let cursor = 0;
   async function worker(): Promise<void> {
     for (;;) {
       const index = cursor;
       cursor += 1;
-      if (index >= roster.length) return;
-      const entry = roster[index]!;
+      if (index >= plan.entries.length) return;
+      const entry = plan.entries[index]!.entry;
       attemptedByProvider.set(entry.provider, (attemptedByProvider.get(entry.provider) ?? 0) + 1);
       const tally = tallyByProvider.get(entry.provider) ?? emptyTally();
       try {
@@ -211,26 +255,63 @@ export async function runAtsRosterDiscovery(
         for (const vacancy of result.vacancies) {
           vacancies.push(normalizeRosterVacancy(discoveryProvider, entry, vacancy, config.minimumAnnualBaseUsd));
         }
+        const previous = observationState.observations.find(
+          (observation) => observation.provider === entry.provider && observation.slug.toLowerCase() === entry.slug.toLowerCase(),
+        );
+        const status = result.vacancies.length === 0 ? 'empty' : 'verified';
+        if (status === 'verified' && previous?.status !== 'verified') newlyVerifiedSources += 1;
+        observationState = recordAtsSourceObservation(observationState, {
+          entry,
+          status,
+          errorCategory: null,
+          vacancies: result.vacancies,
+        });
       } catch (error) {
         tally.requests += 1;
         tally.companiesFailed += 1;
         const failure = sourceFailure(error);
         if (failure.status === 'blocked') tally.companiesBlocked += 1;
         tally.lastError = `${entry.slug}: ${failure.error}`;
+        const category = classifyAtsSourceFailure(error);
+        failuresByCategory[category] = (failuresByCategory[category] ?? 0) + 1;
+        observationState = recordAtsSourceObservation(observationState, {
+          entry,
+          status: failure.status === 'blocked' ? 'blocked' : 'error',
+          errorCategory: category,
+          vacancies: [],
+        });
       }
       tallyByProvider.set(entry.provider, tally);
     }
   }
 
-  const concurrency = Math.max(1, Math.min(config.discovery.atsRosterConcurrency, roster.length));
+  const concurrency = Math.max(1, Math.min(config.discovery.atsRosterConcurrency, plan.entries.length || 1));
   await Promise.all(Array.from({ length: concurrency }, worker));
+
+  if (projectRoot !== undefined) {
+    await writeAtsSourceObservations(projectRoot, observationState);
+  }
+
+  const rosterScan: NonNullable<DiscoverySourceAudit['rosterScan']> = {
+    mode: plan.mode,
+    totalRosterSize: plan.totalRosterSize,
+    dueSourcesAttempted: plan.entries.length,
+    explorationSourcesAttempted: plan.entries.filter((entry) => entry.reason === 'exploration').length,
+    newlyVerifiedSources,
+    skippedNotDue: plan.skippedNotDue,
+    failuresByCategory,
+    checkpoint: plan.checkpoint,
+  };
 
   const sources = ATS_ROSTER_PROVIDERS.map((provider) =>
     sourceAuditFor(
       provider,
+      roster.filter((entry) => entry.provider === provider).length,
       attemptedByProvider.get(provider) ?? 0,
       tallyByProvider.get(provider) ?? emptyTally(),
       countersByProvider.get(provider) ?? newNetworkAttemptCounters(),
+      plan.mode,
+      provider === ATS_ROSTER_PROVIDERS[0] ? rosterScan : undefined,
     ),
   );
 

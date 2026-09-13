@@ -22,6 +22,10 @@
     "taiwanJobsMaxCities": 22,
     "museEnabled": true,
     "museMaxPages": 6,
+    "atsRosterConcurrency": 8,
+    "atsRosterFocusCountry": "",
+    "atsRosterMaxSourcesPerFocusedScan": 200,
+    "atsRosterExplorationBudget": 80,
     "navArbeidsplassenMaxPages": 3
   },
   "officialSources": []

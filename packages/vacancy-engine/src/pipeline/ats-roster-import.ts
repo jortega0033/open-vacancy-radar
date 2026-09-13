@@ -7,7 +7,11 @@ import {
   type AtsRosterEntry,
   type AtsRosterProvider,
 } from '../companies/ats-roster-source.js';
-import { writeAtsRoster } from '../companies/ats-roster-repository.js';
+import {
+  deduplicateAtsRosterEntries,
+  loadAtsRoster,
+  writeAtsRoster,
+} from '../companies/ats-roster-repository.js';
 import type { AppConfig } from '../config.js';
 import {
   createSafeHttpClient,
@@ -115,11 +119,15 @@ export async function runAtsRosterImport(
   }
 
   const importedAt = new Date();
-  const file = await writeAtsRoster(projectRoot, allEntries, sourceCounts, importedAt);
+  // Keep validated tenants promoted by the local observation import. A roster refresh may add or
+  // update upstream tenants, but it must not erase locally discovered canonical tenants.
+  const existingEntries = await loadAtsRoster(projectRoot);
+  const mergedEntries = deduplicateAtsRosterEntries([...allEntries, ...existingEntries]);
+  const file = await writeAtsRoster(projectRoot, mergedEntries, sourceCounts, importedAt);
   return {
     file,
     importedAt: importedAt.toISOString(),
-    totalEntries: allEntries.length,
+    totalEntries: mergedEntries.length,
     providers: providerResults,
   };
 }
