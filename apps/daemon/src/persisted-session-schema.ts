@@ -92,6 +92,15 @@ const MAX_STATUS_BYTES = 256;
 const MAX_TOOL_NAME_BYTES = 256;
 const MAX_ERROR_CODE_BYTES = 128;
 /**
+ * `usage.rate_limits`'s `limitId`/`limitName` are provider-reported labels, the same trust level as
+ * `status`/`toolName` above -- but unlike those two, they were kept verbatim with no bound at all
+ * until ADI-28's session-search review found it: `SessionLineageStore#searchEvents` fully
+ * materializes and scans these fields on every search request, across up to 200 sessions per call,
+ * so an unbounded value here is no longer just disk bloat, it is unbounded per-request CPU/memory
+ * work. Same 256-byte budget as the other short provider-authored labels in this file.
+ */
+const MAX_RATE_LIMIT_LABEL_BYTES = 256;
+/**
  * Byte caps for the three *identifier* fields that are kept verbatim rather than digested.
  *
  * A model id, a provider-native thread id, and a tool-call id are all short, opaque handles in every
@@ -424,8 +433,10 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
       return {
         ...base,
         type: 'usage.rate_limits',
-        ...(envelope.limitId === undefined ? {} : { limitId: envelope.limitId }),
-        ...(envelope.limitName === undefined ? {} : { limitName: envelope.limitName }),
+        ...(envelope.limitId === undefined ? {} : { limitId: truncateToBytes(envelope.limitId, MAX_RATE_LIMIT_LABEL_BYTES) }),
+        ...(envelope.limitName === undefined
+          ? {}
+          : { limitName: truncateToBytes(envelope.limitName, MAX_RATE_LIMIT_LABEL_BYTES) }),
         ...(envelope.primary === undefined
           ? {}
           : {

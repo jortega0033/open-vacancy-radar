@@ -161,8 +161,8 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
     expect(new Set(channels).size).toBe(channels.length);
   });
 
-  it('hands ADI-07 the guarded registrar, so its five channels are covered too', () => {
-    // The five `agent-workspace:*` channels are registered inside agent-workspace-ipc.ts against
+  it('hands ADI-07 the guarded registrar, so its six channels are covered too', () => {
+    // The six `agent-workspace:*` channels are registered inside agent-workspace-ipc.ts against
     // whatever registrar it is given. This one line in main.ts is what makes them guarded.
     expect(source('main.ts')).toContain('registerAgentWorkspaceHandlers(guardedIpc,');
     expect(guardedChannels()).not.toContain(AGENT_WORKSPACE_CHANNELS[0]);

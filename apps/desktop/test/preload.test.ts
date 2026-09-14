@@ -999,10 +999,18 @@ describe('electron/preload.ts: workspaceGrant.startSession (ADI-13)', () => {
 const V2_SESSION_ID = '11111111-2222-4333-8444-555555555555';
 
 describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
-  it('exposes exactly the six documented capability functions and nothing else', async () => {
+  it('exposes exactly the seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('agentWorkspace');
     expect(Object.keys(api).sort()).toEqual(
-      ['listSessions', 'getSession', 'getSessionEvents', 'attachActivity', 'detachActivity', 'onActivity'].sort(),
+      [
+        'listSessions',
+        'getSession',
+        'getSessionEvents',
+        'searchSessions',
+        'attachActivity',
+        'detachActivity',
+        'onActivity',
+      ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -1031,6 +1039,7 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
         'agent-workspace:events',
         (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
       ],
+      ['searchSessions', 'agent-workspace:search', (fn: never) => (fn as (q: string) => Promise<unknown>)('bash')],
       [
         'attachActivity',
         'agent-workspace:attach',
@@ -1201,6 +1210,33 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
     expect(page.events[0]).not.toHaveProperty('detail');
     // A code that is not already a clean identifier has no row to select in the copy table.
     expect(page.events[1]).not.toHaveProperty('code');
+  });
+
+  it('rebuilds search matches field by field, dropping an unreadable record (ADI-28)', async () => {
+    invoke.mockResolvedValue({
+      matches: [
+        { sessionId: 'ses-1', sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+        { sessionId: 'ses-1', sequence: -1, eventType: 'status', field: 'status', excerpt: 'bad sequence' },
+        { sessionId: 'ses-1', field: 'status', excerpt: 'missing sequence entirely' },
+      ],
+      nextCursor: 'abc123',
+    });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.searchSessions as (q: string) => Promise<unknown>)('bash')) as {
+      matches: unknown[];
+      nextCursor?: string;
+    };
+    expect(page.matches).toEqual([
+      { sessionId: 'ses-1', sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+    ]);
+    expect(page.nextCursor).toBe('abc123');
+  });
+
+  it('sends the query and paging fields to agent-workspace:search, coerced', async () => {
+    invoke.mockResolvedValue({ matches: [] });
+    const api = await loadPreload('agentWorkspace');
+    await (api.searchSessions as (q: string, p?: unknown) => Promise<unknown>)('bash', { cursor: 'abc', limit: 10 });
+    expect(invoke).toHaveBeenCalledWith('agent-workspace:search', { query: 'bash', cursor: 'abc', limit: 10 });
   });
 
   it('asserts history origin rather than reading it, so a mislabelled entry cannot win the merge', async () => {

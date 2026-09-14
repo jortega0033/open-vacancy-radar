@@ -1,11 +1,13 @@
 import { toHistoryEntry } from './agent-activity-sanitize.js';
-import { toCapacity, toSessionSummary } from './agent-workspace-view.js';
+import { toCapacity, toSearchMatch, toSessionSummary } from './agent-workspace-view.js';
 import type { GuardedIpcHandle } from './ipc-sender-guard.js';
 import type {
   AttachResult,
   HistoryEntry,
   SessionEventsPage,
   SessionListPage,
+  SessionSearchMatch,
+  SessionSearchPage,
   SessionSummary,
 } from './agent-workspace-types.js';
 import {
@@ -14,13 +16,14 @@ import {
   parseAgentWorkspaceEventsInput,
   parseAgentWorkspaceGetInput,
   parseAgentWorkspaceListInput,
+  parseAgentWorkspaceSearchInput,
 } from './workspace/validate.js';
 
 /*
  * ---------------------------------------------------------------------------------------------
  * AI Workspace IPC (ADI-07): the seventh preload namespace.
  *
- * Five channels, and the same rule the grant channels in main.ts keep: **none of them accepts or
+ * Six channels, and the same rule the grant channels in main.ts keep: **none of them accepts or
  * returns a location**. Every request payload is parsed by an allow-listing validator
  * (workspace/validate.ts) that has no `path`, `cwd`, `workspaceId`, or `incarnation` parser at all,
  * and every response is rebuilt field by field (agent-workspace-view.ts, agent-activity-sanitize.ts)
@@ -30,11 +33,11 @@ import {
  * The renderer never talks to the daemon. These handlers are the only thing that does, over
  * loopback, with a bearer token that stays in the main process.
  *
- * ## Why this is a module rather than five `ipcMain.handle` calls inline in main.ts
+ * ## Why this is a module rather than six `ipcMain.handle` calls inline in main.ts
  *
  * main.ts registers roughly fifty IPC channels at module scope and has never been importable by a
  * test: importing it boots Electron. That is a pre-existing problem this feature does not try to
- * solve. What it does do is keep its own five channels, its own paging helpers, and its own alias
+ * solve. What it does do is keep its own six channels, its own paging helpers, and its own alias
  * book out of that module scope entirely, behind one call. The whole feature is therefore
  * removable by deleting a single line from main.ts, and testable without main.ts -- see
  * test/agent-workspace-ipc.test.ts, which registers these handlers against a stub registrar.
@@ -42,13 +45,14 @@ import {
  */
 
 /**
- * Every channel this feature owns, in one place so a test can assert that all five are additive and
+ * Every channel this feature owns, in one place so a test can assert that all six are additive and
  * that none of them collides with a channel some other part of main.ts already answers.
  */
 export const AGENT_WORKSPACE_CHANNELS = [
   'agent-workspace:list',
   'agent-workspace:get',
   'agent-workspace:events',
+  'agent-workspace:search',
   'agent-workspace:attach',
   'agent-workspace:detach',
 ] as const;
@@ -182,6 +186,21 @@ export function registerAgentWorkspaceHandlers(ipc: GuardedIpcHandle, deps: Agen
     }
     const nextCursor = readCursor(body);
     return { sessionId, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  });
+
+  ipc.handle('agent-workspace:search', async (_event, input: unknown): Promise<SessionSearchPage> => {
+    const { query, ...page } = parseAgentWorkspaceSearchInput(input);
+    const params = new URLSearchParams({ query, limit: String(page.limit) });
+    if (page.cursor !== undefined) params.set('cursor', page.cursor);
+    const body = await getJson(`/v2/sessions/search?${params.toString()}`);
+    const raw = Array.isArray(body?.matches) ? body.matches : [];
+    const matches: SessionSearchMatch[] = [];
+    for (const record of raw) {
+      const match = toSearchMatch(record);
+      if (match !== null) matches.push(match);
+    }
+    const nextCursor = readCursor(body);
+    return { matches, ...(nextCursor === undefined ? {} : { nextCursor }) };
   });
 
   ipc.handle('agent-workspace:attach', (_event, input: unknown): AttachResult => {

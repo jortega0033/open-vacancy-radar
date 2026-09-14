@@ -196,6 +196,98 @@ export interface EventPage {
   nextCursor?: string;
 }
 
+/** One plaintext field on one persisted event that matched a `searchEvents` query. */
+export interface SessionSearchMatch {
+  sessionId: string;
+  sequence: number;
+  eventType: string;
+  field: string;
+  excerpt: string;
+}
+
+export interface SessionSearchPage {
+  matches: SessionSearchMatch[];
+  nextCursor?: string;
+}
+
+/**
+ * At most this many matches are returned per `searchEvents` call. A session whose scan pushes the
+ * running total past this limit is still finished before returning (see `searchEvents`), so the
+ * actual count in one page can run slightly over -- never under, and never mid-session.
+ */
+const MAX_SEARCH_MATCHES = 50;
+
+/**
+ * At most this many sessions are scanned per `searchEvents` call, regardless of match count, so a
+ * query that matches nothing still does bounded work and a caller with more history gets a cursor
+ * back instead of an unbounded wait.
+ *
+ * This bounds total work, not latency: `#readEventLog` is a synchronous `readFileSync`, matching
+ * every other read in this class (see the class doc comment on why recovery/retention are
+ * synchronous by design), so a worst-case call still does up to 200 blocking file reads on the
+ * daemon's one JS thread before returning. A query this repo's own workload realistically issues --
+ * a person searching their own recent CV/job-application sessions, not an automated poll -- stays
+ * well under a bound sized for correctness, not for throughput; if search call volume or session
+ * count ever grows enough to make that latency felt, revisit the bound or the read path then, with
+ * real measurements, rather than pre-emptively rewriting a synchronous store around a load this
+ * feature has not yet seen.
+ */
+const MAX_SESSIONS_SCANNED_PER_SEARCH = 200;
+
+/** Bounds one match's `excerpt`. Every field this function reads is also bounded at write time (see
+ * persisted-session-schema.ts's `MAX_STATUS_BYTES`/`MAX_TOOL_NAME_BYTES`/`MAX_ERROR_CODE_BYTES`/
+ * `MAX_RATE_LIMIT_LABEL_BYTES`), so this is a second, cheap belt-and-braces cap, not the only one. */
+const MAX_SEARCH_EXCERPT_BYTES = 200;
+
+/** Characters of context kept on each side of the match inside `buildExcerpt`, before the final
+ * byte-safe truncation. A budget, not an enforced bound -- `MAX_SEARCH_EXCERPT_BYTES` is the bound. */
+const EXCERPT_CONTEXT_CHARS = 60;
+
+/**
+ * Builds a match's `excerpt` centered on the query, not just the field's first `MAX_SEARCH_EXCERPT_BYTES`
+ * bytes. A field this function reads can exceed the excerpt budget (a write-time bound of 256 bytes is
+ * still bigger than 200), and a naive "keep the prefix" truncation can cut the excerpt before the match
+ * ever appears in it -- a real bug a review caught: the caller sees "1 match" with an excerpt that does
+ * not visibly contain what they searched for. `caseInsensitiveNeedle` must already be known to occur in
+ * `text` (the caller only calls this after a successful `includes` check).
+ */
+function buildExcerpt(text: string, caseInsensitiveNeedle: string): string {
+  const matchIndex = text.toLowerCase().indexOf(caseInsensitiveNeedle);
+  if (matchIndex === -1) return truncateToBytes(text, MAX_SEARCH_EXCERPT_BYTES);
+  const start = Math.max(0, matchIndex - EXCERPT_CONTEXT_CHARS);
+  const end = Math.min(text.length, matchIndex + caseInsensitiveNeedle.length + EXCERPT_CONTEXT_CHARS);
+  const windowed = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+  return truncateToBytes(windowed, MAX_SEARCH_EXCERPT_BYTES);
+}
+
+/**
+ * The searchable plaintext fields of one persisted event record -- deliberately an allowlist, not
+ * "every string field this record happens to have". ADI-05's durable store is content-free by
+ * design: `assistant.message`/`thinking.delta` text and `tool.*` input/result are SHA-256 digests,
+ * never the text itself, so there is nothing to search there and this function must never be
+ * tempted to walk the record generically. Keeping the allowlist in one place means a future field
+ * added to `PersistedEventRecordV1` starts unsearchable by default, not searchable by accident.
+ */
+function searchableFields(record: PersistedEventRecordV1): Array<{ field: string; text: string }> {
+  switch (record.type) {
+    case 'status':
+      return [{ field: 'status', text: record.status }];
+    case 'tool.started':
+    case 'tool.completed':
+      return record.toolName === undefined ? [] : [{ field: 'toolName', text: record.toolName }];
+    case 'error':
+      return record.code === undefined ? [] : [{ field: 'code', text: record.code }];
+    case 'usage.rate_limits': {
+      const fields: Array<{ field: string; text: string }> = [];
+      if (record.limitId !== undefined) fields.push({ field: 'limitId', text: record.limitId });
+      if (record.limitName !== undefined) fields.push({ field: 'limitName', text: record.limitName });
+      return fields;
+    }
+    default:
+      return [];
+  }
+}
+
 export interface StoreStats {
   lineages: number;
   records: number;
@@ -1233,13 +1325,13 @@ export class SessionLineageStore {
       : { sessions: page };
   }
 
-  listEvents(sessionId: string, options: { cursor?: string; limit?: number } = {}): EventPage {
-    const located = this.#locate(sessionId);
-    if (!located) return { events: [] };
-    const limit = options.limit ?? 50;
-
-    const logPath = this.#eventLogPath(located.lineage.rootId, sessionId);
-    if (!existsSync(logPath)) return { events: [] };
+  /** Reads one session's whole event log into memory, stopping at the first line that fails to
+   * parse (a torn write at the tail, never earlier -- `appendDurably` never leaves a corrupt line
+   * in the middle). Shared by `listEvents` and `searchEvents` so both agree on what a session's
+   * event history is. */
+  #readEventLog(rootId: string, sessionId: string): PersistedEventRecordV1[] {
+    const logPath = this.#eventLogPath(rootId, sessionId);
+    if (!existsSync(logPath)) return [];
 
     const events: PersistedEventRecordV1[] = [];
     for (const line of readFileSync(logPath, 'utf8').split('\n')) {
@@ -1248,6 +1340,15 @@ export class SessionLineageStore {
       if (!parsed.success) break;
       events.push(parsed.data as PersistedEventRecordV1);
     }
+    return events;
+  }
+
+  listEvents(sessionId: string, options: { cursor?: string; limit?: number } = {}): EventPage {
+    const located = this.#locate(sessionId);
+    if (!located) return { events: [] };
+    const limit = options.limit ?? 50;
+
+    const events = this.#readEventLog(located.lineage.rootId, sessionId);
 
     let start = 0;
     if (options.cursor !== undefined) {
@@ -1263,6 +1364,59 @@ export class SessionLineageStore {
     return hasMore && last
       ? { events: page, nextCursor: encodeCursor(String(last.sequence)) }
       : { events: page };
+  }
+
+  /**
+   * Bounded literal search over persisted session history (ADI-28). Case-insensitive substring
+   * match against only the allowlisted plaintext fields `searchableFields` names -- see that
+   * function's doc comment for why this can never become a search over conversation content.
+   *
+   * Bounded two ways at once, both real limits, not soft targets: `MAX_SESSIONS_SCANNED_PER_SEARCH`
+   * caps how many sessions' event logs this call reads regardless of match count (so a
+   * zero-match query still does bounded work), and `MAX_SEARCH_MATCHES` caps the page returned. A
+   * session's events are always scanned to completion before either bound is checked, so a
+   * `nextCursor` this method returns always means "every session up to and including this one has
+   * been fully scanned" -- never a session cut off mid-file.
+   */
+  searchEvents(query: string, options: { cursor?: string; limit?: number } = {}): SessionSearchPage {
+    const limit = Math.min(options.limit ?? MAX_SEARCH_MATCHES, MAX_SEARCH_MATCHES);
+    const needle = query.toLowerCase();
+    const all = this.#allRecordsNewestFirst();
+
+    let start = 0;
+    if (options.cursor !== undefined) {
+      const afterId = decodeCursor(options.cursor);
+      const index = all.findIndex((record) => record.session.id === afterId);
+      if (index === -1) throw new InvalidCursorError();
+      start = index + 1;
+    }
+
+    const end = Math.min(all.length, start + MAX_SESSIONS_SCANNED_PER_SEARCH);
+    const matches: SessionSearchMatch[] = [];
+
+    for (let i = start; i < end; i++) {
+      const record = all[i]!;
+      const events = this.#readEventLog(record.session.rootSessionId, record.session.id);
+      for (const event of events) {
+        for (const { field, text } of searchableFields(event)) {
+          if (!text.toLowerCase().includes(needle)) continue;
+          matches.push({
+            sessionId: record.session.id,
+            sequence: event.sequence,
+            eventType: event.type,
+            field,
+            excerpt: buildExcerpt(text, needle),
+          });
+          // One match per event is enough signal; avoids duplicate rows for a multi-field hit.
+          break;
+        }
+      }
+      if (matches.length >= limit) {
+        return i + 1 < all.length ? { matches, nextCursor: encodeCursor(record.session.id) } : { matches };
+      }
+    }
+
+    return end < all.length ? { matches, nextCursor: encodeCursor(all[end - 1]!.session.id) } : { matches };
   }
 
   stats(): StoreStats {

@@ -696,6 +696,8 @@ export type {
   SessionCapacity,
   SessionEventsPage,
   SessionListPage,
+  SessionSearchMatch,
+  SessionSearchPage,
   SessionSummary,
 } from './agent-workspace-types.js';
 
@@ -708,6 +710,8 @@ import type {
   HistoryEntry as HistoryEntryType,
   PageRequest as PageRequestType,
   SessionCapacity as SessionCapacityType,
+  SessionSearchMatch as SessionSearchMatchType,
+  SessionSearchPage as SessionSearchPageType,
   SessionSummary as SessionSummaryType,
 } from './agent-workspace-types.js';
 
@@ -912,6 +916,31 @@ function toPagePayload(page: PageRequestType | undefined): Record<string, unknow
   };
 }
 
+/** Rebuilds one search match field by field (ADI-28), the same fail-closed discipline every other
+ * daemon-supplied shape in this file gets: `null` for anything this build cannot interpret, never a
+ * half-built row passed through. */
+function toSearchMatch(value: unknown): SessionSearchMatchType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const sessionId = optionalString(source, 'sessionId');
+  const sequence = optionalFiniteNumber(source, 'sequence');
+  const eventType = optionalString(source, 'eventType');
+  const field = optionalString(source, 'field');
+  const excerpt = optionalString(source, 'excerpt');
+  if (
+    sessionId === undefined ||
+    sequence === undefined ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    eventType === undefined ||
+    field === undefined ||
+    excerpt === undefined
+  ) {
+    return null;
+  }
+  return { sessionId, sequence, eventType, field, excerpt };
+}
+
 const agentWorkspaceApi: AgentWorkspaceBridgeType = {
   async listSessions(page) {
     const result: unknown = await ipcRenderer.invoke('agent-workspace:list', toPagePayload(page));
@@ -955,6 +984,22 @@ const agentWorkspaceApi: AgentWorkspaceBridgeType = {
     }
     const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
     return { sessionId: id, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  },
+
+  async searchSessions(query, page) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:search', {
+      query: typeof query === 'string' ? query : '',
+      ...toPagePayload(page),
+    });
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.matches) ? source.matches : [];
+    const matches: SessionSearchPageType['matches'] = [];
+    for (const record of raw) {
+      const match = toSearchMatch(record);
+      if (match !== null) matches.push(match);
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return { matches, ...(nextCursor === undefined ? {} : { nextCursor }) };
   },
 
   async attachActivity(sessionId, lastSeq) {

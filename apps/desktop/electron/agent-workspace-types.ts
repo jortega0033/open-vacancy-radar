@@ -160,6 +160,26 @@ export interface SessionEventsPage {
   nextCursor?: string;
 }
 
+/**
+ * One plaintext field on one persisted event that matched a search query (ADI-28). See
+ * `SessionLineageStore#searchEvents`'s doc comment (apps/daemon/src/session-lineage-store.ts) for
+ * why this can only ever be a handful of allowlisted fields (`toolName`, `status`, `code`,
+ * `limitId`/`limitName`) and never conversation text: ADI-05's durable store is content-free by
+ * design.
+ */
+export interface SessionSearchMatch {
+  sessionId: string;
+  sequence: number;
+  eventType: string;
+  field: string;
+  excerpt: string;
+}
+
+export interface SessionSearchPage {
+  matches: SessionSearchMatch[];
+  nextCursor?: string;
+}
+
 /** Why a live attach was refused. Reason-only, from a closed set. */
 export type AttachRefusal = 'attach_limit' | 'daemon_unavailable' | 'invalid_session_id';
 
@@ -187,13 +207,15 @@ export interface PageRequest {
 }
 
 /**
- * The `window.agentWorkspace` capability list: exactly six functions, no `invoke`, no `channel`,
+ * The `window.agentWorkspace` capability list: exactly seven functions, no `invoke`, no `channel`,
  * and no argument anywhere that could name a location.
  */
 export interface AgentWorkspaceBridge {
   listSessions(page?: PageRequest): Promise<SessionListPage>;
   getSession(sessionId: string): Promise<SessionSummary | null>;
   getSessionEvents(sessionId: string, page?: PageRequest): Promise<SessionEventsPage>;
+  /** Bounded literal search over persisted session history (ADI-28). */
+  searchSessions(query: string, page?: PageRequest): Promise<SessionSearchPage>;
   /** Starts a live, sanitized relay of one session's SSE stream. Idempotent per session id. */
   attachActivity(sessionId: string, lastSeq?: number): Promise<AttachResult>;
   detachActivity(sessionId: string): Promise<void>;

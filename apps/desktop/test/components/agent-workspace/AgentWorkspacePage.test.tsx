@@ -431,3 +431,54 @@ describe('AgentWorkspacePage: capacity', () => {
     expect(line.textContent).not.toMatch(/claude|codex/i);
   });
 });
+
+describe('AgentWorkspacePage: session history search (ADI-28)', () => {
+  it('searches, renders results, and opens a session the loaded page never fetched', async () => {
+    const { bridge } = installAgentWorkspaceBridge({
+      listSessions: vi.fn().mockResolvedValue({ sessions: [], capacity: TEST_CAPACITY }),
+      searchSessions: vi.fn().mockResolvedValue({
+        matches: [
+          { sessionId: SESSION_A, sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+        ],
+      }),
+      getSession: vi.fn().mockResolvedValue(sessionSummary(SESSION_A)),
+    });
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+    fireEvent.click(await screen.findByRole('button', { name: /search session history/i }));
+
+    const input = screen.getByRole('textbox', { name: /search session history/i });
+    fireEvent.change(input, { target: { value: 'bash' } });
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }));
+
+    const resultButton = await screen.findByRole('button', { name: /Tool name.*Bash/ });
+    expect(within(resultButton).getByText('Bash')).toBeInTheDocument();
+    expect(bridge.searchSessions).toHaveBeenCalledWith('bash', undefined);
+
+    fireEvent.click(resultButton);
+
+    // The session was not in the empty loaded list, so opening it had to fetch it first.
+    await waitFor(() => expect(bridge.getSession).toHaveBeenCalledWith(SESSION_A));
+    expect(await screen.findByRole('heading', { name: 'claude' })).toBeInTheDocument();
+  });
+
+  it('says plainly that it cannot search conversation content, and reports no matches honestly', async () => {
+    installAgentWorkspaceBridge({
+      listSessions: vi.fn().mockResolvedValue({ sessions: [], capacity: TEST_CAPACITY }),
+      searchSessions: vi.fn().mockResolvedValue({ matches: [] }),
+    });
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+    fireEvent.click(await screen.findByRole('button', { name: /search session history/i }));
+    expect(screen.getByText(/cannot search what the agent said/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('textbox', { name: /search session history/i }), {
+      target: { value: 'nonexistent' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^search$/i }));
+
+    expect(await screen.findByText(/No matches for "nonexistent"/)).toBeInTheDocument();
+  });
+});

@@ -7,6 +7,9 @@ import {
   frozenLaunchScopeViewSchema,
   opaqueCursorV2Schema,
   pageLimitV2Schema,
+  sessionSearchMatchV2Schema,
+  sessionSearchPageV2Schema,
+  sessionSearchQuerySchema,
   sessionStatusSchema,
   sessionStatusV2Schema,
   terminalReasonV2Schema,
@@ -156,5 +159,27 @@ describe('capacity and paging', () => {
     expect(opaqueCursorV2Schema.safeParse('has space').success).toBe(false);
     expect(opaqueCursorV2Schema.safeParse('../../etc/passwd').success).toBe(false);
     expect(opaqueCursorV2Schema.safeParse('a'.repeat(257)).success).toBe(false);
+  });
+});
+
+describe('session search (ADI-28)', () => {
+  it('bounds the search query length and rejects control characters', () => {
+    expect(sessionSearchQuerySchema.safeParse('bash').success).toBe(true);
+    expect(sessionSearchQuerySchema.safeParse('has space').success).toBe(true);
+    expect(sessionSearchQuerySchema.safeParse('').success).toBe(false);
+    expect(sessionSearchQuerySchema.safeParse('x'.repeat(200)).success).toBe(true);
+    expect(sessionSearchQuerySchema.safeParse('x'.repeat(201)).success).toBe(false);
+    expect(sessionSearchQuerySchema.safeParse(`a${String.fromCharCode(0)}b`).success).toBe(false);
+    expect(sessionSearchQuerySchema.safeParse('a\nb').success).toBe(false);
+    expect(sessionSearchQuerySchema.safeParse(`a${String.fromCharCode(127)}b`).success).toBe(false);
+  });
+
+  it('validates a match and a page, both .strict()', () => {
+    const match = { sessionId: 's1', sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' };
+    expect(sessionSearchMatchV2Schema.safeParse(match).success).toBe(true);
+    expect(sessionSearchMatchV2Schema.safeParse({ ...match, unexpected: true }).success).toBe(false);
+
+    expect(sessionSearchPageV2Schema.safeParse({ matches: [match] }).success).toBe(true);
+    expect(sessionSearchPageV2Schema.safeParse({ matches: [match], nextCursor: 'abc-_123' }).success).toBe(true);
   });
 });

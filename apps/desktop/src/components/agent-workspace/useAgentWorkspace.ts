@@ -63,6 +63,8 @@ export interface AgentWorkspaceApi {
   cancelSession(sessionId: string): Promise<void>;
   /** Mints a key for a start that does not exist yet. See the reducer's note on `pendingStarts`. */
   newClientKey(): string;
+  /** Opens a session that may not be in the currently loaded page yet (ADI-28's search result). */
+  openSessionById(sessionId: string): Promise<void>;
 }
 
 let clientKeyCounter = 0;
@@ -404,6 +406,27 @@ export function useAgentWorkspace(): AgentWorkspaceApi {
     }
   }, []);
 
+  /**
+   * Opens a session that may not be in the currently loaded page -- a search result (ADI-28) is
+   * the one caller of this today. Unlike `select`, this fetches the daemon's own view first and
+   * upserts it via `session/updated` (the same action `startSession` already uses for a freshly
+   * created session, above) before selecting, so the detail pane has something real to render
+   * instead of falling through to the composer because `state.sessions` had no entry for the id.
+   * A row already in the loaded list still goes through the cheaper `select` directly -- this
+   * extra round trip is worth paying only when the id might not be there yet.
+   */
+  const openSessionById = useCallback(async (sessionId: string) => {
+    try {
+      const view = await window.agentWorkspace.getSession(sessionId);
+      if (!mountedRef.current) return;
+      if (view !== null) dispatch({ type: 'session/updated', session: view });
+    } catch {
+      // Best-effort: selecting below still shows an honest empty/composer state if the fetch failed.
+    } finally {
+      if (mountedRef.current) dispatch({ type: 'session/selected', sessionId });
+    }
+  }, []);
+
   return {
     state,
     refresh,
@@ -414,6 +437,7 @@ export function useAgentWorkspace(): AgentWorkspaceApi {
     dismissPendingStart,
     cancelSession,
     newClientKey,
+    openSessionById,
   };
 }
 

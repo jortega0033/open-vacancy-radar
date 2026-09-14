@@ -262,3 +262,44 @@ export const pageLimitV2Schema = z.number().int().min(1).max(100);
 
 /** Default page size when a request omits `limit`. Well under `pageLimitV2Schema`'s cap. */
 export const DEFAULT_PAGE_LIMIT_V2 = 50;
+
+/**
+ * A literal search query over persisted session history (ADI-28). Bounded length, and restricted to
+ * printable characters -- no control characters, since this string never does anything but a plain
+ * case-insensitive substring comparison and has no business carrying one.
+ *
+ * ADI-05's durable store is content-free by design (assistant/thinking text and tool input/result
+ * are SHA-256 digests, never the text itself), so this query can only ever match the small set of
+ * plaintext fields the store already persists unredacted -- status words, tool names, error codes,
+ * rate-limit names. It is not, and cannot be, a search over conversation content.
+ */
+export const sessionSearchQuerySchema = z
+  .string()
+  .min(1)
+  .max(200)
+  // eslint-disable-next-line no-control-regex
+  .regex(/^[^\u0000-\u001f\u007f]+$/, 'query must not contain control characters');
+
+/** One plaintext field on one persisted event that matched a search query. */
+export const sessionSearchMatchV2Schema = z
+  .object({
+    sessionId: z.string(),
+    sequence: z.number().int().nonnegative(),
+    eventType: z.string(),
+    /** Which allowlisted plaintext field matched, e.g. `'toolName'` or `'status'`. */
+    field: z.string(),
+    /** The matched field's value, bounded -- never a digest, never prose. */
+    excerpt: z.string(),
+  })
+  .strict();
+
+export type SessionSearchMatchV2 = z.infer<typeof sessionSearchMatchV2Schema>;
+
+export const sessionSearchPageV2Schema = z
+  .object({
+    matches: z.array(sessionSearchMatchV2Schema),
+    nextCursor: opaqueCursorV2Schema.optional(),
+  })
+  .strict();
+
+export type SessionSearchPageV2 = z.infer<typeof sessionSearchPageV2Schema>;

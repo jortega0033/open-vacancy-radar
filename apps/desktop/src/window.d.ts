@@ -186,6 +186,8 @@ export type {
   SessionEventsPage,
   SessionListPage,
   SessionScopeSummary,
+  SessionSearchMatch,
+  SessionSearchPage,
   SessionSummary,
   StartSessionDenialReason,
 } from '../electron/agent-workspace-types.js';

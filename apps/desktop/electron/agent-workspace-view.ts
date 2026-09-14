@@ -5,6 +5,7 @@ import { truncateToBytes } from '@agent-dock/shared/content-digest';
 import type {
   SessionCapacity,
   SessionScopeSummary,
+  SessionSearchMatch,
   SessionSummary,
 } from './agent-workspace-types.js';
 
@@ -133,4 +134,34 @@ export function toCapacity(value: unknown): SessionCapacity {
 function bucket(value: unknown): { active: number; limit: number } {
   const source = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
   return { active: nonNegativeInt(source.active), limit: nonNegativeInt(source.limit) };
+}
+
+/**
+ * The main-process rebuild of one `GET /v2/sessions/search` match (ADI-28), the same name-by-name
+ * discipline `toSessionSummary` documents above: an unrecognized shape produces `null`, never a
+ * half-built row, and every field is bounded before it reaches the renderer.
+ */
+export function toSearchMatch(value: unknown): SessionSearchMatch | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const sessionId = str(source.sessionId, MAX_ID_BYTES);
+  const sequence = source.sequence;
+  const eventType = str(source.eventType, MAX_ENUM_BYTES);
+  const field = str(source.field, MAX_ENUM_BYTES);
+  // Matches the daemon's own `MAX_SEARCH_EXCERPT_BYTES` (apps/daemon/src/session-lineage-store.ts):
+  // this is a second, redundant cap, not the real one, so it stays equal to the daemon's rather than
+  // a disconnected, larger number that would only ever bind if the two drifted apart.
+  const excerpt = str(source.excerpt, 200);
+  if (
+    sessionId === undefined ||
+    typeof sequence !== 'number' ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    eventType === undefined ||
+    field === undefined ||
+    excerpt === undefined
+  ) {
+    return null;
+  }
+  return { sessionId, sequence, eventType, field, excerpt };
 }

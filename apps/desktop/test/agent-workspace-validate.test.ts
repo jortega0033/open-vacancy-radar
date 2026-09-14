@@ -10,6 +10,7 @@ import {
   parseAgentWorkspaceEventsInput,
   parseAgentWorkspaceGetInput,
   parseAgentWorkspaceListInput,
+  parseAgentWorkspaceSearchInput,
   parseArchivedSessionIds,
   parseSessionId,
   parseSettingsPatch,
@@ -17,7 +18,7 @@ import {
 } from '../electron/workspace/validate.js';
 
 /**
- * Input validation for the five `agent-workspace:*` channels and the three preference fields
+ * Input validation for the six `agent-workspace:*` channels and the three preference fields
  * (ADI-07).
  *
  * The rule specific to these channels, on top of this module's usual allow-list-and-bound
@@ -125,6 +126,41 @@ describe('agent-workspace:events', () => {
   it('drops anything location-shaped alongside the id', () => {
     expect(parseAgentWorkspaceEventsInput({ sessionId: VALID_ID, cwd: 'C:/Users/someone' })).toEqual({
       sessionId: VALID_ID,
+      limit: PAGE_LIMIT_BOUNDS.default,
+    });
+  });
+});
+
+describe('agent-workspace:search (ADI-28)', () => {
+  it('combines a query with a bounded page', () => {
+    expect(parseAgentWorkspaceSearchInput({ query: 'bash', cursor: 'abc', limit: 25 })).toEqual({
+      query: 'bash',
+      cursor: 'abc',
+      limit: 25,
+    });
+    expect(parseAgentWorkspaceSearchInput({ query: 'bash' })).toEqual({
+      query: 'bash',
+      limit: PAGE_LIMIT_BOUNDS.default,
+    });
+  });
+
+  it('trims the query and rejects an empty or all-whitespace one', () => {
+    expect(parseAgentWorkspaceSearchInput({ query: '  bash  ' }).query).toBe('bash');
+    expect(() => parseAgentWorkspaceSearchInput({ query: '' })).toThrow();
+    expect(() => parseAgentWorkspaceSearchInput({ query: '   ' })).toThrow();
+  });
+
+  it('rejects a query over the length bound and one containing control characters', () => {
+    expect(() => parseAgentWorkspaceSearchInput({ query: 'x'.repeat(201) })).toThrow(/at most 200/);
+    expect(() => parseAgentWorkspaceSearchInput({ query: 'a\nb' })).toThrow(/control characters/);
+    expect(() => parseAgentWorkspaceSearchInput({ query: `a${String.fromCharCode(0)}b` })).toThrow(
+      /control characters/,
+    );
+  });
+
+  it('drops anything location-shaped alongside the query', () => {
+    expect(parseAgentWorkspaceSearchInput({ query: 'bash', cwd: 'C:/Users/someone' })).toEqual({
+      query: 'bash',
       limit: PAGE_LIMIT_BOUNDS.default,
     });
   });
