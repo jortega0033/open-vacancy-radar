@@ -125,6 +125,44 @@ opens (see [SECURITY.md](../SECURITY.md) for that boundary). Deleting the `appli
 directory yourself, with the app closed, is safe at any time: the app rebuilds an empty queue on
 next launch, the same way deleting `agentdock-state/` itself is safe.
 
+### Tool-output attachments: the one deliberate exception to "session history without content"
+
+`attachments-v1/`, alongside the stores above, is the one place under `agentdock-state/` that is
+**not** content-free — a deliberate, bounded exception to the rule the session-history section above
+states, not an accidental gap in it.
+
+Every AI tool call the app runs (reading a file, running a command) produces a result, and the
+session-history record above keeps only that result's byte length and hash, by design. That is
+right for the durable crash-recovery record, but it means a result too long to fit in the app's
+own bounded on-screen preview is otherwise gone for good — there is nowhere for its full text to
+have been kept. `attachments-v1/` exists to hold that one thing: the complete text of a tool
+result that exceeded the inline preview, so it can still be retrieved after the fact instead of
+being permanently lost.
+
+What makes this a *bounded* exception rather than an open-ended one:
+
+- **Size-capped, three ways.** One attachment is capped at 1 MB; one AI session can accumulate at
+  most 20 of them; the whole store is capped at 64 MB in total. A write that would exceed any of
+  the three is refused outright — never silently truncated, and never made room for by deleting an
+  older attachment, the same "refuse rather than discard" choice the security log above makes at
+  its own capacity limit.
+- **Narrow content type.** Only plain text and JSON are accepted; nothing else is retained
+  regardless of size.
+- **Session-scoped.** An attachment can only ever be retrieved by the session that produced it —
+  there is no cross-session listing and no "browse everything this daemon has kept" surface.
+- **Time-bounded.** An attachment older than 7 days is removed automatically the next time the
+  daemon starts, whether or not anything else asked for it to be cleaned up.
+- **Same filesystem discipline as every other store here**: private (`0700`) directories and private
+  (`0600`) files on macOS and Linux, where the OS enforces those permission bits; on Windows the app
+  relies on the same inherited folder ACL every other file under your user profile already has,
+  since Windows does not treat these bits as an access restriction the way POSIX does. Plus the
+  same path-containment and symlink-safety checks this page's other stores already use.
+
+As of this writing this store exists and is fully tested, but nothing in the shipped app populates
+it yet — no tool result currently exceeds the inline preview threshold in a way that writes an
+attachment, and no UI surfaces a way to retrieve one. This section is written now, ahead of that
+wiring landing, so this page never describes less than what the code on disk can actually do.
+
 None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
 plain SQLite file on your own disk, readable by anything running as your OS user, same as any other
 desktop app's local data.
