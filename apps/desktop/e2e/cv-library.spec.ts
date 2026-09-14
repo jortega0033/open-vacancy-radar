@@ -95,7 +95,12 @@ test.describe('CV library', () => {
 
       await goto(window, 'CV');
       await window.getByRole('button', { name: /^upload cv$/i }).click();
-      await expect(window.getByText(/loaded/i)).toContainText('cv.docx');
+      // DOCX extraction lazily imports `mammoth`, which pulls in its own dependency tree (jszip et
+      // al.) the *first* time this process ever needs it -- unlike the plain .txt upload test above,
+      // which needs no such import. That one-off cold load can run past the default 5s timeout on a
+      // cold disk cache (observed in CI); a generous explicit timeout here, not a shorter one
+      // elsewhere, is what actually varies between the two upload tests.
+      await expect(window.getByText(/loaded/i)).toContainText('cv.docx', { timeout: 20_000 });
 
       await window.getByRole('button', { name: /save to cv library/i }).click();
       await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
