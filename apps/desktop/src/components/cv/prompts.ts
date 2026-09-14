@@ -221,6 +221,36 @@ export const ATS_FIT_EVIDENCE_STATUSES = [
   'needs confirmation',
 ] as const;
 
+type AtsFitEvidenceStatus = (typeof ATS_FIT_EVIDENCE_STATUSES)[number];
+
+/**
+ * One sentence per label, keyed so TypeScript enforces every label in `ATS_FIT_EVIDENCE_STATUSES`
+ * has a description here and vice versa -- the prompt text below is built from this pair, not
+ * retyped alongside it, so it can never list a status it doesn't also explain, or explain one it no
+ * longer requests.
+ */
+const ATS_FIT_EVIDENCE_STATUS_DESCRIPTIONS: Record<AtsFitEvidenceStatus, string> = {
+  matched: 'the CV directly evidences this requirement.',
+  'expression gap':
+    "the CV does not use the posting's exact wording, but other supplied evidence shows the candidate did equivalent work.",
+  'insufficient evidence':
+    'nothing supplied speaks to this requirement either way. Silence in a CV is not proof the candidate lacks it -- label it unknown, never a gap.',
+  'confirmed gap':
+    "the supplied text explicitly contradicts the requirement, or the candidate's own material states they do not meet it.",
+  'needs confirmation':
+    'the requirement is ambiguous in the posting itself, or the CV evidence is too thin to classify with confidence.',
+};
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function atsFitEvidenceStatusList(): string {
+  return ATS_FIT_EVIDENCE_STATUSES.map(
+    (status) => `- **${capitalize(status)}**: ${ATS_FIT_EVIDENCE_STATUS_DESCRIPTIONS[status]}`,
+  ).join('\n');
+}
+
 /** The bound on how many deduplicated requirements one ATS-fit review reads (issue #361): enough
  * for a real posting's full requirement list, small enough to stay a reviewable one-shot answer. */
 export const ATS_FIT_MAX_REQUIREMENTS = 20;
@@ -238,13 +268,9 @@ ${promptContextRules(context)}
 Anchor every requirement to a short quote from the posting below, and anchor every piece of candidate evidence to the CV section, role or project it comes from. Never invent a line number, a document link, an employer policy, a year, a skill, a qualification or an authorisation fact that the supplied text does not state.
 
 Distinguish these evidence statuses, and use only these five labels:
-- **Matched**: the CV directly evidences this requirement.
-- **Expression gap**: the CV does not use the posting's exact wording, but other supplied evidence shows the candidate did equivalent work.
-- **Insufficient evidence**: nothing supplied speaks to this requirement either way. Silence in a CV is not proof the candidate lacks it -- label it unknown, never a gap.
-- **Confirmed gap**: the supplied text explicitly contradicts the requirement, or the candidate's own material states they do not meet it.
-- **Needs confirmation**: the requirement is ambiguous in the posting itself, or the CV evidence is too thin to classify with confidence.
+${atsFitEvidenceStatusList()}
 
-Review at most ${ATS_FIT_MAX_REQUIREMENTS} deduplicated requirements from the posting, prioritising explicit mandatory conditions first. If the posting states more than ${ATS_FIT_MAX_REQUIREMENTS} distinct requirements, review only the top ${ATS_FIT_MAX_REQUIREMENTS} by that priority and say plainly, inside the Requirement-to-evidence matrix section, how many were reviewed and how many were left out.
+Review at most ${ATS_FIT_MAX_REQUIREMENTS} deduplicated requirements from the posting, prioritising explicit mandatory conditions first. If the posting states more than ${ATS_FIT_MAX_REQUIREMENTS}, review only the top ${ATS_FIT_MAX_REQUIREMENTS} by that priority and say plainly, inside the Requirement-to-evidence matrix section, how many were reviewed and how many were left out.
 
 Reply in Markdown using exactly these three headings, in this order:
 
@@ -255,7 +281,7 @@ One entry per reviewed requirement, in this exact repeated shape:
 - JD anchor: "<short verbatim quote from the posting>"
 - Importance: required | preferred | unclear
 - Candidate evidence: <what the CV shows, or "None found in the supplied text"> (source: <CV section, role or project name>)
-- Evidence status: matched | expression gap | insufficient evidence | confirmed gap | needs confirmation
+- Evidence status: ${ATS_FIT_EVIDENCE_STATUSES.join(' | ')}
 - Next step: <one concrete, supported action, or "None needed" if matched>
 
 ## Hard constraints
