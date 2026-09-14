@@ -14,9 +14,11 @@ import {
   buildStructuredResumePrompt,
   formatVacancy,
   GROUNDING_RULES,
+  MAX_AUDIT_FOCUS_CODE_POINTS,
   MAX_CV_PROMPT_CHARS,
   MAX_UNATTENDED_VACANCY_TEXT_CHARS,
   MAX_VACANCY_FIELD_CHARS,
+  validateAuditFocus,
   wasVacancyTextTruncated,
 } from '../src/components/cv/prompts.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
@@ -192,8 +194,50 @@ describe('prompt builders', () => {
     ]) {
       expect(prompt).toContain(heading);
     }
-    expect(prompt).toContain('Do not assume a target vacancy');
+    expect(prompt).toContain('general review');
+    expect(prompt).toContain('do not assume a target vacancy');
     expect(prompt).toContain(CV.text);
+  });
+
+  describe('resume audit target-role focus (issue #362)', () => {
+    it('normalizes whitespace and trims the focus', () => {
+      expect(validateAuditFocus('  React   Frontend\n\tEngineer  ')).toEqual({
+        value: 'React Frontend Engineer',
+        overlong: false,
+      });
+    });
+
+    it('treats blank/whitespace-only input as a general review, never a role of its own', () => {
+      expect(validateAuditFocus('   ')).toEqual({ value: '', overlong: false });
+      expect(buildResumeAuditPrompt(CV, '   ')).toContain('general review');
+    });
+
+    it('accepts exactly the code-point bound and rejects one past it, counting code points not UTF-16 units', () => {
+      const atBound = 'x'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect(validateAuditFocus(atBound)).toEqual({ value: atBound, overlong: false });
+      expect(validateAuditFocus('x'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS + 1)).overlong).toBe(true);
+
+      // A surrogate-pair emoji is one code point, not two UTF-16 units.
+      const emojiAtBound = '🚀'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect([...emojiAtBound]).toHaveLength(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect(validateAuditFocus(emojiAtBound).overlong).toBe(false);
+    });
+
+    it('focuses the audit prompt on the named role without inventing experience or a numeric score', () => {
+      const prompt = buildResumeAuditPrompt(CV, 'React Frontend Engineer');
+      expect(prompt).toContain('"React Frontend Engineer"');
+      expect(prompt).toContain('A desired role is not evidence of experience');
+      expect(prompt).not.toContain('general review');
+      // The four fixed sections are preserved verbatim regardless of focus.
+      for (const heading of ['## Summary', '## What works', '## Risks and weak spots', '## Priority fixes']) {
+        expect(prompt).toContain(heading);
+      }
+    });
+
+    it('re-normalizes an unnormalized focus rather than trusting the caller already did', () => {
+      const prompt = buildResumeAuditPrompt(CV, '  Angular   Architect  ');
+      expect(prompt).toContain('"Angular Architect"');
+    });
   });
 
   it('separates achievement rewrites from their evidence and missing evidence', () => {
