@@ -160,6 +160,8 @@ export type PersistedEventRecordV1 = PersistedEventBase &
         outputTokens?: number;
         cachedInputTokens?: number;
         cost?: number;
+        contextTokens?: number;
+        contextWindowTokens?: number;
       }
     | {
         type: 'usage.rate_limits';
@@ -251,6 +253,8 @@ export const persistedEventRecordV1Schema = z.discriminatedUnion('type', [
       outputTokens: z.number().optional(),
       cachedInputTokens: z.number().optional(),
       cost: z.number().optional(),
+      contextTokens: z.number().optional(),
+      contextWindowTokens: z.number().optional(),
     })
     .strict(),
   z
@@ -422,6 +426,8 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
         ...(envelope.outputTokens === undefined ? {} : { outputTokens: envelope.outputTokens }),
         ...(envelope.cachedInputTokens === undefined ? {} : { cachedInputTokens: envelope.cachedInputTokens }),
         ...(envelope.cost === undefined ? {} : { cost: envelope.cost }),
+        ...(envelope.contextTokens === undefined ? {} : { contextTokens: envelope.contextTokens }),
+        ...(envelope.contextWindowTokens === undefined ? {} : { contextWindowTokens: envelope.contextWindowTokens }),
       };
 
     case 'usage.rate_limits':

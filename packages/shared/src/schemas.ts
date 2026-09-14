@@ -122,6 +122,8 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     outputTokens: z.number().optional(),
     cachedInputTokens: z.number().optional(),
     cost: z.number().optional(),
+    contextTokens: z.number().optional(),
+    contextWindowTokens: z.number().optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('usage.rate_limits'),

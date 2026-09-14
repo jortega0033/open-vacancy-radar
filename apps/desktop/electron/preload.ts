@@ -736,6 +736,23 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
+/** A missing/NaN/Infinity `usedPercent` drops the whole window rather than faking `0` (ADI-26). */
+function readRateLimitWindow(
+  value: unknown,
+): { usedPercent: number; windowDurationMins?: number; resetsAt?: number } | undefined {
+  const window = asRecord(value);
+  if (!window) return undefined;
+  const usedPercent = optionalFiniteNumber(window, 'usedPercent');
+  if (usedPercent === undefined) return undefined;
+  const windowDurationMins = optionalFiniteNumber(window, 'windowDurationMins');
+  const resetsAt = optionalFiniteNumber(window, 'resetsAt');
+  return {
+    usedPercent,
+    ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+  };
+}
+
 function toDigest(value: unknown): ActivityDigestType | undefined {
   const source = asRecord(value);
   if (!source) return undefined;
@@ -868,6 +885,8 @@ function toActivityEntry(value: unknown): ActivityEntryType | null {
       const outputTokens = optionalFiniteNumber(source, 'outputTokens');
       const cachedInputTokens = optionalFiniteNumber(source, 'cachedInputTokens');
       const cost = optionalFiniteNumber(source, 'cost');
+      const contextTokens = optionalFiniteNumber(source, 'contextTokens');
+      const contextWindowTokens = optionalFiniteNumber(source, 'contextWindowTokens');
       return {
         ...base,
         kind: 'usage',
@@ -875,6 +894,22 @@ function toActivityEntry(value: unknown): ActivityEntryType | null {
         ...(outputTokens === undefined ? {} : { outputTokens }),
         ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
         ...(cost === undefined ? {} : { cost }),
+        ...(contextTokens === undefined ? {} : { contextTokens }),
+        ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+      };
+    }
+    case 'usage.rate_limits': {
+      const limitId = optionalString(source, 'limitId');
+      const limitName = optionalString(source, 'limitName');
+      const primary = readRateLimitWindow(source.primary);
+      const secondary = readRateLimitWindow(source.secondary);
+      return {
+        ...base,
+        kind: 'usage.rate_limits',
+        ...(limitId === undefined ? {} : { limitId }),
+        ...(limitName === undefined ? {} : { limitName }),
+        ...(primary === undefined ? {} : { primary }),
+        ...(secondary === undefined ? {} : { secondary }),
       };
     }
     case 'error': {

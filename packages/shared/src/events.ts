@@ -38,11 +38,19 @@ export type AgentEvent =
       outputTokens?: number;
       cachedInputTokens?: number;
       cost?: number;
+      /** Latest active-context token count, e.g. Codex's `tokenUsage.last.totalTokens`. Never the
+       * accumulated session total -- that is a different, billing-shaped question. */
+      contextTokens?: number;
+      /** Provider-reported context-window capacity in tokens, e.g. Codex's `modelContextWindow`.
+       * Absent when the provider/transport does not expose this evidence; never hardcoded. */
+      contextWindowTokens?: number;
     }
   | {
       type: 'usage.rate_limits';
       limitId?: string;
       limitName?: string;
+      /** `resetsAt` is unix **seconds**, matching Codex app-server's own `RateLimitWindow.resetsAt`
+       * -- not milliseconds. A consumer converting to a JS `Date` must multiply by 1000. */
       primary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
       secondary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
     }

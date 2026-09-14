@@ -139,6 +139,41 @@ describe('CodexAppServerNormalizer: usage and errors', () => {
     ).toEqual([{ type: 'usage', inputTokens: 10, outputTokens: 5, cachedInputTokens: 2 }]);
   });
 
+  it('maps last.totalTokens and modelContextWindow to contextTokens/contextWindowTokens (ADI-26)', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('thread/tokenUsage/updated', {
+        threadId: 'thread-abc',
+        turnId: 't1',
+        tokenUsage: { last: { inputTokens: 10, outputTokens: 5, totalTokens: 62000 }, modelContextWindow: 272000 },
+      }),
+    ).toEqual([
+      { type: 'usage', inputTokens: 10, outputTokens: 5, contextTokens: 62000, contextWindowTokens: 272000 },
+    ]);
+  });
+
+  it('does not throw when a notification reports modelContextWindow with no last token usage at all (ADI-26)', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('thread/tokenUsage/updated', {
+        threadId: 'thread-abc',
+        turnId: 't1',
+        tokenUsage: { modelContextWindow: 272000 },
+      }),
+    ).toEqual([{ type: 'usage', contextWindowTokens: 272000 }]);
+  });
+
+  it('omits contextTokens/contextWindowTokens when the provider does not report them', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('thread/tokenUsage/updated', {
+        threadId: 'thread-abc',
+        turnId: 't1',
+        tokenUsage: { last: { inputTokens: 10 } },
+      }),
+    ).toEqual([{ type: 'usage', inputTokens: 10 }]);
+  });
+
   it('maps the top-level error notification, deriving recoverable from willRetry', () => {
     const normalizer = new CodexAppServerNormalizer();
     expect(normalizer.normalize('error', { willRetry: true })).toEqual([{ type: 'error', message: 'Codex app-server reported an error', recoverable: true }]);

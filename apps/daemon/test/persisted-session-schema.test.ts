@@ -77,7 +77,17 @@ describe('redaction exhaustiveness', () => {
         sequence: 5,
         timestamp: 't',
       },
-      { type: 'usage', inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cost: 0.5, sequence: 6, timestamp: 't' },
+      {
+        type: 'usage',
+        inputTokens: 1,
+        outputTokens: 2,
+        cachedInputTokens: 3,
+        cost: 0.5,
+        contextTokens: 62000,
+        contextWindowTokens: 272000,
+        sequence: 6,
+        timestamp: 't',
+      },
       { type: 'usage.rate_limits', limitId: 'limit-1', limitName: 'API Limit', primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 }, sequence: 7, timestamp: 't' },
       { type: 'error', code: 'E_BAD', message: 'went wrong', recoverable: true, sequence: 8, timestamp: 't' },
       { type: 'session.completed', providerSessionId: 'p', sequence: 9, timestamp: 't' },
@@ -90,6 +100,18 @@ describe('redaction exhaustiveness', () => {
       const parsed = persistedEventRecordV1Schema.safeParse(redactEnvelope(sample));
       expect(parsed.success, `${sample.type} produced an invalid persisted record`).toBe(true);
     }
+  });
+
+  it('keeps contextTokens and contextWindowTokens through redaction (ADI-26)', () => {
+    const record = redactEnvelope({
+      type: 'usage',
+      contextTokens: 62000,
+      contextWindowTokens: 272000,
+      sequence: 0,
+      timestamp: 't',
+    });
+    expect(record).toMatchObject({ contextTokens: 62000, contextWindowTokens: 272000 });
+    expect(persistedEventRecordV1Schema.safeParse(record).success).toBe(true);
   });
 });
 

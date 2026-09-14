@@ -62,7 +62,17 @@ const ALL_SAMPLES: AgentEventEnvelope[] = [
     sequence: 5,
     timestamp: 't',
   },
-  { type: 'usage', inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cost: 0.5, sequence: 6, timestamp: 't' },
+  {
+    type: 'usage',
+    inputTokens: 1,
+    outputTokens: 2,
+    cachedInputTokens: 3,
+    cost: 0.5,
+    contextTokens: 62000,
+    contextWindowTokens: 272000,
+    sequence: 6,
+    timestamp: 't',
+  },
   { type: 'usage.rate_limits', limitId: 'limit-1', limitName: 'API Limit', primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 }, sequence: 7, timestamp: 't' },
   { type: 'error', code: 'E_BAD', message: 'failed reading C:/Users/someone/secrets', recoverable: true, sequence: 8, timestamp: 't' },
   { type: 'session.completed', providerSessionId: 'native-thread-abc', sequence: 9, timestamp: 't' },
@@ -190,7 +200,16 @@ describe('toActivityEntry: what deliberately does cross', () => {
 
   it('drops NaN and Infinity from usage rather than rendering them', () => {
     const entry = toActivityEntry(
-      { type: 'usage', inputTokens: Number.NaN, outputTokens: Number.POSITIVE_INFINITY, cost: 1, sequence: 0, timestamp: 't' },
+      {
+        type: 'usage',
+        inputTokens: Number.NaN,
+        outputTokens: Number.POSITIVE_INFINITY,
+        cost: 1,
+        contextTokens: Number.NaN,
+        contextWindowTokens: Number.POSITIVE_INFINITY,
+        sequence: 0,
+        timestamp: 't',
+      },
       new Map(),
     );
     expect(entry).toEqual({ seq: 0, at: 't', origin: 'live', kind: 'usage', cost: 1 });
@@ -233,6 +252,21 @@ describe('toActivityEntry: what deliberately does cross', () => {
       new Map(),
     ) as { resultAttachmentId?: string };
     expect(invalid.resultAttachmentId).toBeUndefined();
+  });
+
+  it('keeps contextTokens and contextWindowTokens when both are present (ADI-26)', () => {
+    const entry = toActivityEntry(
+      { type: 'usage', contextTokens: 62000, contextWindowTokens: 272000, sequence: 0, timestamp: 't' },
+      new Map(),
+    );
+    expect(entry).toEqual({
+      seq: 0,
+      at: 't',
+      origin: 'live',
+      kind: 'usage',
+      contextTokens: 62000,
+      contextWindowTokens: 272000,
+    });
   });
 });
 
