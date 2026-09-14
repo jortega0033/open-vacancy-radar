@@ -12,6 +12,7 @@ import {
 import { createDatabaseClient, migrateDatabase } from './db/client.js';
 import { createLogger } from './logger.js';
 import { runAtsRosterImport } from './pipeline/ats-roster-import.js';
+import { runAtsSourceObservationImport } from './pipeline/ats-source-observation-import.js';
 import { runGlobalRemoteScan } from './pipeline/global-remote.js';
 import { runSponsorSync } from './pipeline/sponsors.js';
 
@@ -60,6 +61,22 @@ async function main(): Promise<void> {
           );
         });
         break;
+      case 'ats-sources:import':
+        await runExclusiveCommand(scanLock, logger, command, async () => {
+          const inputFile = process.argv[3];
+          if (inputFile === undefined || inputFile.trim().length === 0) {
+            throw new Error('ats-sources:import requires a versioned JSON file path');
+          }
+          const result = await runAtsSourceObservationImport(
+            database.db,
+            config,
+            logger,
+            inputFile,
+            process.cwd(),
+          );
+          logger.info(result, 'ATS source observation import completed');
+        });
+        break;
       case 'global-remote:scan':
         await runExclusiveCommand(scanLock, logger, command, async () => {
           const result = await runGlobalRemoteScan(database.db, config, logger, process.cwd(), {
@@ -82,7 +99,7 @@ async function main(): Promise<void> {
         break;
       default:
         throw new Error(
-          `Unknown command: ${command ?? '(missing)'}. Available: db:migrate, sponsors:sync, ats-roster:import, global-remote:scan`,
+          `Unknown command: ${command ?? '(missing)'}. Available: db:migrate, sponsors:sync, ats-roster:import, ats-sources:import <file>, global-remote:scan`,
         );
     }
   } finally {

@@ -110,6 +110,12 @@ export const globalRemoteConfigSchema = z.object({
      * roster can hold thousands of entries, so this only bounds how many `listVacancies` calls are
      * in flight at once, on top of the shared HTTP client's own concurrency limits. */
     atsRosterConcurrency: z.number().int().min(1).max(50).default(8),
+    /** Generic focused country used by the ATS tenant planner. Empty preserves full-roster scans. */
+    atsRosterFocusCountry: z.string().trim().max(100).optional(),
+    /** Maximum ATS tenants attempted by one focused scan, including exploration. */
+    atsRosterMaxSourcesPerFocusedScan: z.number().int().min(1).max(5_000).optional(),
+    /** Reserved unseen/stale tenant budget so focused scans continue expanding coverage. */
+    atsRosterExplorationBudget: z.number().int().min(1).max(1_000).optional(),
     /** NAV Arbeidsplassen consumer bearer token (free, self-service registration; see
      * https://arbeidsplassen.nav.no/vilkar-api). Empty means the source stays
      * `configuration_required` and is never called. */
@@ -389,6 +395,18 @@ export type DiscoverySourceAudit = {
     applied: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; parameter: string; valueFormat: 'free_text' | 'exact' | 'enumerated'; pagination: 'filtered_pages' | 'not_applicable'; limitations: string }[];
     deferred: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
     unsupported: { criterion: import('./focused-scan.js').FocusedCriterion; value: string; normalizedValue: string; reason: string }[];
+  };
+  /** Aggregate telemetry for the incremental ATS tenant planner. Present on the first roster
+   * provider audit only, so report consumers can sum source rows without double-counting it. */
+  rosterScan?: {
+    mode: 'complete' | 'incremental';
+    totalRosterSize: number;
+    dueSourcesAttempted: number;
+    explorationSourcesAttempted: number;
+    newlyVerifiedSources: number;
+    skippedNotDue: number;
+    failuresByCategory: Partial<Record<import('../companies/ats-source-observation-repository.js').AtsSourceFailureCategory, number>>;
+    checkpoint: number;
   };
 };
 

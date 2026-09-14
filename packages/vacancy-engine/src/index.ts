@@ -65,6 +65,20 @@ export {
   readAtsRosterStatus,
   type AtsRosterStatus,
 } from './companies/ats-roster-repository.js';
+export {
+  atsSourceObservationFilePath,
+  loadAtsSourceObservations,
+  parseAtsSourceObservationImport,
+  planAtsRosterScan,
+  type AtsRosterScanPlan,
+  type AtsSourceFailureCategory,
+  type AtsSourceObservation,
+  type AtsSourceObservationFile,
+} from './companies/ats-source-observation-repository.js';
+export {
+  runAtsSourceObservationImport,
+  type AtsSourceObservationImportResult,
+} from './pipeline/ats-source-observation-import.js';
 
 export type {
   GlobalRemoteReport,
