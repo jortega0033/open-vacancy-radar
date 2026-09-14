@@ -26,6 +26,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
       worldwideSponsorMatch: null,
     },
     official: null,
+    provisional: false,
     key: 'ww-1',
     title: 'Remote Frontend Engineer',
     company: 'Acme Corp',

@@ -906,7 +906,7 @@ export function SearchPage({
     } finally {
       setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
     }
-  }, [isStreamingPartial, onSavedJobsChanged, onViewApplicationAttempt, selected]);
+  }, [onSavedJobsChanged, onViewApplicationAttempt, selected]);
 
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
