@@ -129,6 +129,15 @@ regression test (`apps/daemon/test/index.test.ts`) now pins this by constructing
 `buildMcpManager()` and asserting `providerIds()` is empty, rather than pattern-matching `index.ts`'s
 source text, so the test keeps working across any refactor that preserves the actual invariant.
 
+> **Update (#48, 2026-09-10):** the gate has now opened once, deliberately. InfoSec Job Board (#48)
+> is the first policy wired into `buildMcpManager()`, and the regression test above now asserts
+> `providerIds()` equals `['infosec_job_board']` rather than `[]`. It qualified as the reviewed change
+> this section anticipated — every field `docs/mcp-source-policy.md`'s "required review record"
+> demands was completed for it in #48 — and it needed no `OAuthClientProvider`, since its transport
+> is credential-free (`auth: 'none'`). The invariant this section protects is unchanged: **any**
+> provider addition, OAuth or not, must remain its own explicit, reviewed edit to `buildMcpManager()`,
+> never a side effect of something else. Only the pinned value moved, from empty to this one entry.
+
 ## Preload surface vs. documentation (now reconciled)
 
 `apps/desktop/electron/preload.ts` exposes five `contextBridge` namespaces, only one of which

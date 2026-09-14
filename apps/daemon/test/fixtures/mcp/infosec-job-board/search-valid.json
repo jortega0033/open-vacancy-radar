@@ -1,0 +1,133 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"jobs\":[{\"id\":\"job-001\",\"title\":\"Security Engineer 1\",\"company\":\"Example Security Corp 1\",\"url\":\"https://www.infosecjobboard.com/jobs/job-001\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 1.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-01T09:00:00Z\"},{\"id\":\"job-002\",\"title\":\"Security Engineer 2\",\"company\":\"Example Security Corp 2\",\"url\":\"https://www.infosecjobboard.com/jobs/job-002\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 2.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-02T09:00:00Z\"},{\"id\":\"job-003\",\"title\":\"Security Engineer 3\",\"company\":\"Example Security Corp 3\",\"url\":\"https://www.infosecjobboard.com/jobs/job-003\",\"location\":null,\"description\":\"Own detection engineering and incident response for listing 3.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-03T09:00:00Z\"},{\"id\":\"job-004\",\"title\":\"Security Engineer 4\",\"company\":\"Example Security Corp 4\",\"url\":\"https://www.infosecjobboard.com/jobs/job-004\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 4.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-04T09:00:00Z\"},{\"id\":\"job-005\",\"title\":\"Security Engineer 5\",\"company\":\"Example Security Corp 5\",\"url\":\"https://www.infosecjobboard.com/jobs/job-005\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 5.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-05T09:00:00Z\"},{\"id\":\"job-006\",\"title\":\"Security Engineer 6\",\"company\":\"Example Security Corp 6\",\"url\":\"https://www.infosecjobboard.com/jobs/job-006\",\"location\":null,\"description\":\"Own detection engineering and incident response for listing 6.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-06T09:00:00Z\"},{\"id\":\"job-007\",\"title\":\"Security Engineer 7\",\"company\":\"Example Security Corp 7\",\"url\":\"https://www.infosecjobboard.com/jobs/job-007\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 7.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-07T09:00:00Z\"},{\"id\":\"job-008\",\"title\":\"Security Engineer 8\",\"company\":\"Example Security Corp 8\",\"url\":\"https://www.infosecjobboard.com/jobs/job-008\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 8.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-08T09:00:00Z\"},{\"id\":\"job-009\",\"title\":\"Security Engineer 9\",\"company\":\"Example Security Corp 9\",\"url\":\"https://www.infosecjobboard.com/jobs/job-009\",\"location\":null,\"description\":\"Own detection engineering and incident response for listing 9.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-09T09:00:00Z\"},{\"id\":\"job-010\",\"title\":\"Security Engineer 10\",\"company\":\"Example Security Corp 10\",\"url\":\"https://www.infosecjobboard.com/jobs/job-010\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 10.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-09T09:00:00Z\"},{\"id\":\"job-011\",\"title\":\"Security Engineer 11\",\"company\":\"Example Security Corp 11\",\"url\":\"https://www.infosecjobboard.com/jobs/job-011\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response for listing 11.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-09T09:00:00Z\"},{\"id\":\"job-012\",\"title\":\"Security Engineer 12\",\"company\":\"Example Security Corp 12\",\"url\":\"https://www.infosecjobboard.com/jobs/job-012\",\"location\":null,\"description\":\"Own detection engineering and incident response for listing 12.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-09T09:00:00Z\"}]}"
+    }
+  ],
+  "structuredContent": {
+    "jobs": [
+      {
+        "id": "job-001",
+        "title": "Security Engineer 1",
+        "company": "Example Security Corp 1",
+        "url": "https://www.infosecjobboard.com/jobs/job-001",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 1.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-01T09:00:00Z"
+      },
+      {
+        "id": "job-002",
+        "title": "Security Engineer 2",
+        "company": "Example Security Corp 2",
+        "url": "https://www.infosecjobboard.com/jobs/job-002",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 2.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-02T09:00:00Z"
+      },
+      {
+        "id": "job-003",
+        "title": "Security Engineer 3",
+        "company": "Example Security Corp 3",
+        "url": "https://www.infosecjobboard.com/jobs/job-003",
+        "location": null,
+        "description": "Own detection engineering and incident response for listing 3.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-03T09:00:00Z"
+      },
+      {
+        "id": "job-004",
+        "title": "Security Engineer 4",
+        "company": "Example Security Corp 4",
+        "url": "https://www.infosecjobboard.com/jobs/job-004",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 4.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-04T09:00:00Z"
+      },
+      {
+        "id": "job-005",
+        "title": "Security Engineer 5",
+        "company": "Example Security Corp 5",
+        "url": "https://www.infosecjobboard.com/jobs/job-005",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 5.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-05T09:00:00Z"
+      },
+      {
+        "id": "job-006",
+        "title": "Security Engineer 6",
+        "company": "Example Security Corp 6",
+        "url": "https://www.infosecjobboard.com/jobs/job-006",
+        "location": null,
+        "description": "Own detection engineering and incident response for listing 6.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-06T09:00:00Z"
+      },
+      {
+        "id": "job-007",
+        "title": "Security Engineer 7",
+        "company": "Example Security Corp 7",
+        "url": "https://www.infosecjobboard.com/jobs/job-007",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 7.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-07T09:00:00Z"
+      },
+      {
+        "id": "job-008",
+        "title": "Security Engineer 8",
+        "company": "Example Security Corp 8",
+        "url": "https://www.infosecjobboard.com/jobs/job-008",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 8.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-08T09:00:00Z"
+      },
+      {
+        "id": "job-009",
+        "title": "Security Engineer 9",
+        "company": "Example Security Corp 9",
+        "url": "https://www.infosecjobboard.com/jobs/job-009",
+        "location": null,
+        "description": "Own detection engineering and incident response for listing 9.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-09T09:00:00Z"
+      },
+      {
+        "id": "job-010",
+        "title": "Security Engineer 10",
+        "company": "Example Security Corp 10",
+        "url": "https://www.infosecjobboard.com/jobs/job-010",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 10.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-09T09:00:00Z"
+      },
+      {
+        "id": "job-011",
+        "title": "Security Engineer 11",
+        "company": "Example Security Corp 11",
+        "url": "https://www.infosecjobboard.com/jobs/job-011",
+        "location": "Remote",
+        "description": "Own detection engineering and incident response for listing 11.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-09T09:00:00Z"
+      },
+      {
+        "id": "job-012",
+        "title": "Security Engineer 12",
+        "company": "Example Security Corp 12",
+        "url": "https://www.infosecjobboard.com/jobs/job-012",
+        "location": null,
+        "description": "Own detection engineering and incident response for listing 12.",
+        "employment_type": "full-time",
+        "posted_at": "2026-09-09T09:00:00Z"
+      }
+    ]
+  },
+  "isError": false
+}

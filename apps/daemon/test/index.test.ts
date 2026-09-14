@@ -40,14 +40,17 @@ afterAll(() => {
 });
 
 describe('daemon bootstrap: MCP policy gate', () => {
-  it('wires McpConnectionManager with an empty policy array, so no MCP provider is reachable until a policy is reviewed', () => {
+  it('wires McpConnectionManager with exactly the reviewed policy set, so no other MCP provider is reachable', () => {
     // Asserts against the real, constructed manager -- not a regex over main()'s source text --
-    // so a refactor that preserves the empty-policy invariant (e.g. naming the array, reordering
-    // constructor args) can't silently defeat this test the way a source-text pin could. A
-    // provider-specific policy (#29+) must be an explicit, reviewed change to buildMcpManager's own
-    // body. See docs/adr-agentdock-v2-provenance.md#the-mcp-foundation-ships-dormant-on-purpose.
+    // so a refactor (renaming the array, reordering constructor args) can't silently defeat this
+    // test the way a source-text pin could. The registry started life empty; InfoSec Job Board
+    // (#48) is the first policy added to it, and being credential-free (`auth: 'none'`) it needed
+    // no `OAuthClientProvider` onboarding. Any other provider -- in particular the first
+    // OAuth-requiring one (#29+) -- must still be an explicit, reviewed change to buildMcpManager's
+    // own body, never a side effect of something else. See
+    // docs/adr-agentdock-v2-provenance.md#the-mcp-foundation-ships-dormant-on-purpose.
     const manager = buildMcpManager(new OsMcpCredentialStore(), noopLogger);
-    expect(manager.providerIds()).toEqual([]);
+    expect(manager.providerIds()).toEqual(['infosec_job_board']);
   });
 });
 

@@ -42,11 +42,15 @@ function policy(overrides: Partial<McpProviderPolicy> = {}): McpProviderPolicy {
   };
 }
 
-function setup(result: unknown = { jobs: [job] }, overrides: Partial<McpProviderPolicy> = {}) {
+function setup(
+  result: unknown = { jobs: [job] },
+  overrides: Partial<McpProviderPolicy> = {},
+  toolNames: string[] = ['search_jobs'],
+) {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const session: McpSession = {
     connect: vi.fn(async () => undefined),
-    listTools: vi.fn(async () => [{ name: 'search_jobs', inputSchema: { type: 'object' } }]),
+    listTools: vi.fn(async () => toolNames.map((name) => ({ name, inputSchema: { type: 'object' } }))),
     callTool: vi.fn(async (name, args) => { calls.push({ name, args }); return result; }),
     close: vi.fn(async () => undefined),
   };
@@ -209,5 +213,63 @@ describe('MCP connection manager', () => {
     await expect(pending).rejects.toThrow('cancelled');
     expect(session.close).toHaveBeenCalled();
     await expect(manager.search({ providerId: 'fake_jobs', query: 'frontend', limit: 10 })).rejects.toThrow('manager is closed');
+  });
+});
+
+describe('MCP connection manager: getJob (the `get_job` detail counterpart to search)', () => {
+  function detailPolicy(overrides: Partial<McpProviderPolicy> = {}): Partial<McpProviderPolicy> {
+    return {
+      detailTool: 'get_job',
+      mapDetailArguments: ({ externalId }) => ({ id: externalId }),
+      parseDetailResult: (value) => value,
+      ...overrides,
+    };
+  }
+
+  it('discovers only the approved detail tool, maps fixed arguments, and preserves provenance', async () => {
+    const { manager, session, calls } = setup(job, detailPolicy(), ['search_jobs', 'get_job']);
+    const row = await manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' });
+    expect(session.listTools).toHaveBeenCalledOnce();
+    expect(calls).toEqual([{ name: 'get_job', args: { id: 'job-1' } }]);
+    expect(row).toMatchObject({ ...job, providerId: 'fake_jobs', policyVersion: '2026-08-30', attribution: 'Jobs supplied by Fake Jobs' });
+  });
+
+  it('rejects a provider whose policy never configured a detail tool, without connecting', async () => {
+    const { manager, session } = setup();
+    await expect(manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' })).rejects.toThrow('does not support job detail lookups');
+    expect(session.connect).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing and unknown detail tools without calling them', async () => {
+    const { manager, session } = setup(job, detailPolicy(), ['search_jobs']);
+    await expect(manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' })).rejects.toThrow('approved MCP detail tool is unavailable');
+    expect(session.callTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unknown fields', { ...job, privateEmail: 'person@example.test' }],
+    ['wrong field types', { ...job, title: 42 }],
+    ['credential-bearing URLs', { ...job, url: 'https://user:secret@jobs.example.test/1' }],
+  ])('rejects malformed detail data: %s', async (_label, raw) => {
+    const { manager } = setup(raw, detailPolicy(), ['get_job']);
+    await expect(manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' })).rejects.toThrow();
+  });
+
+  it('never writes a detail lookup into the search cache', async () => {
+    const { manager } = setup(job, detailPolicy(), ['get_job']);
+    await manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' });
+    expect(manager.cached('fake_jobs')).toEqual([]);
+  });
+
+  it('shares search\'s connection/search kill switches, timeout, and cancellation plumbing', async () => {
+    const connectionOff = setup(job, detailPolicy({ killSwitches: { connection: false, search: true, persistence: true } }), ['get_job']);
+    await expect(connectionOff.manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' })).rejects.toThrow('connection is disabled');
+
+    const timedOut = setup(job, detailPolicy({ timeoutMs: 10 }), ['get_job']);
+    vi.mocked(timedOut.session.connect).mockImplementation((signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    await expect(timedOut.manager.getJob({ providerId: 'fake_jobs', externalId: 'job-1' })).rejects.toThrow('timed out');
+    expect(timedOut.session.close).toHaveBeenCalledOnce();
   });
 });

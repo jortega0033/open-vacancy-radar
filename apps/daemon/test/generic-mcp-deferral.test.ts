@@ -150,6 +150,14 @@ describe('generic AgentDock MCP and component control stay unregistered (ADI-10)
   it('registers exactly the reviewed set of /mcp/ route paths, nothing else', () => {
     const source = routeSources();
     const mcpPaths = new Set([...source.matchAll(/app\.(?:get|post|put|delete|patch)\(\s*'(\/mcp\/[^']*)'/g)].map((m) => m[1] as string));
-    expect(mcpPaths).toEqual(new Set(['/mcp/providers', '/mcp/providers/:providerId', '/mcp/providers/:providerId/credential', '/mcp/search']));
+    // ADI-15/#48 added the `get_job` counterpart to `/mcp/search`: still an allowlisted providerId
+    // plus an opaque externalId path segment, never a caller-suppliable tool name or arguments.
+    expect(mcpPaths).toEqual(new Set([
+      '/mcp/providers',
+      '/mcp/providers/:providerId',
+      '/mcp/providers/:providerId/credential',
+      '/mcp/providers/:providerId/jobs/:externalId',
+      '/mcp/search',
+    ]));
   });
 });

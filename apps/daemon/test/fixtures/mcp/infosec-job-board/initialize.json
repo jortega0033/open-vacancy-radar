@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": "infosec-initialize-1",
+  "result": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {
+      "tools": { "listChanged": false }
+    },
+    "serverInfo": {
+      "name": "infosec-job-board-mcp",
+      "version": "1.4.0"
+    },
+    "instructions": "Read-only cybersecurity job search. Attribute results to InfoSec Job Board (infosecjobboard.com). search_jobs results are capped at 10; use get_job for a single listing's full detail."
+  }
+}
