@@ -64,7 +64,12 @@ export default defineConfig({
               // transitively-bundled package, the fix is the same: add it here and move it from
               // devDependencies to a real "dependencies" entry so electron-builder's dependency
               // walker packages it (see the file-level comment in electron-builder.yml).
-              external: ['electron', 'better-sqlite3', 'pino', 'cheerio'],
+              //
+              // mammoth (issue #357's DOCX CV import) hit the identical crash: its own dependency
+              // tree (jszip, xmlbuilder, bluebird, underscore, et al.) is old-style CJS with the
+              // same nested-`require` pattern pino/cheerio have, and it was already a real
+              // "dependencies" entry (not dev-only) from the start.
+              external: ['electron', 'better-sqlite3', 'pino', 'cheerio', 'mammoth'],
             },
           },
         },
