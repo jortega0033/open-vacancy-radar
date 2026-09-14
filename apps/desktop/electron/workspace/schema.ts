@@ -51,7 +51,7 @@ export const cvDocuments = sqliteTable('cv_documents', {
   name: text('name').notNull(),
   kind: text('kind', { enum: ['uploaded', 'manual'] }).notNull(),
   targetRole: text('target_role').notNull().default(''),
-  /** Full extracted text for an uploaded CV (PDF/txt/md): what the AI features actually read.
+  /** Full extracted text for an uploaded CV (PDF/txt/md/docx): what the AI features actually read.
    * Empty for a manual profile, which instead relies entirely on `profile`. */
   text: text('text').notNull().default(''),
   /** Structured profile fields, editable regardless of kind: { title, years, location,

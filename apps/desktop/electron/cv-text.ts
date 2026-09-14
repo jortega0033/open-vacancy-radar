@@ -34,6 +34,17 @@ export const MAX_CV_FILE_BYTES = 10 * 1024 * 1024;
  * This bounds the extracted text every format hands back before it is normalized, so a small
  * compressed file cannot cause unbounded memory/text growth in this process. Generous for any real
  * CV -- even a long, multi-page one is a few thousand characters, nowhere near this.
+ *
+ * This check runs *after* `extractDocxText`'s decompression, not before it, so it bounds the result
+ * but not the transient memory `mammoth`/`jszip` use while producing it. That gap is deliberately
+ * accepted rather than pre-inspecting the archive's own (attacker-controlled) declared sizes, which
+ * would mean trusting exactly the metadata a crafted file could lie about. What actually keeps this
+ * bounded is that `MAX_CV_FILE_BYTES` caps the *compressed* input to 10 MiB and `mammoth` reads a
+ * `.docx` as one flat ZIP archive (its parts named by convention, e.g. `word/document.xml`) -- it
+ * never recurses into a part as if it were itself another archive. Single-layer DEFLATE (what a
+ * ZIP entry actually uses) has a real but bounded worst-case expansion ratio, nowhere near the
+ * multi-layer nested-archive ratios a classic "zip bomb" (e.g. 42.zip) relies on to reach
+ * pathological (petabyte-scale) sizes; a 10 MiB compressed `.docx` cannot approach that here.
  */
 export const MAX_CV_EXTRACTED_TEXT_CHARS = 2_000_000;
 
@@ -47,7 +58,7 @@ function tooLargeError(fileName: string, byteLength: number): Error {
 
 function tooMuchExtractedTextError(fileName: string): Error {
   return new Error(
-    `"${fileName}" expanded to an unexpectedly large amount of text and was rejected. If this is a real CV, export or paste it as .txt/.md instead.`,
+    `"${fileName}" expanded to an unexpectedly large amount of text (over ${MAX_CV_EXTRACTED_TEXT_CHARS.toLocaleString('en-US')} characters) and was rejected. If this is a real CV, export or paste it as .txt/.md instead.`,
   );
 }
 

@@ -122,13 +122,13 @@ describe('readCvFile: real DOCX extraction (issue #357)', () => {
 
   it('rejects extracted text past the bound instead of allowing unbounded growth from one small file', async () => {
     // A real CV is nowhere near this; this fixture exists purely to prove the post-extraction
-    // bound is actually enforced, not to model a realistic document.
-    const paragraphs = Array.from(
-      { length: Math.ceil(MAX_CV_EXTRACTED_TEXT_CHARS / 40) + 100 },
-      (_, index) => paragraph(`Line ${index}: ${'x'.repeat(30)}`),
-    );
-    const path = await writeDocx('oversized.docx', paragraphs);
+    // bound is actually enforced, not to model a realistic document. One long paragraph, not
+    // thousands of small ones: it exercises the same bound without paying for a few thousand
+    // `docx`/mammoth object round trips this assertion has no need for.
+    const path = await writeDocx('oversized.docx', [paragraph('x'.repeat(MAX_CV_EXTRACTED_TEXT_CHARS + 1_000))]);
 
-    await expect(readCvFile(path)).rejects.toThrow(/expanded to an unexpectedly large amount of text/);
-  }, 30_000);
+    await expect(readCvFile(path)).rejects.toThrow(
+      new RegExp(`expanded to an unexpectedly large amount of text \\(over ${MAX_CV_EXTRACTED_TEXT_CHARS.toLocaleString('en-US')} characters\\)`),
+    );
+  });
 });
