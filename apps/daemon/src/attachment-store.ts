@@ -84,6 +84,17 @@ export const ATTACHMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const ALLOWED_ATTACHMENT_MIME_TYPES = ['text/plain', 'application/json'] as const;
 export type AllowedAttachmentMimeType = (typeof ALLOWED_ATTACHMENT_MIME_TYPES)[number];
 
+/**
+ * A `tool.completed` result whose serialized size exceeds this is worth an attachment (ADI-29 item
+ * 2/3): below it, the renderer's own bounded inline preview already shows the whole thing, so
+ * writing one would cost a file for no retrieval anyone would ever need. Matches
+ * `MAX_TEXT_BYTES_PER_ENTRY` in `apps/desktop/electron/agent-activity-sanitize.ts` -- the desktop
+ * app's own bound for how much prose it keeps inline per timeline entry -- by deliberate choice, not
+ * a shared import (the daemon has no dependency on desktop code): "big enough that the renderer
+ * would have truncated it anyway" is the same question in both places, so it gets the same answer.
+ */
+export const ATTACHMENT_WORTHY_RESULT_BYTES = 8_000;
+
 const STORE_DIR = 'attachments-v1';
 const SESSION_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ATTACHMENT_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;

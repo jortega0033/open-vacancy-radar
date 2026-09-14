@@ -27,16 +27,16 @@ import type { GuardedIpcHandle } from '../electron/ipc-sender-guard.js';
  * and opens two SQLite databases. That is a pre-existing architectural gap, older than this
  * feature, and this ticket does not try to close it.
  *
- * What ADI-07 *can* do, and now does, is keep the whole feature behind one call. The five channels,
+ * What ADI-07 *can* do, and now does, is keep the whole feature behind one call. The six channels,
  * their paging helpers and their alias book live in `electron/agent-workspace-ipc.ts`; main.ts
  * holds a relay, a `getJson`, and a single `registerAgentWorkspaceHandlers(ipcMain, ...)`. So the
  * three claims below are real, checkable claims rather than a re-statement of the implementation:
  *
- *  1. **The five channels are additive.** Their names are cross-checked, by reading main.ts's and
+ *  1. **The six channels are additive.** Their names are cross-checked, by reading main.ts's and
  *     preload.ts's source, against every other channel this app registers or invokes. A collision
  *     -- which is the one way a new channel can break an existing handler, since the second
  *     `ipcMain.handle` for a name throws at registration -- would fail here.
- *  2. **Not registering them is a complete rollback.** The registrar sees exactly five `handle`
+ *  2. **Not registering them is a complete rollback.** The registrar sees exactly six `handle`
  *     calls and nothing else; skipping the call leaves a registrar untouched, and importing the
  *     module has no side effect of any kind.
  *  3. **The feature owns no shared mutable state.** This is the specific regression the ticket
@@ -154,14 +154,14 @@ function harness(overrides: Partial<AgentWorkspaceIpcDeps> = {}): Harness {
     async invoke(channel: string, payload?: unknown): Promise<unknown> {
       const handler = registrar.handlers.get(channel);
       if (!handler) throw new Error(`no handler registered for '${channel}'`);
-      // `{}` stands in for Electron's IpcMainInvokeEvent: none of these five handlers reads it.
+      // `{}` stands in for Electron's IpcMainInvokeEvent: none of these six handlers reads it.
       return handler({}, payload);
     },
   };
 }
 
-describe('the five AI Workspace channels are additive', () => {
-  it('registers exactly the documented five, once each', () => {
+describe('the six AI Workspace channels are additive', () => {
+  it('registers exactly the documented six, once each', () => {
     const { registrar } = harness();
     expect(registrar.calls).toEqual([...AGENT_WORKSPACE_CHANNELS]);
     expect(new Set(registrar.calls).size).toBe(AGENT_WORKSPACE_CHANNELS.length);

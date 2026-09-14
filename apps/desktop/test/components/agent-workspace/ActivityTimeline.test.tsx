@@ -34,7 +34,7 @@ describe('ActivityTimeline: usage.rate_limits rendering (ADI-26)', () => {
       kind: 'usage.rate_limits',
       primary: { usedPercent: 2.3166666666666664 },
     });
-    render(<ActivityTimeline entry={entry} />);
+    render(<ActivityTimeline sessionId={SESSION_A} entry={entry} />);
 
     const text = screen.getByTestId('activity-timeline').textContent ?? '';
     expect(text).toContain('2.3% used');
@@ -51,7 +51,7 @@ describe('ActivityTimeline: usage.rate_limits rendering (ADI-26)', () => {
       primary: { usedPercent: 50, resetsAt: 999_999_999_999_999 },
     });
 
-    expect(() => render(<ActivityTimeline entry={entry} />)).not.toThrow();
+    expect(() => render(<ActivityTimeline sessionId={SESSION_A} entry={entry} />)).not.toThrow();
     expect(screen.getByTestId('activity-timeline').textContent).toContain('50% used');
   });
 });

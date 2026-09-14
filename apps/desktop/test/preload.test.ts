@@ -999,10 +999,18 @@ describe('electron/preload.ts: workspaceGrant.startSession (ADI-13)', () => {
 const V2_SESSION_ID = '11111111-2222-4333-8444-555555555555';
 
 describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
-  it('exposes exactly the six documented capability functions and nothing else', async () => {
+  it('exposes exactly the seven documented capability functions and nothing else', async () => {
     const api = await loadPreload('agentWorkspace');
     expect(Object.keys(api).sort()).toEqual(
-      ['listSessions', 'getSession', 'getSessionEvents', 'attachActivity', 'detachActivity', 'onActivity'].sort(),
+      [
+        'listSessions',
+        'getSession',
+        'getSessionEvents',
+        'getAttachment',
+        'attachActivity',
+        'detachActivity',
+        'onActivity',
+      ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -1030,6 +1038,11 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
         'getSessionEvents',
         'agent-workspace:events',
         (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
+      ],
+      [
+        'getAttachment',
+        'agent-workspace:attachment',
+        (fn: never) => (fn as (i: string, a: string) => Promise<unknown>)(V2_SESSION_ID, V2_SESSION_ID),
       ],
       [
         'attachActivity',
@@ -1201,6 +1214,41 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
     expect(page.events[0]).not.toHaveProperty('detail');
     // A code that is not already a clean identifier has no row to select in the copy table.
     expect(page.events[1]).not.toHaveProperty('code');
+  });
+
+  it('rebuilds a tool.completed resultPreview/resultAttachmentId, dropping a malformed attachment id (ADI-29)', async () => {
+    invoke.mockResolvedValue({
+      sessionId: 'ses-1',
+      events: [
+        {
+          seq: 0,
+          at: 't',
+          kind: 'tool.completed',
+          toolName: 'Bash',
+          resultPreview: 'the output',
+          resultPreviewTruncated: true,
+          resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+        },
+        {
+          seq: 1,
+          at: 't',
+          kind: 'tool.completed',
+          toolName: 'Bash',
+          resultAttachmentId: 'not-a-uuid',
+        },
+      ],
+    });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.getSessionEvents as (i: string) => Promise<unknown>)('ses-1')) as {
+      events: Array<Record<string, unknown>>;
+    };
+
+    expect(page.events[0]).toMatchObject({
+      resultPreview: 'the output',
+      resultPreviewTruncated: true,
+      resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+    });
+    expect(page.events[1]).not.toHaveProperty('resultAttachmentId');
   });
 
   it('asserts history origin rather than reading it, so a mislabelled entry cannot win the merge', async () => {

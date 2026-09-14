@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ActivityEntry } from '../../window.js';
 import { HISTORY_ONLY_EXPLANATION } from './refusal-copy.js';
 import { formatInstant } from './status.js';
@@ -26,6 +27,7 @@ import { hasOnlyDigestHistory } from './workspace-reducer.js';
  */
 
 export interface ActivityTimelineProps {
+  sessionId: string;
   entry: SessionEntry;
 }
 
@@ -33,7 +35,7 @@ function digestLine(bytes: number, label: string): string {
   return `${label} (${bytes.toLocaleString()} bytes, content not stored)`;
 }
 
-export function ActivityTimeline({ entry }: ActivityTimelineProps) {
+export function ActivityTimeline({ sessionId, entry }: ActivityTimelineProps) {
   const { timeline, toolNamesByAlias } = entry;
 
   if (timeline.entries.length === 0) {
@@ -60,7 +62,7 @@ export function ActivityTimeline({ entry }: ActivityTimelineProps) {
       <ol className="flex flex-col gap-2">
         {timeline.entries.map((item) => (
           <li key={item.seq} className="rounded-box border border-base-300 bg-base-100 p-3">
-            <TimelineRow item={item} toolNamesByAlias={toolNamesByAlias} />
+            <TimelineRow item={item} toolNamesByAlias={toolNamesByAlias} sessionId={sessionId} />
           </li>
         ))}
       </ol>
@@ -71,6 +73,7 @@ export function ActivityTimeline({ entry }: ActivityTimelineProps) {
 interface RowProps {
   item: ActivityEntry;
   toolNamesByAlias: Readonly<Record<string, string>>;
+  sessionId: string;
 }
 
 function RowHeading({ label, at }: { label: string; at: string }) {
@@ -111,6 +114,65 @@ function ProseBody({
         <p className="mt-1 text-xs text-base-content/50">
           This message was longer than the app shows, so it is cut off here.
         </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * The "View full output" action for a `tool.completed` row that has an attachment (ADI-29).
+ *
+ * Fetches lazily, on click, and caches the result for the row's lifetime rather than the whole
+ * session's: this is the retrieval endpoint, and nothing else in the workspace state needs a full
+ * tool result sitting in memory once the user has looked at it and moved on.
+ */
+function AttachmentAction({ sessionId, attachmentId }: { sessionId: string; attachmentId: string }) {
+  const [state, setState] = useState<'collapsed' | 'loading' | 'expanded' | 'error'>('collapsed');
+  const [content, setContent] = useState<string>();
+
+  async function handleClick() {
+    if (state === 'expanded') {
+      setState('collapsed');
+      return;
+    }
+    if (content !== undefined) {
+      setState('expanded');
+      return;
+    }
+    setState('loading');
+    // Every other caller of this bridge (useAgentWorkspace.ts) catches its own rejections; without
+    // this one, a thrown IPC error (a dead daemon, a non-404 failure) would leave this row's button
+    // stuck disabled on "Loading full output..." forever, recoverable only by switching sessions.
+    let attachment: Awaited<ReturnType<typeof window.agentWorkspace.getAttachment>>;
+    try {
+      attachment = await window.agentWorkspace.getAttachment(sessionId, attachmentId);
+    } catch {
+      setState('error');
+      return;
+    }
+    if (attachment === null) {
+      setState('error');
+      return;
+    }
+    setContent(attachment.content);
+    setState('expanded');
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="mt-1 text-xs font-medium text-primary underline underline-offset-2"
+        onClick={handleClick}
+        disabled={state === 'loading'}
+      >
+        {state === 'loading' ? 'Loading full output…' : state === 'expanded' ? 'Hide full output' : 'View full output'}
+      </button>
+      {state === 'error' && <p className="mt-1 text-xs text-error">The full output could not be retrieved.</p>}
+      {state === 'expanded' && content !== undefined && (
+        <pre className="mt-1 max-h-64 overflow-auto rounded-box bg-base-200 p-2 text-xs break-words whitespace-pre-wrap">
+          {content}
+        </pre>
       )}
     </>
   );
@@ -207,7 +269,7 @@ function RateLimitsRow({ item }: { item: Extract<ActivityEntry, { kind: 'usage.r
   );
 }
 
-function TimelineRow({ item, toolNamesByAlias }: RowProps) {
+function TimelineRow({ item, toolNamesByAlias, sessionId }: RowProps) {
   switch (item.kind) {
     case 'session.started':
       return (
@@ -261,8 +323,20 @@ function TimelineRow({ item, toolNamesByAlias }: RowProps) {
               <span className="ml-2 text-xs text-base-content/50">call {item.toolAlias}</span>
             )}
           </p>
-          {item.result !== undefined && (
-            <p className="mt-1 text-xs text-base-content/50">{digestLine(item.result.bytes, 'Result recorded')}</p>
+          {item.resultPreview !== undefined ? (
+            <p className="mt-1 text-xs break-words whitespace-pre-wrap text-base-content/70">{item.resultPreview}</p>
+          ) : (
+            item.result !== undefined && (
+              <p className="mt-1 text-xs text-base-content/50">{digestLine(item.result.bytes, 'Result recorded')}</p>
+            )
+          )}
+          {item.resultPreviewTruncated === true && (
+            <p className="mt-1 text-xs text-base-content/50">
+              This result was longer than the app shows, so it is cut off here.
+            </p>
+          )}
+          {item.resultAttachmentId !== undefined && (
+            <AttachmentAction sessionId={sessionId} attachmentId={item.resultAttachmentId} />
           )}
         </>
       );

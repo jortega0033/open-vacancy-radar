@@ -22,6 +22,7 @@ import type { AuditStore } from './audit-store.js';
 import type { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
 import { registerV2ApplicationRoutes } from './routes/v2-applications.js';
 import type { ApplicationQueueStore } from './application-queue-store.js';
+import type { AttachmentStore } from './attachment-store.js';
 
 /**
  * Present only when the daemon has a working durable store this run.
@@ -35,6 +36,14 @@ import type { ApplicationQueueStore } from './application-queue-store.js';
 export interface BuildServerV2Options {
   store: SessionLineageStore;
   limiter: ActiveSessionLimiter;
+  /**
+   * ADI-29. Independent of `store`/`limiter` -- the attachment store opens on its own regardless of
+   * whether the durable session store did -- but its retrieval route registers only alongside the
+   * other v2 session routes, so it shares their downgrade path: absent, `GET
+   * /v2/sessions/:sessionId/attachments/:attachmentId` 404s through the ordinary not-found handler
+   * exactly like the rest of `v2`.
+   */
+  attachments?: AttachmentStore;
   /**
    * The ADI-06 workspace-trust pair, present only when **both** stores opened.
    *
@@ -142,7 +151,7 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
     // `POST /sessions/application-field-map`, whose own literal provider check is deliberately
     // independent of any capability a provider adapter declares about itself.
     registerV2StageRoutingRoutes(app, opts.registry);
-    registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter);
+    registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter, opts.v2.attachments);
     if (opts.v2.workspace) {
       registerV2WorkspaceRoutes(app, {
         trustStore: opts.v2.workspace.trustStore,

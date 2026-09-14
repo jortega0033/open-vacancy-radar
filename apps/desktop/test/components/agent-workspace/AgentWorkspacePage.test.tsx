@@ -414,6 +414,103 @@ describe('AgentWorkspacePage: empty session list', () => {
   });
 });
 
+describe('AgentWorkspacePage: attachment retrieval is scoped per session (ADI-29)', () => {
+  it('does not carry a fetched attachment\'s content over when switching to a different session', async () => {
+    // Both sessions' `tool.completed` row lands at the same `seq` (0), which is exactly the
+    // position ActivityTimeline's `<li key={item.seq}>` reuses across sessions if the detail pane
+    // itself is not remounted on selection change -- the scenario this test guards against.
+    const attachments: Record<string, string> = {
+      [`${SESSION_A}:11111111-1111-4111-8111-111111111111`]: 'session A full output',
+      [`${SESSION_B}:22222222-2222-4222-8222-222222222222`]: 'session B full output',
+    };
+    const getAttachment = vi.fn(async (sessionId: string, attachmentId: string) => {
+      const content = attachments[`${sessionId}:${attachmentId}`];
+      return content === undefined ? null : { mimeType: 'text/plain', bytes: content.length, content };
+    });
+    const { push } = installAgentWorkspaceBridge({
+      listSessions: vi.fn().mockResolvedValue({
+        sessions: [sessionSummary(SESSION_A), sessionSummary(SESSION_B)],
+        capacity: TEST_CAPACITY,
+      }),
+      getAttachment,
+    });
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+    await waitFor(() => expect(screen.getAllByRole('listitem').length).toBe(2));
+
+    push({
+      sessionId: SESSION_A,
+      entry: {
+        seq: 0,
+        at: 't',
+        origin: 'live',
+        kind: 'tool.completed',
+        resultAttachmentId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+    push({
+      sessionId: SESSION_B,
+      entry: {
+        seq: 0,
+        at: 't',
+        origin: 'live',
+        kind: 'tool.completed',
+        resultAttachmentId: '22222222-2222-4222-8222-222222222222',
+      },
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^Session claude/ })[0] as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: /view full output/i }));
+    await waitFor(() => expect(screen.getByText('session A full output')).toBeInTheDocument());
+    expect(getAttachment).toHaveBeenCalledWith(SESSION_A, '11111111-1111-4111-8111-111111111111');
+
+    // Switching to session B must start its "View full output" action fresh: without a remount,
+    // this row would still read "Hide full output" and already show session A's cached text.
+    fireEvent.click(screen.getAllByRole('button', { name: /^Session claude/ })[1] as HTMLElement);
+    await screen.findByRole('button', { name: /view full output/i });
+    expect(screen.queryByText('session A full output')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /view full output/i }));
+    await waitFor(() => expect(screen.getByText('session B full output')).toBeInTheDocument());
+    expect(getAttachment).toHaveBeenCalledWith(SESSION_B, '22222222-2222-4222-8222-222222222222');
+  });
+
+  it('settles into an error state, rather than staying stuck loading forever, when getAttachment rejects', async () => {
+    // getAttachment throwing (a dead daemon, a non-404 IPC failure) is different from it resolving
+    // null (a genuine miss) -- both must be recoverable from the same row without switching sessions.
+    const { push } = installAgentWorkspaceBridge({
+      listSessions: vi.fn().mockResolvedValue({
+        sessions: [sessionSummary(SESSION_A)],
+        capacity: TEST_CAPACITY,
+      }),
+      getAttachment: vi.fn().mockRejectedValue(new Error('daemon unavailable')),
+    });
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+    await waitFor(() => expect(screen.getAllByRole('listitem').length).toBe(1));
+
+    push({
+      sessionId: SESSION_A,
+      entry: {
+        seq: 0,
+        at: 't',
+        origin: 'live',
+        kind: 'tool.completed',
+        resultAttachmentId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^Session claude/ })[0] as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: /view full output/i }));
+
+    await waitFor(() => expect(screen.getByText(/could not be retrieved/i)).toBeInTheDocument());
+    // Not stuck disabled on "Loading full output...": the button is clickable again.
+    expect(screen.getByRole('button', { name: /view full output/i })).not.toBeDisabled();
+  });
+});
+
 describe('AgentWorkspacePage: capacity', () => {
   it('reports the daemon aggregate without claiming a per-provider number it did not ask for', async () => {
     installAgentWorkspaceBridge({

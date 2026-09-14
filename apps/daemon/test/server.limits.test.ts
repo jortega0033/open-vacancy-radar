@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { noopLogger, ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { AgentEvent, ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '@agent-dock/agent-runtime';
 import { ACTIVE_SESSION_LIMITS, ActiveSessionLimiter } from '../src/active-session-limiter.js';
+import { AttachmentStore } from '../src/attachment-store.js';
 import { SessionLineageStore, type RetentionPolicy } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
 import { buildServer } from '../src/server.js';
@@ -109,6 +111,7 @@ interface Harness {
   claude: ControllableProvider;
   codex: ControllableProvider;
   stateRoot: string;
+  attachments?: AttachmentStore;
 }
 
 let harnesses: Harness[] = [];
@@ -134,6 +137,41 @@ function setup(retention?: RetentionPolicy): Harness {
   });
 
   const harness: Harness = { app, manager, limiter, store, claude, codex, stateRoot };
+  harnesses.push(harness);
+  return harness;
+}
+
+/** Same as `setup()`, plus a wired attachment store (ADI-29). */
+function setupWithAttachments(): Harness {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-limits-'));
+  const claude = new ControllableProvider('claude');
+  const codex = new ControllableProvider('codex');
+  const registry = new ProviderRegistry();
+  registry.register(claude);
+  registry.register(codex);
+
+  const store = new SessionLineageStore({ stateRoot });
+  const limiter = new ActiveSessionLimiter();
+  const attachments = new AttachmentStore({ stateRoot });
+  const manager = new SessionManager(
+    registry,
+    noopLogger,
+    undefined,
+    limiter,
+    store,
+    undefined,
+    undefined,
+    attachments,
+  );
+  const app = buildServer({
+    registry,
+    sessionManager: manager,
+    token: TOKEN,
+    logger: noopLogger,
+    v2: { store, limiter, attachments },
+  });
+
+  const harness: Harness = { app, manager, limiter, store, claude, codex, stateRoot, attachments };
   harnesses.push(harness);
   return harness;
 }
@@ -435,16 +473,20 @@ describe('route inventory', () => {
     ['GET', '/v2/sessions'],
     ['GET', '/v2/sessions/:sessionId'],
     ['GET', '/v2/sessions/:sessionId/events'],
+    // ADI-29: registered unconditionally alongside the other v2 session routes, whether or not this
+    // instance was actually given an attachment store -- the route itself always exists, and 404s
+    // at request time when `attachments` is absent (see the dedicated describe block below).
+    ['GET', '/v2/sessions/:sessionId/attachments/:attachmentId'],
   ];
 
-  it('registers every v1 route unchanged plus exactly five v2 GET routes', async () => {
+  it('registers every v1 route unchanged plus exactly six v2 GET routes', async () => {
     const { app } = setup();
     await app.ready();
 
     for (const [method, url] of [...V1_ROUTES, ...V2_ROUTES]) {
       expect(app.hasRoute({ method: method as 'GET', url }), `${method} ${url} is missing`).toBe(true);
     }
-    expect(V2_ROUTES).toHaveLength(5);
+    expect(V2_ROUTES).toHaveLength(6);
   });
 
   it('exposes no v2 write surface: creation and control stay on v1', async () => {
@@ -611,5 +653,79 @@ describe('v2 read routes', () => {
     for (const url of ['/v2/sessions', '/v2/providers']) {
       expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
     }
+  });
+});
+
+describe('GET /v2/sessions/:sessionId/attachments/:attachmentId (ADI-29)', () => {
+  it('retrieves a real attachment by session and attachment id', async () => {
+    const { app, attachments } = setupWithAttachments();
+    const sessionId = randomUUID();
+    const metadata = attachments!.put(sessionId, 'application/json', JSON.stringify({ output: 'full result' }));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v2/sessions/${sessionId}/attachments/${metadata.id}`,
+      headers: AUTH,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.schemaVersion).toBe(1);
+    expect(body.content).toBe(JSON.stringify({ output: 'full result' }));
+    expect(body.metadata).toMatchObject({ id: metadata.id, sessionId, mimeType: 'application/json' });
+  });
+
+  it('404s an attachment id that does not exist, and one that belongs to a different session', async () => {
+    const { app, attachments } = setupWithAttachments();
+    const sessionId = randomUUID();
+    const otherSessionId = randomUUID();
+    const metadata = attachments!.put(sessionId, 'application/json', 'x');
+
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/v2/sessions/${sessionId}/attachments/${randomUUID()}`,
+      headers: AUTH,
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().code).toBe('attachment_not_found');
+
+    const wrongSession = await app.inject({
+      method: 'GET',
+      url: `/v2/sessions/${otherSessionId}/attachments/${metadata.id}`,
+      headers: AUTH,
+    });
+    expect(wrongSession.statusCode).toBe(404);
+    expect(wrongSession.json().code).toBe('attachment_not_found');
+  });
+
+  it('400s a malformed session or attachment id before ever touching the store', async () => {
+    const { app } = setupWithAttachments();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v2/sessions/not-a-uuid/attachments/also-not-a-uuid',
+      headers: AUTH,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('invalid_attachment_reference');
+  });
+
+  it('404s when no attachment store is configured for this v2 instance', async () => {
+    const { app } = setup(); // the plain harness has no `attachments` in its v2 options
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v2/sessions/${randomUUID()}/attachments/${randomUUID()}`,
+      headers: AUTH,
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe('attachment_not_found');
+  });
+
+  it('requires the bearer token like every other privileged route', async () => {
+    const { app, attachments } = setupWithAttachments();
+    const sessionId = randomUUID();
+    const metadata = attachments!.put(sessionId, 'text/plain', 'x');
+
+    const res = await app.inject({ method: 'GET', url: `/v2/sessions/${sessionId}/attachments/${metadata.id}` });
+    expect(res.statusCode).toBe(401);
   });
 });

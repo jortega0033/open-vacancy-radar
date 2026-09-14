@@ -158,10 +158,11 @@ What makes this a *bounded* exception rather than an open-ended one:
   since Windows does not treat these bits as an access restriction the way POSIX does. Plus the
   same path-containment and symlink-safety checks this page's other stores already use.
 
-As of this writing this store exists and is fully tested, but nothing in the shipped app populates
-it yet — no tool result currently exceeds the inline preview threshold in a way that writes an
-attachment, and no UI surfaces a way to retrieve one. This section is written now, ahead of that
-wiring landing, so this page never describes less than what the code on disk can actually do.
+A `tool.completed` result over 8 KB (the same size the AI Workspace's own activity timeline already
+keeps inline for other entries) is what actually writes an attachment; a session's own daemon-side
+log line still only ever records that result's byte length and hash, per the section above -- an
+attachment id alongside it is the only new thing that record carries, an opaque id, never the content
+itself.
 
 None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
 plain SQLite file on your own disk, readable by anything running as your OS user, same as any other

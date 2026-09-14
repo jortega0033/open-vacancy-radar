@@ -842,6 +842,16 @@ export function parseAgentWorkspaceEventsInput(
   return { sessionId: parseSessionId(input.sessionId), ...parsePage(input) };
 }
 
+/** `agent-workspace:attachment` (ADI-29). Both ids are session/attachment ids -- the same UUID
+ * shape, so `parseSessionId` covers the second with a different field name for its own message. */
+export function parseAgentWorkspaceAttachmentInput(value: unknown): { sessionId: string; attachmentId: string } {
+  const input = asRecord(value, 'attachment payload');
+  return {
+    sessionId: parseSessionId(input.sessionId),
+    attachmentId: parseSessionId(input.attachmentId, 'attachmentId'),
+  };
+}
+
 /** `agent-workspace:attach`. `lastSeq` resumes the SSE stream; it is an index, never a cursor. */
 export function parseAgentWorkspaceAttachInput(value: unknown): { sessionId: string; lastSeq?: number } {
   const input = asRecord(value, 'attach payload');

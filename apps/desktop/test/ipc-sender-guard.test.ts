@@ -79,8 +79,8 @@ function source(file: string): string {
  * The receivers a `handle('channel', ...)` call may legitimately be made on.
  *
  * `guardedIpc` is main.ts's own guarded registrar. `ipc` is the parameter name
- * `registerAgentWorkspaceHandlers(ipc, deps)` registers its five channels on -- and main.ts hands it
- * `guardedIpc`, which the assertion below pins, so those five are guarded by construction rather
+ * `registerAgentWorkspaceHandlers(ipc, deps)` registers its six channels on -- and main.ts hands it
+ * `guardedIpc`, which the assertion below pins, so those six are guarded by construction rather
  * than by a second copy of the check.
  */
 const ALLOWED_HANDLE_RECEIVERS = new Set(['guardedIpc', 'ipc']);
@@ -97,7 +97,7 @@ function preloadInvokeChannels(): string[] {
 
 /**
  * What ADI-16 found: 46 `ipcMain.handle` registrations in main.ts, of which exactly three
- * (`workspace-grant:*`) checked their sender at all, plus five more registered through ADI-07's
+ * (`workspace-grant:*`) checked their sender at all, plus six more registered through ADI-07's
  * registrar. Pinned as a floor rather than an equality so that adding a channel is not a test
  * failure on its own -- the two exhaustiveness assertions below are what actually enforce coverage.
  *
@@ -161,8 +161,8 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
     expect(new Set(channels).size).toBe(channels.length);
   });
 
-  it('hands ADI-07 the guarded registrar, so its five channels are covered too', () => {
-    // The five `agent-workspace:*` channels are registered inside agent-workspace-ipc.ts against
+  it('hands ADI-07 the guarded registrar, so its six channels are covered too', () => {
+    // The six `agent-workspace:*` channels are registered inside agent-workspace-ipc.ts against
     // whatever registrar it is given. This one line in main.ts is what makes them guarded.
     expect(source('main.ts')).toContain('registerAgentWorkspaceHandlers(guardedIpc,');
     expect(guardedChannels()).not.toContain(AGENT_WORKSPACE_CHANNELS[0]);
@@ -180,7 +180,7 @@ describe('every ipcMain.handle registration is guarded (ADI-16, mechanical)', ()
   it('spans all seven preload namespaces', () => {
     const prefixes = new Set(guardedChannels().map((channel) => channel.split(':')[0] as string));
     // The channel prefixes behind `agentDock`, `vacancyRadar`, `workspace`, `cv`, `system` and
-    // `workspaceGrant`; `agentWorkspace`'s five come through the registrar hand-off above.
+    // `workspaceGrant`; `agentWorkspace`'s six come through the registrar hand-off above.
     for (const prefix of ['daemon', 'vacancy', 'workspace', 'workspace-grant', 'cv', 'system', 'dialog']) {
       expect([...prefixes], prefix).toContain(prefix);
     }
@@ -343,7 +343,7 @@ describe('createGuardedIpc', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('is a drop-in for ADI-07’s registrar: registering its five channels guards all five', async () => {
+  it('is a drop-in for ADI-07’s registrar: registering its six channels guards all six', async () => {
     const registered = new Map<string, IpcInvokeListener>();
     const guardedIpc = createGuardedIpc(
       { handle: (channel, listener) => void registered.set(channel, listener) },

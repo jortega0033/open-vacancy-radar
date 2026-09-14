@@ -78,3 +78,41 @@ export function digestOfUnknown(value: unknown): ContentDigest {
 export function digestOfText(text: string): ContentDigest {
   return { bytes: utf8Bytes(text), sha256: sha256OfText(text) };
 }
+
+/** A digest plus a bounded, UTF-8-safe preview of the same content, computed from a single
+ * serialization pass -- never two, which is the exact double-encoding upstream `agentdock` found
+ * worth a same-day perf follow-up for once it built the equivalent feature (issue #150 there). */
+export interface ContentPreview extends ContentDigest {
+  preview: string;
+  previewTruncated: boolean;
+}
+
+/**
+ * Like `digestOfUnknown`, but also returns a bounded preview of the same serialized text (ADI-29).
+ * Used only where the caller has already decided a snippet of this content is safe to keep visible
+ * -- never inside `persisted-session-schema.ts`'s redaction, which stays digest-only.
+ */
+export function digestAndPreviewOfUnknown(value: unknown, maxPreviewBytes: number): ContentPreview {
+  let text: string;
+  try {
+    const encoded = JSON.stringify(value);
+    text = encoded === undefined ? UNSERIALIZABLE_SENTINEL : encoded;
+  } catch {
+    text = UNSERIALIZABLE_SENTINEL;
+  }
+  const bytes = utf8Bytes(text);
+  // A plain string (the common shape for a tool's own stdout) previews as itself: JSON.stringify's
+  // quoting and backslash-escaping exists to make the value round-trip as JSON, which a human
+  // reading a preview of a command's output has no use for and would only read as corruption.
+  // `bytes`/`sha256` above stay keyed to the JSON-encoded form regardless, matching the encoding
+  // `digestOfUnknown` uses for the persisted digest of the same value, so the two never disagree
+  // about how large this content "is".
+  const previewSource = typeof value === 'string' ? value : text;
+  const preview = truncateToBytes(previewSource, maxPreviewBytes);
+  return {
+    bytes,
+    sha256: sha256OfText(text),
+    preview,
+    previewTruncated: utf8Bytes(preview) < utf8Bytes(previewSource),
+  };
+}

@@ -2,7 +2,13 @@
 // because they import `node:crypto`; see that package's `src/index.ts` for why the barrel has to
 // stay free of Node built-ins. This module is bundled into `main.ts` only -- never into the
 // sandboxed `preload.ts` -- so it is free to reach for them.
-import { digestOfText, digestOfUnknown, truncateToBytes, utf8Bytes } from '@agent-dock/shared/content-digest';
+import {
+  digestAndPreviewOfUnknown,
+  digestOfText,
+  digestOfUnknown,
+  truncateToBytes,
+  utf8Bytes,
+} from '@agent-dock/shared/content-digest';
 import type { AgentEventEnvelope, AgentEventType } from '@agent-dock/shared';
 import type { ActivityDigest, ActivityEntry, ActivityText, HistoryEntry } from './agent-workspace-types.js';
 
@@ -74,6 +80,13 @@ const MAX_PROVIDER_BYTES = 64;
  * clean identifier has no row to select and is better dropped than laundered into one.
  */
 const ERROR_CODE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** ADI-29's attachment ids are UUIDs the daemon minted; anything else has no row to select. */
+const ATTACHMENT_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function validAttachmentId(value: unknown): string | undefined {
+  return typeof value === 'string' && ATTACHMENT_ID_PATTERN.test(value) ? value : undefined;
+}
 
 /**
  * Mints a stable, per-session, local alias for a native tool-call id.
@@ -167,7 +180,11 @@ export function toActivityEntry(
     }
 
     case 'tool.completed': {
-      const result = envelope.result === undefined ? undefined : toDigest(digestOfUnknown(envelope.result));
+      // One serialization pass covers both the kept digest and the live preview -- see
+      // `digestAndPreviewOfUnknown`'s own doc comment on why this matters (the exact double-encode
+      // upstream `agentdock` found worth a same-day perf fix for once it built this same feature).
+      const described = envelope.result === undefined ? undefined : digestAndPreviewOfUnknown(envelope.result, MAX_TEXT_BYTES_PER_ENTRY);
+      const attachmentId = validAttachmentId(envelope.resultAttachmentId);
       return {
         ...base,
         kind: 'tool.completed',
@@ -178,7 +195,9 @@ export function toActivityEntry(
           ? {}
           : { toolAlias: aliasForToolCall(toolAliases, envelope.toolCallId) }),
         ...(envelope.isError === undefined ? {} : { isError: envelope.isError === true }),
-        ...(result === undefined ? {} : { result }),
+        ...(described === undefined ? {} : { result: toDigest(described), resultPreview: described.preview }),
+        ...(described?.previewTruncated ? { resultPreviewTruncated: true } : {}),
+        ...(attachmentId === undefined ? {} : { resultAttachmentId: attachmentId }),
       };
     }
 
@@ -417,6 +436,7 @@ export function toHistoryEntry(record: unknown, toolAliases: Map<string, string>
       const toolAlias = alias();
       const toolName = readString(source, 'toolName', MAX_TOOL_NAME_BYTES);
       const result = readDigest(source, 'result');
+      const attachmentId = validAttachmentId(source.resultAttachmentId);
       return {
         ...base,
         kind: 'tool.completed',
@@ -424,6 +444,10 @@ export function toHistoryEntry(record: unknown, toolAliases: Map<string, string>
         ...(toolAlias === undefined ? {} : { toolAlias }),
         ...(typeof source.isError === 'boolean' ? { isError: source.isError } : {}),
         ...(result === undefined ? {} : { result }),
+        // No `resultPreview` here, on purpose: the durable record never held the content to build
+        // one from (see the class doc comment's table). `resultAttachmentId` survives a reload
+        // because it names where to fetch the full content from, not the content itself.
+        ...(attachmentId === undefined ? {} : { resultAttachmentId: attachmentId }),
       };
     }
 
