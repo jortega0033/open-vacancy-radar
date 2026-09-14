@@ -139,7 +139,16 @@ function AttachmentAction({ sessionId, attachmentId }: { sessionId: string; atta
       return;
     }
     setState('loading');
-    const attachment = await window.agentWorkspace.getAttachment(sessionId, attachmentId);
+    // Every other caller of this bridge (useAgentWorkspace.ts) catches its own rejections; without
+    // this one, a thrown IPC error (a dead daemon, a non-404 failure) would leave this row's button
+    // stuck disabled on "Loading full output..." forever, recoverable only by switching sessions.
+    let attachment: Awaited<ReturnType<typeof window.agentWorkspace.getAttachment>>;
+    try {
+      attachment = await window.agentWorkspace.getAttachment(sessionId, attachmentId);
+    } catch {
+      setState('error');
+      return;
+    }
     if (attachment === null) {
       setState('error');
       return;

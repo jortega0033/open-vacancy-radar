@@ -475,6 +475,40 @@ describe('AgentWorkspacePage: attachment retrieval is scoped per session (ADI-29
     await waitFor(() => expect(screen.getByText('session B full output')).toBeInTheDocument());
     expect(getAttachment).toHaveBeenCalledWith(SESSION_B, '22222222-2222-4222-8222-222222222222');
   });
+
+  it('settles into an error state, rather than staying stuck loading forever, when getAttachment rejects', async () => {
+    // getAttachment throwing (a dead daemon, a non-404 IPC failure) is different from it resolving
+    // null (a genuine miss) -- both must be recoverable from the same row without switching sessions.
+    const { push } = installAgentWorkspaceBridge({
+      listSessions: vi.fn().mockResolvedValue({
+        sessions: [sessionSummary(SESSION_A)],
+        capacity: TEST_CAPACITY,
+      }),
+      getAttachment: vi.fn().mockRejectedValue(new Error('daemon unavailable')),
+    });
+    installWorkspaceGrantBridge();
+
+    render(<AgentWorkspacePage defaultProvider="claude" />);
+    await waitFor(() => expect(screen.getAllByRole('listitem').length).toBe(1));
+
+    push({
+      sessionId: SESSION_A,
+      entry: {
+        seq: 0,
+        at: 't',
+        origin: 'live',
+        kind: 'tool.completed',
+        resultAttachmentId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^Session claude/ })[0] as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: /view full output/i }));
+
+    await waitFor(() => expect(screen.getByText(/could not be retrieved/i)).toBeInTheDocument());
+    // Not stuck disabled on "Loading full output...": the button is clickable again.
+    expect(screen.getByRole('button', { name: /view full output/i })).not.toBeDisabled();
+  });
 });
 
 describe('AgentWorkspacePage: capacity', () => {

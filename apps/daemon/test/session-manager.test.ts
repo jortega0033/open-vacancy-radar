@@ -244,6 +244,29 @@ describe('SessionManager: tool result attachments (ADI-29)', () => {
     expect(fetched?.content).toBe(JSON.stringify({ output }));
   });
 
+  it('attaches a plain-string result as readable text/plain, not JSON-quoted-and-escaped application/json', async () => {
+    // Every other test in this block uses an object result, which is exactly the shape that hid
+    // the JSON-escaping bug this covers: a plain string (a Bash tool's typical stdout shape) has to
+    // be previewed and attached as itself, not as `"line1\nline2\n"` with literal escapes.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = `line1\n${'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500)}\nline3\n`;
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: output });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const fetched = attachments.get(session.id, completed.resultAttachmentId!);
+    expect(fetched?.metadata.mimeType).toBe('text/plain');
+    expect(fetched?.content).toBe(output);
+  });
+
   it('does not attach a result under the threshold, and the live event carries no attachment id', async () => {
     const stateRoot = makeStateRoot();
     const { provider, sessionManager } = setupWithAttachments(stateRoot);
