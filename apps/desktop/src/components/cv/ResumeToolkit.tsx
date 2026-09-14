@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { AiOutput } from './AiOutput.js';
@@ -75,7 +75,9 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
   const { reset } = run;
   const detail = MODE_DETAILS[mode];
   const cvKey = cv ? `${cv.fileName}:${cv.text.length}` : '';
-  const focusValidation = validateAuditFocus(targetRoleDraft);
+  // Memoized so a re-render unrelated to the draft (e.g. streaming output arriving) doesn't
+  // recompute this, or reidentify the object and cascade into the effect/callback that depend on it.
+  const focusValidation = useMemo(() => validateAuditFocus(targetRoleDraft), [targetRoleDraft]);
 
   useEffect(() => {
     reset();

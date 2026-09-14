@@ -178,7 +178,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
 
   const start = useCallback(
     async (prompt: string, options: AgentRunOptions = {}) => {
-      const generation = (generationRef.current += 1);
+      const generation = ++generationRef.current;
       clearWatchdog();
       sessionIdRef.current = undefined;
       textRef.current = '';
