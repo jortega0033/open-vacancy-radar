@@ -26,6 +26,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
       worldwideSponsorMatch: null,
     },
     official: null,
+    provisional: false,
     key: 'ww-1',
     title: 'Remote Frontend Engineer',
     company: 'Acme Corp',
@@ -112,5 +113,49 @@ describe('VacancyDetail', () => {
 
     expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
     expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
+  });
+
+  describe('profile-score breakdown (issue #367)', () => {
+    it('shows the honest unscored state, and no breakdown, when profileScore is null', () => {
+      renderDetail(worldwideResult({ profileScore: null }));
+
+      expect(screen.getByText(/has not been scored against your search profile/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Deterministic search-profile score/i)).not.toBeInTheDocument();
+    });
+
+    it("renders the scorer's preserved breakdown -- dimensions, role classification, matching signals, gaps, and reasons -- exactly as computed", () => {
+      renderDetail(
+        worldwideResult({
+          profileScore: 82,
+          profileMatch: {
+            technicalFit: 90,
+            roleFit: 85,
+            seniorityFit: 70,
+            primaryFit: 'Frontend Engineer',
+            matchingSkills: ['Angular', 'TypeScript'],
+            gaps: ['Advertised seniority is below the candidate’s experience'],
+            reasons: ['Technical fit (90): strong match on Angular and TypeScript.'],
+            unmetMandatoryLanguages: [],
+          },
+        }),
+      );
+
+      expect(screen.getByText(/Deterministic search-profile score: 82\./)).toBeInTheDocument();
+      expect(screen.getByText('90')).toBeInTheDocument();
+      expect(screen.getByText('85')).toBeInTheDocument();
+      expect(screen.getByText('70')).toBeInTheDocument();
+      expect(screen.getByText('Frontend Engineer')).toBeInTheDocument();
+      expect(screen.getByText('Angular')).toBeInTheDocument();
+      expect(screen.getByText('TypeScript')).toBeInTheDocument();
+      expect(screen.getByText('Advertised seniority is below the candidate’s experience')).toBeInTheDocument();
+      expect(screen.getByText('Technical fit (90): strong match on Angular and TypeScript.')).toBeInTheDocument();
+    });
+
+    it('shows the explicit older-report fallback, never fabricating a breakdown, when profileScore exists but profileMatch does not', () => {
+      renderDetail(worldwideResult({ profileScore: 82 }));
+
+      expect(screen.getByText(/breakdown unavailable for this older report/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Deterministic search-profile score/i)).not.toBeInTheDocument();
+    });
   });
 });

@@ -32,6 +32,9 @@ export const SearchResultRow = memo(function SearchResultRow({
   // already has an accurate home, unchanged, in the detail pane's Overview section ("Discovery
   // decision" -- see `VacancyDetail.tsx`).
   const badges = [
+    // Always first: a provisional row (issue #364's live view) must never read as an ordinary,
+    // fully-final result -- it has no score and no official-source cross-reference yet.
+    result.provisional ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,

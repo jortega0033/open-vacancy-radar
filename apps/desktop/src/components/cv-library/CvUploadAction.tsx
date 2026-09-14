@@ -9,9 +9,9 @@ export interface CvUploadActionProps {
 
 /**
  * "Upload CV" for the CV library. Picks a file through the same `window.cv` bridge the CV
- * assistant's `CvUpload` uses (PDF, plain text or Markdown; the design reference's prototype also
- * mentions DOCX, but the real `cv:select-and-read` bridge does not support it, so this action
- * doesn't claim it does), then hands the extracted text to the existing `SaveCvToLibrary`
+ * assistant's `CvUpload` uses (PDF, Word, plain text or Markdown -- issue #357 added DOCX support
+ * to the real `cv:select-and-read` bridge, matching what the design reference's prototype already
+ * showed), then hands the extracted text to the existing `SaveCvToLibrary`
  * component to persist unchanged rather than re-implementing `createCvDocument` persistence that
  * is already implemented and already tested.
  *

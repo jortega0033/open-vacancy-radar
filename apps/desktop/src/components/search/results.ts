@@ -2,6 +2,7 @@ import type {
   DiscoveryVacancyAudit,
   OfficialVacancyAudit,
   GlobalRemoteReport,
+  ProfileMatchBreakdown,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   assessSalary,
@@ -79,12 +80,28 @@ interface CommonResult {
    * strongest skills configured for this run.
    */
   profileScore: number | null;
+  /**
+   * The structured evidence behind `profileScore` (issue #367): technical/role/seniority fit, role
+   * classification, matching profile signals, and gaps/caps, exactly as the scorer computed them --
+   * never re-derived or re-scored in the renderer. `null` when `profileScore` is itself null.
+   * `undefined`, distinct from `null`, for a report persisted before this field existed even though
+   * it carries a real `profileScore`; `VacancyDetail` renders that case as an honest "breakdown
+   * unavailable" state rather than fabricating one from the number.
+   */
+  profileMatch?: ProfileMatchBreakdown | null;
   /** Deterministic engine findings, where the pipeline produces them. */
   strongPoints: string[];
   gaps: string[];
   reasons: string[];
   /** The subset of fields the CV assistant needs to write a prompt. */
   lead: VacancyLead;
+  /**
+   * True for a row from an in-progress scan's live/progressive feed (`toPartialResults`), not yet
+   * in a final `GlobalRemoteReport`: unscored, with no official-source cross-reference, and not
+   * safe to hand to application preparation (issue #363/#364). False for every row `toWorldwideResults`
+   * produces, whether or not this run's report is itself capped/incomplete.
+   */
+  provisional: boolean;
 }
 
 export interface SearchResult extends CommonResult {
@@ -220,10 +237,15 @@ export function isWebUrl(value: string): boolean {
  * `official` lookups) and `toPartialResults` (a still-running scan, `official` always null -- see
  * that function's own doc comment for why).
  */
-function toSearchResult(vacancy: DiscoveryVacancyAudit, official: OfficialVacancyAudit | null): SearchResult {
+function toSearchResult(
+  vacancy: DiscoveryVacancyAudit,
+  official: OfficialVacancyAudit | null,
+  provisional: boolean,
+): SearchResult {
   return {
     raw: vacancy,
     official,
+    provisional,
     key: vacancy.key,
     title: vacancy.title,
     company: vacancy.company,
@@ -237,6 +259,9 @@ function toSearchResult(vacancy: DiscoveryVacancyAudit, official: OfficialVacanc
     description: vacancy.description,
     verification: worldwideVerification(vacancy),
     profileScore: vacancy.profileScore,
+    // Passed through exactly as the raw row carries it -- undefined stays undefined (older report,
+    // no such field) rather than being collapsed into null (scored, no breakdown) or vice versa.
+    profileMatch: vacancy.profileMatch,
     strongPoints: [],
     gaps: [],
     reasons: vacancy.reasons,
@@ -257,7 +282,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
   const officialByUrl = new Map<string, OfficialVacancyAudit>();
   for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
 
-  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null));
+  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null, false));
 }
 
 /**
@@ -273,7 +298,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
  * score it was not actually given.
  */
 export function toPartialResults(vacancies: readonly DiscoveryVacancyAudit[]): SearchResult[] {
-  return vacancies.map((vacancy) => toSearchResult(vacancy, null));
+  return vacancies.map((vacancy) => toSearchResult(vacancy, null, true));
 }
 
 export type PostedWithin = 'any' | '1' | '7' | '30';

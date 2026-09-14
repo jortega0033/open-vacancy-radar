@@ -85,6 +85,7 @@ export type {
   DiscoveryProvider,
   DiscoveryVacancyAudit,
   OfficialVacancyAudit,
+  ProfileMatchBreakdown,
   ScanProgressEvent,
   ScanProgressCallback,
   GapTelemetryReport,

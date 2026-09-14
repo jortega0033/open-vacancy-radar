@@ -138,6 +138,11 @@ export function VacancyDetail({
               {result.company}
             </div>
             <div className="mt-1 text-xs text-base-content/60">{subtitle}</div>
+            {result.provisional && (
+              <span className="badge badge-warning badge-soft badge-sm mt-1.5" role="status">
+                Live result · not yet scored or verified
+              </span>
+            )}
           </div>
 
           <div className="flex max-w-full flex-none flex-wrap gap-2">
@@ -299,16 +304,91 @@ export function VacancyDetail({
         </section>
 
         <section className="mt-6">
-          <SectionHeading aside="No strong-match / gap breakdown in this pipeline">
+          <SectionHeading
+            aside={
+              result.profileScore !== null && result.profileMatch
+                ? 'Explains search-profile relevance, not a CV match'
+                : undefined
+            }
+          >
             Why this matches you
           </SectionHeading>
 
-          <p className="mt-3 text-sm text-base-content/70">
-            The worldwide pipeline scores a single overall match percentage against your search
-            profile (shown in the results list), but does not break it down into individual strong
-            matches or gaps. Use the AI gap analysis for a real, detailed comparison against your
-            CV.
-          </p>
+          {result.profileScore === null ? (
+            <p className="mt-3 text-sm text-base-content/70">
+              This vacancy has not been scored against your search profile. Use the AI gap analysis
+              for a real, detailed comparison against your CV.
+            </p>
+          ) : result.profileMatch ? (
+            <div className="mt-3 space-y-4">
+              <p className="text-sm text-base-content/70">
+                <span className="font-semibold text-base-content">
+                  Deterministic search-profile score: {result.profileScore}.
+                </span>{' '}
+                How closely this vacancy&rsquo;s own text matches your configured search profile.
+                Not a CV match, an ATS score, or a comparison against other candidates.
+              </p>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                <Card label="Technical fit">
+                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.technicalFit}</div>
+                </Card>
+                <Card label="Role fit">
+                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.roleFit}</div>
+                </Card>
+                <Card label="Seniority fit">
+                  <div className="mt-1.5 text-sm font-semibold">{result.profileMatch.seniorityFit}</div>
+                </Card>
+              </div>
+
+              <p className="text-sm text-base-content/70">
+                Role classification: <span className="font-medium">{result.profileMatch.primaryFit}</span>
+              </p>
+
+              {result.profileMatch.matchingSkills.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-xs font-semibold text-base-content/60">
+                    Matching profile signals
+                  </div>
+                  <ul className="list-disc pl-5 text-sm text-base-content/70">
+                    {result.profileMatch.matchingSkills.map((skill, index) => (
+                      <li key={`${index}-${skill}`}>{skill}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {result.profileMatch.gaps.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-xs font-semibold text-base-content/60">
+                    Score gaps and caps
+                  </div>
+                  <ul className="list-disc pl-5 text-sm text-base-content/70">
+                    {result.profileMatch.gaps.map((gap, index) => (
+                      <li key={`${index}-${gap}`}>{gap}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {result.profileMatch.reasons.length > 0 && (
+                <div>
+                  <div className="mb-1.5 text-xs font-semibold text-base-content/60">
+                    Scorer reasons
+                  </div>
+                  <ul className="list-disc pl-5 text-sm text-base-content/70">
+                    {result.profileMatch.reasons.map((reason, index) => (
+                      <li key={`${index}-${reason}`}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-base-content/70" role="status">
+              Breakdown unavailable for this older report. Rescan to generate it.
+            </p>
+          )}
 
           {result.reasons.length > 0 && (
             <div className="mt-4">

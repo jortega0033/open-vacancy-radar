@@ -49,7 +49,7 @@ export function CvUpload({ cv, onCvChange, providerLabel }: CvUploadProps) {
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Your CV</div>
         <p className="text-sm text-base-content/60">
-          PDF, plain text or Markdown. The file is read on this machine and its text is only sent to
+          PDF, Word, plain text or Markdown. The file is read on this machine and its text is only sent to
           your own {providerLabel} CLI.
         </p>
 

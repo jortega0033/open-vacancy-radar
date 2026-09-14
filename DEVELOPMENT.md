@@ -100,6 +100,42 @@ the session reaches `session.completed` with sensible normalized events. This is
 is not required for a PR that doesn't touch provider parsing. It's a manual check for exactly the
 class of drift fixtures can't catch (a real CLI changing its own output format).
 
+## Manual QA: vacancy scan notifications
+
+`vacancy-scan-notify.ts`'s content and `app-background-state.ts`'s background/foreground policy are
+unit-tested, but whether a real OS notification actually appears is a platform behavior tests can't
+cover. Before shipping a change that touches either file, or the notification calls in
+`runVacancyScan()` (`electron/main.ts`), check by hand:
+
+- **Windows, packaged build**: `Notification.isSupported()` and toast delivery both depend on the
+  app having a Start Menu shortcut with an AppUserModelID; an unpackaged `pnpm dev` run may show
+  nothing, or show it under a generic "Electron" identity. Verify against an installed build
+  (`pnpm dist` or equivalent), not the dev server. If toasts still don't appear, check whether
+  `app.setAppUserModelId()` needs to run explicitly for that build.
+- **macOS, signed build**: notification delivery (and `Notification.isSupported()` itself, on some
+  macOS versions) can require a signed, notarized app; an ad-hoc or unsigned local build may silently
+  no-op. Verify against a signed build, and confirm Notification Center permission has been granted to
+  the app (System Settings > Notifications).
+- **Both platforms**: start a scan, then background the app (minimize, switch to another app, or
+  close to tray if `minimizeToTrayOnClose` is on) before it finishes, and confirm exactly one
+  notification appears for completion, capped completion, and a forced failure -- and that no
+  notification appears for a scan that finishes while the window is focused and visible.
+
+## Manual QA: DOCX CV import (packaged build)
+
+`cv-text.ts`'s DOCX extraction (via `mammoth`, a pure-JS dependency) is covered by
+`cv-text-docx.test.ts` against real, in-memory-built `.docx` fixtures, but whether the dependency is
+actually present and working inside a *packaged* Electron build is not something those tests can
+prove -- `pnpm dev`/`vitest` both run against `node_modules` directly. Before shipping a change that
+touches `cv-text.ts`'s DOCX path or the `mammoth` dependency itself, verify against a packaged build
+(`pnpm dist` or equivalent), not the dev server:
+
+- Upload a real `.docx` CV through "Upload CV" (CV Library or the CV assistant) and confirm it
+  parses to readable text and saves, the same as a `.pdf`/`.txt`/`.md` CV already does.
+- Confirm the packaged app did not need a native rebuild step for this: `mammoth` and its own
+  dependencies (`jszip` et al.) are pure JS, so nothing here should trigger `electron-rebuild` or
+  require a Python toolchain the way a native module would.
+
 ## Common architectural rules
 
 These aren't style preferences. Breaking them tends to break the security model or the layering

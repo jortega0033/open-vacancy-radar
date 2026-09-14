@@ -63,4 +63,82 @@ describe('ResumeToolkit', () => {
     expect(screen.queryByText('Audit result.')).not.toBeInTheDocument();
     expect(screen.getByText('No best-fit roles yet.')).toBeInTheDocument();
   });
+
+  describe('target-role resume audit focus (issue #362)', () => {
+    it('runs the general audit when the target-role field is left blank', async () => {
+      const bridges = installBridges();
+      render(<ResumeToolkit cv={CV} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].prompt ?? '';
+      expect(prompt).toContain('general review');
+    });
+
+    it('sends only the audit builder the target-role focus; typing never starts a run', async () => {
+      const bridges = installBridges();
+      render(<ResumeToolkit cv={CV} />);
+
+      fireEvent.change(screen.getByLabelText('Target role (optional)'), {
+        target: { value: '  React   Frontend Engineer  ' },
+      });
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].prompt ?? '';
+      expect(prompt).toContain('"React Frontend Engineer"');
+
+      bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Focused audit result.' });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+      expect(await screen.findByText('Focused audit result.')).toBeInTheDocument();
+      expect(screen.getByText('Review focus: React Frontend Engineer')).toBeInTheDocument();
+
+      // Switching to a mode that never sees the role, then confirming it never reached that prompt.
+      fireEvent.click(screen.getByRole('tab', { name: 'Improve achievements' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Find achievement rewrites' }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(2));
+      const achievementsPrompt = vi.mocked(bridges.agentDock.createSession).mock.calls[1]?.[0].prompt ?? '';
+      expect(achievementsPrompt).not.toContain('React Frontend Engineer');
+    });
+
+    it('blocks Run and shows an inline error for an overlong target role, without starting a session', () => {
+      const bridges = installBridges();
+      render(<ResumeToolkit cv={CV} />);
+
+      fireEvent.change(screen.getByLabelText('Target role (optional)'), {
+        target: { value: 'x'.repeat(161) },
+      });
+
+      expect(screen.getByRole('alert')).toHaveTextContent(/160 characters or fewer/i);
+      expect(screen.getByRole('button', { name: 'Run resume audit' })).toBeDisabled();
+
+      // Even a direct click (bypassing the disabled attribute) must never start a session.
+      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+    });
+
+    it('clears a completed result and copy feedback immediately when the normalized focus changes, requiring a fresh Run', async () => {
+      const bridges = installBridges();
+      render(<ResumeToolkit cv={CV} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'General audit result.' });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+      expect(await screen.findByText('General audit result.')).toBeInTheDocument();
+
+      // A whitespace-only edit that normalizes to the same (still-blank) focus must NOT invalidate.
+      fireEvent.change(screen.getByLabelText('Target role (optional)'), { target: { value: '   ' } });
+      expect(screen.getByText('General audit result.')).toBeInTheDocument();
+
+      // A real change does invalidate immediately, before any new Run is clicked.
+      fireEvent.change(screen.getByLabelText('Target role (optional)'), {
+        target: { value: 'Backend Engineer' },
+      });
+      expect(screen.queryByText('General audit result.')).not.toBeInTheDocument();
+      expect(screen.getByText('No resume audit yet.')).toBeInTheDocument();
+    });
+  });
 });

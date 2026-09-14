@@ -929,7 +929,44 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getAllByText('Reattached Streamed Role').length).toBeGreaterThan(0));
     });
 
-    it('keeps the saved report visible during a rescan and reports incoming live progress separately', async () => {
+    it('shows the rescan\'s live rows even though an old report is already loaded, with an explicit way back to it (issue #364)', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
+      const { emit } = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
+        runScan: vi.fn().mockReturnValue(scanPromise),
+      });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      // Provably before `runScan`'s own promise resolves: nothing has resolved it yet.
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'mid-rescan-1', title: 'Mid Rescan Streamed Role' })],
+      });
+
+      // The rescan's own live row is what's visible, not the stale saved report -- silently sitting
+      // on old data while a scan the user asked for runs is exactly the bug #364 reported.
+      await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
+      expect(screen.queryByText('Existing Role')).not.toBeInTheDocument();
+      // Marked as not final, and never a real-looking score.
+      expect(screen.getByText(/live · not yet scored/i)).toBeInTheDocument();
+
+      // An explicit, discoverable way back to the saved report while the rescan keeps running.
+      fireEvent.click(screen.getByRole('button', { name: 'View saved report' }));
+      await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
+      expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
+
+      // And back to live from there.
+      fireEvent.click(screen.getByRole('button', { name: /view live results/i }));
+      await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
+    });
+
+    it('never lets a provisional live row (with an old report loaded) start application preparation (issue #363)', async () => {
       const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
       const { emit } = installProgressCapturingBridge({
         getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
@@ -945,14 +982,39 @@ describe('SearchPage', () => {
 
       emit({
         sourceId: 'himalayas',
-        vacancies: [makeWorldwideVacancy({ key: 'mid-rescan-1', title: 'Mid Rescan Streamed Role' })],
+        vacancies: [makeWorldwideVacancy({ key: 'mid-rescan-2', title: 'Mid Rescan Streamed Role' })],
+      });
+      await waitFor(() => expect(screen.getAllByText('Mid Rescan Streamed Role').length).toBeGreaterThan(0));
+
+      const prepareButton = screen.getByRole('button', { name: /prepare application|finishing scan/i });
+      expect(prepareButton).toBeDisabled();
+    });
+  });
+
+  describe('scan mode interaction state (issue #363)', () => {
+    it('never dims the results/detail pane while scanning, and keeps a saved-report row\'s safe actions active', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ title: 'Existing Role' })])),
+        runScan: vi.fn().mockReturnValue(scanPromise),
       });
 
-      // The existing (real, already-scored) report keeps showing rather than being pre-empted by an
-      // honest-but-unscored partial row -- streaming only fills the "nothing loaded at all yet" gap.
+      const { container } = render(<SearchPage />);
       await waitFor(() => expect(screen.getAllByText('Existing Role').length).toBeGreaterThan(0));
-      expect(screen.getByText(/1 live vacancy has arrived so far/i)).toBeInTheDocument();
-      expect(screen.queryByText('Mid Rescan Streamed Role')).not.toBeInTheDocument();
+
+      enterSearchQuery('Role');
+      fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      // No page-wide "looks disabled" opacity over the results/detail pane while a rescan is in
+      // flight -- the whole point of #363 is that this used to look locked while parts of it (the
+      // detail pane's actions) stayed fully clickable.
+      expect(container.querySelector('.opacity-60')).toBeNull();
+
+      // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
+      expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Prepare application' })).toBeEnabled();
     });
   });
 

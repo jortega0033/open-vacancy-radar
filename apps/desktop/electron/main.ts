@@ -78,6 +78,8 @@ import {
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { requestAutomationGrant } from './automatic-submission-grant.js';
 import { notifyApplicationPreparation } from './application-preparation-notify.js';
+import { notifyVacancyScanCompleted, notifyVacancyScanFailed } from './vacancy-scan-notify.js';
+import { isWindowInBackground } from './app-background-state.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
@@ -1868,6 +1870,22 @@ guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ sca
 const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
 const BROWSE_ALL_RESULT_CAP = 5_000;
 
+/** `isWindowInBackground` bound to this module's own `mainWindow`; see that function's own doc
+ * comment for the policy (issue #366). */
+function isAppInBackground(): boolean {
+  return isWindowInBackground(mainWindow);
+}
+
+/** A scan notification is a courtesy, never a requirement: nothing about deciding whether to show
+ * one, or showing it, may ever fail the scan whose completion/failure it is reporting (issue #366). */
+function notifyScanOutcome(show: () => void): void {
+  try {
+    if (isAppInBackground()) show();
+  } catch (error) {
+    console.error('[vacancy-scan] failed to show scan notification', error);
+  }
+}
+
 /**
  * Shared scan body for user-triggered vacancy discovery. A normal scan must supply a role or
  * keyword; browse-all must be explicit and gets capped below.
@@ -1877,23 +1895,47 @@ const BROWSE_ALL_RESULT_CAP = 5_000;
  * best-effort notification layered on top of the scan below. The renderer can be hidden or off the
  * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
  * unconditional rather than gated on "is anyone currently on the Search page".
+ *
+ * The single choke point both the manual `vacancy:run-scan` IPC handler and the unattended
+ * `scheduleBackgroundScanTick` timer call through, so it is also the one place scan-finished/
+ * scan-failed notifications (#366) need to live: whichever path started the scan, this is where it
+ * actually resolves or rejects. A losing race against another already-running scan
+ * (`isExpectedScanBusyError`) is not a real failure of *this* attempt -- the renderer already treats
+ * it as "reattach and wait", never as an error to report -- so it never produces a failure
+ * notification either.
  */
 async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
   const db = await ensureVacancyEngine();
-  return runExclusiveScan(
-    async () => {
-      const config = vacancyEngineConfig();
-      const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
-        ...(request.mode === 'query'
-          ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
-          : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
-        onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
-      });
-      latestVacancyReport = result.report;
-      return result.report;
-    },
-    { takeAdvisoryLock: true },
-  );
+  try {
+    const report = await runExclusiveScan(
+      async () => {
+        const config = vacancyEngineConfig();
+        const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
+          ...(request.mode === 'query'
+            ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
+            : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
+          onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+        });
+        latestVacancyReport = result.report;
+        return result.report;
+      },
+      { takeAdvisoryLock: true },
+    );
+    notifyScanOutcome(() =>
+      notifyVacancyScanCompleted({
+        kept: report.discoveryAudit.length,
+        complete: report.scanBounds?.complete ?? true,
+      }),
+    );
+    return report;
+  } catch (error) {
+    if (!isExpectedScanBusyError(error)) {
+      notifyScanOutcome(() =>
+        notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
+      );
+    }
+    throw error;
+  }
 }
 
 guardedIpc.handle('vacancy:run-scan', (_event, request: unknown): Promise<GlobalRemoteReport> =>

@@ -79,6 +79,12 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   const sessionIdRef = useRef<string>();
   const textRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  // Bumped by `start`, `cancel`, `reset`, and unmount (issue #362): the one thing that lets `start`
+  // notice, after its `await createSession`, that it has been superseded by a newer `start`, an
+  // explicit `cancel` (including one that landed before a session id even existed yet), a `reset`,
+  // or the component going away -- and so must best-effort cancel the session it just created and
+  // never install it into this run's state, rather than silently resurrecting stale output.
+  const generationRef = useRef(0);
   // Read from inside the mount-once effect below via ref, not a dependency: options is a fresh
   // object every render, and the effect must not resubscribe on every render because of it.
   const chunkSeparatorRef = useRef(options.chunkSeparator ?? '\n\n');
@@ -87,6 +93,14 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
   const clearWatchdog = useCallback(() => {
     if (timeoutRef.current !== undefined) clearTimeout(timeoutRef.current);
     timeoutRef.current = undefined;
+  }, []);
+
+  /** Fire-and-forget cancel for a session this run must never adopt. Swallows its own failure the
+   * same way `cancel` below already does: the session-event stream, if the daemon still has one to
+   * send, carries the true terminal state, and a cancel-request failure over an obsolete session id
+   * is not this run's problem to surface. */
+  const cancelSessionBestEffort = useCallback((sessionId: string) => {
+    void window.agentDock.cancelSession(sessionId).catch(() => {});
   }, []);
 
   // Subscribed once for the component's lifetime and filtered by ref, so a session started after
@@ -155,11 +169,16 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
     return () => {
       unsubscribe();
       clearWatchdog();
+      // Issue #362: a component that unmounts while `start`'s `createSession` is still in flight
+      // must not let that later resolution write into state nobody is reading anymore.
+      generationRef.current += 1;
+      if (sessionIdRef.current) cancelSessionBestEffort(sessionIdRef.current);
     };
-  }, [clearWatchdog]);
+  }, [cancelSessionBestEffort, clearWatchdog]);
 
   const start = useCallback(
     async (prompt: string, options: AgentRunOptions = {}) => {
+      const generation = ++generationRef.current;
       clearWatchdog();
       sessionIdRef.current = undefined;
       textRef.current = '';
@@ -176,6 +195,14 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           prompt,
           ...(options.model ? { model: options.model } : {}),
         });
+        if (generationRef.current !== generation) {
+          // Superseded while this request was in flight -- by a newer `start`, a `cancel` (even one
+          // that landed before any session id existed), a `reset`, or unmount (issue #362). Never
+          // adopt this session into shared state; best-effort cancel it instead of letting it run
+          // unattended to completion.
+          cancelSessionBestEffort(session.id);
+          return;
+        }
         sessionIdRef.current = session.id;
         setStatus((current) => (current === 'starting' ? 'streaming' : current));
 
@@ -189,32 +216,50 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           void window.agentDock.cancelSession(session.id).catch(() => {});
         }, RUN_TIMEOUT_MS);
       } catch (err) {
+        if (generationRef.current !== generation) return; // superseded; not this run's error to report
         sessionIdRef.current = undefined;
         setStatus('failed');
         setError(describeError(err, 'failed to start the agent session'));
       }
     },
-    [clearWatchdog],
+    [cancelSessionBestEffort, clearWatchdog],
   );
 
   const cancel = useCallback(async () => {
+    // Invalidates a `start` whose `createSession` hasn't resolved yet too (issue #362): without
+    // this, clicking Cancel while still "starting" (no session id assigned yet) did nothing, and
+    // the run proceeded exactly as if Cancel had never been clicked.
+    generationRef.current += 1;
     const sessionId = sessionIdRef.current;
-    if (!sessionId) return;
+    if (!sessionId) {
+      // No real session exists yet to send a cancel request for. Reflect the cancellation right
+      // away instead of leaving the UI showing "starting" until that request eventually resolves
+      // in the background and gets silently discarded by the generation check in `start`.
+      clearWatchdog();
+      setStatus('cancelled');
+      return;
+    }
     try {
       await window.agentDock.cancelSession(sessionId);
     } catch {
       // the session-event stream still carries the true terminal state; nothing to add here
     }
-  }, []);
+  }, [clearWatchdog]);
 
   const reset = useCallback(() => {
+    // Issue #362: a session already known to be running must actually be told to stop, not just
+    // forgotten locally -- and invalidating the generation here is what makes an in-flight `start`
+    // (one whose `createSession` hasn't resolved yet, so no session id exists to cancel above)
+    // discover on its own that it was superseded, rather than resurrecting stale output later.
+    generationRef.current += 1;
+    if (sessionIdRef.current) cancelSessionBestEffort(sessionIdRef.current);
     clearWatchdog();
     sessionIdRef.current = undefined;
     textRef.current = '';
     setText('');
     setError(undefined);
     setStatus('idle');
-  }, [clearWatchdog]);
+  }, [cancelSessionBestEffort, clearWatchdog]);
 
   return {
     status,
