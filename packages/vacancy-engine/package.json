@@ -6,6 +6,10 @@
   "description": "Deterministic vacancy-discovery engine for the worldwide job-board/official-source pipeline, with a best-effort Netherlands IND sponsor check, backed by an embedded SQLite store for standalone desktop distribution.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./salary": "./src/global-remote/salary.ts"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -20,6 +24,7 @@
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
+    "entities": "^7.0.1",
     "pino": "^10.3.1",
     "saxes": "^6.0.0",
     "zod": "^4.4.3"

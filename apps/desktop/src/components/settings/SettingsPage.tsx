@@ -6,8 +6,9 @@ import type {
 } from '../../window.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
-import { ConfirmDialog } from '../shell/index.js';
+import { ConfirmDialog, ErrorBanner, PageLoading } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
+import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
@@ -285,7 +286,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
     [settings, flash],
   );
 
-  /** Restore every preference to its schema default. Data (jobs, applications, CVs, letters) stays. */
+  /** Restore every preference to its schema default. Personal application data stays. */
   const resetSettings = useCallback(async (): Promise<AppSettingsRecord> => {
     const updated = await window.workspace.updateSettings(SETTINGS_DEFAULTS);
     saveSeq.current += 1; // invalidate any in-flight per-field save
@@ -300,11 +301,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
     return updated;
   }, []);
 
-  /**
-   * "Reset application data" runs entirely over the existing workspace IPC: list + delete each
-   * entity, then restore default settings. Applications go first because they reference saved
-   * jobs, CVs and letters. No bespoke "drop everything" channel exists, and none is needed.
-   */
+  /** Reset personal records and generated files through one main-process-owned operation. */
   const runReset = useCallback(
     (target: ResetTarget) => {
       setConfirmTarget(null);
@@ -312,25 +309,16 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
       void (async () => {
         try {
           if (target === 'data') {
-            const applications = await window.workspace.listApplications('all');
-            for (const application of applications) {
-              await window.workspace.deleteApplication(application.id);
-            }
-            const savedJobs = await window.workspace.listSavedJobs();
-            for (const job of savedJobs) {
-              await window.workspace.deleteSavedJob(job.id);
-            }
-            const letters = await window.workspace.listLetters();
-            for (const letter of letters) {
-              await window.workspace.deleteLetter(letter.id);
-            }
-            const cvs = await window.workspace.listCvDocuments();
-            for (const cv of cvs) {
-              await window.workspace.deleteCvDocument(cv.id);
-            }
+            const result = await window.workspace.resetApplicationData();
+            saveSeq.current += 1;
+            setSettings(result.settings);
+            applyTheme(result.settings.theme);
+            applyDensity(result.settings.density);
+            await window.system.setLaunchAtLogin(result.settings.launchAtLogin).catch(() => {});
             setCvDocuments([]);
+          } else {
+            await resetSettings();
           }
-          await resetSettings();
           flash({
             kind: 'saved',
             message: target === 'data' ? 'Application data reset' : 'Settings reset',
@@ -354,8 +342,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   if (loadError) {
     return (
       <div>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <div className="alert alert-error mt-4">{loadError}</div>
+        <ErrorBanner className="mt-4">{loadError}</ErrorBanner>
       </div>
     );
   }
@@ -363,8 +350,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
   if (!settings) {
     return (
       <div>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <div className="alert alert-info mt-4">Loading settings…</div>
+        <PageLoading label="Loading settings…" />
       </div>
     );
   }
@@ -373,8 +359,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-lg font-semibold">Settings</h2>
-      <p className="mt-1 text-sm text-base-content/60">
+      <p className="text-sm text-base-content/60">
         Changes are saved automatically as you make them.
       </p>
 
@@ -498,6 +483,14 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             disabled={disabled}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}
+          />
+
+          <AtsRosterSection
+            disabled={disabled}
+            onRefreshed={(result) =>
+              flash({ kind: 'saved', message: `Company roster refreshed: ${result.totalEntries.toLocaleString()} companies` })
+            }
+            onRefreshError={(message) => flash({ kind: 'error', message })}
           />
         </>
       )}
@@ -630,7 +623,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
       {confirmTarget === 'data' && (
         <ConfirmDialog
           title="Reset application data?"
-          message="This permanently deletes every saved job, application, CV and letter, and restores default settings. This cannot be undone."
+          message="This permanently deletes saved jobs, applications, attempts, CVs, letters, submission receipts, automation grants, generated application files and the search profile. It also restores default settings. The public vacancy cache stays available. This cannot be undone."
           confirmLabel="Delete everything"
           onConfirm={() => runReset('data')}
           onCancel={() => setConfirmTarget(null)}

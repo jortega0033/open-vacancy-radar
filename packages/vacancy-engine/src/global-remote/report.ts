@@ -53,27 +53,70 @@ function officialRows(vacancies: readonly OfficialVacancyAudit[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+/**
+ * The work-eligibility evidence for one row (issue #280), or an honest "not assessed" for a row
+ * from a report written before that record existed. Every answer is printed with its scope, so an
+ * employer-scope register hit can never be read off this table as a vacancy-scope promise, and the
+ * geographic salary caption is printed in full rather than folded into the salary column.
+ */
+function eligibilityCell(vacancy: DiscoveryVacancyAudit): string {
+  const eligibility = vacancy.eligibility;
+  if (eligibility === undefined || eligibility === null) {
+    return '<small>Not assessed in this report.</small>';
+  }
+  const rows: [string, { answer: string; scope: string; freshness: string }][] = [
+    ['Work country', eligibility.candidateWorkCountry],
+    ['Mandatory language', eligibility.mandatoryLanguage],
+    ['Visa sponsorship', eligibility.visaSponsorship],
+    ['Employer of Record', eligibility.employerOfRecord],
+    ['Candidate relocation willingness', eligibility.candidateRelocationWillingness],
+    ['Employer relocation support', eligibility.employerRelocationSupport],
+  ];
+  return `<ul>${rows
+    .map(
+      ([label, evidence]) =>
+        `<li>${escapeHtml(label)}: <code>${escapeHtml(evidence.answer)}</code> <small>(${escapeHtml(evidence.scope)}, ${escapeHtml(evidence.freshness)})</small></li>`,
+    )
+    .join('')}</ul><small>${escapeHtml(eligibility.salaryGeography.label)}</small>`;
+}
+
 function discoveryRows(vacancies: readonly DiscoveryVacancyAudit[]): string {
   const candidates = vacancies.filter((vacancy) =>
     !['role_mismatch', 'non_vacancy'].includes(vacancy.decision));
   if (candidates.length === 0) return '<p>No title-matched discovery listings.</p>';
-  return `<table><thead><tr><th>Discovery listing</th><th>Metadata</th><th>Preliminary decision</th></tr></thead><tbody>${candidates.map((vacancy) => `
+  return `<table><thead><tr><th>Discovery listing</th><th>Metadata</th><th>Preliminary decision</th><th>Eligibility evidence</th></tr></thead><tbody>${candidates.map((vacancy) => `
     <tr>
       <td>${link(vacancy.url, vacancy.company)}<br><strong>${escapeHtml(vacancy.title)}</strong><br><small>${escapeHtml(vacancy.provider)}</small></td>
       <td>${escapeHtml(vacancy.location)}<br>${money(vacancy.annualizedMinimumUsd)} USD annualized minimum</td>
       <td><code>${escapeHtml(vacancy.decision)}</code><br>${escapeHtml(vacancy.reasons.join(' '))}</td>
+      <td>${eligibilityCell(vacancy)}</td>
     </tr>`).join('')}</tbody></table>`;
+}
+
+/**
+ * Attempts/coverage cell for one source row (issue #279): distinguishes logical requests from the
+ * actual network attempts `SafeHttpClient` made underneath (including retries), and reports whether
+ * this source's own coverage is definitively complete for this run -- separately from `status`,
+ * which only ever describes whether the request(s) succeeded, not how much of the source was seen.
+ */
+function attemptsCell(source: DiscoverySourceAudit): string {
+  const retrySuffix = source.retries > 0 ? ` <small>(${source.retries} retried)</small>` : '';
+  const coverage = source.complete
+    ? 'complete'
+    : `incomplete${source.completenessReason === null ? '' : `: ${escapeHtml(source.completenessReason)}`}`;
+  return `${source.networkAttempts.toLocaleString('en-US')} attempt(s)${retrySuffix}<br><small>${coverage}</small>`;
 }
 
 function discoverySourceRows(sources: readonly DiscoverySourceAudit[]): string {
   if (sources.length === 0) return '<p>No discovery sources were recorded.</p>';
-  return `<table><thead><tr><th>Discovery source</th><th>Status</th><th>Requests / listings</th><th>Detail</th></tr></thead><tbody>${sources
+  return `<table><thead><tr><th>Discovery source</th><th>Status</th><th>Requests / listings</th><th>Network attempts / coverage</th><th>Detail</th></tr></thead><tbody>${sources
     .map(
       (source) => `
     <tr>
       <td>${link(source.url, source.provider)}<br><small>${escapeHtml(source.id)}</small></td>
       <td><code>${escapeHtml(source.status)}</code></td>
       <td>${source.requests.toLocaleString('en-US')} / ${source.listings.toLocaleString('en-US')}</td>
+      <td>${attemptsCell(source)}</td>
       <td>${source.error === null ? 'None.' : escapeHtml(source.error)}</td>
     </tr>`,
     )
@@ -90,6 +133,30 @@ function registryRows(sources: readonly SourceRegistryEntry[]): string {
     </tr>`).join('')}</tbody></table>`;
 }
 
+/**
+ * "Checked / eligible" for the bounded IND sponsor cross-check, or "Not reported" for a report
+ * written before that check carried coverage numbers. Never collapsed to a bare count of matches:
+ * how many employers went unchecked is the part a reader cannot otherwise infer, and reading an
+ * unchecked employer as an unmatched one is exactly the wrong conclusion (see
+ * `applyWorldwideSponsorMatches`).
+ */
+function sponsorMatchCoverage(stats: GlobalRemoteReport['statistics']): string {
+  const checked = stats.sponsorMatchResolvedCompanies;
+  const eligible = stats.sponsorMatchEligibleCompanies;
+  if (checked === undefined || eligible === undefined) return 'Not reported';
+  return `${checked.toLocaleString('en-US')}/${eligible.toLocaleString('en-US')}`;
+}
+
+function scanBoundsNotice(report: GlobalRemoteReport): string {
+  const bounds = report.scanBounds;
+  if (!bounds || bounds.mode !== 'browse_all') return '';
+  const cap = bounds.resultCap?.toLocaleString('en-US') ?? 'unbounded';
+  const count = bounds.resultCountBeforeCap.toLocaleString('en-US');
+  const state = bounds.complete ? 'Complete within cap' : 'Incomplete';
+  const reason = bounds.completenessReason ?? `Browse-all scan found ${count} vacancies with cap ${cap}.`;
+  return `<p class="warning"><strong>${escapeHtml(state)} browse-all report.</strong> ${escapeHtml(reason)}</p>`;
+}
+
 export function renderGlobalRemoteHtml(report: GlobalRemoteReport): string {
   const stats = report.statistics;
   return `<!doctype html>
@@ -100,6 +167,7 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
 </style></head><body>
 <h1>Global Remote Frontend Radar</h1>
 <p>Generated ${escapeHtml(report.generatedAt)} · Run ${escapeHtml(report.runId)}</p>
+${scanBoundsNotice(report)}
 <p class="warning">A discovery-board label is never treated as final proof. Strict matches require a current official employer/ATS source, fully remote work from the Netherlands, no US-only authorization gate, and a guaranteed USD annual base floor of ${money(report.criteria.minimumAnnualBaseUsd)}.</p>
 <div class="cards">
   <div class="card"><div class="number">${stats.strictMatches}</div>strict matches</div>
@@ -108,6 +176,7 @@ body{font:15px/1.5 system-ui,sans-serif;max-width:1500px;margin:0 auto;padding:2
   <div class="card"><div class="number">${stats.discoveryUniqueListings}</div>unique discovery listings</div>
   <div class="card"><div class="number">${stats.officialRequests}</div>official requests</div>
   <div class="card"><div class="number">${stats.activeRegistrySources}/${stats.registrySources}</div>active / registered sources</div>
+  <div class="card"><div class="number">${sponsorMatchCoverage(stats)}</div>Netherlands employers sponsor-checked</div>
 </div>
 <h2>Strict matches</h2>${officialRows(report.strictMatches)}
 <h2>Manual confirmation queue</h2>${officialRows(report.manualReview)}

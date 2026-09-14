@@ -1,0 +1,31 @@
+{
+  "uuid": "33333333-3333-4333-8333-333333333333",
+  "sistEndret": "2026-08-19T09:00:00Z",
+  "status": "ACTIVE",
+  "ad_content": {
+    "uuid": "33333333-3333-4333-8333-333333333333",
+    "published": "2026-08-10T08:00:00Z",
+    "expires": "2099-01-01T00:00:00Z",
+    "updated": "2026-08-19T09:00:00Z",
+    "workLocations": [
+      { "country": "Norway", "address": null, "city": null, "postalCode": null, "county": "Trøndelag", "municipal": "Trondheim" }
+    ],
+    "contactList": [],
+    "title": "Backend Developer",
+    "description": "Backend role building APIs in Trondheim.",
+    "sourceurl": null,
+    "source": null,
+    "applicationUrl": null,
+    "applicationDue": "2026-09-20",
+    "occupationCategories": [],
+    "categoryList": [],
+    "jobtitle": "Backend Developer",
+    "link": "https://arbeidsplassen.nav.no/stillinger/stilling/33333333-3333-4333-8333-333333333333",
+    "employer": { "name": "Trondheim Tech AS", "orgnr": "923456789", "description": null, "homepage": null },
+    "engagementtype": "Fast",
+    "extent": "Heltid",
+    "starttime": null,
+    "positioncount": "1",
+    "sector": "Privat"
+  }
+}

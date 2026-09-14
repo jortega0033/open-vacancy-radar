@@ -29,16 +29,27 @@ function fixtureUrl(fileName: string): string {
 }
 
 const FIXTURE_FORM_URL = fixtureUrl('ashby-application-form.html');
+/** The same fixture form without a document-upload control (#272). Also local-only and also not a
+ * real target: it exists so the review-mode preparation pipeline can be driven end to end while
+ * verified uploads (#273/R02b) are still in flight, without relaxing the rule that a *required*
+ * upload blocks an application from being reported ready. See the fixture file's own header. */
+const FIXTURE_FORM_NO_UPLOAD_URL = fixtureUrl('ashby-application-form-no-upload.html');
 /** Deliberately allowlisted despite immediately trying to redirect itself off-policy -- it exists
  * to prove the runtime navigation guard, not to be a real target. See its own file header comment
  * and `not-a-target.html`, its (deliberately unlisted) redirect destination. */
 const REDIRECT_ATTEMPT_URL = fixtureUrl('redirect-attempt.html');
 
+/** Exported so a test names the fixture it drives instead of indexing into `exactFileUrls`. */
+export const FIXTURE_FORM_URLS = Object.freeze({
+  withUpload: FIXTURE_FORM_URL,
+  withoutUpload: FIXTURE_FORM_NO_UPLOAD_URL,
+});
+
 export const FIXTURE_REVIEW_POLICY: ApplicationTargetPolicy = {
   id: 'ashby-fixture-test-only',
   displayName: 'Local fixture form (test-only, not a real target)',
   origins: [],
-  exactFileUrls: [FIXTURE_FORM_URL, REDIRECT_ATTEMPT_URL],
+  exactFileUrls: [FIXTURE_FORM_URL, FIXTURE_FORM_NO_UPLOAD_URL, REDIRECT_ATTEMPT_URL],
   adapter: 'generic-html-form',
   termsRegisterEntry: 'ashby',
   termsVersion: 'n/a (local fixture, not a live target)',

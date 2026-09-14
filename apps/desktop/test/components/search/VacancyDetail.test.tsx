@@ -26,6 +26,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
       worldwideSponsorMatch: null,
     },
     official: null,
+    provisional: false,
     key: 'ww-1',
     title: 'Remote Frontend Engineer',
     company: 'Acme Corp',
@@ -46,13 +47,20 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
   } as SearchResult;
 }
 
-function renderDetail(result: SearchResult, overrides: { onGenerateLetter?: () => void } = {}) {
+function renderDetail(
+  result: SearchResult,
+  overrides: { onGenerateLetter?: () => void; providerLabel?: string; prepareAvailable?: boolean } = {},
+) {
   render(
     <VacancyDetail
       result={result}
       defaultCvName={null}
+      providerLabel={overrides.providerLabel ?? 'Claude Code'}
       saveState="idle"
+      prepareState="idle"
+      prepareAvailable={overrides.prepareAvailable ?? true}
       onSave={vi.fn()}
+      onPrepare={vi.fn()}
       onGenerateLetter={overrides.onGenerateLetter ?? vi.fn()}
       assistantOpen={false}
       onToggleAssistant={vi.fn()}
@@ -74,13 +82,80 @@ describe('VacancyDetail', () => {
     expect(screen.getByText(/remotive did not include description text/i)).toBeInTheDocument();
   });
 
-  it('offers "Generate Letter" alongside "Save job", firing the handler on click', () => {
+  // UX audit finding: the "Vacancy source" card and the Overview "Source" field both rendered the
+  // raw snake_case `DiscoveryProvider` id (e.g. "devitjobs_uk") instead of a human label.
+  it('shows a human-readable provider label, not the raw snake_case id, in the source card and Overview', () => {
+    renderDetail(worldwideResult({ provider: 'devitjobs_uk', description: null }));
+
+    expect(screen.getAllByText('DevITjobs UK').length).toBeGreaterThan(0);
+    expect(screen.queryByText('devitjobs_uk')).not.toBeInTheDocument();
+    expect(screen.getByText(/DevITjobs UK did not include description text/i)).toBeInTheDocument();
+  });
+
+  it('offers application preparation, letter generation and saving from the vacancy', () => {
     const onGenerateLetter = vi.fn();
     renderDetail(worldwideResult(), { onGenerateLetter });
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
 
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds preparation until a streamed vacancy belongs to the final report', () => {
+    renderDetail(worldwideResult(), { prepareAvailable: false });
+    expect(screen.getByRole('button', { name: 'Finishing scan…' })).toBeDisabled();
+  });
+
+  it("names the actually-configured provider in the CV match card, not a hardcoded Claude Code", () => {
+    renderDetail(worldwideResult(), { providerLabel: 'Codex' });
+
+    expect(screen.getByText(/your own Codex CLI/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
+  });
+
+  describe('profile-score breakdown (issue #367)', () => {
+    it('shows the honest unscored state, and no breakdown, when profileScore is null', () => {
+      renderDetail(worldwideResult({ profileScore: null }));
+
+      expect(screen.getByText(/has not been scored against your search profile/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Deterministic search-profile score/i)).not.toBeInTheDocument();
+    });
+
+    it("renders the scorer's preserved breakdown -- dimensions, role classification, matching signals, gaps, and reasons -- exactly as computed", () => {
+      renderDetail(
+        worldwideResult({
+          profileScore: 82,
+          profileMatch: {
+            technicalFit: 90,
+            roleFit: 85,
+            seniorityFit: 70,
+            primaryFit: 'Frontend Engineer',
+            matchingSkills: ['Angular', 'TypeScript'],
+            gaps: ['Advertised seniority is below the candidate’s experience'],
+            reasons: ['Technical fit (90): strong match on Angular and TypeScript.'],
+            unmetMandatoryLanguages: [],
+          },
+        }),
+      );
+
+      expect(screen.getByText(/Deterministic search-profile score: 82\./)).toBeInTheDocument();
+      expect(screen.getByText('90')).toBeInTheDocument();
+      expect(screen.getByText('85')).toBeInTheDocument();
+      expect(screen.getByText('70')).toBeInTheDocument();
+      expect(screen.getByText('Frontend Engineer')).toBeInTheDocument();
+      expect(screen.getByText('Angular')).toBeInTheDocument();
+      expect(screen.getByText('TypeScript')).toBeInTheDocument();
+      expect(screen.getByText('Advertised seniority is below the candidate’s experience')).toBeInTheDocument();
+      expect(screen.getByText('Technical fit (90): strong match on Angular and TypeScript.')).toBeInTheDocument();
+    });
+
+    it('shows the explicit older-report fallback, never fabricating a breakdown, when profileScore exists but profileMatch does not', () => {
+      renderDetail(worldwideResult({ profileScore: 82 }));
+
+      expect(screen.getByText(/breakdown unavailable for this older report/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Deterministic search-profile score/i)).not.toBeInTheDocument();
+    });
   });
 });

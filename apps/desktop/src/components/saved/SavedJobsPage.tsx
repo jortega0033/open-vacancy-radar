@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
 import emptySavedJobsIllustration from '../../../assets/illustrations/empty-saved-jobs.svg?no-inline';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
-import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
 import { SavedJobDrawer } from './SavedJobDrawer.js';
 import { SavedJobFilterBox } from './SavedJobFilterBox.js';
 import { toSavedJobInput } from './saved-job-input.js';
@@ -15,8 +15,25 @@ interface PendingUndo {
   job: SavedJobRecord;
 }
 
+interface PrepareNotice {
+  message: string;
+  attemptId?: string;
+}
+
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+export interface SavedJobsPageProps {
+  /**
+   * Fired after any mutation that can change the saved jobs count (create, delete, or undoing a
+   * delete) so the caller (App.tsx) can refresh the sidebar badge and the header's saved jobs
+   * count without waiting for the user to navigate away and back.
+   *
+   * Status changes and edits are not wired to this: neither one changes the total count.
+   */
+  onSavedJobsChanged?: () => void;
+  onViewApplicationAttempt?: (attemptId: string) => void;
 }
 
 /**
@@ -28,7 +45,7 @@ function describeError(err: unknown, fallback: string): string {
  * here. This page is exported standalone (see `index.ts`) so the shell's router can pick it up
  * once every page agent's work has landed, without every agent racing to edit the same file.
  */
-export function SavedJobsPage() {
+export function SavedJobsPage({ onSavedJobsChanged, onViewApplicationAttempt }: SavedJobsPageProps = {}) {
   const [jobs, setJobs] = useState<SavedJobRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
@@ -42,6 +59,12 @@ export function SavedJobsPage() {
   const [actionError, setActionError] = useState<string>();
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
+
+  // #272: which job's preparation request is in flight, and what came back from the last one. One
+  // at a time by id rather than a single boolean, so a slow request never disables every other
+  // row's button.
+  const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
+  const [prepareNotice, setPrepareNotice] = useState<PrepareNotice>();
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +115,8 @@ export function SavedJobsPage() {
         if (drawerState.mode === 'add') {
           const created = await window.workspace.createSavedJob(input);
           setJobs((prev) => [created, ...(prev ?? [])]);
+          // A newly created job changes the total count.
+          onSavedJobsChanged?.();
         } else {
           const updated = await window.workspace.updateSavedJob(drawerState.job.id, input);
           setJobs((prev) => (prev ?? []).map((job) => (job.id === updated.id ? updated : job)));
@@ -103,7 +128,7 @@ export function SavedJobsPage() {
         setSavingDrawer(false);
       }
     },
-    [drawerState],
+    [drawerState, onSavedJobsChanged],
   );
 
   const handleStatusChange = useCallback(async (job: SavedJobRecord, status: SavedJobStatus) => {
@@ -115,6 +140,37 @@ export function SavedJobsPage() {
       setActionError(describeError(err, 'could not update status'));
     }
   }, []);
+
+  /**
+   * Hands one saved job to the preparation pipeline (#272). This records an attempt and queues it;
+   * it never submits anything, and it never reaches the daemon or a browser from here -- Electron
+   * main resolves the vacancy, the CV and the destination itself and does the work under a queue
+   * lease. Progress shows up on the Applications page's "In progress" tab.
+   *
+   * A refusal is reported as a plain notice rather than an error banner: "an application for this
+   * vacancy is already in progress" is the dedup rule working, not a failure.
+   */
+  const handlePrepare = useCallback(async (job: SavedJobRecord) => {
+    setActionError(undefined);
+    setPrepareNotice(undefined);
+    setPreparingJobId(job.id);
+    try {
+      const result = await window.applicationPipeline.start(job.id);
+      setPrepareNotice(
+        result.ok
+          ? {
+              message: `Preparing an application for "${job.role}" at ${job.company}.`,
+              attemptId: result.attemptId,
+            }
+          : { message: result.detail ?? 'this application could not be started', attemptId: result.attemptId },
+      );
+      if (result.ok) onSavedJobsChanged?.();
+    } catch (err) {
+      setActionError(describeError(err, 'could not start preparing this application'));
+    } finally {
+      setPreparingJobId(null);
+    }
+  }, [onSavedJobsChanged, onViewApplicationAttempt]);
 
   const requestDelete = useCallback((job: SavedJobRecord) => {
     setActionError(undefined);
@@ -134,11 +190,13 @@ export function SavedJobsPage() {
       setJobs((prev) => (prev ?? []).filter((row) => row.id !== job.id));
       if (result.deleted) {
         setPendingUndo({ message: `Deleted "${job.role}" at ${job.company}.`, job });
+        // A deleted job moves out of the total count.
+        onSavedJobsChanged?.();
       }
     } catch (err) {
       setActionError(describeError(err, 'could not delete this job'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, onSavedJobsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -148,10 +206,12 @@ export function SavedJobsPage() {
     try {
       const recreated = await window.workspace.createSavedJob(toSavedJobInput(undo.job));
       setJobs((prev) => [recreated, ...(prev ?? [])]);
+      // Undoing a delete moves a job back into the total count.
+      onSavedJobsChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not undo the delete'));
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, onSavedJobsChanged]);
 
   const isLoading = jobs === null;
   const hasAnyJobs = (jobs?.length ?? 0) > 0;
@@ -159,10 +219,7 @@ export function SavedJobsPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">Saved jobs</h2>
-          {hasAnyJobs && <p className="mt-1 text-sm text-base-content/60">{jobs?.length} saved</p>}
-        </div>
+        <div>{hasAnyJobs && <p className="text-sm text-base-content/60">{jobs?.length} saved</p>}</div>
         <div className="flex items-center gap-2">
           <SavedJobFilterBox value={query} onChange={setQuery} disabled={isLoading} />
           <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
@@ -171,10 +228,24 @@ export function SavedJobsPage() {
         </div>
       </div>
 
-      {loadError && <div className="alert alert-error mt-4">{loadError}</div>}
-      {actionError && <div className="alert alert-error mt-4">{actionError}</div>}
+      {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+      {prepareNotice && (
+        <div className="alert alert-info mt-4 flex items-center justify-between gap-3" role="status">
+          <span>{prepareNotice.message}</span>
+          {prepareNotice.attemptId && onViewApplicationAttempt && (
+            <button
+              type="button"
+              className="btn btn-info btn-sm"
+              onClick={() => onViewApplicationAttempt(prepareNotice.attemptId!)}
+            >
+              View application
+            </button>
+          )}
+        </div>
+      )}
 
-      {isLoading && !loadError && <div className="alert alert-info mt-4">Loading saved jobs…</div>}
+      {isLoading && !loadError && <PageLoading label="Loading saved jobs…" />}
 
       {!isLoading && !hasAnyJobs && (
         <EmptyState
@@ -204,6 +275,8 @@ export function SavedJobsPage() {
             onEdit={openEditDrawer}
             onDelete={requestDelete}
             onStatusChange={handleStatusChange}
+            onPrepareApplication={handlePrepare}
+            preparingJobId={preparingJobId}
           />
         </div>
       )}

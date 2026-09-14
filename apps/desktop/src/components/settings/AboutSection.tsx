@@ -2,8 +2,35 @@ import { useEffect, useState } from 'react';
 import { SettingsSection } from './controls.js';
 
 const REPOSITORY_URL = 'https://github.com/jortega0033/open-vacancy-radar';
+const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
+const DIAGNOSTIC_TEXT_LIMIT = 4000;
 
 type CopyState = 'idle' | 'copied' | 'failed';
+
+function redactDiagnosticsText(value: string): string {
+  const withoutEmails = value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, '[redacted-email]');
+  const withoutWindowsPaths = withoutEmails.replace(/[A-Z]:\\[^\s"'<>`]+/giu, '[redacted-path]');
+  const withoutHomePaths = withoutWindowsPaths.replace(/\/Users\/[^\s"'<>`]+/gu, '[redacted-path]');
+  const withoutBearer = withoutHomePaths.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, 'Bearer [redacted-token]');
+  const withoutKeyValues = withoutBearer.replace(
+    /\b(token|api[_-]?key|authorization|password|secret)=([^\s&]+)/giu,
+    '$1=[redacted-secret]',
+  );
+  return withoutKeyValues.length > DIAGNOSTIC_TEXT_LIMIT
+    ? `${withoutKeyValues.slice(0, DIAGNOSTIC_TEXT_LIMIT)}\n[truncated]`
+    : withoutKeyValues;
+}
+
+function sanitizeForDiagnostics<T>(value: T): T {
+  if (typeof value === 'string') return redactDiagnosticsText(value) as T;
+  if (Array.isArray(value)) return value.map((entry) => sanitizeForDiagnostics(entry)) as T;
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeForDiagnostics(entry)]),
+    ) as T;
+  }
+  return value;
+}
 
 /**
  * Static-but-real "About" information: version comes from `app.getVersion()` (never a
@@ -14,6 +41,7 @@ type CopyState = 'idle' | 'copied' | 'failed';
 export function AboutSection() {
   const [version, setVersion] = useState<string>();
   const [copyState, setCopyState] = useState<CopyState>('idle');
+  const [lastDiagnostics, setLastDiagnostics] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
@@ -43,20 +71,44 @@ export function AboutSection() {
       state: 'unavailable' as const,
       error: err instanceof Error ? err.message : 'could not read daemon status',
     }));
-    const diagnostics = {
+    const diagnostics = sanitizeForDiagnostics({
       application: 'Open Vacancy Radar',
       version: version ?? 'unknown',
+      generatedAt: new Date().toISOString(),
       platform: navigator.userAgent,
+      route: window.location.hash || window.location.pathname || 'unknown',
       daemonStatus,
-    };
+    });
+    const text = JSON.stringify(diagnostics, null, 2);
     try {
-      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      await navigator.clipboard.writeText(text);
+      setLastDiagnostics(text);
       setCopyState('copied');
     } catch {
       setCopyState('failed');
     }
     setTimeout(() => setCopyState('idle'), 2000);
   };
+
+  const diagnosticIssueUrl = `${ISSUE_URL}?${new URLSearchParams({
+    title: '[Bug]: Installed app diagnostic report',
+    body:
+      '## What happened?\n\n\n## Diagnostic report\n\n```json\n' +
+      (lastDiagnostics ??
+        JSON.stringify(
+          {
+            application: 'Open Vacancy Radar',
+            version: version ?? 'unknown',
+            generatedAt: new Date().toISOString(),
+            platform: navigator.userAgent,
+            route: window.location.hash || window.location.pathname || 'unknown',
+            daemonStatus: 'Click Copy diagnostics first for live daemon status.',
+          },
+          null,
+          2,
+        )) +
+      '\n```\n',
+  }).toString()}`;
 
   return (
     <SettingsSection title="About">
@@ -80,6 +132,9 @@ export function AboutSection() {
         <button type="button" className="btn btn-sm btn-outline" onClick={() => void copyDiagnostics()}>
           Copy diagnostics
         </button>
+        <a className="btn btn-sm btn-outline" href={diagnosticIssueUrl} target="_blank" rel="noopener noreferrer">
+          Open GitHub issue
+        </a>
         {copyState === 'copied' && (
           <span className="text-sm" role="status">
             Copied

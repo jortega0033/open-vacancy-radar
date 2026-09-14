@@ -4,7 +4,7 @@ import type { AgentEvent } from '@agent-dock/shared';
 import type { AgentDockBridge } from '../../../src/window.js';
 import { CvLibraryPage } from '../../../src/components/cv-library/index.js';
 import type { CvBridge, CvDocumentRecord } from '../../../src/window.js';
-import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 
 type EmitEvent = (sessionId: string, event: AgentEvent) => void;
 
@@ -16,6 +16,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
     targetRole: 'Senior Frontend Engineer',
     text: 'Angular. TypeScript. 8 years.',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    source: null,
     isDefault: false,
     uploadedAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
@@ -234,6 +235,37 @@ describe('CvLibraryPage', () => {
     expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript');
   });
 
+  it("runs 'Parse with AI' through the user's configured default provider, not a hardcoded Claude Code fallback", async () => {
+    // Real regression: CvDrawer used to call `parseRun.start()` with no provider option at all,
+    // which silently falls back to `useAgentRun`'s own hardcoded 'claude' default regardless of
+    // what the user set as their default runtime -- failing outright for anyone who configured
+    // Codex, since Claude Code isn't authenticated on their machine.
+    const record = makeCv({
+      id: 'parse-provider-1',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Five years. Amsterdam.',
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([record]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'codex' }),
+    });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() =>
+      expect(bridge.createSession).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codex' })),
+    );
+  });
+
   it('surfaces a malformed AI CV-parse response as an error, leaving the form untouched', async () => {
     const record = makeCv({ id: 'parse-2', name: 'Uploaded CV', kind: 'uploaded', text: 'Some CV text.' });
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
@@ -285,12 +317,67 @@ describe('CvLibraryPage', () => {
 
   it('sets a CV as default and updates the list from the returned array', async () => {
     const a = makeCv({ id: 'a', name: 'CV A', isDefault: true });
-    const b = makeCv({ id: 'b', name: 'CV B', isDefault: false });
+    const b = makeCv({
+      id: 'b',
+      name: 'CV B',
+      isDefault: false,
+      targetRole: 'Product Engineer',
+      profile: {
+        title: 'Frontend Engineer',
+        years: '8 years',
+        location: 'Amsterdam',
+        languages: 'English, Dutch',
+        skills: ['React', 'TypeScript'],
+        summary: '',
+        auth: '',
+      },
+    });
     const setDefaultCvDocument = vi.fn().mockResolvedValue([
       { ...a, isDefault: false },
       { ...b, isDefault: true },
     ]);
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([a, b]), setDefaultCvDocument });
+    const saveSearchProfile = vi.fn().mockResolvedValue({
+      candidateName: '',
+      currentRole: 'Frontend Engineer',
+      location: 'Amsterdam',
+      experienceYears: 8,
+      strongestSkills: ['React', 'TypeScript'],
+      additionalSkills: [],
+      targetRoles: ['Product Engineer'],
+      consideredRoles: [],
+      excludedRoleFamilies: [],
+      constraints: {
+        professionalLanguage: 'English',
+        dutchRequired: false,
+        primaryCountry: '',
+        allowRemoteEuSupportingNetherlands: false,
+        minimumMonthlyBaseEur: 0,
+      },
+      profileVersion: 'test',
+    });
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue({
+        candidateName: '',
+        currentRole: '',
+        location: '',
+        experienceYears: 0,
+        strongestSkills: [],
+        additionalSkills: [],
+        targetRoles: [],
+        consideredRoles: [],
+        excludedRoleFamilies: [],
+        constraints: {
+          professionalLanguage: '',
+          dutchRequired: false,
+          primaryCountry: '',
+          allowRemoteEuSupportingNetherlands: false,
+          minimumMonthlyBaseEur: 0,
+        },
+        profileVersion: 'empty',
+      }),
+      saveSearchProfile,
+    });
     installCvBridge();
 
     render(<CvLibraryPage />);
@@ -299,6 +386,17 @@ describe('CvLibraryPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /set as default/i }));
 
     await waitFor(() => expect(setDefaultCvDocument).toHaveBeenCalledWith('b'));
+    await waitFor(() =>
+      expect(saveSearchProfile).toHaveBeenCalledWith({
+        currentRole: 'Frontend Engineer',
+        location: 'Amsterdam',
+        experienceYears: 8,
+        constraints: { professionalLanguage: 'English' },
+        strongestSkills: ['React', 'TypeScript'],
+        targetRoles: ['Product Engineer'],
+      }),
+    );
+    expect(screen.getByText(/search profile filled from the default cv/i)).toBeInTheDocument();
     // Exactly one badge (excluding the "Default" column header): proves the demotion round-tripped.
     await waitFor(() => expect(screen.getAllByText('Default', { selector: '.badge' })).toHaveLength(1));
 
@@ -308,10 +406,69 @@ describe('CvLibraryPage', () => {
     expect(within(rowB!).getByText('Default', { selector: '.badge' })).toBeInTheDocument();
   });
 
+  it('does not overwrite existing search-profile values when setting a default CV', async () => {
+    const a = makeCv({ id: 'a', name: 'CV A', isDefault: true });
+    const b = makeCv({
+      id: 'b',
+      name: 'CV B',
+      isDefault: false,
+      targetRole: 'Frontend Engineer',
+      profile: {
+        title: 'Frontend Engineer',
+        years: '8',
+        location: 'Amsterdam',
+        languages: 'English',
+        skills: ['React'],
+        summary: '',
+        auth: '',
+      },
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([a, b]),
+      setDefaultCvDocument: vi.fn().mockResolvedValue([{ ...b, isDefault: true }]),
+    });
+    const saveSearchProfile = vi.fn().mockResolvedValue({});
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue({
+        candidateName: '',
+        currentRole: 'Backend Engineer',
+        location: 'Berlin',
+        experienceYears: 5,
+        strongestSkills: ['Go'],
+        additionalSkills: [],
+        targetRoles: ['Platform Engineer'],
+        consideredRoles: [],
+        excludedRoleFamilies: [],
+        constraints: {
+          professionalLanguage: 'German',
+          dutchRequired: false,
+          primaryCountry: '',
+          allowRemoteEuSupportingNetherlands: false,
+          minimumMonthlyBaseEur: 0,
+        },
+        profileVersion: 'manual',
+      }),
+      saveSearchProfile,
+    });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('CV A')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /set as default/i }));
+
+    await waitFor(() => expect(screen.getByText('CV B')).toBeInTheDocument());
+    expect(saveSearchProfile).not.toHaveBeenCalled();
+  });
+
   it('deletes a CV through the confirm dialog', async () => {
     const record = makeCv({ id: 'del-1', name: 'To Delete' });
     const deleteCvDocument = vi.fn().mockResolvedValue({ deleted: true });
-    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]), deleteCvDocument });
+    // Delete refetches the library afterward (see the next test for why: the backend can promote
+    // a new default on delete, which a plain local-filter update would never pick up), so the
+    // second call must reflect the post-delete state, not repeat the first.
+    const listCvDocuments = vi.fn().mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    installWorkspaceBridge({ listCvDocuments, deleteCvDocument });
     installCvBridge();
 
     render(<CvLibraryPage />);
@@ -323,7 +480,41 @@ describe('CvLibraryPage', () => {
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(deleteCvDocument).toHaveBeenCalledWith('del-1'));
+    await waitFor(() => expect(listCvDocuments).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText(/no cv on file/i)).toBeInTheDocument());
+  });
+
+  it('promotes another CV to default after deleting the current default, reflecting the backend promotion', async () => {
+    // Real regression: the backend already promotes another remaining CV to default when the
+    // default one is deleted (see `deleteCvDocument` in electron/workspace/repository.ts), but the
+    // page used to just filter the deleted row out of its already-loaded list instead of
+    // refetching, so that promotion never showed up here -- the library looked like it had no
+    // default at all until the next reload.
+    const a = makeCv({ id: 'a', name: 'CV A', isDefault: true, uploadedAt: '2026-01-01T00:00:00.000Z' });
+    const b = makeCv({ id: 'b', name: 'CV B', isDefault: false, uploadedAt: '2026-02-01T00:00:00.000Z' });
+    const deleteCvDocument = vi.fn().mockResolvedValue({ deleted: true });
+    const listCvDocuments = vi
+      .fn()
+      .mockResolvedValueOnce([a, b])
+      .mockResolvedValueOnce([{ ...b, isDefault: true }]);
+    installWorkspaceBridge({ listCvDocuments, deleteCvDocument });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('CV A')).toBeInTheDocument());
+
+    const rows = screen.getAllByRole('row');
+    const rowA = rows.find((row) => within(row).queryByText('CV A'));
+    if (!rowA) throw new Error('expected a row for CV A');
+    fireEvent.click(within(rowA).getByRole('button', { name: /^delete$/i }));
+
+    const confirmDialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(deleteCvDocument).toHaveBeenCalledWith('a'));
+    await waitFor(() => expect(screen.queryByText('CV A')).not.toBeInTheDocument());
+    expect(screen.getByText('CV B')).toBeInTheDocument();
+    expect(screen.getByText('Default', { selector: '.badge' })).toBeInTheDocument();
   });
 
   it('cancels a delete without calling deleteCvDocument', async () => {

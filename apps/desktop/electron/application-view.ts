@@ -22,14 +22,46 @@ import type { CdpTransport } from '@agent-dock/application-executor';
  * has re-parented it onto the app's own visible main window.
  */
 
+/**
+ * How much of the host window's height a shown handoff leaves to the app itself (#277).
+ *
+ * The live view is a chrome-less surface showing a third-party page, and it renders *above* the
+ * app's own web contents. If it covered the whole content area, two things would follow, both bad:
+ * the app's own "you are on the live application page for X at Y" banner and its exit control would
+ * be painted over, and a page that drew a convincing imitation of this app's UI (a credential
+ * prompt, say) would be indistinguishable from the real thing, with no app-owned pixel left on
+ * screen to contradict it. Reserving this strip means there is always a region the target page
+ * cannot draw in, carrying an answer to "what am I looking at?" that comes from this app's own
+ * workspace record, plus a way out that does not depend on the page cooperating.
+ */
+export const HANDOFF_BANNER_HEIGHT_PX = 56;
+
 export interface ApplicationView {
   view: WebContentsView;
   transport: CdpTransport;
-  /** Attaches the isolated view to `window`'s content view, covering it, so the user can see and
-   * interact with the real page during a handoff. */
-  show(window: BrowserWindow): void;
+  /**
+   * Attaches the isolated view to `window`'s content view, below a reserved app-owned banner strip
+   * (`HANDOFF_BANNER_HEIGHT_PX`), and moves keyboard focus into it, so the person can actually see
+   * and *type into* the real page during a handoff.
+   *
+   * Focus is the part that makes this a handoff rather than a picture (#277): a re-parented
+   * `WebContentsView` renders immediately but does not take keyboard focus on its own, so a person
+   * asked to solve a CAPTCHA or sign in would have found a page that draws but does not accept
+   * typing. `hide()` gives focus back to the host window.
+   *
+   * `onEscape`, if given, is called when the person presses Escape inside the live page. It is the
+   * one way out of the handoff that does not depend on the page: the reserved strip carries a real
+   * button too, but a keyboard user whose focus is inside the page cannot Tab out of it, and a page
+   * is perfectly capable of swallowing every other key. Escape is observed at the Electron layer
+   * (`before-input-event`), before the page sees it.
+   */
+  show(window: BrowserWindow, onEscape?: () => void): void;
   /** Detaches the view from whatever window it was shown in, if any. Safe to call when not shown. */
   hide(window: BrowserWindow): void;
+  /** Which window this view is currently shown in, or `undefined` when it is parked on its own
+   * hidden host. Lets the caller tell "this attempt has the handoff" from "some other attempt does"
+   * without keeping a second copy of that fact that could drift from this one. */
+  shownIn(): BrowserWindow | undefined;
   /** Detaches the CDP debugger and destroys the underlying `WebContents`. Idempotent. */
   destroy(): void;
 }
@@ -91,6 +123,41 @@ export function createApplicationView(
 
   let attachedTo: BrowserWindow | undefined;
   let debuggerAttached = false;
+  /** Set while shown, so the window's own `resize`/`closed` events can act on the live handoff
+   * without either of them needing to know how it was started. */
+  let onEscapeWhileShown: (() => void) | undefined;
+
+  /** Sizes the view to fill `window`'s content area below the reserved banner strip. Recomputed on
+   * every resize: a view left at stale bounds either clips the page or, worse, leaves app UI
+   * exposed underneath an untrusted page's own rendering. */
+  function fitToWindow(window: BrowserWindow): void {
+    const bounds = window.getContentBounds();
+    view.setBounds({
+      x: 0,
+      y: HANDOFF_BANNER_HEIGHT_PX,
+      width: bounds.width,
+      height: Math.max(0, bounds.height - HANDOFF_BANNER_HEIGHT_PX),
+    });
+  }
+
+  // Registered once for the view's whole lifetime, for the same reason the debugger's `detach`
+  // listener is: a listener added per `show()` would accumulate one closure per handoff with
+  // nothing ever removing it. It does nothing unless a handoff is actually on screen.
+  view.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') onEscapeWhileShown?.();
+  });
+
+  function handleHostResize(): void {
+    if (attachedTo) fitToWindow(attachedTo);
+  }
+
+  /** The host window went away while the handoff was on screen (macOS "close all windows", then
+   * `activate` builds a *new* window). Forgetting it here is what stops `hide()`/`destroy()` from
+   * later calling `removeChildView` on a destroyed `BrowserWindow`. */
+  function handleHostClosed(): void {
+    attachedTo = undefined;
+    onEscapeWhileShown = undefined;
+  }
 
   // Registered once, unconditionally -- not inside `ensureDebuggerAttached` below, which runs on
   // every reattach after an external detach (DevTools opened, renderer crash). A `.on('detach', ...)`
@@ -122,25 +189,54 @@ export function createApplicationView(
   return {
     view,
     transport,
-    show(window) {
+    show(window, onEscape) {
       hostWindow.contentView.removeChildView(view);
       window.contentView.addChildView(view);
-      const bounds = window.getContentBounds();
-      view.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
       attachedTo = window;
+      onEscapeWhileShown = onEscape;
+      fitToWindow(window);
+      // A window that is resized (or closed) while a handoff is on screen. `once` for `closed`,
+      // because that window is gone for good; `on` for `resize`, removed again in `hide()`.
+      window.on('resize', handleHostResize);
+      window.once('closed', handleHostClosed);
+      // Without this the page renders but never receives a keystroke, which is useless for the two
+      // things a handoff exists for (a CAPTCHA, a login). Guarded because a destroyed or
+      // already-closing `webContents` throws on `focus()`, and a handoff failing to focus must
+      // never take the whole review down with it.
+      try {
+        view.webContents.focus();
+      } catch {
+        // The view is going away; there is nothing to focus and nothing to clean up.
+      }
     },
     hide(window) {
       if (attachedTo === window) {
+        window.removeListener('resize', handleHostResize);
+        window.removeListener('closed', handleHostClosed);
         window.contentView.removeChildView(view);
         hostWindow.contentView.addChildView(view);
         view.setBounds({ x: 0, y: 0, width: 1024, height: 768 });
         attachedTo = undefined;
+        onEscapeWhileShown = undefined;
+        // Focus followed the view in `show()`; hand it back rather than leaving the app with no
+        // focused surface at all.
+        try {
+          window.webContents.focus();
+        } catch {
+          // The window is closing -- nothing to return focus to.
+        }
       }
+    },
+    shownIn() {
+      return attachedTo;
     },
     destroy() {
       if (attachedTo) {
+        attachedTo.removeListener('resize', handleHostResize);
+        attachedTo.removeListener('closed', handleHostClosed);
         attachedTo.contentView.removeChildView(view);
         attachedTo = undefined;
+        onEscapeWhileShown = undefined;
       }
       if (debuggerAttached) {
         try {

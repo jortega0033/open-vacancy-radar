@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { providerIdSchema } from './schemas.js';
 
 /**
  * The bounded-JSON and capability-id primitives from AgentDock v2's much larger capability
@@ -233,3 +234,58 @@ export const ACTIVE_CAPABILITY_EXTENSION_IDS: readonly string[] = Object.freeze(
 export function isCapabilityExtensionActive(id: string): boolean {
   return ACTIVE_CAPABILITY_EXTENSION_IDS.includes(id);
 }
+
+/**
+ * One entry in a provider's live, reviewed model catalog (ADI-22a: `GET
+ * /v2/providers/:providerId/models`, `AgentProvider.fetchModelCatalog()` in
+ * `packages/agent-runtime/src/types.ts`).
+ *
+ * A wire-shape mirror of `CodexAppServerModel`
+ * (`packages/agent-runtime/src/providers/codex/app-server/scope-evidence.ts`), not an import of
+ * it: `packages/shared` has no dependency on `packages/agent-runtime` (dependencies only flow the
+ * other way, per CONTRIBUTING.md), so the two shapes are kept in sync by a mapping at the one call
+ * site that produces this from that (`CodexProvider.fetchModelCatalog`), not by a shared type.
+ *
+ * `id` is the provider-native model id/alias this repo passes straight through to a provider's own
+ * CLI/RPC call, matching `ProviderStatus.availableModels`'s existing "pass through as-is" contract
+ * (`provider.ts`) -- and exactly what `resolveModelSelection`
+ * (`packages/vacancy-agent-adapter/src/model-select.ts`) resolves a model-select request against
+ * once a caller maps a catalog down to `entry.id[]`. `displayName` is a human-readable label,
+ * never itself passed to a provider. `isDefault` marks the model a provider would pick with no
+ * explicit selection; a caller with a genuine need to know that is expected to have exactly one
+ * such entry, but this schema does not itself enforce that (see `resolveCodexSelectedModel` in
+ * `scope-evidence.ts` for where an ambiguous or absent default actually fails startup).
+ *
+ * `.strict()`, matching every other v2 read-view shape in this repo (see session-v2.ts's own
+ * header comment): both producer and consumer of this shape ship from this same repo.
+ */
+export const providerModelV2Schema = z
+  .object({
+    id: z.string().min(1).max(256),
+    displayName: z.string().min(1).max(256),
+    isDefault: z.boolean(),
+  })
+  .strict();
+
+export type ProviderModelV2 = z.infer<typeof providerModelV2Schema>;
+
+/**
+ * `GET /v2/providers/:providerId/models`'s response body (ADI-22a).
+ *
+ * `models` is empty, never an error response, for a provider this build has no live catalog for --
+ * whether because the provider implements no `fetchModelCatalog` at all (Claude today, blocked on
+ * #144) or because a live probe that does exist failed or timed out. An empty array is not itself a
+ * signal a caller needs to branch on differently from a real-but-short catalog; see
+ * `resolveModelSelection`'s own `no_catalog` outcome (`model-select.ts`) for the one place that
+ * distinction actually matters, and note that outcome is driven by the *session-creation* catalog
+ * argument, not by this route's response.
+ */
+export const providerModelCatalogV2ResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    providerId: providerIdSchema,
+    models: z.array(providerModelV2Schema).max(1_024),
+  })
+  .strict();
+
+export type ProviderModelCatalogV2Response = z.infer<typeof providerModelCatalogV2ResponseSchema>;

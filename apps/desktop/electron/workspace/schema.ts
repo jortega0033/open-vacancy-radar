@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import type { CvSourceDocument } from './cv-source-schema.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -50,7 +51,7 @@ export const cvDocuments = sqliteTable('cv_documents', {
   name: text('name').notNull(),
   kind: text('kind', { enum: ['uploaded', 'manual'] }).notNull(),
   targetRole: text('target_role').notNull().default(''),
-  /** Full extracted text for an uploaded CV (PDF/txt/md): what the AI features actually read.
+  /** Full extracted text for an uploaded CV (PDF/txt/md/docx): what the AI features actually read.
    * Empty for a manual profile, which instead relies entirely on `profile`. */
   text: text('text').notNull().default(''),
   /** Structured profile fields, editable regardless of kind: { title, years, location,
@@ -64,6 +65,22 @@ export const cvDocuments = sqliteTable('cv_documents', {
     summary: string;
     auth: string;
   }>(),
+  /**
+   * #274: the reviewed full structured source CV -- real employers with their own dates and
+   * engagement type, education, the candidate's corrected contact details and links, and project
+   * records with the candidate's pins and configured count limit. See `cv-source-schema.ts` for
+   * the shape and for why each of those is a separate field rather than prose.
+   *
+   * Nullable, and null is the normal state for every row that predates this column: a CV whose
+   * source has never been extracted and reviewed has no structured source, and saying so is the
+   * point. Export falls back to the flat `profile` mapping for those rather than inventing the
+   * sections they do not have.
+   *
+   * A JSON column rather than four join tables (experience/education/projects/links), following
+   * `profile`'s existing precedent: this value is only ever read and written whole, for one CV at a
+   * time, and nothing queries, orders or joins across it in SQL.
+   */
+  sourceCv: text('source_cv', { mode: 'json' }).$type<CvSourceDocument>(),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
@@ -127,6 +144,24 @@ export const applicationAttempts = sqliteTable('application_attempts', {
   /** The actual URL this attempt applies through -- the "canonical job URL" #193 specified,
    * kept separate from `vacancyKey` because a posting can be re-listed at a new URL. */
   canonicalUrl: text('canonical_url').notNull().default(''),
+  /**
+   * #275's requisition identity, derived once at creation by `application-identity.ts` and stored
+   * rather than recomputed, so the completed-application lookup is a plain column comparison.
+   *
+   * `employerKey` is `<ats-provider>:<board>` when the apply URL is a recognised ATS job URL, and
+   * a normalized company name otherwise. It is never matched on alone: two different openings at
+   * one employer share an `employerKey` and must both stay eligible, which is why every completed
+   * lookup requires a non-null `requisitionId` alongside it before it will call two attempts the
+   * same application. Empty on every row written before migration 0012.
+   */
+  employerKey: text('employer_key').notNull().default(''),
+  /** The opening's id as the receiving ATS names it, or null when nothing reliable was derivable
+   * -- in which case `canonicalUrlKey` is the only identity the lookup has to work with. */
+  requisitionId: text('requisition_id'),
+  /** `canonicalUrl` reduced to the parts that identify the posting (no scheme, no `www.`, no
+   * fragment, no tracking parameters, remaining query sorted). The fallback identity, and the
+   * reason the same posting arriving with different `utm_*` tags is still the same posting. */
+  canonicalUrlKey: text('canonical_url_key').notNull().default(''),
   company: text('company').notNull(),
   role: text('role').notNull(),
   /** The CV this attempt was generated from. `on delete set null`, not cascade: deleting the
@@ -148,6 +183,9 @@ export const applicationAttempts = sqliteTable('application_attempts', {
   /** Identifies which version of the generation task contract/prompt produced this attempt, so a
    * later change to that contract cannot silently reinterpret an already-recorded attempt. */
   workflowVersion: text('workflow_version').notNull().default(''),
+  /** Which document path this attempt records. `original` is set only after the person explicitly
+   * chooses the visible fallback after AI tailoring fails; it is never a silent fallback. */
+  tailoringMode: text('tailoring_mode', { enum: ['ai', 'original'] }).notNull().default('ai'),
   checkpoint: text('checkpoint', {
     enum: [
       'queued',
@@ -162,6 +200,14 @@ export const applicationAttempts = sqliteTable('application_attempts', {
       'skipped',
       'failed',
       'submission_unknown',
+      /**
+       * A person told the app they completed this application themselves (#271). Deliberately NOT
+       * `submitted`: that checkpoint now means "this app observed a real receipt", and collapsing
+       * the two would make the evidence-backed state unfalsifiable. Equally deliberately not
+       * `failed` -- #271's fourth acceptance case is that the *absence* of a confirmation email is
+       * not evidence of anything, so nothing may ever downgrade this on silence alone.
+       */
+      'user_reported',
     ],
   })
     .notNull()
@@ -197,6 +243,54 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * so counting a manually-reviewed submission against that cap would be wrong -- a person's own
    * review pace is already the rate limit #202 relies on for the manual path. Null until submitted. */
   submissionMode: text('submission_mode', { enum: ['manual', 'automatic'] }),
+  /**
+   * What backs the claim that this attempt was actually completed (#275). Both values suppress a
+   * duplicate equally -- the column exists to preserve *which* one did it, not to rank them:
+   *
+   *  - `user_reported`: a person told the app this application is done. That is the only kind of
+   *    completion a renderer-originated patch can ever assert (see `validate.ts`), because the
+   *    renderer is the user and cannot observe a receipt.
+   *  - `receipt_confirmed`: the submission itself was observed to land -- a confirmation page or an
+   *    unambiguous receipt. Only main-process submission code may record this, and only #271's
+   *    receipt observer can honestly produce it; until that lands nothing writes this value, and a
+   *    `submitted` attempt with a null evidence type means "completed, evidence not recorded".
+   *
+   * Null is not "not completed": the checkpoint alone decides that. Null means the evidence was
+   * never recorded, which is the state every row written before migration 0012 is in.
+   */
+  completionEvidence: text('completion_evidence', { enum: ['user_reported', 'receipt_confirmed'] }),
+  /**
+   * #275's explicit reapply path: the completed attempt this one deliberately supersedes.
+   *
+   * A plain column, not a foreign key. The point of these three fields is to be a durable record
+   * of a decision, and a `set null` on delete (or worse, a cascade) would erase exactly the
+   * provenance an audit of "why was a second application sent to this requisition?" needs. The
+   * predecessor's own document version is snapshotted here for the same reason the attempt
+   * snapshots `sourceCvContentHash` rather than trusting `cvDocuments` to still hold it.
+   */
+  supersedesAttemptId: text('supersedes_attempt_id'),
+  /** Why the user reapplied (a corrected document, an updated CV, an employer asking again).
+   * Required and non-empty on the reapply path; empty on every ordinary attempt. */
+  reapplyReason: text('reapply_reason').notNull().default(''),
+  /** The superseded attempt's `sourceCvContentHash` as it stood when this reapply was created.
+   * With this row's own `sourceCvContentHash` that is both document versions, before and after,
+   * readable without depending on the predecessor row still existing. */
+  reapplyPreviousCvContentHash: text('reapply_previous_cv_content_hash'),
+  /**
+   * What the preparation pipeline (#272) actually committed to this attempt's form, as JSON --
+   * one entry per field the live snapshot carried, each recording the field's own label, control
+   * type, whether it was committed/left to the person/left blank, and where a committed value came
+   * from (`cv`/`profile`/`user_answer`). Empty string for every attempt no pipeline run has
+   * prepared, which is every attempt created before this column existed.
+   *
+   * Stored on the attempt rather than derived at review time on purpose: it is the record of what
+   * *this* attempt committed, so a review can never show a previous attempt's answers for the same
+   * vacancy, and it survives an app restart exactly as the checkpoint does. It records only what
+   * this app itself applied -- reading the page back to confirm each value is genuinely committed
+   * is #277 (R06)'s work, which is why each entry carries its own `verification` field rather than
+   * this column implying a read-back that has not happened.
+   */
+  preparedFields: text('prepared_fields').notNull().default(''),
 });
 
 /**
@@ -245,6 +339,58 @@ export const applicationArtifacts = sqliteTable('application_artifacts', {
    * writes one yet; never a path the renderer supplies (see #196 §6.2's "nothing renderer-supplied"
    * rule) -- only ever written by the main-process code that staged the file. */
   storagePath: text('storage_path').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * The durable evidence record behind every submission-outcome claim this app makes (#271).
+ *
+ * Before this table, "submitted" was a single enum value on the attempt with nothing standing
+ * behind it: a click that returned was recorded as a delivered application, and there was no way,
+ * afterwards, to ask *why* the app believed that. Every row here answers exactly that question for
+ * one observation, and rows are append-only in practice -- a later observation adds a row, it never
+ * rewrites an earlier one, so a reconciliation is visible as the second record rather than as a
+ * silently changed first one.
+ *
+ * Deliberately separate from `applicationAttempts.checkpoint`: the checkpoint is the attempt's
+ * current *stage*, this is the *evidence*, and #271's scope explicitly asks for stage, delivery
+ * evidence and hiring outcome to stay separate rather than being collapsed into one status.
+ *
+ * `onDelete: 'cascade'` for the same reason artifacts cascade: a receipt has no meaning
+ * independent of the attempt it belongs to.
+ */
+export const applicationSubmissionReceipts = sqliteTable('application_submission_receipts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  /** What this one observation established. `unknown` rows are kept, not discarded: "we looked and
+   * could not tell" is exactly the fact a person needs to see, and is what a later delayed receipt
+   * reconciles against. */
+  outcome: text('outcome', { enum: ['submitted', 'rejected', 'unknown', 'user_reported'] }).notNull(),
+  /** Where the claim came from. `page_observation` is the post-click observer; `delayed_receipt`
+   * is an out-of-band acknowledgement that arrived later; `user_reported` is a person's own
+   * statement, which is never machine evidence of delivery and is recorded as its own source so it
+   * can never be mistaken for one. */
+  source: text('source', { enum: ['page_observation', 'delayed_receipt', 'user_reported'] }).notNull(),
+  /** The URL this attempt was actually submitted to -- #271 requires a `submitted` record to name
+   * its destination, not just its attempt. Recorded for every outcome, not only the successful one. */
+  destination: text('destination').notNull().default(''),
+  /** What kind of proof this row rests on. `none` is the honest answer for a rejection or an
+   * unresolved observation, and is never allowed to coexist with `outcome: 'submitted'` (enforced
+   * in `repository.ts`, which is where every write to this table goes through). */
+  evidenceKind: text('evidence_kind', {
+    enum: ['confirmation_page', 'receipt_reference', 'delivery_receipt', 'user_statement', 'none'],
+  }).notNull(),
+  /** The matched confirmation text, receipt identifier, or the person's own note. Bounded by the
+   * executor package before it ever reaches here. Untrusted third-party page text: display data
+   * only, never parsed for control flow. */
+  evidenceReference: text('evidence_reference').notNull().default(''),
+  /** A short human-readable account of what was observed, for the attempt drawer. */
+  detail: text('detail').notNull().default(''),
+  /** When the observation itself happened -- distinct from `createdAt`, which is when it was
+   * written down. A delayed receipt is observed long after the click but written immediately. */
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 

@@ -50,8 +50,12 @@ const { FakeDebugger, instances, baseWindowInstances } = vi.hoisted(() => {
     permissionHandler?: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void;
     windowOpenHandler?: () => unknown;
     closeCalls: number;
+    focusCalls: number;
     setBoundsCalls: unknown[];
     navigationListeners: Partial<Record<'will-navigate' | 'will-redirect', (event: { preventDefault: () => void }, url: string) => void>>;
+    /** #277: the `before-input-event` handler that turns Escape into a way out of the handoff. */
+    inputListener?: (event: unknown, input: { type: string; key: string }) => void;
+    inputListenerCount: number;
   }
 
   const instances: Instance[] = [];
@@ -75,13 +79,24 @@ vi.mock('electron', () => {
       session: { setPermissionRequestHandler: (fn: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void) => void };
       setWindowOpenHandler: (fn: () => unknown) => void;
       close: () => void;
+      /** #277: the handoff moves keyboard focus into the live page. Writable, so a test can make it
+       * throw the way a destroyed `webContents` really does. */
+      focus: () => void;
       on: (event: string, listener: (...args: never[]) => void) => void;
     };
     setBounds: (bounds: unknown) => void;
 
     constructor(options: unknown) {
       const debug = new FakeDebugger();
-      const record: (typeof instances)[number] = { options, debug, closeCalls: 0, setBoundsCalls: [], navigationListeners: {} };
+      const record: (typeof instances)[number] = {
+        options,
+        debug,
+        closeCalls: 0,
+        focusCalls: 0,
+        setBoundsCalls: [],
+        navigationListeners: {},
+        inputListenerCount: 0,
+      };
       instances.push(record);
       this.webContents = {
         debugger: debug,
@@ -96,9 +111,16 @@ vi.mock('electron', () => {
         close: () => {
           record.closeCalls += 1;
         },
+        focus: () => {
+          record.focusCalls += 1;
+        },
         on: (event, listener) => {
           if (event === 'will-navigate' || event === 'will-redirect') {
             record.navigationListeners[event] = listener as (event: { preventDefault: () => void }, url: string) => void;
+          }
+          if (event === 'before-input-event') {
+            record.inputListener = listener as (event: unknown, input: { type: string; key: string }) => void;
+            record.inputListenerCount += 1;
           }
         },
       };
@@ -126,17 +148,53 @@ vi.mock('electron', () => {
   return { WebContentsView: FakeWebContentsView, BaseWindow: FakeBaseWindow };
 });
 
-import { createApplicationView } from '../electron/application-view.js';
+import { createApplicationView, HANDOFF_BANNER_HEIGHT_PX } from '../electron/application-view.js';
 
 const ALLOW_ALL = () => true;
 
-function fakeWindow(bounds = { x: 0, y: 0, width: 800, height: 600 }) {
+type Bounds = { x: number; y: number; width: number; height: number };
+
+/** `bounds` may be a live getter, so a test can resize the window between calls the way a real one
+ * does rather than only reporting the size it had when it was built. */
+function fakeWindow(bounds: Bounds | (() => Bounds) = { x: 0, y: 0, width: 800, height: 600 }) {
   const addChildView = vi.fn();
   const removeChildView = vi.fn();
+  /** Each registration keeps a link back to the function the caller passed, so `removeListener`
+   * can find a `once` wrapper by the original -- the same indirection Node's own EventEmitter
+   * uses, and the reason `removeListener(event, handler)` works for a `once(event, handler)`. */
+  type Registration = { original: () => void; run: () => void };
+  const listeners = new Map<string, Registration[]>();
+  function register(event: string, registration: Registration): void {
+    listeners.set(event, [...(listeners.get(event) ?? []), registration]);
+  }
   return {
     contentView: { addChildView, removeChildView },
-    getContentBounds: () => bounds,
+    getContentBounds: () => (typeof bounds === 'function' ? bounds() : bounds),
+    webContents: { focus: vi.fn() },
+    on: (event: string, listener: () => void) => register(event, { original: listener, run: listener }),
+    // `once` really does stop firing after the first event, the same guarantee the real one gives.
+    once: (event: string, listener: () => void) => {
+      const registration: Registration = {
+        original: listener,
+        run: () => {
+          listeners.set(event, (listeners.get(event) ?? []).filter((candidate) => candidate !== registration));
+          listener();
+        },
+      };
+      register(event, registration);
+    },
+    removeListener: (event: string, listener: () => void) => {
+      listeners.set(event, (listeners.get(event) ?? []).filter((candidate) => candidate.original !== listener));
+    },
+    /** Test-only. */
+    emit: (event: string) => {
+      for (const registration of [...(listeners.get(event) ?? [])]) registration.run();
+    },
   } as never;
+}
+
+function emitWindowEvent(window: never, event: string): void {
+  (window as unknown as { emit: (event: string) => void }).emit(event);
 }
 
 beforeEach(() => {
@@ -214,7 +272,7 @@ describe('createApplicationView', () => {
     expect(record.debug.attachCalls).toHaveLength(2);
   });
 
-  it('show() attaches the view to the window and sizes it to the content bounds', () => {
+  it('show() attaches the view to the window and sizes it to the content bounds below the banner', () => {
     const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
     const window = fakeWindow({ x: 0, y: 0, width: 1024, height: 768 });
     // Construction already sized the view once, for its hidden host window -- see this module's
@@ -224,9 +282,10 @@ describe('createApplicationView', () => {
     expect((window as unknown as { contentView: { addChildView: ReturnType<typeof vi.fn> } }).contentView.addChildView).toHaveBeenCalledWith(
       applicationView.view,
     );
+    // #277: the app keeps the top strip, so the view fills what is left rather than the whole window.
     expect(instances[0]!.setBoundsCalls).toEqual([
       { x: 0, y: 0, width: 1024, height: 768 },
-      { x: 0, y: 0, width: 1024, height: 768 },
+      { x: 0, y: HANDOFF_BANNER_HEIGHT_PX, width: 1024, height: 768 - HANDOFF_BANNER_HEIGHT_PX },
     ]);
   });
 
@@ -319,6 +378,128 @@ describe('createApplicationView', () => {
     const host = baseWindowInstances[0]!;
     applicationView.destroy();
     expect(host.destroyCalls).toBe(1);
+  });
+
+  it('show() moves keyboard focus into the live page, which is what makes it a handoff (#277)', () => {
+    // Without this the page renders but never receives a keystroke, which is useless for the two
+    // things a handoff exists for: a CAPTCHA and a login.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    expect(instances[0]!.focusCalls).toBe(0);
+    applicationView.show(window);
+    expect(instances[0]!.focusCalls).toBe(1);
+  });
+
+  it('show() leaves an app-owned strip at the top that the target page cannot draw in (#277)', () => {
+    // The live view renders above the app's own web contents. Covering the whole content area would
+    // paint over the banner naming the employer and the way out of the handoff, leaving a
+    // chrome-less third-party page with no app-owned pixel on screen to contradict it.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow({ x: 0, y: 0, width: 1024, height: 768 });
+    applicationView.show(window);
+    expect(instances[0]!.setBoundsCalls.at(-1)).toEqual({
+      x: 0,
+      y: HANDOFF_BANNER_HEIGHT_PX,
+      width: 1024,
+      height: 768 - HANDOFF_BANNER_HEIGHT_PX,
+    });
+  });
+
+  it('resizing the host window re-fits the live view, so it never sits at stale bounds', () => {
+    // Stale bounds either clip the page or, worse, leave app UI exposed under an untrusted page.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    let bounds = { x: 0, y: 0, width: 1024, height: 768 };
+    const window = fakeWindow(() => bounds);
+    applicationView.show(window);
+
+    bounds = { x: 0, y: 0, width: 640, height: 480 };
+    emitWindowEvent(window, 'resize');
+    expect(instances[0]!.setBoundsCalls.at(-1)).toEqual({
+      x: 0,
+      y: HANDOFF_BANNER_HEIGHT_PX,
+      width: 640,
+      height: 480 - HANDOFF_BANNER_HEIGHT_PX,
+    });
+
+    // And it stops listening once hidden, rather than re-fitting for the rest of the view's life.
+    applicationView.hide(window);
+    const callsAfterHide = instances[0]!.setBoundsCalls.length;
+    emitWindowEvent(window, 'resize');
+    expect(instances[0]!.setBoundsCalls).toHaveLength(callsAfterHide);
+  });
+
+  it('Escape inside the live page calls the caller\'s way out, before the page sees the key', () => {
+    // The only exit that does not depend on the page cooperating: a keyboard user focused inside
+    // the live page cannot Tab back to the app's own banner button, and a page can swallow keys.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    const onEscape = vi.fn();
+    applicationView.show(window, onEscape);
+
+    instances[0]!.inputListener!({}, { type: 'keyDown', key: 'a' });
+    expect(onEscape).not.toHaveBeenCalled();
+    instances[0]!.inputListener!({}, { type: 'keyUp', key: 'Escape' });
+    expect(onEscape).not.toHaveBeenCalled(); // keyUp is not the gesture
+
+    instances[0]!.inputListener!({}, { type: 'keyDown', key: 'Escape' });
+    expect(onEscape).toHaveBeenCalledTimes(1);
+
+    // And it stops mattering once hidden, so a later Escape cannot re-enter a closed handoff.
+    applicationView.hide(window);
+    instances[0]!.inputListener!({}, { type: 'keyDown', key: 'Escape' });
+    expect(onEscape).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers exactly one before-input-event listener for the view\'s whole lifetime', () => {
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    applicationView.show(window, vi.fn());
+    applicationView.hide(window);
+    applicationView.show(window, vi.fn());
+    expect(instances[0]!.inputListenerCount).toBe(1);
+  });
+
+  it('a host window closed under a live handoff is forgotten, never removed from twice', () => {
+    // macOS: close all windows, then `activate` builds a *new* main window. Without this,
+    // `destroy()` would later call removeChildView on a destroyed BrowserWindow.
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    applicationView.show(window);
+    emitWindowEvent(window, 'closed');
+    expect(applicationView.shownIn()).toBeUndefined();
+
+    applicationView.destroy();
+    expect((window as unknown as { contentView: { removeChildView: ReturnType<typeof vi.fn> } }).contentView.removeChildView).not.toHaveBeenCalled();
+  });
+
+  it('hide() gives focus back to the app rather than leaving nothing focused', () => {
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    applicationView.show(window);
+    applicationView.hide(window);
+    expect((window as unknown as { webContents: { focus: ReturnType<typeof vi.fn> } }).webContents.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('a webContents that throws on focus never takes the whole handoff down with it', () => {
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    // A destroyed or closing `webContents` throws on `focus()`. The view must still be attached.
+    const view = applicationView.view as unknown as { webContents: { focus: () => void } };
+    view.webContents.focus = () => {
+      throw new Error('Object has been destroyed');
+    };
+    expect(() => applicationView.show(window)).not.toThrow();
+    expect((window as unknown as { contentView: { addChildView: ReturnType<typeof vi.fn> } }).contentView.addChildView).toHaveBeenCalled();
+  });
+
+  it('shownIn() reports which window holds the view, so one attempt can tell it is not the shown one', () => {
+    const applicationView = createApplicationView('attempt-1', ALLOW_ALL);
+    const window = fakeWindow();
+    expect(applicationView.shownIn()).toBeUndefined();
+    applicationView.show(window);
+    expect(applicationView.shownIn()).toBe(window);
+    applicationView.hide(window);
+    expect(applicationView.shownIn()).toBeUndefined();
   });
 
   it('registers exactly one debugger detach listener at construction, never a second on reattach', async () => {

@@ -1,15 +1,18 @@
 import type { KeyboardEvent } from 'react';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { countryOptions, type SearchFilters } from './results.js';
+
+const SALARY_CURRENCIES = ['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'CHF'];
 
 export interface SearchFilterBarProps {
   filters: SearchFilters;
   onFiltersChange: (patch: Partial<SearchFilters>) => void;
-  /** The country filter: a plain, instant, client-side narrowing of whatever is already loaded. */
+  /** Updates the draft country criterion; a successful scan commits it. */
   onLocationChange: (value: string) => void;
-  /** Always runs a fresh scan, whether or not one is already loaded -- there is no separate "just
-   * filter" action, since typing in a filter field already re-filters the loaded report live (see
-   * the `onChange` handlers below), with no button needed for that. */
+  /** Starts a fresh upstream scan and commits its criteria with the completed report. */
   onSearch: () => void;
+  /** Starts the deliberate broad scan flow. */
+  onBrowseAll: () => void;
   onClear: () => void;
   /** Provider ids present in the loaded report: never a hardcoded list. */
   sources: string[];
@@ -18,6 +21,7 @@ export interface SearchFilterBarProps {
   busy: boolean;
   /** One honest line about the money the report actually carries. */
   salaryNote: string;
+  hasReport: boolean;
 }
 
 /**
@@ -33,14 +37,18 @@ export function SearchFilterBar({
   onFiltersChange,
   onLocationChange,
   onSearch,
+  onBrowseAll,
   onClear,
   sources,
   employmentTypes,
   busy,
   salaryNote,
+  hasReport,
 }: SearchFilterBarProps) {
+  const hasQuery = filters.query.trim().length > 0;
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') onSearch();
+    if (event.key === 'Enter' && !hasReport) onSearch();
   }
 
   return (
@@ -73,10 +81,66 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy}>
+        <details className="relative">
+          <summary className="btn btn-outline btn-sm list-none">Salary</summary>
+          <div className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[calc(100vw-3rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
+            <div className="flex items-end gap-2">
+              <label className="min-w-0 flex-1 text-xs font-medium text-base-content/70">
+                Minimum annual salary
+                <input
+                  className="input input-sm mt-1 w-full"
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="Minimum annual salary"
+                  placeholder="e.g. 60000 or 60 000"
+                  value={filters.salaryMinimum}
+                  onChange={(event) => onFiltersChange({ salaryMinimum: event.target.value })}
+                  disabled={busy}
+                />
+              </label>
+              <label className="text-xs font-medium text-base-content/70">
+                Currency
+                <select
+                  className="select select-sm mt-1 w-24"
+                  aria-label="Salary currency"
+                  value={filters.salaryCurrency}
+                  onChange={(event) => onFiltersChange({ salaryCurrency: event.target.value })}
+                  disabled={busy}
+                >
+                  {SALARY_CURRENCIES.map((currency) => (
+                    <option key={currency} value={currency}>
+                      {currency}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="mt-2 flex cursor-pointer items-start gap-2 text-xs text-base-content/70">
+              <input
+                className="checkbox checkbox-sm mt-0.5"
+                type="checkbox"
+                checked={filters.includeUnknownSalary}
+                onChange={(event) => onFiltersChange({ includeUnknownSalary: event.target.checked })}
+                disabled={busy}
+              />
+              <span>Include vacancies without comparable salary</span>
+            </label>
+            <p className="mt-2 text-xs text-base-content/60">
+              Gross annual compensation. Hourly values use the configured 40 hours/week and 52 weeks/year assumption.
+            </p>
+          </div>
+        </details>
+
+        <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-          Search
+          {hasReport ? 'Run new scan' : 'Run scan'}
         </button>
+
+        {!hasQuery && (
+          <button className="btn btn-outline btn-sm" type="button" onClick={onBrowseAll} disabled={busy}>
+            Browse all vacancies
+          </button>
+        )}
 
         {/* The engine only ever attempts this check for a Netherlands-located vacancy (see
             `worldwideSponsorMatch`'s own gate), so the filter is meaningless -- and would just
@@ -95,6 +159,12 @@ export function SearchFilterBar({
           </label>
         )}
       </div>
+
+      {!hasQuery && (
+        <p className="mt-2 text-xs text-base-content/60" role="status">
+          Enter a role or keyword to start a new scan. Existing reports remain available to browse and filter.
+        </p>
+      )}
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         <select
@@ -120,7 +190,7 @@ export function SearchFilterBar({
           <option value="all">All sources</option>
           {sources.map((source) => (
             <option key={source} value={source}>
-              {source}
+              {discoveryProviderLabel(source)}
             </option>
           ))}
         </select>

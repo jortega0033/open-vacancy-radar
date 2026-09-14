@@ -31,6 +31,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       remooteCountry: 'Netherlands',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -39,6 +40,9 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources: [],
   };
@@ -155,6 +159,38 @@ describe('Additional public and configuration-gated discovery', () => {
     ]);
   });
 
+  // QA regression: a real vacancy description read "experienceTwo Microsoft certifications" and
+  // "customer-focused mannerStrong troubleshooting" -- words that used to sit in separate `<p>`
+  // elements running together with no separator once the HTML was stripped to plain text (the old
+  // `decodedText` was `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads every text node
+  // with nothing inserted between them).
+  it('keeps a word boundary between adjacent HTML block elements when stripping a description to plain text', async () => {
+    const routes = new Map([
+      [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
+      [MUSE_URL, JSON.stringify({
+        page: 1,
+        page_count: 1,
+        total: 1,
+        results: [{
+          id: 43,
+          name: 'Support Engineer',
+          contents: '<p>3+ years experience</p><p>Two Microsoft certifications</p>',
+          company: { name: 'Muse Co' },
+          locations: [{ name: 'Flexible / Remote' }],
+          refs: { landing_page: 'https://www.themuse.com/jobs/muse-co/support-engineer' },
+          publication_date: '2026-07-30T00:20:58Z',
+        }],
+      })],
+    ]);
+
+    const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
+
+    expect(result.vacancies[0]?.description).not.toContain('experienceTwo');
+    expect(result.vacancies[0]?.description).toContain('experience');
+    expect(result.vacancies[0]?.description).toContain('Two Microsoft certifications');
+  });
+
   it('keeps every researched source visible without mislabeling gated portals as active', () => {
     const registry = globalRemoteSourceRegistry(profile());
 
@@ -164,7 +200,10 @@ describe('Additional public and configuration-gated discovery', () => {
         ? source.ingestionMode !== 'disabled'
         : source.ingestionMode === 'disabled',
     )).toBe(true);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(26);
+    // +5 since issue #251: one active `full_ingestion` registry entry per in-scope ATS roster
+    // provider (greenhouse/lever/ashby/recruitee/personio), on top of the 27 active as of Taiwan
+    // Jobs (#44) and NAV Arbeidsplassen (#42), see source-registry.ts.
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(32);
     expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
       transport: 'rss',
       url: 'https://remotive.com/remote-jobs/feed',

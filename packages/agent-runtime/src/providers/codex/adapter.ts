@@ -1,12 +1,17 @@
-import type { ProviderStatus } from '@agent-dock/shared';
-import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '../../types.js';
+import { tmpdir } from 'node:os';
+import type { ProviderModelV2, ProviderStatus } from '@agent-dock/shared';
+import type { AgentProvider, ProviderModelCatalogOptions, ProviderSessionHandle, StartSessionOptions } from '../../types.js';
+import { findExecutable } from '../../detect-executable.js';
 import { type Logger, noopLogger } from '../../logger.js';
 import { runProviderSession } from '../common/run-session.js';
 import { resolveCodexTransportMode } from './app-server-support.js';
+import { probeCodexModelCatalog } from './app-server/model-catalog.js';
 import { buildCodexArgs } from './build-args.js';
 import { detectCodex } from './detect.js';
 import { parseCodexLine } from './parser.js';
 import { createCodexTransportWithFallback } from './transport-selection.js';
+
+const EXECUTABLE_NAMES = ['codex'];
 
 /**
  * Codex CLI adapter. Authentication is entirely owned by the `codex` binary via `codex login`.
@@ -44,7 +49,7 @@ export class CodexProvider implements AgentProvider {
       return runProviderSession(
         {
           providerId: 'codex',
-          executableNames: ['codex'],
+          executableNames: EXECUTABLE_NAMES,
           buildArgs: buildCodexArgs,
           parseLine: parseCodexLine,
           promptViaStdin: true,
@@ -54,5 +59,32 @@ export class CodexProvider implements AgentProvider {
       );
     }
     return createCodexTransportWithFallback(options, this.logger);
+  }
+
+  /**
+   * ADI-22a. A thin wrapper over the same live `model/list` RPC `app-server/transport.ts` and
+   * `scope-probe.ts` already call before every real session (`app-server/model-catalog.ts`'s
+   * `probeCodexModelCatalog`) -- deliberately independent of `AGENT_DOCK_CODEX_TRANSPORT`: a
+   * read-only catalog probe carries none of the risk that gates using the app-server transport for
+   * a real turn, and `transport-selection.ts` already documents this exact kind of caller ("a
+   * future settings/diagnostics surface") as one `probeCodexAppServerScope` was left unwired for.
+   *
+   * Resolves to an empty catalog, never a rejection, when the `codex` executable itself cannot be
+   * found -- "no CLI installed" is not an infrastructure failure this method should propagate as
+   * one, and both callers (the `GET /v2/providers/:providerId/models` route and `POST
+   * /v2/sessions`'s capability resolution) already treat an empty/failed catalog identically.
+   * `options.cwd` defaults to the OS temp directory: this probe's `model/list` call has no
+   * dependency on a real workspace, and a caller with no session-specific directory (the read-only
+   * route) has nothing more meaningful to offer.
+   */
+  async fetchModelCatalog(options: ProviderModelCatalogOptions = {}): Promise<readonly ProviderModelV2[]> {
+    const executablePath = await findExecutable(EXECUTABLE_NAMES);
+    if (!executablePath) return [];
+    const catalog = await probeCodexModelCatalog({
+      executable: executablePath,
+      cwd: options.cwd ?? tmpdir(),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    return catalog.map(({ id, displayName, isDefault }) => ({ id, displayName, isDefault }));
   }
 }

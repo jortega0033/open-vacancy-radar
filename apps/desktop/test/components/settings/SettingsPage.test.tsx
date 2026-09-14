@@ -6,8 +6,6 @@ import type {
   AppSettingsPatch,
   AppSettingsRecord,
   CvDocumentRecord,
-  LetterRecord,
-  SavedJobRecord,
 } from '../../../src/window.js';
 import {
   DEFAULT_SETTINGS,
@@ -45,6 +43,7 @@ function makeCv(id: string, name: string): CvDocumentRecord {
     targetRole: '',
     text: '',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    source: null,
     isDefault: false,
     uploadedAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
@@ -91,16 +90,18 @@ describe('SettingsPage', () => {
     expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
 
     const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headingsNow()).toEqual(['Settings', 'Startup', 'Appearance']);
+    expect(headingsNow()).toEqual(['Startup', 'Appearance']);
 
     openTab('Search');
-    await waitFor(() => expect(headingsNow()).toEqual(['Settings', 'Default search location', 'Search profile']));
+    await waitFor(() =>
+      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company roster']),
+    );
 
     openTab('Workspace');
-    expect(headingsNow()).toEqual(['Settings', 'Documents', 'Applications']);
+    expect(headingsNow()).toEqual(['Documents', 'Applications']);
 
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['Settings', 'AI runtime', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Data management', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {
@@ -308,12 +309,21 @@ describe('SettingsPage', () => {
     expect(bridge.deleteLetter).not.toHaveBeenCalled();
   });
 
-  it('reset application data deletes every row through the existing IPC verbs, then restores defaults', async () => {
+  it('reset application data uses the main-process reset and applies returned defaults', async () => {
     const { bridge } = setup({
-      listApplications: vi.fn().mockResolvedValue([{ id: 'app-1' } as ApplicationRecord, { id: 'app-2' } as ApplicationRecord]),
-      listSavedJobs: vi.fn().mockResolvedValue([{ id: 'job-1' } as SavedJobRecord]),
-      listLetters: vi.fn().mockResolvedValue([{ id: 'letter-1' } as LetterRecord]),
-      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV')]),
+      resetApplicationData: vi.fn().mockResolvedValue({
+        settings: DEFAULT_SETTINGS,
+        deleted: {
+          savedJobs: 1,
+          applications: 2,
+          cvDocuments: 1,
+          letters: 1,
+          applicationAttempts: 1,
+          applicationArtifacts: 2,
+          submissionReceipts: 1,
+          automationGrants: 1,
+        },
+      }),
     });
 
     render(<SettingsPage />);
@@ -325,12 +335,8 @@ describe('SettingsPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
 
     await waitFor(() => expect(screen.getByText('Application data reset')).toBeInTheDocument());
-    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-1');
-    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-2');
-    expect(bridge.deleteSavedJob).toHaveBeenCalledWith('job-1');
-    expect(bridge.deleteLetter).toHaveBeenCalledWith('letter-1');
-    expect(bridge.deleteCvDocument).toHaveBeenCalledWith('cv-1');
-    expect(bridge.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'system', defaultCvId: null }));
+    expect(bridge.resetApplicationData).toHaveBeenCalledTimes(1);
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
   it('cancelling a reset confirmation deletes nothing and saves nothing', async () => {
@@ -347,7 +353,7 @@ describe('SettingsPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    expect(bridge.deleteApplication).not.toHaveBeenCalled();
+    expect(bridge.resetApplicationData).not.toHaveBeenCalled();
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 

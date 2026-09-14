@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CandidateProfile } from '../../src/candidate/profile.js';
-import { RELEVANCE_THRESHOLD, scoreWorldwideVacancy, type WorldwideScorableVacancy } from '../../src/filtering/index.js';
+import {
+  RELEVANCE_THRESHOLD,
+  scoreWorldwideVacancy,
+  UNMET_MANDATORY_LANGUAGE_SCORE_CAP,
+  type WorldwideScorableVacancy,
+} from '../../src/filtering/index.js';
 
 const profile: CandidateProfile = {
   profileVersion: 'candidate-profile-v1',
@@ -119,5 +124,66 @@ describe('scoreWorldwideVacancy', () => {
     expect(result).not.toBeNull();
     expect(result!.deterministicScore).toBeLessThanOrEqual(45);
     expect(result!.gaps.some((gap) => gap.startsWith('Excluded primary role family'))).toBe(true);
+  });
+});
+
+/**
+ * Issue #280, acceptance check 3: the worldwide deterministic scorer is the third pipeline the
+ * mandatory-language gate has to hold in, alongside the discovery classifier and the
+ * official-source review (both in `test/global-remote/evaluation.test.ts`).
+ */
+describe('scoreWorldwideVacancy: mandatory-language enforcement', () => {
+  const withLateGermanRequirement = vacancy({
+    description: `Responsibilities
+      Build and own an Angular and TypeScript web application.
+      Create accessible UI components for our design system.
+      Requirements
+      Strong Angular, RxJS and frontend architecture experience.
+      Our process
+      A short intro call, a technical round, and a team conversation.
+      Please note: fluency in German is required, as all client work is in German.`,
+  });
+
+  it('caps the score and reports the unmet language, rather than dropping the vacancy', () => {
+    const result = scoreWorldwideVacancy(withLateGermanRequirement, profile, 100_000);
+
+    expect(result).not.toBeNull();
+    expect(result!.deterministicScore).toBeLessThanOrEqual(UNMET_MANDATORY_LANGUAGE_SCORE_CAP);
+    expect(result!.relevant).toBe(false);
+    expect(result!.unmetMandatoryLanguages).toEqual(['German']);
+    expect(result!.gaps).toContain('Mandatory language not in the candidate profile: German');
+    expect(result!.reasons.some((reason) => reason.includes('German'))).toBe(true);
+  });
+
+  it('applies no cap once the candidate profile lists that language', () => {
+    const result = scoreWorldwideVacancy(
+      withLateGermanRequirement,
+      { ...profile, constraints: { ...profile.constraints, professionalLanguage: 'English, German' } },
+      100_000,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.unmetMandatoryLanguages).toEqual([]);
+    expect(result!.deterministicScore).toBeGreaterThanOrEqual(RELEVANCE_THRESHOLD);
+  });
+
+  it('applies no cap for a merely preferred language, and none when no language is configured', () => {
+    const preferred = vacancy({
+      description: `Responsibilities
+        Build and own an Angular and TypeScript web application.
+        Requirements
+        Strong Angular, RxJS and frontend architecture experience.
+        Nice to have
+        German is a plus.`,
+    });
+
+    expect(scoreWorldwideVacancy(preferred, profile, 100_000)!.unmetMandatoryLanguages).toEqual([]);
+    expect(
+      scoreWorldwideVacancy(
+        withLateGermanRequirement,
+        { ...profile, constraints: { ...profile.constraints, professionalLanguage: '' } },
+        100_000,
+      )!.unmetMandatoryLanguages,
+    ).toEqual([]);
   });
 });

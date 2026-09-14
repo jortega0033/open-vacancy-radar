@@ -43,6 +43,10 @@ matters for the *current* UI (it renders no untrusted content or links, and requ
 permissions), but it's cheap defense in depth for a fork that later adds either (see
 [SECURITY.md](../SECURITY.md#electron-hardening)).
 
+The supported minimum outer window size is 760 x 600 pixels. `BrowserWindow` enforces that limit,
+including when code or the operating system attempts to restore smaller bounds. The real Electron
+app-shell test verifies the effective bounds after a resize below the minimum.
+
 ## The preload bridge
 
 `electron/preload.ts` exposes seven separate `contextBridge` namespaces on `window`, each a fixed,

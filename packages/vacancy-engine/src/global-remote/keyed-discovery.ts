@@ -1,9 +1,16 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   isoPostedAtFromDdMmYyyy,
   numberValue,
@@ -19,6 +26,7 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+import { runNavArbeidsplassenDiscovery } from './nav-arbeidsplassen-discovery.js';
 
 function basicAuthHeader(apiKey: string): string {
   return `Basic ${Buffer.from(`${apiKey}:`, 'utf8').toString('base64')}`;
@@ -28,12 +36,15 @@ async function discoverAdzuna(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const { adzunaAppId, adzunaAppKey } = config.discovery;
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://api.adzuna.com/v1/api/jobs/gb/search/1';
   try {
     for (let page = 1; page <= config.discovery.adzunaMaxPages; page += 1) {
@@ -66,6 +77,7 @@ async function discoverAdzuna(
           currency: minimum !== null && minimum > 0 ? 'GBP' : null,
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+          salaryProvenance: 'reviewed_structured',
           description: stringValue(job.description),
           postedAt: isoPostedAt(stringValue(job.created)),
           raw,
@@ -75,6 +87,7 @@ async function discoverAdzuna(
       if (root.results.length < 50) break;
       if (page === config.discovery.adzunaMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.adzunaMaxPages}-page limit.`;
       }
     }
@@ -82,6 +95,7 @@ async function discoverAdzuna(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -92,6 +106,8 @@ async function discoverAdzuna(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -101,6 +117,8 @@ async function discoverJooble(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = `https://jooble.org/api/${config.discovery.joobleApiKey}`;
   try {
     const response = await http.postJson(url, {
@@ -142,12 +160,30 @@ async function discoverJooble(
       })];
     });
     return {
-      sources: [{ id: 'jooble:frontend-remote', provider: 'jooble', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'jooble:frontend-remote',
+        provider: 'jooble',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'jooble:frontend-remote', provider: 'jooble', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'jooble:frontend-remote',
+        provider: 'jooble',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -157,6 +193,8 @@ async function discoverReed(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const reedUrl = new URL('https://www.reed.co.uk/api/1.0/search');
   if (config.discovery.roleQuery) reedUrl.searchParams.set('keywords', config.discovery.roleQuery);
   reedUrl.searchParams.set('resultsToTake', '100');
@@ -191,6 +229,7 @@ async function discoverReed(
         currency: minimum !== null && minimum > 0 ? currency : null,
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.jobDescription),
         postedAt: isoPostedAtFromDdMmYyyy(stringValue(job.date)),
         raw,
@@ -198,12 +237,30 @@ async function discoverReed(
       })];
     });
     return {
-      sources: [{ id: 'reed:frontend-developer', provider: 'reed', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'reed:frontend-developer',
+        provider: 'reed',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'reed:frontend-developer', provider: 'reed', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'reed:frontend-developer',
+        provider: 'reed',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -213,6 +270,8 @@ async function discoverJobsPipe(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://api.jobspipe.dev/v1/jobs/search';
   try {
     const response = await http.postJson(
@@ -257,12 +316,30 @@ async function discoverJobsPipe(
       })];
     });
     return {
-      sources: [{ id: 'jobspipe:frontend-remote', provider: 'jobspipe', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'jobspipe:frontend-remote',
+        provider: 'jobspipe',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'jobspipe:frontend-remote', provider: 'jobspipe', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'jobspipe:frontend-remote',
+        provider: 'jobspipe',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -279,6 +356,9 @@ export async function runKeyedDiscovery(
     ...(config.discovery.joobleApiKey.trim().length > 0 ? [discoverJooble(http, config)] : []),
     ...(config.discovery.reedApiKey.trim().length > 0 ? [discoverReed(http, config)] : []),
     ...(config.discovery.jobspipeApiKey.trim().length > 0 ? [discoverJobsPipe(http, config)] : []),
+    ...(config.discovery.navArbeidsplassenApiKey.trim().length > 0
+      ? [runNavArbeidsplassenDiscovery(http, config)]
+      : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

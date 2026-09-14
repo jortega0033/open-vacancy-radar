@@ -124,6 +124,7 @@ function auditFromVacancy(
   httpStatus: number | null,
   minimumAnnualBaseUsd: number | null,
   extraEvidence: string[] = [],
+  candidateLanguages: readonly string[] = [],
 ): OfficialVacancyAudit {
   const hash = vacancy === null ? null : createVacancyContentHash(vacancy);
   const evaluation = evaluateOfficialReview({
@@ -132,6 +133,7 @@ function auditFromVacancy(
     currentTitle: vacancy?.title ?? source.expectedTitle,
     contentHash: hash,
     minimumAnnualBaseUsd,
+    candidateLanguages,
   });
   const evidence = [
     ...(vacancy === null ? [] : [
@@ -167,6 +169,7 @@ function errorAudit(
   error: unknown,
   requestCount: number,
   minimumAnnualBaseUsd: number | null,
+  candidateLanguages: readonly string[] = [],
 ): OfficialVacancyAudit {
   const failure = errorState(error);
   const audit = auditFromVacancy(
@@ -177,6 +180,7 @@ function errorAudit(
     failure.httpStatus,
     minimumAnnualBaseUsd,
     [failure.reason],
+    candidateLanguages,
   );
   return { ...audit, reasons: [failure.reason] };
 }
@@ -216,6 +220,12 @@ function htmlVacancy(source: GlobalRemoteSource, body: string): { state: Officia
 export async function runOfficialGlobalRemoteSources(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  /**
+   * The candidate's own configured languages, so a reviewed `review.mandatoryLanguage` is enforced
+   * on this pipeline too and not only on the discovery one (issue #280). Empty by default, which
+   * routes a reviewed mandatory language to `language_confirmation` rather than excluding anything.
+   */
+  candidateLanguages: readonly string[] = [],
 ): Promise<OfficialRun> {
   const boardScans = new Map<string, Promise<BoardScan>>();
   let requestCount = 0;
@@ -257,14 +267,15 @@ export async function runOfficialGlobalRemoteSources(
           response.status,
           config.minimumAnnualBaseUsd,
           parsed.evidence,
+          candidateLanguages,
         );
       } catch (error) {
-        return errorAudit(source, error, 1, config.minimumAnnualBaseUsd);
+        return errorAudit(source, error, 1, config.minimumAnnualBaseUsd, candidateLanguages);
       }
     }
     const scan = await boardScan(source);
     if (scan.error !== null || scan.result === null) {
-      return errorAudit(source, scan.error, 1, config.minimumAnnualBaseUsd);
+      return errorAudit(source, scan.error, 1, config.minimumAnnualBaseUsd, candidateLanguages);
     }
     const vacancy = scan.result.vacancies.find((item) => item.externalId === source.externalId) ?? null;
     if (vacancy === null && !scan.result.complete) {
@@ -276,6 +287,7 @@ export async function runOfficialGlobalRemoteSources(
         200,
         config.minimumAnnualBaseUsd,
         ['Board scan was incomplete, so absence cannot prove this vacancy is inactive.'],
+        candidateLanguages,
       );
     }
     return auditFromVacancy(
@@ -285,6 +297,8 @@ export async function runOfficialGlobalRemoteSources(
       0,
       200,
       config.minimumAnnualBaseUsd,
+      [],
+      candidateLanguages,
     );
   }));
   return { audits, requestCount };

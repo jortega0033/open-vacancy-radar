@@ -40,16 +40,16 @@ test.describe('Applications', () => {
     await expect(window.getByRole('row', { name: /Redwood Software/ })).toBeVisible();
   });
 
-  test('shows the read-only In progress tab, with no way to add one from the renderer', async ({ window }) => {
+  test('shows the read-only Review queue, with no way to add an attempt from the renderer', async ({ window }) => {
     // A fresh workspace has no application_attempts rows -- nothing in the renderer can create
     // one (issue #202: an attempt's existence is owned entirely by the main-process pipeline) --
     // so this real run only exercises the tab switch and empty state, not a populated list; the
     // fuller behavior (row rendering, the detail drawer) is covered against mocked data in
     // ApplicationsPage.test.tsx.
     await goto(window, 'Applications');
-    await window.getByRole('tab', { name: 'In progress' }).click();
+    await window.getByRole('tab', { name: 'Review queue' }).click();
 
-    await expect(window.getByText('Nothing in progress')).toBeVisible();
+    await expect(window.getByText('Nothing to review')).toBeVisible();
     await expect(window.getByRole('button', { name: /add application/i })).toHaveCount(0);
   });
 });

@@ -7,6 +7,20 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function extractRateLimitWindow(
+  value: unknown,
+): { usedPercent: number; windowDurationMins?: number; resetsAt?: number } | undefined {
+  if (value === null || value === undefined) return undefined;
+  const window = value as Record<string, unknown>;
+  const usedPercent = window.usedPercent;
+  if (typeof usedPercent !== 'number') return undefined;
+  return {
+    usedPercent,
+    windowDurationMins: typeof window.windowDurationMins === 'number' ? window.windowDurationMins : undefined,
+    resetsAt: typeof window.resetsAt === 'number' ? window.resetsAt : undefined,
+  };
+}
+
 function itemEvent(kind: 'started' | 'completed', item: JsonObject): AgentEvent | undefined {
   const id = optionalString(item.id);
   const status = optionalString(item.status);
@@ -125,6 +139,25 @@ export class CodexAppServerNormalizer {
             cachedInputTokens: typeof last.cachedInputTokens === 'number' ? last.cachedInputTokens : undefined,
           },
         ];
+      }
+      case 'account/rateLimits/updated': {
+        const rateLimits = object(object(params, 'account/rateLimits/updated params').rateLimits, 'rate limits');
+        const primary = extractRateLimitWindow(rateLimits.primary);
+        const secondary = extractRateLimitWindow(rateLimits.secondary);
+        // Sparse update: only emit if at least one of primary/secondary is present (matching
+        // upstream's own normalizer guidance to merge into last-known snapshot, never emit empty).
+        if (primary || secondary) {
+          return [
+            {
+              type: 'usage.rate_limits',
+              limitId: optionalString(rateLimits.limitId),
+              limitName: optionalString(rateLimits.limitName),
+              primary,
+              secondary,
+            },
+          ];
+        }
+        return [];
       }
       case 'error': {
         const p = object(params, 'error params');

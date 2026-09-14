@@ -79,7 +79,8 @@ describe('--bare is never constructed into a Claude argv (ADI-08b)', () => {
 describe('--bare appears in no quoted string anywhere in this repo (ADI-08b)', () => {
   const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const SKIP_DIRS = new Set([
-    'node_modules', 'dist', 'build', 'out', 'coverage', '.git', '.turbo', '.next', '.vite', 'release',
+    'node_modules', 'dist', 'dist-electron', 'dist-packages', 'build', 'out', 'coverage', '.git',
+    '.turbo', '.next', '.vite', '.claude', '.codex', 'artifacts', 'release',
   ]);
   const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 

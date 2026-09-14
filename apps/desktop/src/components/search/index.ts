@@ -19,6 +19,7 @@ export {
   WORLDWIDE_VERIFICATION,
   countryOptions,
   decisionLabel,
+  descriptionExcerpt,
   employmentOptions,
   filterResults,
   formatDate,
@@ -32,3 +33,5 @@ export {
   worldwideVerification,
 } from './results.js';
 export type { PostedWithin, SearchFilters, SearchResult, Verification, VerificationLevel } from './results.js';
+export { createSearchSessionState } from './search-session.js';
+export type { SearchSessionState } from './search-session.js';

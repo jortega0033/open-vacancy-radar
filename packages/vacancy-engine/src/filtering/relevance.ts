@@ -1,5 +1,13 @@
 import { type NormalizedVacancy } from '../domain/models.js';
 import { isCandidateProfileConfigured, type CandidateProfile } from '../candidate/profile.js';
+import {
+  candidateWorkLanguages,
+  detectLanguageRequirements,
+  uncoveredMandatoryLanguages,
+} from '../eligibility/language.js';
+import { normalizeForMatching, plainText } from '../text/plain.js';
+
+export { plainText } from '../text/plain.js';
 
 export const DETERMINISTIC_SCORING_VERSION = 'deterministic-relevance-v11';
 export const RELEVANCE_THRESHOLD = 70;
@@ -126,48 +134,6 @@ const ROLE_EXCLUSION_ALIASES: Readonly<Record<PrimaryRoleFamily, readonly string
 
 function clamp(value: number, minimum = 0, maximum = 100): number {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function normalizeForMatching(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/\p{Diacritic}/gu, '')
-    .replace(/[–—]/g, '-')
-    .replace(/[’]/g, "'")
-    .toLowerCase();
-}
-
-const NAMED_ENTITY: Record<string, string> = {
-  nbsp: ' ',
-  '#160': ' ',
-  amp: '&',
-  quot: '"',
-  '#34': '"',
-  '#39': "'",
-  apos: "'",
-};
-
-const NAMED_ENTITY_PATTERN = new RegExp(`&(${Object.keys(NAMED_ENTITY).join('|')});`, 'gi');
-
-/**
- * Decodes the handful of HTML entities job-description markup actually uses, in one pass. The
- * previous version ran a separate `.replace(/&amp;/gi, '&')` before the `&quot;`/`&#39;` passes, so
- * a source string containing an already-escaped entity — `&amp;quot;`, literally the text `&quot;`
- * on the page — got decoded twice: once to `&quot;` by the `&amp;` pass, then again to `"` by the
- * pass after it, same as CodeQL's `js/double-escaping` finding on this function. Matching the whole
- * `&name;`/`&#nn;` token in one alternation and replacing each match exactly once removes the
- * possibility structurally: `String.replace` with `/g` never rescans text it just inserted.
- * `NAMED_ENTITY_PATTERN` is derived from `NAMED_ENTITY`'s own keys so the two can't drift apart.
- */
-export function plainText(value: string): string {
-  return value
-    .replace(/<(?:br|\/p|\/li|\/h[1-6]|\/div)\b[^>]*>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(NAMED_ENTITY_PATTERN, (match, entity: string) => NAMED_ENTITY[entity.toLowerCase()] ?? match)
-    .replace(/\r/g, '\n')
-    .replace(/[\t ]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
 }
 
 function inferContext(text: string, inherited: SegmentContext): SegmentContext {
@@ -627,7 +593,20 @@ export type WorldwideDeterministicScore = {
   matchingSkills: string[];
   gaps: string[];
   reasons: string[];
+  /**
+   * The languages the vacancy states as mandatory and the candidate profile does not list (issue
+   * #280). Always empty when no candidate language is configured, and never populated by a merely
+   * preferred language.
+   */
+  unmetMandatoryLanguages: string[];
 };
+
+/**
+ * The score a vacancy can never exceed once it states a mandatory language the candidate does not
+ * have. A cap, deliberately, rather than a drop: the row stays in the results list with a stated
+ * reason, the same way an excluded role family and a below-floor salary already behave here.
+ */
+export const UNMET_MANDATORY_LANGUAGE_SCORE_CAP = 45;
 
 export type WorldwideScorableVacancy = {
   title: string;
@@ -674,12 +653,19 @@ export function scoreWorldwideVacancy(
   const technical = assessTechnicalFit(role, conceptEvidence, matchingSkills);
   const seniority = assessSeniority({ title: vacancy.title, description }, profile);
   const excludedPrimaryFamily = isExcludedPrimaryFamily(role.family, profile);
+  const unmetLanguages = uncoveredMandatoryLanguages(
+    detectLanguageRequirements(vacancy.description),
+    candidateWorkLanguages(profile),
+  );
 
   const weightedScore = Math.round(
     technical.score * 0.45 + role.score * 0.4 + seniority.score * 0.15,
   );
   let deterministicScore = weightedScore;
   if (excludedPrimaryFamily) deterministicScore = Math.min(deterministicScore, 45);
+  if (unmetLanguages.length > 0) {
+    deterministicScore = Math.min(deterministicScore, UNMET_MANDATORY_LANGUAGE_SCORE_CAP);
+  }
 
   const salaryBelowThreshold =
     vacancy.annualizedMinimumUsd !== null &&
@@ -691,6 +677,9 @@ export function scoreWorldwideVacancy(
   if (matchingSkills.length === 0) gaps.push('No explicit candidate skill match found');
   if (seniority.score < 80) gaps.push('Advertised seniority is below the candidate’s experience');
   if (excludedPrimaryFamily) gaps.push(`Excluded primary role family: ${role.primaryFit}`);
+  for (const requirement of unmetLanguages) {
+    gaps.push(`Mandatory language not in the candidate profile: ${requirement.language}`);
+  }
   if (vacancy.annualizedMinimumUsd === null) {
     gaps.push('Minimum USD annual base salary is not advertised');
   } else if (salaryBelowThreshold) {
@@ -704,6 +693,11 @@ export function scoreWorldwideVacancy(
   ];
   if (excludedPrimaryFamily) {
     reasons.push(`Hard cap applied because “${role.primaryFit}” matches a configured excluded role family.`);
+  }
+  for (const requirement of unmetLanguages) {
+    reasons.push(
+      `Eligibility cap applied because the vacancy states ${requirement.language} as mandatory and the candidate profile does not list it: “${requirement.quote}”`,
+    );
   }
   if (salaryBelowThreshold) {
     reasons.push('Eligibility cap applied because the advertised USD annual base salary is below the configured minimum.');
@@ -721,5 +715,6 @@ export function scoreWorldwideVacancy(
     matchingSkills,
     gaps,
     reasons,
+    unmetMandatoryLanguages: unmetLanguages.map((requirement) => requirement.language),
   };
 }

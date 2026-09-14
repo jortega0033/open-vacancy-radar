@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Logger } from '@agent-dock/agent-runtime';
@@ -105,6 +105,7 @@ interface QueueSnapshot {
   entries: ApplicationQueueEntry[];
   lease: ApplicationQueueLease | null;
   nextEventSeq: number;
+  eventReplayFloor: number;
 }
 
 const SCHEMA_VERSION = 1;
@@ -112,8 +113,8 @@ const SCHEMA_VERSION = 1;
 /** A fresh, empty snapshot. A function, not a shared constant: `{ ...EMPTY_SNAPSHOT }` would be a
  * shallow copy that still shares the *same* `entries` array across every instance that starts
  * empty, so a `push()` in one store would silently leak into every other one. */
-function emptySnapshot(): QueueSnapshot {
-  return { schemaVersion: SCHEMA_VERSION, entries: [], lease: null, nextEventSeq: 0 };
+function emptySnapshot(nextEventSeq = 0): QueueSnapshot {
+  return { schemaVersion: SCHEMA_VERSION, entries: [], lease: null, nextEventSeq, eventReplayFloor: nextEventSeq };
 }
 
 /** How many recent events `subscribe()` can replay to a newly-attaching listener. Bounded for the
@@ -145,6 +146,11 @@ export class ApplicationQueueStore {
 
     this.#snapshot = this.#loadSnapshot();
     this.#recentEvents = this.#loadRecentEvents();
+    const nextEventSeq = (this.#recentEvents.at(-1)?.seq ?? -1) + 1;
+    if (nextEventSeq > this.#snapshot.nextEventSeq) {
+      this.#snapshot.nextEventSeq = nextEventSeq;
+      this.#persist();
+    }
     this.#logger.info('application queue store ready', {
       entries: this.#snapshot.entries.length,
       leased: this.#snapshot.lease?.attemptId,
@@ -161,6 +167,7 @@ export class ApplicationQueueStore {
         entries: raw.entries,
         lease: raw.lease ?? null,
         nextEventSeq: typeof raw.nextEventSeq === 'number' ? raw.nextEventSeq : 0,
+        eventReplayFloor: typeof raw.eventReplayFloor === 'number' ? raw.eventReplayFloor : 0,
       };
     } catch (err) {
       // A snapshot that can't be parsed is treated as absent rather than fatal: the daemon is a
@@ -179,7 +186,7 @@ export class ApplicationQueueStore {
     try {
       const lines = readFileSync(this.#eventLogPath, 'utf8').split('\n').filter((line) => line.trim().length > 0);
       const parsed = lines.map((line) => JSON.parse(line) as ApplicationQueueEvent);
-      return parsed.slice(-MAX_REPLAY_EVENTS);
+      return parsed.filter((event) => event.seq >= this.#snapshot.eventReplayFloor).slice(-MAX_REPLAY_EVENTS);
     } catch (err) {
       this.#logger.error('application queue event log could not be read; replay history starts empty', {
         message: err instanceof Error ? err.message : String(err),
@@ -195,6 +202,7 @@ export class ApplicationQueueStore {
   #emit(type: ApplicationQueueEventType, attemptId: string): void {
     const event: ApplicationQueueEvent = { seq: this.#snapshot.nextEventSeq, at: new Date().toISOString(), type, attemptId };
     this.#snapshot.nextEventSeq += 1;
+    this.#persist();
     appendDurably(this.#eventLogPath, JSON.stringify(event));
     this.#recentEvents.push(event);
     if (this.#recentEvents.length > MAX_REPLAY_EVENTS) this.#recentEvents.shift();
@@ -218,6 +226,16 @@ export class ApplicationQueueStore {
 
   currentLease(): ApplicationQueueLease | null {
     return this.#snapshot.lease ? { ...this.#snapshot.lease } : null;
+  }
+
+  /** Clears every opaque attempt id after Electron has confirmed no preparation is running. */
+  clear(): number {
+    const count = this.#snapshot.entries.length;
+    this.#snapshot = emptySnapshot(this.#snapshot.nextEventSeq);
+    this.#recentEvents = [];
+    this.#persist();
+    writeFileSync(this.#eventLogPath, '', { encoding: 'utf8', mode: 0o600 });
+    return count;
   }
 
   /**

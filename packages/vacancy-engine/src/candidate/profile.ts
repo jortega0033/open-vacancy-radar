@@ -22,11 +22,27 @@ export const candidateProfileSchema = z.object({
   consideredRoles: z.array(z.string()),
   excludedRoleFamilies: z.array(z.string()),
   constraints: z.object({
+    /**
+     * Free text, and read as a list: "English", "English, Dutch" and "English / German" all name
+     * the languages the candidate can work in (see `parseCandidateLanguages`). It is the only
+     * candidate-side input to the mandatory-language gate, so leaving it empty leaves that gate
+     * inert rather than falling back to any default language.
+     */
     professionalLanguage: z.string(),
     dutchRequired: z.boolean(),
     primaryCountry: z.string(),
     allowRemoteEuSupportingNetherlands: z.boolean(),
     minimumMonthlyBaseEur: z.number().nonnegative(),
+    /**
+     * The candidate's own answer to "would you relocate for a role?" (issue #280). Optional, and
+     * absent means never answered, which stays `unknown` in the eligibility evidence rather than
+     * defaulting to either answer.
+     *
+     * Deliberately separate from anything the employer offers: whether a candidate is willing to
+     * move and whether an employer will fund or sponsor the move are different facts, and merging
+     * them into one "relocation" flag is what this field exists to prevent.
+     */
+    relocationWilling: z.boolean().optional(),
   }),
 });
 export type CandidateProfile = z.infer<typeof candidateProfileSchema>;

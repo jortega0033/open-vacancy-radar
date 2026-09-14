@@ -2,10 +2,17 @@ import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
+  buildSearchResultIndex,
+  descriptionExcerpt,
+  filterSearchResultIndex,
   filterResults,
+  salaryCounts,
   countryOptions,
+  formatDiscoverySalary,
   isStalePosting,
+  sortSearchResultIndex,
   sortResults,
+  toPartialResults,
   worldwideVerification,
   WORLDWIDE_VERIFICATION,
   type SearchResult,
@@ -40,6 +47,7 @@ function worldwideResult(overrides: { key: string; location: string | null }): S
   return {
     raw: { worldwideSponsorMatch: null } as never,
     official: null,
+    provisional: false,
     key: overrides.key,
     title: 'Frontend Engineer',
     company: 'Acme',
@@ -58,6 +66,33 @@ function worldwideResult(overrides: { key: string; location: string | null }): S
     lead: { title: 'Frontend Engineer', company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
   };
 }
+
+describe('toPartialResults (issue #252)', () => {
+  it('converts a discovery row to a row with no official cross-reference and an honest "not available" verification', () => {
+    const [result] = toPartialResults([discoveryVacancy({ key: 'streamed-1', title: 'Streamed Role' })]);
+
+    expect(result).toMatchObject({ key: 'streamed-1', title: 'Streamed Role', official: null });
+    expect(result!.verification).toEqual(WORLDWIDE_VERIFICATION);
+  });
+
+  it('never invents a profile score or sponsor match for a row that has not been enriched yet', () => {
+    const [result] = toPartialResults([
+      discoveryVacancy({ profileScore: null, worldwideSponsorMatch: null }),
+    ]);
+
+    expect(result!.profileScore).toBeNull();
+    expect(result!.raw.worldwideSponsorMatch).toBeNull();
+  });
+
+  it('produces one row per input vacancy, in the given order, unlike toWorldwideResults it never needs a report to run against', () => {
+    const results = toPartialResults([
+      discoveryVacancy({ key: 'a', title: 'Role A' }),
+      discoveryVacancy({ key: 'b', title: 'Role B' }),
+    ]);
+
+    expect(results.map((r) => r.key)).toEqual(['a', 'b']);
+  });
+});
 
 describe('filterResults: country filter', () => {
   it('applies no filter when country is "all", the default', () => {
@@ -87,6 +122,28 @@ describe('filterResults: country filter', () => {
     const filtered = filterResults(results, { ...DEFAULT_FILTERS, country: UNSPECIFIED_LOCATION });
     expect(filtered.map((r) => r.key).sort()).toEqual(['1', '2']);
   });
+
+  it('matches every country retained after same-vacancy deduplication', () => {
+    const result = worldwideResult({ key: 'multi-country', location: 'Remote' });
+    result.raw = discoveryVacancy({ location: 'Remote', locations: ['Remote', 'Netherlands', 'Germany'] });
+    expect(filterResults([result], { ...DEFAULT_FILTERS, country: 'Netherlands' }).map((item) => item.key)).toEqual(['multi-country']);
+    expect(filterResults([result], { ...DEFAULT_FILTERS, country: 'Germany' }).map((item) => item.key)).toEqual(['multi-country']);
+  });
+
+  it('matches an employment filter against every retained duplicate employment type', () => {
+    const result = worldwideResult({ key: 'merged-employment', location: 'Worldwide' });
+    result.employmentType = 'contract';
+    result.raw = discoveryVacancy({ employmentType: 'contract', employmentTypes: ['contract', 'full_time'] });
+    expect(filterResults([result], { ...DEFAULT_FILTERS, employment: 'full_time' }).map((item) => item.key)).toEqual(['merged-employment']);
+  });
+});
+
+describe('filterResults: role search', () => {
+  it('matches a searchable description when the title does not contain the typed role', () => {
+    const result = worldwideResult({ key: 'description-role', location: 'Netherlands' });
+    result.description = 'Build accessible TypeScript interfaces.';
+    expect(filterResults([result], { ...DEFAULT_FILTERS, query: 'typescript' }).map((item) => item.key)).toEqual(['description-role']);
+  });
 });
 
 describe('filterResults: sponsorOnly', () => {
@@ -100,6 +157,114 @@ describe('filterResults: sponsorOnly', () => {
 
     const filtered = filterResults([matched, unmatched], { ...DEFAULT_FILTERS, sponsorOnly: true });
     expect(filtered.map((r) => r.key)).toEqual(['1']);
+  });
+});
+
+describe('filterResults: salary floor', () => {
+  it('keeps comparable rows at or above the floor and includes unknown rows by default', () => {
+    const atFloor = worldwideResult({ key: 'at-floor', location: 'Amsterdam, Netherlands' });
+    atFloor.raw = discoveryVacancy({ normalizedAnnualMinimum: 60_000, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' });
+    const below = worldwideResult({ key: 'below', location: 'Amsterdam, Netherlands' });
+    below.raw = discoveryVacancy({ normalizedAnnualMinimum: 59_999, normalizedCurrency: 'EUR', salaryProvenance: 'reviewed_structured' });
+    const unknown = worldwideResult({ key: 'unknown', location: 'Amsterdam, Netherlands' });
+    unknown.raw = discoveryVacancy({ salaryPeriod: 'weekly' });
+    const filters = { ...DEFAULT_FILTERS, salaryMinimum: '60000' };
+
+    expect(filterResults([atFloor, below, unknown], filters).map((result) => result.key)).toEqual([
+      'at-floor',
+      'unknown',
+    ]);
+    expect(salaryCounts([atFloor, below, unknown], filters)).toEqual({ comparable: 2, unknown: 1 });
+    expect(
+      filterResults([atFloor, below, unknown], { ...filters, includeUnknownSalary: false }).map(
+        (result) => result.key,
+      ),
+    ).toEqual(['at-floor']);
+  });
+
+  it('does not compare a raw USD value as EUR', () => {
+    const usd = worldwideResult({ key: 'usd', location: 'Remote' });
+    usd.raw = discoveryVacancy({ normalizedAnnualMinimum: 100_000, normalizedCurrency: 'USD', salaryProvenance: 'reviewed_structured' });
+    expect(filterResults([usd], { ...DEFAULT_FILTERS, salaryMinimum: '60000' })).toEqual([usd]);
+    expect(salaryCounts([usd], { ...DEFAULT_FILTERS, salaryMinimum: '60000' })).toEqual({
+      comparable: 0,
+      unknown: 1,
+    });
+  });
+});
+
+describe('large report filtering index', () => {
+  it('keeps indexed filtering and sorting behavior identical to the legacy helpers', () => {
+    const now = new Date('2026-09-01T00:00:00.000Z');
+    const results = [
+      {
+        ...worldwideResult({ key: '1', location: 'Amsterdam, Netherlands' }),
+        title: 'Frontend Engineer',
+        company: 'Acme',
+        provider: 'jobicy',
+        employmentType: 'full_time',
+        postedAt: '2026-08-31T00:00:00.000Z',
+        profileScore: 70,
+      },
+      {
+        ...worldwideResult({ key: '2', location: 'Austin, United States' }),
+        title: 'Backend Engineer',
+        company: 'Beta',
+        provider: 'remotive',
+        employmentType: 'contract',
+        postedAt: '2026-07-01T00:00:00.000Z',
+        profileScore: 90,
+      },
+      {
+        ...worldwideResult({ key: '3', location: 'Rotterdam, Netherlands' }),
+        title: 'Frontend Lead',
+        company: 'Gamma',
+        provider: 'jobicy',
+        employmentType: 'full_time',
+        postedAt: null,
+        profileScore: 80,
+      },
+    ] satisfies SearchResult[];
+    const filters = {
+      ...DEFAULT_FILTERS,
+      query: 'frontend',
+      source: 'jobicy',
+      country: 'Netherlands',
+      employment: 'full_time',
+      postedWithin: '30',
+    } as const;
+
+    const legacy = sortResults(filterResults(results, filters, now)).map((result) => result.key);
+    const indexed = sortSearchResultIndex(filterSearchResultIndex(buildSearchResultIndex(results), filters, now)).map(
+      (result) => result.key,
+    );
+
+    expect(indexed).toEqual(legacy);
+  });
+
+  it('filters and sorts a 20k-row saved report inside the documented interaction budget', () => {
+    const now = new Date('2026-09-01T00:00:00.000Z');
+    const results = Array.from({ length: 20_000 }, (_unused, index) => ({
+      ...worldwideResult({
+        key: `job-${index}`,
+        location: index % 4 === 0 ? 'Amsterdam, Netherlands' : 'Austin, United States',
+      }),
+      title: index % 2 === 0 ? 'Frontend Engineer' : 'Backend Engineer',
+      company: `Company ${index}`,
+      provider: index % 3 === 0 ? 'jobicy' : 'remotive',
+      employmentType: index % 5 === 0 ? 'contract' : 'full_time',
+      postedAt: index % 7 === 0 ? '2026-08-31T00:00:00.000Z' : null,
+      profileScore: index % 100,
+    })) satisfies SearchResult[];
+    const filters = { ...DEFAULT_FILTERS, query: 'frontend', country: 'Netherlands' };
+    const start = performance.now();
+    const index = buildSearchResultIndex(results);
+    const filtered = filterSearchResultIndex(index, filters, now);
+    const sorted = sortSearchResultIndex(filtered);
+    const elapsedMs = performance.now() - start;
+
+    expect(sorted).toHaveLength(5_000);
+    expect(elapsedMs).toBeLessThan(1_500);
   });
 });
 
@@ -142,6 +307,7 @@ describe('sortResults', () => {
     return {
       raw: discoveryVacancy({ key: overrides.key }),
       official: null,
+      provisional: false,
       key: overrides.key,
       title: overrides.title ?? overrides.key,
       company: 'Acme',
@@ -234,5 +400,111 @@ describe('worldwideVerification', () => {
     expect(verification.tone).toBe('warning');
     expect(verification.note).toContain('Acme Technologies B.V.');
     expect(verification.note).toContain('01234567');
+  });
+
+  it('falls back to WORLDWIDE_VERIFICATION, rather than crashing, when worldwideSponsorMatch is entirely absent', () => {
+    // Regression test: a report persisted by an older engine version can predate this field, so a
+    // vacancy hydrated from disk can carry `worldwideSponsorMatch: undefined` (the property simply
+    // never set) rather than the `null` the current type promises. Reading `match.legalName` off
+    // that `undefined` used to throw `TypeError: Cannot read properties of undefined (reading
+    // 'legalName')`, which had no error boundary above it and took the whole Search page down to a
+    // blank white screen on every launch that happened to hydrate such a report.
+    const vacancy = discoveryVacancy();
+    delete (vacancy as { worldwideSponsorMatch?: unknown }).worldwideSponsorMatch;
+
+    expect(worldwideVerification(vacancy)).toBe(WORLDWIDE_VERIFICATION);
+  });
+
+  it('falls back to WORLDWIDE_VERIFICATION for a match object missing legalName or kvkNumber', () => {
+    // Same schema-drift concern as above, one level down: a half-populated match object (rather
+    // than an entirely absent one) must not crash either.
+    expect(
+      worldwideVerification(
+        discoveryVacancy({ worldwideSponsorMatch: { legalName: '', kvkNumber: '01234567' } }),
+      ),
+    ).toBe(WORLDWIDE_VERIFICATION);
+    expect(
+      worldwideVerification(
+        discoveryVacancy({ worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '' } }),
+      ),
+    ).toBe(WORLDWIDE_VERIFICATION);
+  });
+});
+
+describe('formatDiscoverySalary', () => {
+  it('returns null when the source carries no advertised minimum', () => {
+    expect(formatDiscoverySalary(discoveryVacancy({ advertisedMinimum: null }))).toBeNull();
+  });
+
+  // UX audit finding: a single results list showed "USD 163,200/yearly", "GBP 25,000/weekly" and
+  // "USD 120,000/year" side by side -- three spellings straight from whichever upstream source
+  // produced them. Every synonym below must collapse onto the same canonical suffix.
+  it.each([
+    ['yearly', '/yr'],
+    ['year', '/yr'],
+    ['annual', '/yr'],
+    ['Annually', '/yr'],
+    ['yr', '/yr'],
+    ['monthly', '/mo'],
+    ['month', '/mo'],
+    ['weekly', '/wk'],
+    ['week', '/wk'],
+    ['hourly', '/hr'],
+    ['hour', '/hr'],
+    ['daily', '/day'],
+  ])('normalizes salaryPeriod %j to the canonical suffix %j', (salaryPeriod, suffix) => {
+    const salary = formatDiscoverySalary(
+      discoveryVacancy({ currency: 'USD', advertisedMinimum: 100_000, salaryPeriod }),
+    );
+    expect(salary).toBe(`from USD 100,000${suffix}`);
+  });
+
+  it('renders with no period suffix for a salaryPeriod it does not recognize, rather than leaking raw source text', () => {
+    expect(
+      formatDiscoverySalary(
+        discoveryVacancy({ currency: 'USD', advertisedMinimum: 100_000, salaryPeriod: 'per project' }),
+      ),
+    ).toBe('from USD 100,000');
+  });
+
+  it('renders with no period suffix at all when salaryPeriod is null', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: 'EUR', advertisedMinimum: 50_000, salaryPeriod: null })),
+    ).toBe('from EUR 50,000');
+  });
+
+  it('always prefixes "from" since advertisedMinimum is a minimum, never a fixed salary', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: 'GBP', advertisedMinimum: 25_000, salaryPeriod: 'annual' })),
+    ).toBe('from GBP 25,000/yr');
+  });
+
+  it('omits the currency, without a stray double space, when the source carries none', () => {
+    expect(
+      formatDiscoverySalary(discoveryVacancy({ currency: null, advertisedMinimum: 45_000, salaryPeriod: 'annual' })),
+    ).toBe('from 45,000/yr');
+  });
+});
+
+describe('descriptionExcerpt', () => {
+  it('returns null for a null description', () => {
+    expect(descriptionExcerpt(null)).toBeNull();
+  });
+
+  it('returns null for a whitespace-only description', () => {
+    expect(descriptionExcerpt('   \n\n  ')).toBeNull();
+  });
+
+  it('collapses preserved paragraph breaks to a single line for the card preview', () => {
+    // `description` can carry real newlines at former block-tag boundaries (see
+    // `packages/vacancy-engine/src/ats/shared.ts`'s `htmlToText`), which the detail pane renders
+    // with `whitespace-pre-wrap`. The card excerpt is a different, single-line rendering context.
+    expect(descriptionExcerpt('Multiple years of experience.\n\nTwo Microsoft certifications.')).toBe(
+      'Multiple years of experience. Two Microsoft certifications.',
+    );
+  });
+
+  it('trims leading and trailing whitespace', () => {
+    expect(descriptionExcerpt('  Build accessible interfaces.  ')).toBe('Build accessible interfaces.');
   });
 });

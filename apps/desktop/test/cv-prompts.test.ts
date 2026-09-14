@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { RESUME_JSON_SHAPE } from '../electron/resume-schema.js';
 import {
+  ATS_FIT_EVIDENCE_STATUSES,
+  ATS_FIT_MAX_REQUIREMENTS,
+  buildAchievementRewritePrompt,
+  buildAtsFitPrompt,
+  buildBestFitRolesPrompt,
   buildCoverLetterPrompt,
   buildCvParsePrompt,
   buildCvTailorPrompt,
   buildGapAnalysisPrompt,
+  buildResumeAuditPrompt,
   buildStructuredResumePrompt,
   formatVacancy,
   GROUNDING_RULES,
+  MAX_AUDIT_FOCUS_CODE_POINTS,
   MAX_CV_PROMPT_CHARS,
   MAX_UNATTENDED_VACANCY_TEXT_CHARS,
   MAX_VACANCY_FIELD_CHARS,
+  validateAuditFocus,
   wasVacancyTextTruncated,
 } from '../src/components/cv/prompts.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
@@ -30,7 +38,12 @@ const VACANCY: VacancyLead = {
 
 describe('prompt builders', () => {
   it('states an undisclosed salary explicitly rather than omitting the field', () => {
-    const block = formatVacancy({ ...VACANCY, advertisedMinimum: null, currency: null, salaryPeriod: null });
+    const block = formatVacancy({
+      ...VACANCY,
+      advertisedMinimum: null,
+      currency: null,
+      salaryPeriod: null,
+    });
     expect(block).toContain('Advertised salary: not disclosed in the posting');
   });
 
@@ -54,7 +67,10 @@ describe('prompt builders', () => {
     const huge = { fileName: 'cv.pdf', text: 'x'.repeat(MAX_CV_PROMPT_CHARS + 5_000) };
     // Every builder that echoes the CV shares one clamp; the tailoring prompt is checked too
     // because it is the one that asks for the whole document back, not a paragraph about it.
-    for (const prompt of [buildGapAnalysisPrompt(huge, VACANCY), buildCvTailorPrompt(huge, VACANCY)]) {
+    for (const prompt of [
+      buildGapAnalysisPrompt(huge, VACANCY),
+      buildCvTailorPrompt(huge, VACANCY),
+    ]) {
       expect(prompt).toContain('…truncated at');
       expect(prompt.length).toBeLessThan(MAX_CV_PROMPT_CHARS + 4_000);
     }
@@ -70,6 +86,9 @@ describe('prompt builders', () => {
       buildCvTailorPrompt(CV, VACANCY),
       buildCvParsePrompt(CV.fileName, CV.text),
       buildStructuredResumePrompt(CV, VACANCY),
+      buildResumeAuditPrompt(CV),
+      buildAchievementRewritePrompt(CV),
+      buildBestFitRolesPrompt(CV),
     ]) {
       expect(prompt).toContain(GROUNDING_RULES);
     }
@@ -131,11 +150,111 @@ describe('prompt builders', () => {
     expect(titleLine?.endsWith('…')).toBe(true);
   });
 
-  it('asks the gap analysis for the four fixed sections', () => {
-    const prompt = buildGapAnalysisPrompt(CV, VACANCY);
-    for (const heading of ['## Strengths', '## Gaps', '## How to close the gaps', '## Overall fit']) {
+  it('asks the ATS fit review for the requirement-to-evidence matrix, hard constraints, and priority actions (issue #361)', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    for (const heading of [
+      '## Requirement-to-evidence matrix',
+      '## Hard constraints',
+      '## Priority actions',
+    ]) {
       expect(prompt).toContain(heading);
     }
+    expect(prompt).toContain('Do not claim to simulate, predict or guarantee');
+    expect(prompt).toContain('never output a numeric score, percentage or pass/fail verdict');
+  });
+
+  it('requests only the five defined evidence-status labels, and explains each', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    for (const status of ATS_FIT_EVIDENCE_STATUSES) {
+      expect(prompt.toLowerCase()).toContain(status);
+    }
+    expect(prompt).toContain('Silence in a CV is not proof the candidate lacks it');
+  });
+
+  it('bounds the review to a fixed requirement count and requires disclosure when capped', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    expect(prompt).toContain(`Review at most ${ATS_FIT_MAX_REQUIREMENTS} deduplicated requirements`);
+    expect(prompt).toContain('how many were reviewed and how many were left out');
+  });
+
+  it('requires a JD anchor and a CV source anchor for every matrix entry, never invented facts', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    expect(prompt).toContain('JD anchor');
+    expect(prompt).toContain('source: <CV section, role or project name>');
+    expect(prompt).toContain('Never invent a line number, a document link, an employer policy');
+  });
+
+  it('keeps the resume audit grounded and organized around actionable review', () => {
+    const prompt = buildResumeAuditPrompt(CV);
+    for (const heading of [
+      '## Summary',
+      '## What works',
+      '## Risks and weak spots',
+      '## Priority fixes',
+    ]) {
+      expect(prompt).toContain(heading);
+    }
+    expect(prompt).toContain('general review');
+    expect(prompt).toContain('do not assume a target vacancy');
+    expect(prompt).toContain(CV.text);
+  });
+
+  describe('resume audit target-role focus (issue #362)', () => {
+    it('normalizes whitespace and trims the focus', () => {
+      expect(validateAuditFocus('  React   Frontend\n\tEngineer  ')).toEqual({
+        value: 'React Frontend Engineer',
+        overlong: false,
+      });
+    });
+
+    it('treats blank/whitespace-only input as a general review, never a role of its own', () => {
+      expect(validateAuditFocus('   ')).toEqual({ value: '', overlong: false });
+      expect(buildResumeAuditPrompt(CV, '   ')).toContain('general review');
+    });
+
+    it('accepts exactly the code-point bound and rejects one past it, counting code points not UTF-16 units', () => {
+      const atBound = 'x'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect(validateAuditFocus(atBound)).toEqual({ value: atBound, overlong: false });
+      expect(validateAuditFocus('x'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS + 1)).overlong).toBe(true);
+
+      // A surrogate-pair emoji is one code point, not two UTF-16 units.
+      const emojiAtBound = '🚀'.repeat(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect([...emojiAtBound]).toHaveLength(MAX_AUDIT_FOCUS_CODE_POINTS);
+      expect(validateAuditFocus(emojiAtBound).overlong).toBe(false);
+    });
+
+    it('focuses the audit prompt on the named role without inventing experience or a numeric score', () => {
+      const prompt = buildResumeAuditPrompt(CV, 'React Frontend Engineer');
+      expect(prompt).toContain('"React Frontend Engineer"');
+      expect(prompt).toContain('A desired role is not evidence of experience');
+      expect(prompt).not.toContain('general review');
+      // The four fixed sections are preserved verbatim regardless of focus.
+      for (const heading of ['## Summary', '## What works', '## Risks and weak spots', '## Priority fixes']) {
+        expect(prompt).toContain(heading);
+      }
+    });
+
+    it('re-normalizes an unnormalized focus rather than trusting the caller already did', () => {
+      const prompt = buildResumeAuditPrompt(CV, '  Angular   Architect  ');
+      expect(prompt).toContain('"Angular Architect"');
+    });
+  });
+
+  it('separates achievement rewrites from their evidence and missing evidence', () => {
+    const prompt = buildAchievementRewritePrompt(CV);
+    expect(prompt).toContain('**Original:**');
+    expect(prompt).toContain('**Supported rewrite:**');
+    expect(prompt).toContain('**Evidence used:**');
+    expect(prompt).toContain('**Missing evidence:**');
+    expect(prompt).toContain('Do not add numbers');
+  });
+
+  it('frames best-fit roles as realistic search directions rather than outcomes', () => {
+    const prompt = buildBestFitRolesPrompt(CV);
+    expect(prompt).toContain('## Best-fit role directions');
+    expect(prompt).toContain('## Stretch directions');
+    expect(prompt).toContain('## Search focus');
+    expect(prompt).toContain('not a guaranteed fit, interview or job outcome');
   });
 
   it('asks the cover letter for a generic salutation and no placeholder template', () => {
@@ -149,13 +268,17 @@ describe('prompt builders', () => {
   it('asks the tailored CV for reordering/re-emphasis only, never new facts or a new shape', () => {
     const prompt = buildCvTailorPrompt(CV, VACANCY);
     expect(prompt).toContain('reordering and re-emphasis task, not a rewriting task');
-    expect(prompt).toContain('Keep the candidate\'s real employers, titles, dates and structure intact');
+    expect(prompt).toContain(
+      "Keep the candidate's real employers, titles, dates and structure intact",
+    );
     expect(prompt).toContain('no Markdown headings');
     expect(prompt).toContain('Angular architect. 8 years of frontend work.');
     // The failure mode this feature invites, spelled out: a vacancy that asks for a skill the CV
     // does not evidence must not become a skill the tailored draft claims.
     expect(prompt).toContain('even if the vacancy asks for it and the CV is silent on it');
-    expect(prompt).toContain('Do not add a single fact, skill, tool, employer, title, date or metric');
+    expect(prompt).toContain(
+      'Do not add a single fact, skill, tool, employer, title, date or metric',
+    );
     expect(prompt).toContain('drawing only on what the CV already says');
   });
 
@@ -164,7 +287,9 @@ describe('prompt builders', () => {
     expect(prompt).toContain(RESUME_JSON_SHAPE);
     expect(prompt).toContain('no Markdown code fence');
     expect(prompt).toContain('do not guess');
-    expect(prompt).toContain('Do not add a single fact, skill, tool, employer, title, date or metric');
+    expect(prompt).toContain(
+      'Do not add a single fact, skill, tool, employer, title, date or metric',
+    );
     expect(prompt).toContain('Angular architect. 8 years of frontend work.');
   });
 
@@ -184,7 +309,10 @@ describe('prompt builders', () => {
 
   it('reports whether the vacancy text would be truncated at a given limit', () => {
     expect(wasVacancyTextTruncated(VACANCY, MAX_UNATTENDED_VACANCY_TEXT_CHARS)).toBe(false);
-    const longVacancy = { ...VACANCY, description: 'x'.repeat(MAX_UNATTENDED_VACANCY_TEXT_CHARS + 1) };
+    const longVacancy = {
+      ...VACANCY,
+      description: 'x'.repeat(MAX_UNATTENDED_VACANCY_TEXT_CHARS + 1),
+    };
     expect(wasVacancyTextTruncated(longVacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)).toBe(true);
   });
 

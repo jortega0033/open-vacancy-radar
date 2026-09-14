@@ -1,3 +1,4 @@
+import { isAcceptableDocumentLink } from './document-links.js';
 import type { TailoredResume } from './resume-schema.js';
 
 /**
@@ -20,11 +21,37 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#039;');
 }
 
+/**
+ * #276: a portfolio or profile URL that prints as grey text and nothing else is a link the reader
+ * cannot follow, so links become real anchors and the acceptance contract checks they survived into
+ * the finished PDF as usable link annotations.
+ *
+ * Only an already-absolute http(s)/mailto address becomes an anchor. A CV that writes
+ * "linkedin.com/in/name" is not wrong, but an `<a href>` around it resolves relative to the
+ * `data:text/html` URL the PDF renderer loads, producing a broken annotation in the finished
+ * document -- worse than plain text, and not something to silently "fix" by guessing a scheme the
+ * candidate never wrote.
+ */
+function renderLink(url: string): string {
+  const trimmed = url.trim();
+  return isAcceptableDocumentLink(trimmed) ? `<a href="${escapeHtml(trimmed)}">${escapeHtml(trimmed)}</a>` : escapeHtml(trimmed);
+}
+
 function contactLine(resume: TailoredResume): string {
-  const parts = [resume.contact.location, resume.contact.email, resume.contact.phone, ...resume.contact.links].filter(
-    (part) => part.trim().length > 0,
-  );
-  return parts.map(escapeHtml).join(' &nbsp;&middot;&nbsp; ');
+  const plainParts = [resume.contact.location, resume.contact.email, resume.contact.phone]
+    .filter((part) => part.trim().length > 0)
+    .map(escapeHtml);
+  const linkParts = resume.contact.links.filter((link) => link.trim().length > 0).map(renderLink);
+  return [...plainParts, ...linkParts].join(' &nbsp;&middot;&nbsp; ');
+}
+
+/** #274: a contract delivered for an end client is labelled as one, and the end client is never
+ * written where the direct employer goes. A resume that lists a client as an employer is a factual
+ * misstatement about the candidate's own history, which is exactly what this ticket exists to stop. */
+function engagementNote(entry: TailoredResume['experience'][number]): string {
+  if (entry.engagement !== 'client_engagement') return '';
+  const label = entry.client.trim().length > 0 ? `client engagement: ${entry.client}` : 'client engagement';
+  return `<p class="entry-note">${escapeHtml(label)}</p>`;
 }
 
 function experienceSection(resume: TailoredResume): string {
@@ -37,11 +64,36 @@ function experienceSection(resume: TailoredResume): string {
         <span class="entry-title">${escapeHtml(entry.title)}${entry.title && entry.company ? ', ' : ''}${escapeHtml(entry.company)}</span>
         <span class="entry-dates">${escapeHtml(entry.dates)}</span>
       </div>
+      ${engagementNote(entry)}
       ${entry.bullets.length > 0 ? `<ul>${entry.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')}</ul>` : ''}
     </article>`,
     )
     .join('');
   return `<section><h2>Experience</h2>${entries}</section>`;
+}
+
+function projectsSection(resume: TailoredResume): string {
+  if (resume.projects.length === 0) return '';
+  const entries = resume.projects
+    .map((project) => {
+      const context = [project.role, project.organization].filter((part) => part.trim().length > 0).join(', ');
+      const meta = [
+        project.technologies.length > 0 ? escapeHtml(project.technologies.join(', ')) : '',
+        project.links.length > 0 ? project.links.map(renderLink).join(' &nbsp;&middot;&nbsp; ') : '',
+      ].filter((part) => part.length > 0);
+      return `
+    <article class="entry">
+      <div class="entry-head">
+        <span class="entry-title">${escapeHtml(project.name)}</span>
+        <span class="entry-dates">${escapeHtml(project.dates)}</span>
+      </div>
+      ${context ? `<p class="entry-note">${escapeHtml(context)}</p>` : ''}
+      ${project.description.trim().length > 0 ? `<p class="project-description">${escapeHtml(project.description)}</p>` : ''}
+      ${meta.length > 0 ? `<p class="entry-note">${meta.join(' &nbsp;&middot;&nbsp; ')}</p>` : ''}
+    </article>`;
+    })
+    .join('');
+  return `<section><h2>Projects</h2>${entries}</section>`;
 }
 
 function educationSection(resume: TailoredResume): string {
@@ -78,18 +130,27 @@ export function renderResumeHtml(resume: TailoredResume): string {
 <title>${escapeHtml(resume.contact.name || 'Resume')}</title>
 <style>
 @page { margin: 48px 56px; }
-body { font: 11pt/1.45 Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; }
+/* #276: an unbroken run with nowhere to wrap (a very long role title, a long portfolio URL) would
+   otherwise be laid out past the right page margin and physically cut off in print. Wrapping
+   anywhere is the only way a fixed-width page can keep it on the paper. */
+body { font: 11pt/1.45 Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; overflow-wrap: anywhere; }
 header { margin-bottom: 18px; }
 h1 { font-size: 20pt; margin: 0 0 2px; }
 .headline { font-size: 12pt; color: #444; margin: 0 0 6px; }
 .contact-line { font-size: 9.5pt; color: #555; }
+a { color: inherit; text-decoration: none; }
 h2 { font-size: 11pt; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin: 16px 0 8px; }
 section:first-of-type h2 { margin-top: 0; }
 .entry { margin-bottom: 10px; }
 .entry-head { display: flex; justify-content: space-between; gap: 12px; font-weight: bold; }
+/* Without min-width:0 a flex item refuses to shrink below its longest unbreakable run, pushing the
+   date column off the page rather than wrapping the title (#276). */
+.entry-title { min-width: 0; }
 .entry-dates { font-weight: normal; color: #555; white-space: nowrap; }
 ul { margin: 4px 0 0; padding-left: 18px; }
 li { margin-bottom: 2px; }
+.entry-note { margin: 2px 0 0; font-size: 9.5pt; color: #555; }
+.project-description { margin: 3px 0 0; }
 .summary { margin: 0; }
 .skills { margin: 0; }
 </style></head>
@@ -101,6 +162,7 @@ li { margin-bottom: 2px; }
 </header>
 ${summarySection(resume)}
 ${experienceSection(resume)}
+${projectsSection(resume)}
 ${skillsSection(resume)}
 ${educationSection(resume)}
 </body></html>`;

@@ -11,6 +11,9 @@ import type { ProviderCapabilities } from '@agent-dock/shared';
  * - thinking: `thinking` content blocks normalize to thinking.delta (parser.ts): only present when
  *   the CLI itself surfaces extended-thinking output; absent otherwise, which is fine, since this
  *   capability means "the adapter passes it through when the CLI provides it", not "always present"
+ * - hardenedNoNetwork (#284): `buildClaudeArgs` reads `opts.hardened === 'no-network'` and appends
+ *   `CLAUDE_HARDENING_ARGS_NO_NETWORK` (build-args.ts) -- this adapter is the only one in the repo
+ *   that reads that field at all, which is exactly the fact this flag makes machine-readable
  */
 export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   resume: true,
@@ -18,6 +21,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   tools: true,
   usage: true,
   thinking: true,
+  hardenedNoNetwork: true,
 };
 
 /**

@@ -35,6 +35,23 @@ const REAL_MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '..', '..'
 
 const PRE_0001_TAGS = ['0000_giant_winter_soldier'];
 
+/**
+ * What a fully migrated database holds: the three tables 0001 leaves standing, plus every table a
+ * later migration adds. `migrateDatabase` always applies the whole journal, so this list -- not
+ * 0001's three survivors on their own -- is what these assertions can compare against.
+ * `worldwide_sponsor_lookups` comes from 0002 and is what lets the worldwide sponsor check resume
+ * across scans instead of re-paying a rate-limited Wikidata for every employer, every run.
+ */
+const SURVIVING_AND_LATER_TABLES = [
+  'http_cache',
+  'ind_sponsor_snapshots',
+  'ind_sponsors',
+  'worldwide_sponsor_lookups',
+];
+
+/** Migrations applied on top of `PRE_0001_TAGS` by a full `migrateDatabase` run: 0001 and 0002. */
+const POST_0001_MIGRATION_COUNT = 2;
+
 type JournalEntry = { idx: number; version: string; when: number; tag: string; breakpoints: boolean };
 type Journal = { version: string; dialect: string; entries: JournalEntry[] };
 
@@ -268,7 +285,7 @@ describe('migration 0001 drops the curated Netherlands pipeline tables only', ()
     }
   });
 
-  it('leaves the fourteen curated tables gone and the three survivors intact, byte-identical', async () => {
+  it('leaves the fourteen curated tables gone and the survivors intact, byte-identical', async () => {
     seedPre0001Database();
 
     const { db, close } = createDatabaseClient(join(dir, 'vacancy-engine.db'));
@@ -281,7 +298,7 @@ describe('migration 0001 drops the curated Netherlands pipeline tables only', ()
     const connection = openRaw(join(dir, 'vacancy-engine.db'));
     try {
       const tables = tableNames(connection);
-      expect(tables.sort()).toEqual(['http_cache', 'ind_sponsor_snapshots', 'ind_sponsors'].sort());
+      expect(tables.sort()).toEqual(SURVIVING_AND_LATER_TABLES.sort());
 
       // The load-bearing assertion: the only tables the surviving worldwideSponsorMatch check
       // depends on must come through with every value unchanged, not just "the table exists".
@@ -324,7 +341,7 @@ describe('migration 0001 drops the curated Netherlands pipeline tables only', ()
     const connection = openRaw(join(dir, 'vacancy-engine.db'));
     try {
       const applied = connection.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as { n: number };
-      expect(applied.n).toBe(PRE_0001_TAGS.length + 1);
+      expect(applied.n).toBe(PRE_0001_TAGS.length + POST_0001_MIGRATION_COUNT);
     } finally {
       connection.close();
     }
@@ -332,7 +349,7 @@ describe('migration 0001 drops the curated Netherlands pipeline tables only', ()
 });
 
 describe('migrateDatabase applies 0001 to a genuinely fresh database too', () => {
-  it('creates only the three surviving tables from nothing', async () => {
+  it('creates only the surviving and later-added tables from nothing', async () => {
     const { db, close } = createDatabaseClient(join(dir, 'fresh.db'));
     try {
       await migrateDatabase(db);
@@ -342,7 +359,7 @@ describe('migrateDatabase applies 0001 to a genuinely fresh database too', () =>
 
     const connection = openRaw(join(dir, 'fresh.db'));
     try {
-      expect(tableNames(connection).sort()).toEqual(['http_cache', 'ind_sponsor_snapshots', 'ind_sponsors'].sort());
+      expect(tableNames(connection).sort()).toEqual(SURVIVING_AND_LATER_TABLES.sort());
     } finally {
       connection.close();
     }

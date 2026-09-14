@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { WorkspaceCounts } from './window.js';
 import { PROVIDER_LABEL } from './provider-labels.js';
-import { SearchPage } from './components/search/index.js';
+import { SearchPage, createSearchSessionState } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
@@ -12,6 +12,7 @@ import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import {
   AppSidebar,
+  ErrorBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -37,6 +38,9 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  const [searchSession, setSearchSession] = useState(createSearchSessionState);
+  const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
+  const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -111,6 +115,8 @@ export function App() {
     // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
+    setLetterReturnAttemptId(null);
+    if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
     void window.workspace?.updateSettings({ lastOpenedPage: page }).catch(() => {});
@@ -126,6 +132,17 @@ export function App() {
   const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
     hasNavigatedRef.current = true;
     setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(null);
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(attemptId);
     setNav('letters');
     void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
     void refreshCounts();
@@ -134,6 +151,30 @@ export function App() {
   // Passed to `LettersPage`: fired once it has captured its own copy of `pendingVacancy`, so this
   // state can be cleared immediately rather than waiting for the user to navigate elsewhere.
   const handleVacancyConsumed = useCallback(() => setPendingVacancy(null), []);
+
+  const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
+    hasNavigatedRef.current = true;
+    if (letterReturnAttemptId) {
+      setApplicationAttemptToOpen(letterReturnAttemptId);
+      setLetterReturnAttemptId(null);
+      setNav('applications');
+      void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
+      void refreshCounts();
+      return;
+    }
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
+    setNav('search');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
+    void refreshCounts();
+  }, [letterReturnAttemptId, refreshCounts]);
+
+  const handleViewApplicationAttempt = useCallback((attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setApplicationAttemptToOpen(attemptId);
+    setNav('applications');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
 
   const handleToggleSidebar = useCallback(() => {
     setSidebarCollapsed((previous) => {
@@ -216,17 +257,48 @@ export function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <WorkspaceHeader title={title} subtitle={subtitle} />
 
-        <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <main
+          className={`min-h-0 flex-1 py-6 ${
+            nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
+          }`}
+        >
           {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
               destination you are on, "the CLI runtime is not running" is worth knowing. */}
-          {daemonState === 'connecting' && <div className="alert alert-info mb-5">Connecting to local daemon…</div>}
-          {daemonState === 'unavailable' && (
-            <div className="alert alert-error alert-soft mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</div>
-          )}
+          <div className={nav === 'search' ? 'px-6' : undefined}>
+            {daemonState === 'connecting' && (
+              <div className="alert alert-info mb-5">Connecting to local daemon…</div>
+            )}
+            {daemonState === 'unavailable' && (
+              <ErrorBanner className="mb-5">
+                Daemon unavailable: {daemonError ?? 'unknown error'}
+              </ErrorBanner>
+            )}
+          </div>
 
-          {nav === 'search' && <SearchPage onGenerateLetter={handleGenerateLetter} />}
-          {nav === 'saved' && <SavedJobsPage />}
-          {nav === 'applications' && <ApplicationsPage />}
+          {nav === 'search' && (
+            <SearchPage
+              onGenerateLetter={handleGenerateLetter}
+              onOpenSearchProfile={() => handleNavigate('settings')}
+              onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
+              session={searchSession}
+              onSessionChange={setSearchSession}
+            />
+          )}
+          {nav === 'saved' && (
+            <SavedJobsPage
+              onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
+            />
+          )}
+          {nav === 'applications' && (
+            <ApplicationsPage
+              onApplicationsChanged={refreshCounts}
+              focusAttemptId={applicationAttemptToOpen}
+              onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
+              onGenerateLetter={handleGenerateApplicationLetter}
+            />
+          )}
           {nav === 'cv' && <CvLibraryPage />}
           {nav === 'letters' && (
             <LettersPage
@@ -234,6 +306,7 @@ export function App() {
               openOnGenerator={pendingVacancy !== null}
               onVacancyConsumed={handleVacancyConsumed}
               onLettersChanged={refreshCounts}
+              onBackToVacancy={handleBackToVacancy}
             />
           )}
           {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}

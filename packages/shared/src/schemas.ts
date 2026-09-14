@@ -16,6 +16,7 @@ export const providerCapabilitiesSchema = z
     tools: z.boolean().optional(),
     usage: z.boolean().optional(),
     thinking: z.boolean().optional(),
+    modelCatalog: z.boolean().optional(),
   })
   .catchall(z.boolean());
 
@@ -120,6 +121,25 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     outputTokens: z.number().optional(),
     cachedInputTokens: z.number().optional(),
     cost: z.number().optional(),
+  }),
+  agentEventBaseSchema.extend({
+    type: z.literal('usage.rate_limits'),
+    limitId: z.string().optional(),
+    limitName: z.string().optional(),
+    primary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
+    secondary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('error'),

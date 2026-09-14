@@ -1,4 +1,14 @@
-import type { DiscoveryVacancyAudit, OfficialVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  DiscoveryVacancyAudit,
+  OfficialVacancyAudit,
+  GlobalRemoteReport,
+  ProfileMatchBreakdown,
+} from '@open-vacancy-radar/vacancy-engine';
+import {
+  assessSalary,
+  parseMinimumAnnualSalary,
+  type SalaryFilterCriteria,
+} from '@open-vacancy-radar/vacancy-engine/salary';
 import type { VacancyLead } from '../cv/types.js';
 import { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './countries.js';
 
@@ -70,12 +80,28 @@ interface CommonResult {
    * strongest skills configured for this run.
    */
   profileScore: number | null;
+  /**
+   * The structured evidence behind `profileScore` (issue #367): technical/role/seniority fit, role
+   * classification, matching profile signals, and gaps/caps, exactly as the scorer computed them --
+   * never re-derived or re-scored in the renderer. `null` when `profileScore` is itself null.
+   * `undefined`, distinct from `null`, for a report persisted before this field existed even though
+   * it carries a real `profileScore`; `VacancyDetail` renders that case as an honest "breakdown
+   * unavailable" state rather than fabricating one from the number.
+   */
+  profileMatch?: ProfileMatchBreakdown | null;
   /** Deterministic engine findings, where the pipeline produces them. */
   strongPoints: string[];
   gaps: string[];
   reasons: string[];
   /** The subset of fields the CV assistant needs to write a prompt. */
   lead: VacancyLead;
+  /**
+   * True for a row from an in-progress scan's live/progressive feed (`toPartialResults`), not yet
+   * in a final `GlobalRemoteReport`: unscored, with no official-source cross-reference, and not
+   * safe to hand to application preparation (issue #363/#364). False for every row `toWorldwideResults`
+   * produces, whether or not this run's report is itself capped/incomplete.
+   */
+  provisional: boolean;
 }
 
 export interface SearchResult extends CommonResult {
@@ -108,7 +134,15 @@ export function orNotStated(value: string | null | undefined): string {
  */
 export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verification {
   const match = vacancy.worldwideSponsorMatch;
-  if (match === null) return WORLDWIDE_VERIFICATION;
+  // `!= null` (not `=== null`) on purpose: a report persisted by an older engine version can
+  // predate this field entirely, so `worldwideSponsorMatch` may come back `undefined` from disk
+  // rather than the `null` the current type promises -- a stale report is exactly what a real dev
+  // launch can hydrate (apps/desktop/electron/resolve-vacancy-engine-paths.ts's dev-mode data root
+  // is not scoped per launch). The stored JSON is trusted, untyped data at this boundary; treating
+  // a malformed or half-populated match as "no match" (rather than crashing on `match.legalName`
+  // of `undefined`) matches this module's own rule above: absence of verification renders as
+  // absent, never as a negative result -- and never as a crash either.
+  if (match == null || !match.legalName || !match.kvkNumber) return WORLDWIDE_VERIFICATION;
 
   return {
     level: 'possible_sponsor_match',
@@ -118,15 +152,73 @@ export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verificat
   };
 }
 
+/** Canonical suffix shown for each of the pay-period buckets this app recognizes. */
+const SALARY_PERIOD_LABELS = {
+  hourly: '/hr',
+  weekly: '/wk',
+  monthly: '/mo',
+  annual: '/yr',
+  daily: '/day',
+} as const;
+
+type SalaryPeriodLabel = keyof typeof SALARY_PERIOD_LABELS;
+
+/**
+ * `DiscoveryVacancyAudit['salaryPeriod']` is a plain `string | null`, not a closed enum -- some
+ * discovery adapters run raw upstream feed vocabulary through `parseSalaryText` first (giving one
+ * of a handful of known words), but others (Himalayas, Jobicy, ...) pass the source's own
+ * `salaryPeriod` field straight through unnormalized (see `discoverHimalayas`/`discoverJobicy` in
+ * `packages/vacancy-engine/src/global-remote/discovery.ts`). A confirmed audit finding was a single
+ * results list showing "USD 163,200/yearly", "GBP 25,000/weekly" and "USD 120,000/year" side by
+ * side -- three spellings of two periods, read verbatim from whichever source happened to produce
+ * them. This maps every synonym actually seen across this app's sources onto one of a small,
+ * consistent set of suffixes. A value this doesn't recognize renders with no period suffix at all,
+ * rather than leaking arbitrary source text into the UI.
+ */
+function normalizeSalaryPeriod(period: string | null): SalaryPeriodLabel | null {
+  if (!period) return null;
+  if (/\b(?:hour|hourly|hr)\b/iu.test(period)) return 'hourly';
+  if (/\b(?:week|weekly|wk)\b/iu.test(period)) return 'weekly';
+  if (/\b(?:month|monthly|mo)\b/iu.test(period)) return 'monthly';
+  if (/\b(?:day|daily)\b/iu.test(period)) return 'daily';
+  if (/\b(?:year|yearly|annual|annually|yr|p\.?a\.?)\b/iu.test(period)) return 'annual';
+  return null;
+}
+
+/**
+ * `advertisedMinimum` is exactly what its name says -- a minimum, not a fixed salary -- so this is
+ * prefixed with "from" rather than rendered as if it were the whole story (a confirmed audit
+ * finding: the UI never said "minimum" anywhere, so a candidate had no way to know the number on a
+ * card was a floor rather than the actual offer).
+ */
 export function formatDiscoverySalary(vacancy: DiscoveryVacancyAudit): string | null {
   if (vacancy.advertisedMinimum == null) return null;
-  const currency = vacancy.currency ?? '';
-  const period = vacancy.salaryPeriod ? `/${vacancy.salaryPeriod}` : '';
-  return `${currency} ${vacancy.advertisedMinimum.toLocaleString()}${period}`.trim();
+  const parts = ['from'];
+  if (vacancy.currency) parts.push(vacancy.currency);
+  parts.push(vacancy.advertisedMinimum.toLocaleString());
+  const amount = parts.join(' ');
+  const normalizedPeriod = normalizeSalaryPeriod(vacancy.salaryPeriod);
+  return normalizedPeriod ? `${amount}${SALARY_PERIOD_LABELS[normalizedPeriod]}` : amount;
 }
 
 export function decisionLabel(decision: DiscoveryVacancyAudit['decision']): string {
   return decision.replace(/_/g, ' ');
+}
+
+/**
+ * Single-line preview of `description` for the results-list card (issue: cards showed zero
+ * role-content, so scanning 25 results meant opening each one individually to judge fit). The
+ * stored `description` can now carry real paragraph breaks (`htmlToText` inserts a newline at every
+ * block-tag boundary -- see `packages/vacancy-engine/src/global-remote/feed-discovery.ts`'s
+ * `decodedText`), which the detail pane renders with `whitespace-pre-wrap`; collapsing them to
+ * spaces here is purely a card-preview concern; it never mutates or re-derives the text the detail
+ * pane shows. Returns null for a blank/whitespace-only description so the card never renders an
+ * empty line.
+ */
+export function descriptionExcerpt(description: string | null): string | null {
+  if (!description) return null;
+  const collapsed = description.replace(/\s+/gu, ' ').trim();
+  return collapsed.length > 0 ? collapsed : null;
 }
 
 /** Renderer-side scheme guard, mirroring `electron/external-url.ts`. A feed controls this string. */
@@ -139,13 +231,21 @@ export function isWebUrl(value: string): boolean {
   }
 }
 
-export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
-  const officialByUrl = new Map<string, OfficialVacancyAudit>();
-  for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
-
-  return report.discoveryAudit.map((vacancy) => ({
+/**
+ * The `SearchResult` row for one discovery vacancy, given whatever official-source cross-reference
+ * (if any) this run found for its exact URL. Shared by `toWorldwideResults` (a finished scan, real
+ * `official` lookups) and `toPartialResults` (a still-running scan, `official` always null -- see
+ * that function's own doc comment for why).
+ */
+function toSearchResult(
+  vacancy: DiscoveryVacancyAudit,
+  official: OfficialVacancyAudit | null,
+  provisional: boolean,
+): SearchResult {
+  return {
     raw: vacancy,
-    official: officialByUrl.get(vacancy.url) ?? null,
+    official,
+    provisional,
     key: vacancy.key,
     title: vacancy.title,
     company: vacancy.company,
@@ -159,6 +259,9 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
     description: vacancy.description,
     verification: worldwideVerification(vacancy),
     profileScore: vacancy.profileScore,
+    // Passed through exactly as the raw row carries it -- undefined stays undefined (older report,
+    // no such field) rather than being collapsed into null (scored, no breakdown) or vice versa.
+    profileMatch: vacancy.profileMatch,
     strongPoints: [],
     gaps: [],
     reasons: vacancy.reasons,
@@ -172,7 +275,30 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
       salaryPeriod: vacancy.salaryPeriod,
       advertisedMinimum: vacancy.advertisedMinimum,
     },
-  }));
+  };
+}
+
+export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
+  const officialByUrl = new Map<string, OfficialVacancyAudit>();
+  for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
+
+  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null, false));
+}
+
+/**
+ * Streaming/provisional counterpart to `toWorldwideResults` (issue #252): converts the discovery
+ * rows a scan has pushed so far, while it is still running and no final `GlobalRemoteReport` exists
+ * yet. `official` is always null -- the official-source audit this run will eventually produce
+ * doesn't exist yet either (`runOfficialGlobalRemoteSources` runs independently of, and is never
+ * awaited by, the discovery progress events this converts), so every partial row's verification
+ * reads the same honest "not available" state `worldwideVerification` already gives any row with no
+ * sponsor match. `profileScore` is whatever the raw `DiscoveryVacancyAudit` carries, which is always
+ * null here too: scoring and sponsor-matching only ever run once, after discovery has fully
+ * finished (see `runGlobalRemoteScan`), so a partial row is never mislabelled with a real-looking
+ * score it was not actually given.
+ */
+export function toPartialResults(vacancies: readonly DiscoveryVacancyAudit[]): SearchResult[] {
+  return vacancies.map((vacancy) => toSearchResult(vacancy, null, true));
 }
 
 export type PostedWithin = 'any' | '1' | '7' | '30';
@@ -193,6 +319,10 @@ export interface SearchFilters {
   /** Which country a vacancy's own `location` text normalizes to (see `countries.ts`). `'all'`
    * applies no filter. */
   country: string;
+  /** Draft input, parsed only when a scan is submitted. */
+  salaryMinimum: string;
+  salaryCurrency: string;
+  includeUnknownSalary: boolean;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -203,7 +333,36 @@ export const DEFAULT_FILTERS: SearchFilters = {
   source: 'all',
   employment: 'any',
   country: 'all',
+  salaryMinimum: '',
+  salaryCurrency: 'EUR',
+  includeUnknownSalary: true,
 };
+
+export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
+  const minimumAnnual = parseMinimumAnnualSalary(filters.salaryMinimum ?? '');
+  if (minimumAnnual === null) return null;
+  return {
+    minimumAnnual,
+    currency: filters.salaryCurrency ?? 'EUR',
+    includeUnknown: filters.includeUnknownSalary ?? true,
+  };
+}
+
+export function salaryCounts(
+  results: readonly SearchResult[],
+  filters: SearchFilters,
+): { comparable: number; unknown: number } {
+  const criteria = salaryCriteriaFromFilters(filters);
+  if (criteria === null) return { comparable: 0, unknown: 0 };
+  let comparable = 0;
+  let unknown = 0;
+  for (const result of results) {
+    const assessment = assessSalary(result.raw, criteria);
+    if (assessment.kind === 'comparable' || assessment.kind === 'below_floor') comparable += 1;
+    else if (assessment.kind === 'unknown') unknown += 1;
+  }
+  return { comparable, unknown };
+}
 
 /**
  * Every selectable country plus the honest fallback for a vacancy whose location text didn't
@@ -220,16 +379,35 @@ export function sourceOptions(results: SearchResult[]): string[] {
 
 export function employmentOptions(results: SearchResult[]): string[] {
   const values = results
-    .map((result) => result.employmentType)
+    .flatMap((result) => result.raw.employmentTypes ?? (result.employmentType ? [result.employmentType] : []))
     .filter((value): value is string => !!value && value.trim().length > 0);
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 
 const MILLISECONDS_PER_DAY = 86_400_000;
 
-function matches(haystack: string | null, needle: string): boolean {
-  if (!needle.trim()) return true;
-  return (haystack ?? '').toLowerCase().includes(needle.trim().toLowerCase());
+export interface SearchResultIndexEntry {
+  result: SearchResult;
+  titleLower: string;
+  companyLower: string;
+  locationLower: string;
+  descriptionLower: string;
+  countries: string[];
+  employmentTypes: string[];
+  postedAtMs: number | null;
+}
+
+export function buildSearchResultIndex(results: SearchResult[]): SearchResultIndexEntry[] {
+  return results.map((result) => ({
+    result,
+    titleLower: result.title.toLowerCase(),
+    companyLower: result.company.toLowerCase(),
+    locationLower: (result.location ?? '').toLowerCase(),
+    descriptionLower: (result.description ?? '').toLowerCase(),
+    countries: (result.raw.locations ?? [result.location ?? '']).map((location) => normalizeCountry(location)).filter((country): country is string => country !== null),
+    employmentTypes: result.raw.employmentTypes ?? (result.employmentType ? [result.employmentType] : []),
+    postedAtMs: postedAtTimestamp(result.postedAt),
+  }));
 }
 
 /**
@@ -242,35 +420,46 @@ export function filterResults(
   filters: SearchFilters,
   now: Date = new Date(),
 ): SearchResult[] {
-  return results.filter((result) => {
-    if (filters.query.trim()) {
-      const needle = filters.query.trim().toLowerCase();
-      const inTitle = result.title.toLowerCase().includes(needle);
-      const inCompany = result.company.toLowerCase().includes(needle);
-      if (!inTitle && !inCompany) return false;
-    }
+  return filterSearchResultIndex(buildSearchResultIndex(results), filters, now).map((entry) => entry.result);
+}
 
-    if (!matches(result.location, filters.location)) return false;
+export function filterSearchResultIndex(
+  index: SearchResultIndexEntry[],
+  filters: SearchFilters,
+  now: Date = new Date(),
+): SearchResultIndexEntry[] {
+  const query = filters.query.trim().toLowerCase();
+  const location = filters.location.trim().toLowerCase();
+  const maximumAgeMs = filters.postedWithin === 'any' ? null : Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
+  const nowMs = now.getTime();
+  const salary = salaryCriteriaFromFilters(filters);
 
-    if (filters.source !== 'all' && result.provider !== filters.source) return false;
+  return index.filter((entry) => {
+    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query) && !entry.descriptionLower.includes(query)) return false;
 
-    if (filters.sponsorOnly && result.raw.worldwideSponsorMatch === null) return false;
+    if (location && !entry.locationLower.includes(location)) return false;
 
-    if (filters.postedWithin !== 'any') {
+    if (filters.source !== 'all' && entry.result.provider !== filters.source) return false;
+
+    if (filters.sponsorOnly && entry.result.raw.worldwideSponsorMatch === null) return false;
+
+    if (maximumAgeMs !== null) {
       // A row with no known posting date cannot satisfy "posted in the last N days". It is dropped
       // rather than kept, so the narrowed list means exactly what it says; the filter bar states it.
-      if (!result.postedAt) return false;
-      const posted = new Date(result.postedAt);
-      if (Number.isNaN(posted.valueOf())) return false;
-      const maximumAgeMs = Number(filters.postedWithin) * MILLISECONDS_PER_DAY;
-      if (now.getTime() - posted.getTime() > maximumAgeMs) return false;
+      if (entry.postedAtMs === null) return false;
+      if (nowMs - entry.postedAtMs > maximumAgeMs) return false;
     }
 
-    if (filters.employment !== 'any' && result.employmentType !== filters.employment) return false;
+    if (filters.employment !== 'any' && !entry.employmentTypes.includes(filters.employment)) return false;
 
     if (filters.country !== 'all') {
-      const resolved = normalizeCountry(result.location) ?? UNSPECIFIED_LOCATION;
-      if (resolved !== filters.country) return false;
+      if (filters.country === UNSPECIFIED_LOCATION ? entry.countries.length !== 0 : !entry.countries.includes(filters.country)) return false;
+    }
+
+    if (salary !== null) {
+      const assessment = assessSalary(entry.result.raw, salary);
+      if (assessment.kind === 'below_floor') return false;
+      if (assessment.kind === 'unknown' && !salary.includeUnknown) return false;
     }
 
     return true;
@@ -288,24 +477,30 @@ function postedAtTimestamp(value: string | null): number | null {
  * title. A row with no known posting date sorts after every row that has one, never assumed recent.
  */
 export function sortResults(results: SearchResult[]): SearchResult[] {
-  return [...results].sort((left, right) => {
+  return sortSearchResultIndex(buildSearchResultIndex(results));
+}
+
+export function sortSearchResultIndex(index: SearchResultIndexEntry[]): SearchResult[] {
+  return [...index].sort((left, right) => {
+    const leftResult = left.result;
+    const rightResult = right.result;
     if (
-      left.profileScore != null &&
-      right.profileScore != null &&
-      left.profileScore !== right.profileScore
+      leftResult.profileScore != null &&
+      rightResult.profileScore != null &&
+      leftResult.profileScore !== rightResult.profileScore
     ) {
-      return right.profileScore - left.profileScore;
+      return rightResult.profileScore - leftResult.profileScore;
     }
-    const leftPosted = postedAtTimestamp(left.postedAt);
-    const rightPosted = postedAtTimestamp(right.postedAt);
+    const leftPosted = left.postedAtMs;
+    const rightPosted = right.postedAtMs;
     if (leftPosted !== null && rightPosted !== null && leftPosted !== rightPosted) {
       return rightPosted - leftPosted;
     }
     if ((leftPosted === null) !== (rightPosted === null)) {
       return leftPosted === null ? 1 : -1;
     }
-    return left.title.localeCompare(right.title);
-  });
+    return leftResult.title.localeCompare(rightResult.title);
+  }).map((entry) => entry.result);
 }
 
 export function formatDate(value: string | null): string {

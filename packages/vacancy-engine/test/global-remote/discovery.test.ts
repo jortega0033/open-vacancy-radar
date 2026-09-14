@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { discoverHimalayas, discoverJobicy } from '../../src/global-remote/discovery.js';
-import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { discoverHimalayas, discoverJobicy, runGlobalRemoteDiscovery } from '../../src/global-remote/discovery.js';
+import type { GlobalRemoteConfig, ScanProgressEvent } from '../../src/global-remote/models.js';
+import { loadGapRecords } from '../../src/global-remote/source-gap-telemetry.js';
 import { FixtureHttpClient } from '../ats/helpers.js';
 
 function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): GlobalRemoteConfig {
@@ -26,6 +31,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       remooteCountry: '',
       remooteLimit: 10,
       aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -34,6 +40,9 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
       ...overrides,
     },
     officialSources: [],
@@ -72,6 +81,24 @@ describe('discoverHimalayas', () => {
     );
 
     expect(result.sources[0]).toMatchObject({ id: 'himalayas:backend', status: 'success' });
+  });
+
+  it('sends the mapped employment enum on every filtered Himalayas page request', async () => {
+    const routes = new Map([
+      [
+        'https://himalayas.app/jobs/api/search?q=backend&country=DE&employment_type=Full+Time&sort=salaryDesc&page=1',
+        JSON.stringify({ jobs: [], totalCount: 0 }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    await discoverHimalayas(http, config({
+      himalayasQueries: ['backend'], himalayasCountry: 'DE', himalayasEmploymentType: 'Full Time',
+    }));
+
+    expect(http.requestedUrls).toEqual([
+      'https://himalayas.app/jobs/api/search?q=backend&country=DE&employment_type=Full+Time&sort=salaryDesc&page=1',
+    ]);
   });
 
   it('converts the unix-seconds pubDate to an ISO posting date', async () => {
@@ -137,5 +164,146 @@ describe('discoverJobicy', () => {
     expect(result.vacancies).toEqual([
       expect.objectContaining({ provider: 'jobicy', postedAt: '2026-08-31T20:08:43.000Z' }),
     ]);
+  });
+});
+
+describe('runGlobalRemoteDiscovery progress callback (issue #252)', () => {
+  /**
+   * Proves the exact acceptance criterion "at least one vacancy becomes visible before the scan's
+   * own promise resolves" at the engine layer, with real ordering instead of a timing-dependent
+   * `setTimeout`: himalayas resolves immediately, jobicy is held open on a deferred this test
+   * controls, and every other one of the eight sub-sources has no fixture route registered at all,
+   * which is not an error here -- each adapter catches its own network/parse failures internally
+   * (see `sourceFailure` throughout global-remote/*.ts) and reports a `'blocked'`/`'error'` status
+   * rather than rejecting, the same as a real unreachable source would.
+   */
+  it('reports a fast source before a still-pending one, strictly before the aggregate promise settles', async () => {
+    let releaseJobicy: () => void = () => {};
+    const jobicyGate = new Promise<void>((resolve) => {
+      releaseJobicy = resolve;
+    });
+
+    const routes = new Map<string, string | (() => Promise<string>)>([
+      [
+        'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+        JSON.stringify({ jobs: [], totalCount: 0 }),
+      ],
+      [
+        'https://jobicy.com/api/v2/remote-jobs?count=1',
+        async () => {
+          await jobicyGate;
+          return JSON.stringify({ jobs: [] });
+        },
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const progress: ScanProgressEvent[] = [];
+    const done = runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], undefined, (event) => {
+      progress.push(event);
+    });
+
+    // Flush pending microtasks so every source that resolves without waiting on the jobicy gate
+    // (himalayas, plus every other source failing fast on its own missing fixture route) has
+    // already reported, while jobicy provably has not.
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+
+    expect(progress.map((event) => event.sourceId)).toContain('himalayas');
+    expect(progress.map((event) => event.sourceId)).not.toContain('jobicy');
+
+    releaseJobicy();
+    const result = await done;
+
+    const sourceIds = progress.map((event) => event.sourceId);
+    expect(sourceIds).toContain('jobicy');
+    expect(sourceIds.indexOf('himalayas')).toBeLessThan(sourceIds.indexOf('jobicy'));
+    // Every progress event's own `sourceId` shows up exactly once, and only once, across the whole
+    // discovery run -- the callback is not fired again on some later, unrelated resolution.
+    expect(new Set(sourceIds).size).toBe(sourceIds.length);
+    expect(sourceIds.sort()).toEqual(
+      [
+        'additional', 'ai_dev_jobs', 'ats_roster', 'feeds', 'himalayas', 'jobicy', 'jobtech',
+        'keyed', 'structured', 'taiwan_jobs',
+      ].sort(),
+    );
+
+    // Unchanged aggregate contract: `onProgress` is purely an observability hook layered on top,
+    // never a second source of truth for the final result.
+    expect(result.sources.length).toBeGreaterThan(0);
+  });
+
+  it('never calls onProgress when none is supplied (existing non-streaming callers unaffected)', async () => {
+    const http = new FixtureHttpClient(
+      new Map([
+        [
+          'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+          JSON.stringify({ jobs: [], totalCount: 0 }),
+        ],
+        ['https://jobicy.com/api/v2/remote-jobs?count=1', JSON.stringify({ jobs: [] })],
+      ]),
+    );
+
+    // No third argument at all: the pre-existing call shape every non-streaming caller still uses.
+    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }));
+
+    expect(result.sources.length).toBeGreaterThan(0);
+  });
+});
+
+describe('runGlobalRemoteDiscovery gap telemetry wiring', () => {
+  // Integration test: proves gap records actually get captured from a real discovery run (through
+  // the fixture-based discovery test harness, no live network call), not just from the
+  // source-gap-telemetry.ts/gap-report.ts unit tests exercising each piece in isolation against
+  // hand-built DiscoverySourceAudit fixtures. Issue #9 requires the report to reflect real scan
+  // data, so this is what proves `runGlobalRemoteDiscovery` -> `recordDiscoveryGapTelemetry` ->
+  // `gap-telemetry.json` is actually wired end to end.
+  let projectRoot: string;
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('persists a gap record for a source that fails during a real discovery run', async () => {
+    projectRoot = await mkdtemp(path.join(tmpdir(), 'ovr-gap-telemetry-'));
+    // No fixture routes registered at all: keyed-discovery skips every source outright (no API
+    // keys configured, see config() below), and every other source's single unconfigured request
+    // hits FixtureHttpClient's "Unexpected fixture URL" -- the same shape of failure a genuinely
+    // unsupported/unreachable ATS host would produce, caught by each source's own `sourceFailure`
+    // handling and turned into a `status: 'error'` DiscoverySourceAudit.
+    const http = new FixtureHttpClient(new Map());
+
+    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
+
+    const failedSources = result.sources.filter((source) => source.status !== 'success');
+    expect(failedSources.length).toBeGreaterThan(0);
+    expect(failedSources.some((source) => source.provider === 'himalayas')).toBe(true);
+
+    const records = await loadGapRecords(projectRoot);
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.length).toBe(failedSources.length);
+    expect(records.some((record) => record.redactedUrl.includes('himalayas.app'))).toBe(true);
+  });
+
+  it('aggregates gap records across repeated scans instead of resetting them each run', async () => {
+    projectRoot = await mkdtemp(path.join(tmpdir(), 'ovr-gap-telemetry-'));
+    const http = new FixtureHttpClient(new Map());
+
+    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
+    const afterFirstRun = await loadGapRecords(projectRoot);
+
+    await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }), [], projectRoot);
+    const afterSecondRun = await loadGapRecords(projectRoot);
+
+    expect(afterSecondRun.length).toBe(afterFirstRun.length * 2);
+  });
+
+  it('does not touch disk when no projectRoot is given', async () => {
+    const http = new FixtureHttpClient(new Map());
+
+    // Must not throw even though every source fails: telemetry persistence is opt-in via
+    // `projectRoot`, and this call omits it entirely.
+    const result = await runGlobalRemoteDiscovery(http, config({ himalayasQueries: [] }));
+
+    expect(result.sources.some((source) => source.status !== 'success')).toBe(true);
   });
 });

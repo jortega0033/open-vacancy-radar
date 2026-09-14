@@ -32,6 +32,7 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
   return {
     raw: discoveryVacancy(key, { title, postedAt: overrides.postedAt }),
     official: null,
+    provisional: false,
     key,
     title,
     company: 'Acme',
@@ -53,6 +54,102 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
 }
 
 describe('SearchResultList', () => {
+  // UX audit finding: `decisionLabel(result.raw.decision)` used to render as a badge chip styled
+  // identically to the salary/employment-type chips. In every populated screenshot reviewed,
+  // `role_mismatch` read as "role mismatch" on essentially every card, which looks exactly like
+  // "this job doesn't match you" on 100% of listings -- misleading, since it is a pipeline
+  // classification, not a per-candidate match rejection. It still has an accurate home in the
+  // detail pane's Overview section ("Discovery decision"), unchanged -- only the card chip is gone.
+  it('never renders the raw discovery-decision chip on the card, for any decision value', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', { raw: discoveryVacancy('1', { decision: 'role_mismatch' }) }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/role mismatch/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/official review candidate/i)).not.toBeInTheDocument();
+  });
+
+  // UX audit finding: cards showed title/company/location/chips/date but zero role-content, so
+  // scanning a list of results meant opening each one individually to judge fit.
+  it('shows a clamped description excerpt between the company/location line and the chip row', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', {
+            description: 'Build accessible, performant interfaces for a distributed team.',
+          }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const excerpt = screen.getByText('Build accessible, performant interfaces for a distributed team.');
+    expect(excerpt).toHaveClass('line-clamp-2');
+  });
+
+  it('renders no description line at all when the source carries no description text', () => {
+    const { container } = render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer', { description: null })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.line-clamp-2')).not.toBeInTheDocument();
+  });
+
+  // UX audit finding: the card showed the raw snake_case `DiscoveryProvider` id (e.g.
+  // "devitjobs_uk") instead of a human label.
+  it('shows a human-readable provider label instead of the raw snake_case provider id', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Frontend Engineer', {
+            provider: 'devitjobs_uk',
+            raw: discoveryVacancy('1', { provider: 'devitjobs_uk' }),
+          }),
+        ]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('DevITjobs UK')).toBeInTheDocument();
+    expect(screen.queryByText('devitjobs_uk')).not.toBeInTheDocument();
+  });
+
   it('shows no verification badge for a row with no sponsor match', () => {
     render(
       <SearchResultList
@@ -99,6 +196,27 @@ describe('SearchResultList', () => {
     );
 
     expect(screen.getByText('Possible sponsor match (best effort)')).toBeInTheDocument();
+  });
+
+  it('marks a provisional (live-scan) row as not yet scored, and never for a final row (issue #364)', () => {
+    const provisionalRow = worldwideResult('1', 'Frontend Engineer', { provisional: true });
+    const finalRow = worldwideResult('2', 'Backend Engineer', { provisional: false });
+
+    render(
+      <SearchResultList
+        results={[provisionalRow, finalRow]}
+        totalCount={2}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="2 vacancies"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText(/live · not yet scored/i)).toHaveLength(1);
   });
 
   it('flags a posting over 30 days old instead of showing its date as if it were fresh', () => {
@@ -225,5 +343,39 @@ describe('SearchResultList', () => {
 
     fireEvent.click(rows[1]!);
     expect(onSelect).toHaveBeenCalledWith(second);
+  });
+
+  it('leaves room for the detail pane below it when the two panes are stacked (under lg)', () => {
+    // Regression guard. `SearchPage` lays this pane and `VacancyDetail` out as `flex-col lg:flex-row`,
+    // and the app's own default window is 1000px wide -- narrower than `lg`'s 1024px -- so the
+    // stacked column is the layout a user gets out of the box. `VacancyDetail` is `flex-1`
+    // (`flex: 1 1 0%`, a zero flex basis). While this pane was `flex: 0 1 auto`, basing itself on its
+    // own page-of-25-rows-tall content, the column had no free space left to distribute and the
+    // detail pane stayed at its zero basis: it rendered at zero height, below the bottom of a
+    // `<main>` that does not scroll, so "Save job", "Generate Letter" and the verification cards were
+    // all invisible and unclickable at the default window size.
+    //
+    // jsdom runs no layout engine, so the flex classes themselves are the testable contract here:
+    // `flex-1` below `lg` (an even split with the detail pane, each scrolling internally) and
+    // `lg:flex-none` from `lg` up (so the side-by-side layout's own `lg:w-2/5` sizing still applies).
+    const { container } = render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer')]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const pane = container.firstElementChild!;
+    expect(pane).toHaveClass('flex-1');
+    expect(pane).toHaveClass('lg:flex-none');
+    // The side-by-side sizing must stay exactly as it was; this fix is scoped to the stacked case.
+    expect(pane).toHaveClass('lg:w-2/5');
   });
 });

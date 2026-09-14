@@ -63,10 +63,11 @@ const ALL_SAMPLES: AgentEventEnvelope[] = [
     timestamp: 't',
   },
   { type: 'usage', inputTokens: 1, outputTokens: 2, cachedInputTokens: 3, cost: 0.5, sequence: 6, timestamp: 't' },
-  { type: 'error', code: 'E_BAD', message: 'failed reading C:/Users/someone/secrets', recoverable: true, sequence: 7, timestamp: 't' },
-  { type: 'session.completed', providerSessionId: 'native-thread-abc', sequence: 8, timestamp: 't' },
-  { type: 'session.failed', message: 'fatal: /var/run/agent.sock', sequence: 9, timestamp: 't' },
-  { type: 'session.cancelled', sequence: 10, timestamp: 't' },
+  { type: 'usage.rate_limits', limitId: 'limit-1', limitName: 'API Limit', primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 }, sequence: 7, timestamp: 't' },
+  { type: 'error', code: 'E_BAD', message: 'failed reading C:/Users/someone/secrets', recoverable: true, sequence: 8, timestamp: 't' },
+  { type: 'session.completed', providerSessionId: 'native-thread-abc', sequence: 9, timestamp: 't' },
+  { type: 'session.failed', message: 'fatal: /var/run/agent.sock', sequence: 10, timestamp: 't' },
+  { type: 'session.cancelled', sequence: 11, timestamp: 't' },
 ];
 
 describe('sanitizer exhaustiveness (ADI-07)', () => {
@@ -74,9 +75,9 @@ describe('sanitizer exhaustiveness (ADI-07)', () => {
     expect([...SANITIZED_EVENT_TYPES].sort()).toEqual(eventTypesFromSchema());
   });
 
-  it('declares all eleven v1 event types', () => {
-    expect(eventTypesFromSchema()).toHaveLength(11);
-    expect(SANITIZED_EVENT_TYPES).toHaveLength(11);
+  it('declares all twelve v1 event types', () => {
+    expect(eventTypesFromSchema()).toHaveLength(12);
+    expect(SANITIZED_EVENT_TYPES).toHaveLength(12);
   });
 
   it('the sample set below exercises every declared type, so the behavioral tests are exhaustive too', () => {
@@ -130,12 +131,12 @@ describe('toActivityEntry: what never crosses', () => {
   });
 
   it("never passes an error or session.failed message through, only a bounded identifier code", () => {
-    const error = toActivityEntry(ALL_SAMPLES[7] as AgentEventEnvelope, new Map());
-    expect(error).toEqual({ seq: 7, at: 't', origin: 'live', kind: 'error', code: 'E_BAD', recoverable: true });
+    const error = toActivityEntry(ALL_SAMPLES[8] as AgentEventEnvelope, new Map());
+    expect(error).toEqual({ seq: 8, at: 't', origin: 'live', kind: 'error', code: 'E_BAD', recoverable: true });
     expect(JSON.stringify(error)).not.toContain('Users');
 
-    const failed = toActivityEntry(ALL_SAMPLES[9] as AgentEventEnvelope, new Map());
-    expect(failed).toEqual({ seq: 9, at: 't', origin: 'live', kind: 'session.failed' });
+    const failed = toActivityEntry(ALL_SAMPLES[10] as AgentEventEnvelope, new Map());
+    expect(failed).toEqual({ seq: 10, at: 't', origin: 'live', kind: 'session.failed' });
     expect(JSON.stringify(failed)).not.toContain('agent.sock');
   });
 

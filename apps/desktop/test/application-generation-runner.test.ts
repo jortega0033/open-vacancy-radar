@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentEventEnvelope } from '@agent-dock/shared';
-import { FIELD_MAP_GENERATION_TIMEOUT_MS, runFieldMapGeneration } from '../electron/application-generation-runner.js';
+import {
+  FIELD_MAP_GENERATION_TIMEOUT_MS,
+  runFieldMapGeneration,
+  runTextGeneration,
+} from '../electron/application-generation-runner.js';
 
 /**
  * A minimal stand-in for the slice of `AgentDockClient` this runner actually calls. Typed loosely
@@ -144,5 +148,16 @@ describe('runFieldMapGeneration', () => {
       yield envelope({ type: 'session.completed' }); // unreachable; satisfies require-yield
     });
     await expect(runFieldMapGeneration(client as never, INPUT)).rejects.toThrow('daemon unreachable');
+  });
+});
+
+describe('runTextGeneration', () => {
+  it('uses the same closed-tool, no-network application route as field-map generation', async () => {
+    const client = fakeClient([
+      { type: 'assistant.message', text: '{}' },
+      { type: 'session.completed' },
+    ]);
+    await runTextGeneration(client as never, { ...INPUT, prompt: 'tailor this CV' });
+    expect(client.sessions.createFieldMapGeneration).toHaveBeenCalledWith({ ...INPUT, prompt: 'tailor this CV' });
   });
 });

@@ -159,6 +159,13 @@ export type PersistedEventRecordV1 = PersistedEventBase &
         cachedInputTokens?: number;
         cost?: number;
       }
+    | {
+        type: 'usage.rate_limits';
+        limitId?: string;
+        limitName?: string;
+        primary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+        secondary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+      }
     | { type: 'error'; code?: string; recoverable: boolean; messageBytes: number; messageSha256: string }
     | { type: 'session.completed'; providerSessionId?: string }
     | { type: 'session.failed'; messageBytes: number; messageSha256: string }
@@ -246,6 +253,28 @@ export const persistedEventRecordV1Schema = z.discriminatedUnion('type', [
   z
     .object({
       ...persistedEventBaseShape,
+      type: z.literal('usage.rate_limits'),
+      limitId: z.string().optional(),
+      limitName: z.string().optional(),
+      primary: z
+        .object({
+          usedPercent: z.number(),
+          windowDurationMins: z.number().optional(),
+          resetsAt: z.number().optional(),
+        })
+        .optional(),
+      secondary: z
+        .object({
+          usedPercent: z.number(),
+          windowDurationMins: z.number().optional(),
+          resetsAt: z.number().optional(),
+        })
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...persistedEventBaseShape,
       type: z.literal('error'),
       code: z.string().optional(),
       recoverable: z.boolean(),
@@ -290,6 +319,7 @@ const REDACTED_EVENT_TYPE_TUPLE = [
   'tool.started',
   'tool.completed',
   'usage',
+  'usage.rate_limits',
   'error',
   'session.completed',
   'session.failed',
@@ -388,6 +418,32 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
         ...(envelope.outputTokens === undefined ? {} : { outputTokens: envelope.outputTokens }),
         ...(envelope.cachedInputTokens === undefined ? {} : { cachedInputTokens: envelope.cachedInputTokens }),
         ...(envelope.cost === undefined ? {} : { cost: envelope.cost }),
+      };
+
+    case 'usage.rate_limits':
+      return {
+        ...base,
+        type: 'usage.rate_limits',
+        ...(envelope.limitId === undefined ? {} : { limitId: envelope.limitId }),
+        ...(envelope.limitName === undefined ? {} : { limitName: envelope.limitName }),
+        ...(envelope.primary === undefined
+          ? {}
+          : {
+              primary: {
+                usedPercent: envelope.primary.usedPercent,
+                ...(envelope.primary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.primary.windowDurationMins }),
+                ...(envelope.primary.resetsAt === undefined ? {} : { resetsAt: envelope.primary.resetsAt }),
+              },
+            }),
+        ...(envelope.secondary === undefined
+          ? {}
+          : {
+              secondary: {
+                usedPercent: envelope.secondary.usedPercent,
+                ...(envelope.secondary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.secondary.windowDurationMins }),
+                ...(envelope.secondary.resetsAt === undefined ? {} : { resetsAt: envelope.secondary.resetsAt }),
+              },
+            }),
       };
 
     case 'error': {

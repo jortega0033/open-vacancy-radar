@@ -32,6 +32,7 @@ const config: GlobalRemoteConfig = {
     remooteCountry: 'Netherlands',
     remooteLimit: 10,
     aiDevJobsMaxPages: 1,
+    taiwanJobsMaxCities: 1,
     museEnabled: false,
     museMaxPages: 1,
     adzunaAppId: '',
@@ -40,6 +41,9 @@ const config: GlobalRemoteConfig = {
     joobleApiKey: '',
     reedApiKey: '',
     jobspipeApiKey: '',
+    atsRosterConcurrency: 1,
+    navArbeidsplassenApiKey: '',
+    navArbeidsplassenMaxPages: 1,
   },
   officialSources: [],
 };

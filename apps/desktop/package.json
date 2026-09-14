@@ -1,6 +1,6 @@
 {
   "name": "@agent-dock/desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Open Vacancy Radar desktop application",
   "author": "Open Vacancy Radar contributors",
   "private": true,
@@ -22,6 +22,7 @@
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "cheerio": "^1.2.0",
+    "mammoth": "^1.12.3",
     "pino": "^10.3.1"
   },
   "devDependencies": {

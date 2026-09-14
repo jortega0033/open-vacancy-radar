@@ -1,5 +1,11 @@
 import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
-import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  AtsRosterImportResult,
+  AtsRosterStatus,
+  CandidateProfile,
+  GlobalRemoteReport,
+  ScanProgressEvent,
+} from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../electron/vacancy-profile-validate.js';
 
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
@@ -26,20 +32,36 @@ export interface AgentDockBridge {
 }
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyScanRequest = string | { mode: 'query'; query: string; country?: string; employment?: string; salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean } } | { mode: 'browse_all' };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
-  /** `query` scopes each source's own server-side search parameter for this run; omitted or blank
-   * keeps the checked-in profile's static default. */
-  runScan(query?: string): Promise<GlobalRemoteReport>;
+  getReportSummary(): Promise<VacancyReportSummary | null>;
+  /** `query` scopes each source's own server-side search parameter for this run. Blank input is
+   * rejected before discovery starts, so a new worldwide scan always has an explicit role signal. */
+  runScan(request: VacancyScanRequest): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /**
+   * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
+   * own freshly discovered rows, pushed the moment that source resolves rather than only once the
+   * whole scan finishes. Fires for any scan in this process, not just one this window started.
+   * Returns an unsubscribe function; call it on unmount.
+   */
+  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /** Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
+   * `null` when the import has never run yet against this data directory. */
+  getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  /** Runs the roster import now. Deliberately manual, never automatic -- see the main-process
+   * doc comment on `runAtsRosterRefresh`. */
+  refreshAtsRoster(): Promise<AtsRosterImportResult>;
 }
 
 export interface CvFile {
@@ -201,6 +223,7 @@ export type {
 export type {
   ApplicationArtifactKind,
   ApplicationArtifactRecord,
+  ApplicationArtifactSummary,
   ApplicationAttemptCheckpoint,
   ApplicationAttemptPatch,
   ApplicationAttemptRecord,
@@ -214,8 +237,16 @@ export type {
   CvDocumentInput,
   CvDocumentPatch,
   CvDocumentRecord,
+  CvExportFormat,
+  CvExportResult,
   CvKind,
   CvProfile,
+  CvEngagementType,
+  CvSourceContact,
+  CvSourceDocument,
+  CvSourceEducationEntry,
+  CvSourceExperienceEntry,
+  CvSourceProjectEntry,
   DeleteResult,
   DensityPreference,
   LetterInput,
@@ -225,6 +256,10 @@ export type {
   LetterStatus,
   LetterTone,
   LetterType,
+  PreparedApplicationField,
+  PreparedApplicationFields,
+  PreparedFieldProvenance,
+  PreparedFieldStatus,
   SavedJobInput,
   SavedJobPatch,
   SavedJobRecord,
@@ -235,6 +270,14 @@ export type {
   WorkspaceBridge,
   WorkspaceCounts,
 } from '../electron/workspace/types.js';
+
+/** #272's preparation-pipeline result shapes, re-exported here for the same reason the workspace
+ * records above are: one definition shared by main, preload and the renderer. Type-only. */
+export type {
+  ApplicationPipelineBridge,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from '../electron/application-pipeline-types.js';
 
 declare global {
   interface Window {
@@ -255,6 +298,10 @@ declare global {
      * has confirmed, close it. `submitReview` performs no confirmation step itself: the caller must
      * not invoke it before the user has explicitly reviewed and confirmed this specific attempt. */
     applicationExecutor: import('../electron/application-executor-types.js').ApplicationExecutorBridge;
+    /** #272. The tenth namespace: start the preparation pipeline for one saved job. One method,
+     * taking a saved-job id and nothing else -- where an application goes, which CV it is built
+     * from and what it is tailored against are all resolved in Electron main. Never submits. */
+    applicationPipeline: import('../electron/application-pipeline-types.js').ApplicationPipelineBridge;
   }
 }
 

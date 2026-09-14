@@ -14,8 +14,15 @@ export {
   buildGapAnalysisPrompt,
   buildCoverLetterPrompt,
   buildCvTailorPrompt,
+  buildSourceCvPrompt,
+  buildStructuredResumePrompt,
+  formatSourceCv,
   formatVacancy,
+  wasCvTextTruncated,
+  MAX_SOURCE_CV_PROMPT_CHARS,
 } from './prompts.js';
+export { parseSourceCvResponse, sourceCvCompleteness, toCvSourceDocument } from './source-cv-response.js';
+export type { SourceCvCompleteness } from './source-cv-response.js';
 export { useAgentRun, describeError, RUN_TIMEOUT_MS } from './useAgentRun.js';
 export type { AgentRun, AgentRunStatus } from './useAgentRun.js';
 export type { CvDocument, VacancyLead } from './types.js';

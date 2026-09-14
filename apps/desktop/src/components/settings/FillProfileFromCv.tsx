@@ -41,6 +41,18 @@ interface ReviewForm {
   additionalSkills: string;
 }
 
+function parsedCvReviewForm(profile: CvDocumentRecord['profile'], current: CandidateProfile): ReviewForm {
+  const skills = profile.skills.filter((skill) => skill.trim().length > 0);
+  return {
+    currentRole: profile.title.trim() || current.currentRole,
+    experienceYears: profile.years.trim() || String(current.experienceYears),
+    location: current.location,
+    professionalLanguage: profile.languages.trim() || current.constraints.professionalLanguage,
+    strongestSkills: skillsToText(skills.length > 0 ? skills : current.strongestSkills),
+    additionalSkills: skillsToText(current.additionalSkills),
+  };
+}
+
 /** Seeds the review form from the extraction, falling back per field to what the profile already
  * holds. This is what keeps a thin extraction from being destructive: a field the model had nothing
  * for shows (and saves) the user's existing value rather than blanking it. */
@@ -172,6 +184,13 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
   }, []);
 
   const selected = documents?.find((doc) => doc.id === selectedId);
+  const hasParsedProfile = Boolean(
+    selected &&
+      (selected.profile.title.trim() ||
+        selected.profile.years.trim() ||
+        selected.profile.languages.trim() ||
+        selected.profile.skills.length > 0),
+  );
   const busy = run.isBusy || saving;
 
   function handleRead() {
@@ -279,6 +298,16 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
                     {run.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
                     Read CV
                   </button>
+                  {hasParsedProfile && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      disabled={busy}
+                      onClick={() => setForm(parsedCvReviewForm(selected!.profile, profile))}
+                    >
+                      Use parsed values
+                    </button>
+                  )}
                   {run.isBusy && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void run.cancel()}>
                       Stop

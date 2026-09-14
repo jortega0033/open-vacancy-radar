@@ -173,15 +173,14 @@ purpose or otherwise.
 `%APPDATA%\Open Vacancy Radar`. It holds every piece of local state the app has ever written: the
 workspace SQLite database (saved jobs, applications, CV documents, letters, settings), the
 vacancy-engine database, the `ai-workspace/` scratch directory the CV/AI features use, and
-AgentDock's own daemon state directory. None of it is removed by uninstalling the app, and there is
-currently no in-app "delete all my data" action either -- removing that folder by hand (or with
-Windows' "Reset this app"/"Uninstall and delete data" prompts, where offered) is the only way to
-clear it today. This is determined from the packaging config and the absence of any uninstall
-script, not from a live install/uninstall/inspect cycle -- see [Verifying a packaging-sensitive
-change](#verifying-a-packaging-sensitive-change) for why an actual install-time verification pass
-(clean-machine install, restart, uninstall, confirm what's left) still needs a human or a real
-Windows CI runner: this repository's automated environment cannot launch an installer, run it
-elevated, or inspect a live `%APPDATA%` the way that check requires.
+AgentDock's own daemon state directory. None of it is removed by uninstalling the app. Settings >
+Advanced > Reset application data deletes personal workspace records, generated application files,
+the application queue and search profile. It intentionally keeps the public vacancy cache and AI
+runtime history. Removing `%APPDATA%\Open Vacancy Radar` with the app closed clears everything.
+
+The retention claim comes from packaging config and the absence of an uninstall script. The
+uninstaller process has been tested, but a current clean-machine inspect-before/after check of
+`%APPDATA%` remains a release checklist item.
 
 ## Platform matrix
 
@@ -191,10 +190,9 @@ elevated, or inspect a live `%APPDATA%` the way that check requires.
 | **macOS** | untested | untested | untested | not implemented | n/a |
 | **Linux** | untested | untested | untested | not implemented | n/a |
 
-The "uninstall" column above is about the uninstaller *process* completing without error, live-tested
-against a real install. What it does or doesn't remove from `%APPDATA%` is a separate claim, covered
-in [Uninstall behavior](#uninstall-behavior) above -- determined from the packaging config, not
-(yet) from a live inspect-before/after cycle.
+The "uninstall" column records that the uninstaller process completed without error. User-data
+retention is based on packaging config and still needs the current release's clean-machine
+inspect-before/after confirmation.
 
 **Supported OS/version**: Windows 10 or later, 64-bit (x64) only — `electron-builder.yml`'s `win.target.arch`
 is `[x64]` exclusively, and the bundled Electron 44 itself no longer supports Windows 7/8/8.1.

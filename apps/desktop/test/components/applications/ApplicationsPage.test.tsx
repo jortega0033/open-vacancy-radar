@@ -4,12 +4,51 @@ import { ApplicationsPage } from '../../../src/components/applications/index.js'
 import type { ApplicationAttemptRecord, ApplicationRecord } from '../../../src/window.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
 
+/**
+ * What `openReview` hands the review session (#277). `readiness` is a first-class part of that
+ * result now, not an optional extra: the swipe card reports `verifiedFilledCount`, so a fixture
+ * that omitted it would be a fixture for a build where nothing had been verified.
+ *
+ * Defaults to ready with no blockers so the tests here keep being about the approve/skip/close
+ * flow. A test about readiness passes its own.
+ */
+function reviewResult(
+  fields: readonly Record<string, unknown>[],
+  readinessOverrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    snapshot: {
+      generation: 1,
+      fields,
+      submitControls: [],
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      challengeDetected: false,
+      activeFrameId: 0,
+      pageStateFingerprint: 'fingerprint',
+    },
+    screenshotBase64: 'ZmFrZQ==',
+    readiness: {
+      ready: true,
+      verifiedFilledCount: fields.length,
+      discoveredFieldCount: fields.length,
+      requiredFieldCount: fields.filter((field) => field.required === true).length,
+      requiredFieldsSatisfied: fields.filter((field) => field.required === true).length,
+      blockers: [],
+      ...readinessOverrides,
+    },
+    handoffShown: false,
+  };
+}
+
 function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): ApplicationAttemptRecord {
   return {
     id: overrides.id ?? 'attempt-1',
     applicationId: null,
     vacancyKey: null,
     canonicalUrl: 'https://jobs.example.com/apply/123',
+    employerKey: 'acme-corp',
+    requisitionId: null,
+    canonicalUrlKey: 'jobs.example.com/apply/123',
     company: 'Acme Corp',
     role: 'Senior Frontend Engineer',
     sourceCvId: null,
@@ -18,6 +57,7 @@ function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): Applica
     jdSnapshotHash: 'jd-hash-1',
     jdComplete: true,
     workflowVersion: 'v1',
+    tailoringMode: 'ai',
     checkpoint: 'ready',
     checkpointDetail: '',
     createdAt: '2026-08-20T10:00:00.000Z',
@@ -26,6 +66,11 @@ function makeAttempt(overrides: Partial<ApplicationAttemptRecord> = {}): Applica
     formStructureHash: null,
     scheduledAutomaticSubmitAt: null,
     submissionMode: null,
+    completionEvidence: null,
+    supersedesAttemptId: null,
+    reapplyReason: '',
+    reapplyPreviousCvContentHash: null,
+    preparedFields: null,
     ...overrides,
   };
 }
@@ -215,6 +260,90 @@ describe('ApplicationsPage', () => {
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
   });
 
+  describe('onApplicationsChanged (stale sidebar/header counts after mutating without navigating away)', () => {
+    it('fires after creating an application, so the caller can refresh counts without navigating away', async () => {
+      const createApplication = vi
+        .fn()
+        .mockResolvedValue(makeApplication({ id: 'new-1', role: 'New Role', company: 'New Co' }));
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([]), createApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('No applications yet')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'New Role' } });
+      fireEvent.change(within(dialog).getByLabelText('Company *'), { target: { value: 'New Co' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /create application/i }));
+
+      await waitFor(() => expect(createApplication).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not fire for a plain edit, which cannot change the active/archived split', async () => {
+      const app = makeApplication({ id: 'edit-1' });
+      const updateApplication = vi.fn().mockResolvedValue({ ...app, role: 'Staff Frontend Engineer' });
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([app]), updateApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'Staff Frontend Engineer' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+      await waitFor(() => expect(updateApplication).toHaveBeenCalledTimes(1));
+      expect(onApplicationsChanged).not.toHaveBeenCalled();
+    });
+
+    it('fires after archiving and after restoring, since that moves a row in or out of `activeApplications`', async () => {
+      const app = makeApplication({ id: 'arch-1', archived: false });
+      const updateApplication = vi.fn().mockResolvedValue({ ...app, archived: true });
+      installWorkspaceBridge({ listApplications: vi.fn().mockResolvedValue([app]), updateApplication });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^archive$/i }));
+
+      await waitFor(() => expect(updateApplication).toHaveBeenCalledWith('arch-1', { archived: true }));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it('fires after a delete and again after undoing it', async () => {
+      const app = makeApplication({ id: 'del-1' });
+      const deleteApplication = vi.fn().mockResolvedValue({ deleted: true });
+      const createApplication = vi
+        .fn()
+        .mockResolvedValue(makeApplication({ id: 'recreated-1', role: app.role, company: app.company }));
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([app]),
+        deleteApplication,
+        createApplication,
+      });
+      const onApplicationsChanged = vi.fn();
+
+      render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      const confirmDialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
+
+      await waitFor(() => expect(deleteApplication).toHaveBeenCalledWith('del-1'));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(await screen.findByRole('button', { name: /undo/i }));
+
+      await waitFor(() => expect(createApplication).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(2));
+    });
+  });
+
   it('surfaces a load error without crashing', async () => {
     installWorkspaceBridge({ listApplications: vi.fn().mockRejectedValue(new Error('database unreachable')) });
 
@@ -223,7 +352,7 @@ describe('ApplicationsPage', () => {
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
 
-  describe('In progress tab (issue #202)', () => {
+  describe('Review queue tab (issue #326)', () => {
     it('loads attempts only when the tab is opened, never alongside the applications tabs', async () => {
       const listApplications = vi.fn().mockResolvedValue([]);
       const listApplicationAttempts = vi.fn().mockResolvedValue([]);
@@ -233,48 +362,99 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(listApplications).toHaveBeenCalledWith('active'));
       expect(listApplicationAttempts).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(listApplicationAttempts).toHaveBeenCalledTimes(1));
     });
 
-    it('shows an empty state when there are no in-progress attempts', async () => {
+    it('shows an empty state when there are no attempts ready for review', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
         listApplicationAttempts: vi.fn().mockResolvedValue([]),
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
 
-      await waitFor(() => expect(screen.getByText('Nothing in progress')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('Nothing to review')).toBeInTheDocument());
     });
 
     it('renders attempts sorted by most recently updated, with a readable checkpoint label', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
         listApplicationAttempts: vi.fn().mockResolvedValue([
-          makeAttempt({ id: 'older', role: 'Older Attempt', updatedAt: '2026-01-01T00:00:00.000Z', checkpoint: 'needs_user' }),
+          makeAttempt({ id: 'older', role: 'Older Attempt', updatedAt: '2026-01-01T00:00:00.000Z', checkpoint: 'queued' }),
           makeAttempt({ id: 'newer', role: 'Newer Attempt', updatedAt: '2026-08-01T00:00:00.000Z', checkpoint: 'tailoring' }),
         ]),
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Preparing (2)' }));
 
       await waitFor(() => expect(screen.getByText('Newer Attempt')).toBeInTheDocument());
       const [firstRow, secondRow] = screen.getAllByRole('row').slice(1);
       expect(within(firstRow!).getByText('Newer Attempt')).toBeInTheDocument();
       expect(within(firstRow!).getByText('Tailoring CV')).toBeInTheDocument();
       expect(within(secondRow!).getByText('Older Attempt')).toBeInTheDocument();
-      expect(within(secondRow!).getByText('Needs your input')).toBeInTheDocument();
+      expect(within(secondRow!).getByText('Queued')).toBeInTheDocument();
     });
 
-    it('opens a read-only detail drawer with the checkpoint, JD snapshot, and documents; has no edit affordance', async () => {
-      // Any non-'ready' checkpoint: 'ready' is the one state that opens the review-and-submit
-      // session instead (see the dedicated test for that below), not this read-only drawer.
+    it('opens the requested attempt when navigation lands from a preparation notice', async () => {
       const attempt = makeAttempt({
+        id: 'attempt-focus',
         checkpoint: 'needs_user',
-        checkpointDetail: 'Waiting for you to review the tailored CV.',
+        checkpointDetail: 'Review the prepared application.',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+      const onFocusAttemptConsumed = vi.fn();
+
+      render(<ApplicationsPage focusAttemptId="attempt-focus" onFocusAttemptConsumed={onFocusAttemptConsumed} />);
+
+      expect(await screen.findByRole('tab', { name: 'Review queue' })).toHaveAttribute('aria-selected', 'true');
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Review the prepared application.')).toBeInTheDocument();
+      expect(onFocusAttemptConsumed).toHaveBeenCalledTimes(1);
+    });
+
+    it('replaces focused preparation with its review card when polling reports it ready', async () => {
+      const queued = makeAttempt({ id: 'attempt-live', checkpoint: 'queued' });
+      const ready = makeAttempt({
+        id: 'attempt-live',
+        checkpoint: 'needs_user',
+        checkpointDetail: 'CV tailored for this vacancy. Your application documents are ready. Continue manually.',
+      });
+      const listApplicationAttempts = vi.fn().mockResolvedValueOnce([queued]).mockResolvedValue([ready]);
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts,
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+
+      render(<ApplicationsPage focusAttemptId="attempt-live" />);
+      expect((await screen.findAllByText('Queued')).length).toBeGreaterThan(0);
+
+      await waitFor(
+        () => expect(screen.getByRole('button', { name: 'Continue on employer site' })).toBeInTheDocument(),
+        { timeout: 3_000 },
+      );
+      expect(listApplicationAttempts.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText('1 of 1 ready')).toBeInTheDocument();
+    });
+
+    it('opens a read-only detail drawer for an attempt that is still preparing', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'tailoring',
+        checkpointDetail: 'Tailoring the CV for this vacancy.',
         jdSnapshot: 'Full job description text here.',
       });
       const listApplicationArtifacts = vi.fn().mockResolvedValue([
@@ -287,13 +467,14 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Preparing (1)' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
-      expect(within(dialog).getByText('Waiting for you to review the tailored CV.')).toBeInTheDocument();
+      expect(within(dialog).getByText('Tailoring the CV for this vacancy.')).toBeInTheDocument();
       expect(listApplicationArtifacts).toHaveBeenCalledWith(attempt.id);
       await waitFor(() => expect(within(dialog).getByText('Tailored CV')).toBeInTheDocument());
       expect(within(dialog).queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
@@ -305,7 +486,7 @@ describe('ApplicationsPage', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
 
-    it('opens the review-and-submit session, not the read-only drawer, for a `ready` attempt (issue #202)', async () => {
+    it('opens the manual swipe card for a ready attempt without an approved target policy', async () => {
       const attempt = makeAttempt(); // default checkpoint: 'ready'
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
@@ -318,18 +499,149 @@ describe('ApplicationsPage', () => {
         applyFieldMap: vi.fn(),
         submitReview: vi.fn(),
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
-      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
 
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/review application/i)).toBeInTheDocument();
+      await waitFor(() => expect(resolveTargetPolicyId).toHaveBeenCalledWith(attempt.canonicalUrl));
+      await waitFor(() => expect(within(dialog).getByText(/not approved for automated submission/i)).toBeInTheDocument());
+      expect(within(dialog).getByRole('button', { name: /continue on employer site/i })).toBeInTheDocument();
+    });
+
+    it('advances directly to the next actionable card after a decision', async () => {
+      const first = makeAttempt({ id: 'attempt-new', role: 'Newest Role', updatedAt: '2026-08-21T00:00:00.000Z' });
+      const second = makeAttempt({ id: 'attempt-old', role: 'Next Role', updatedAt: '2026-08-20T00:00:00.000Z' });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([second, first]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+        updateApplicationAttempt: vi.fn().mockResolvedValue({ ...first, checkpoint: 'skipped' }),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      await waitFor(() => expect(screen.getByText('Newest Role')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /newest role/i }));
+
+      let dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('1 of 2 ready')).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Skip' }));
+
+      await waitFor(() => {
+        dialog = screen.getByRole('dialog');
+        expect(within(dialog).getByText('1 of 1 ready')).toBeInTheDocument();
+      });
+      expect(within(dialog).getAllByText(/next role/i).length).toBeGreaterThan(0);
+    });
+
+    it('offers retry and explicit original-CV recovery when automatic tailoring fails', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: 'Automatic CV tailoring stopped: provider unavailable',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      const retryTailoring = vi.fn().mockResolvedValue({ ok: true, attemptId: attempt.id, tailoringMode: 'ai' });
+      const useOriginalCv = vi.fn().mockResolvedValue({ ok: true, attemptId: attempt.id, tailoringMode: 'original' });
+      (window as unknown as { applicationPipeline: unknown }).applicationPipeline = {
+        start: vi.fn(), startFromVacancy: vi.fn(), retryTailoring, useOriginalCv,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
       const dialog = await screen.findByRole('dialog');
-      expect(within(dialog).getByText(/review & submit/i)).toBeInTheDocument();
-      await waitFor(() => expect(resolveTargetPolicyId).toHaveBeenCalledWith(attempt.canonicalUrl));
-      await waitFor(() => expect(within(dialog).getByText(/isn.t one of the platforms reviewed/i)).toBeInTheDocument());
+      expect(within(dialog).getByRole('button', { name: 'Retry tailoring' })).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Use original CV' }));
+      await waitFor(() => expect(useOriginalCv).toHaveBeenCalledWith(attempt.id));
+      expect(retryTailoring).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('does not claim documents are ready for a preparation blocker', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: 'the captured job description is incomplete',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      fireEvent.click(await screen.findByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('the captured job description is incomplete')).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Open vacancy' })).toBeInTheDocument();
+      expect(within(dialog).queryByText(/documents are ready/i)).not.toBeInTheDocument();
+    });
+
+    it('routes a required-letter blocker to the existing letter generator', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: 'this form requires "cover letter", but no final cover letter is saved for this vacancy',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+      });
+      const onGenerateLetter = vi.fn();
+
+      render(<ApplicationsPage onGenerateLetter={onGenerateLetter} />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
+
+      expect(onGenerateLetter).toHaveBeenCalledWith(expect.objectContaining({
+        key: attempt.vacancyKey,
+        title: attempt.role,
+        company: attempt.company,
+        description: attempt.jdSnapshot,
+      }), attempt.id);
+    });
+
+    it('opens the manual card with the tailored CV and letter recovery after safe generation stops', async () => {
+      const attempt = makeAttempt({
+        checkpoint: 'needs_user',
+        checkpointDetail: 'Your tailored CV is ready. Cover letter blocker: unsupported source facts. Use Generate letter.',
+      });
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+        listApplicationArtifacts: vi.fn().mockResolvedValue([
+          { id: 'cv-1', attemptId: attempt.id, kind: 'cv_pdf', fileName: 'resume.pdf' },
+        ]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue(null),
+      };
+      const onGenerateLetter = vi.fn();
+
+      render(<ApplicationsPage onGenerateLetter={onGenerateLetter} />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(await within(dialog).findByText('resume.pdf')).toBeInTheDocument();
+      expect(within(dialog).getByText(/tailored CV is ready, but the letter still needs attention/i)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Generate letter' }));
+      expect(onGenerateLetter).toHaveBeenCalledWith(expect.objectContaining({ key: attempt.vacancyKey }), attempt.id);
     });
 
     it('disables the close button and backdrop while a decision is in flight, so closing mid-submit cannot tear down the view under it', async () => {
@@ -345,17 +657,16 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { resolveSubmit = resolve; }));
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -385,17 +696,16 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn().mockResolvedValue({ ok: true });
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true }], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi
+          .fn()
+          .mockResolvedValue(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview,
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -406,6 +716,91 @@ describe('ApplicationsPage', () => {
       await waitFor(() => expect(submitReview).toHaveBeenCalledWith(attempt.id));
       await waitFor(() => expect(closeReview).toHaveBeenCalledWith(attempt.id));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('opening the live handoff names the employer and role from the attempt record, and returning re-reads the page (#277)', async () => {
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      const showHandoff = vi.fn().mockResolvedValue({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+      const hideHandoff = vi.fn().mockResolvedValue(undefined);
+      // The second openReview is the reopen after the handoff: the person has been typing into the
+      // real page, so the readiness reading that comes back is a fresh one.
+      const openReview = vi
+        .fn()
+        .mockResolvedValueOnce(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }], {
+          ready: false,
+          verifiedFilledCount: 0,
+          requiredFieldsSatisfied: 0,
+          blockers: [{ kind: 'challenge_detected' }],
+        }))
+        .mockResolvedValueOnce(reviewResult([{ fieldRef: 'f1', label: 'Name', controlType: 'text', required: true, frameId: 0, active: true }]));
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview,
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff,
+        hideHandoff,
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      // The CAPTCHA blocker is what makes the handoff the obvious next step.
+      await waitFor(() => expect(within(dialog).getByText(/showing a CAPTCHA/i)).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
+
+      await waitFor(() => expect(showHandoff).toHaveBeenCalledWith(attempt.id));
+      // The modal gets out of the way of the real page, and says which application this is.
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByText(/live application page for Senior Engineer at Acme Corp/i)).toBeInTheDocument();
+      expect(screen.getByText(/Other pending applications are untouched/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /done, back to review/i }));
+
+      await waitFor(() => expect(hideHandoff).toHaveBeenCalledWith(attempt.id));
+      // Reopened against the same attempt and target, which is what preserves it.
+      await waitFor(() => expect(openReview).toHaveBeenCalledTimes(2));
+      expect(openReview).toHaveBeenLastCalledWith({ attemptId: attempt.id, policyId: 'some-real-policy', targetUrl: attempt.canonicalUrl, refresh: true });
+      // And the state on screen is the state after the person worked in the page, not before.
+      const reopened = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(reopened).queryByText(/showing a CAPTCHA/i)).not.toBeInTheDocument());
+      expect(within(reopened).getByRole('button', { name: /submit application/i })).toBeEnabled();
+    });
+
+    it('a refused handoff surfaces the reason rather than pretending the live page opened', async () => {
+      const attempt = makeAttempt();
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listApplicationAttempts: vi.fn().mockResolvedValue([attempt]),
+      });
+      (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
+        resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
+        applyFieldMap: vi.fn(),
+        submitReview: vi.fn(),
+        closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: false, reason: 'already_submitting', detail: 'this attempt is mid-submit' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
+      };
+
+      render(<ApplicationsPage />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: /open the live page/i })).toBeInTheDocument());
+      fireEvent.click(within(dialog).getByRole('button', { name: /open the live page/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('this attempt is mid-submit');
     });
 
     it('skipping the swipe card closes the review and marks the attempt skipped, without ever calling submitReview', async () => {
@@ -420,17 +815,14 @@ describe('ApplicationsPage', () => {
       const submitReview = vi.fn();
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview,
         closeReview,
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -452,17 +844,16 @@ describe('ApplicationsPage', () => {
       });
       (window as unknown as { applicationExecutor: unknown }).applicationExecutor = {
         resolveTargetPolicyId: vi.fn().mockResolvedValue('some-real-policy'),
-        openReview: vi.fn().mockResolvedValue({
-          snapshot: { generation: 1, fields: [], submitControls: [], capturedAt: '2026-01-01T00:00:00.000Z', challengeDetected: false },
-          screenshotBase64: 'ZmFrZQ==',
-        }),
+        openReview: vi.fn().mockResolvedValue(reviewResult([])),
         applyFieldMap: vi.fn(),
         submitReview: vi.fn().mockResolvedValue({ ok: false, reason: 'company_not_found_in_documents', detail: '"Acme Corp" does not appear in the rendered documents' }),
         closeReview: vi.fn().mockResolvedValue(undefined),
+        showHandoff: vi.fn().mockResolvedValue({ ok: true, company: 'Acme', role: 'Engineer' }),
+        hideHandoff: vi.fn().mockResolvedValue(undefined),
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('row', { name: /senior frontend engineer/i }));
 
@@ -490,7 +881,7 @@ describe('ApplicationsPage', () => {
       };
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
       const row = screen.getByRole('row', { name: /senior frontend engineer/i });
@@ -511,12 +902,12 @@ describe('ApplicationsPage', () => {
       });
 
       render(<ApplicationsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
 
       await waitFor(() => expect(screen.getByText(/workspace unreachable/i)).toBeInTheDocument());
     });
 
-    it('hides the "Add application" button while on the In progress tab', async () => {
+    it('hides the "Add application" button while on the Review queue tab', async () => {
       installWorkspaceBridge({
         listApplications: vi.fn().mockResolvedValue([]),
         listApplicationAttempts: vi.fn().mockResolvedValue([]),
@@ -525,8 +916,8 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage />);
       expect(screen.getByRole('button', { name: /^add application$/i })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('tab', { name: 'In progress' }));
-      await waitFor(() => expect(screen.getByText('Nothing in progress')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('tab', { name: 'Review queue' }));
+      await waitFor(() => expect(screen.getByText('Nothing to review')).toBeInTheDocument());
       expect(screen.queryByRole('button', { name: /^add application$/i })).not.toBeInTheDocument();
     });
   });

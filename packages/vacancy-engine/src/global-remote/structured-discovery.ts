@@ -1,10 +1,17 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   locations,
   numberValue,
@@ -20,6 +27,42 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+
+/**
+ * FreeHire umbrella discovery integration: hardened structured adapter for remote job aggregation.
+ *
+ * ## Contract and Reliability (issue #6 hardening)
+ *
+ * **Rate limiting:** FreeHire rate limit responses (HTTP 429) are detected by `sourceFailure()`
+ * and marked as 'blocked', never 'error'. This status prevents user-facing retry loops while
+ * allowing parallel discovery to continue without cascading failures.
+ *
+ * **Bounded responses:** When FreeHire returns fewer results than the total available (meta.total
+ * > data.length), the response is marked as 'partial' status and includes the count mismatch in
+ * the error message. Callers MUST NOT treat partial results as definitive. Partial status prevents
+ * the UI from reporting incomplete coverage as exhaustive search results.
+ *
+ * **Outage behavior:** FreeHire failures (malformed response, server error, timeout) are caught
+ * and reported as 'error' status without blocking direct-ATS scanning. The adapter ensures that
+ * FreeHire discovery failing never cascades to prevent local ATS results from being obtained.
+ * This is critical for reliability: FreeHire is a secondary aggregator, not a primary path.
+ *
+ * **Direct ATS attribution:** Jobs found via FreeHire always point to the original ATS host
+ * (Ashby, Greenhouse, Lever, etc.), never to an intermediate aggregator. This preserves
+ * attribution visibility for diagnostics and ensures CVs reach the correct hiring system.
+ *
+ * **Deduplication:** Duplicate jobs discovered locally and via FreeHire converge using the
+ * `discoveryAudit()` key strategy, which combines provider name, job slug, and URL. The global
+ * remote scan's deduplication logic ensures duplicates are merged before evaluation.
+ *
+ * **Caching:** HTTP caching policy is delegated to the AtsHttpClient (passed in options).
+ * The adapter declares no explicit cache control; the crawler layer makes cache decisions
+ * based on response headers and per-source retry policy.
+ *
+ * **User-agent policy:** The adapter sends all requests through `http.get()`, which applies
+ * a user-agent identifying the client (Open Vacancy Radar). FreeHire's API documentation
+ * does not restrict user-agent patterns.
+ */
 
 const FREEHIRE_ATS_HOSTS = [
   'ashbyhq.com',
@@ -41,6 +84,12 @@ const FREEHIRE_ATS_HOSTS = [
   'workable.com',
 ] as const;
 
+/**
+ * Filters a job URL to ensure it points directly to a known ATS system, not an aggregator.
+ * FreeHire provides URLs that may link to intermediate job boards; this function ensures we
+ * only accept direct ATS URLs for attribution transparency and to reach the correct hiring system.
+ * Non-ATS URLs are silently skipped during job ingestion.
+ */
 function directAtsUrl(value: unknown): string | null {
   const url = httpUrl(value);
   if (url === null) return null;
@@ -71,6 +120,8 @@ async function discoverFreehire(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://freehire.me/api/v1/jobs/search');
   if (config.discovery.roleQuery) url.searchParams.set('category', config.discovery.roleQuery);
   url.searchParams.set('work_mode', 'remote');
@@ -111,6 +162,7 @@ async function discoverFreehire(
         currency: stringValue(enrichment?.salary_currency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(enrichment?.salary_period),
         advertisedMinimum: numberValue(enrichment?.salary_min),
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.description),
         postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
@@ -128,6 +180,10 @@ async function discoverFreehire(
         listings: vacancies.length,
         status,
         error: status === 'partial' ? `Bounded to ${root.data.length} of ${total} matching rows.` : null,
+        ...networkAttemptFields(counters),
+        ...(status === 'partial'
+          ? incompleteAudit(`Bounded to ${root.data.length} of ${total} matching rows.`)
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -140,6 +196,7 @@ async function discoverFreehire(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -154,6 +211,8 @@ async function discoverJobOpportunities(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://api.jobopportunitiesapi.org/public/jobs');
   if (config.discovery.roleQuery) url.searchParams.set('q', config.discovery.roleQuery);
   url.searchParams.set('remote_confirmed', 'true');
@@ -191,6 +250,7 @@ async function discoverJobOpportunities(
         currency: stringValue(job.salary_currency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(job.salary_period),
         advertisedMinimum: numberValue(job.salary_min),
+        salaryProvenance: 'reviewed_structured',
         postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
@@ -206,6 +266,10 @@ async function discoverJobOpportunities(
         listings: vacancies.length,
         status: partial ? 'partial' : 'success',
         error: partial ? 'More rows match; keyless access intentionally exposes one page.' : null,
+        ...networkAttemptFields(counters),
+        ...(partial
+          ? incompleteAudit('More rows match; keyless access intentionally exposes one page.')
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -218,6 +282,7 @@ async function discoverJobOpportunities(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -228,11 +293,14 @@ async function discoverRemoteLanders(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://remotelanders.com/api/jobs';
   const pageSize = 100;
   try {
@@ -266,6 +334,7 @@ async function discoverRemoteLanders(
           currency: salary.currency,
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
+          salaryProvenance: 'loose_text',
           postedAt: isoPostedAt(stringValue(job.postedDate)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
@@ -278,6 +347,7 @@ async function discoverRemoteLanders(
       if (complete) break;
       if (page === config.discovery.remoteLandersMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.remoteLandersMaxPages}-page limit.`;
       }
     }
@@ -285,6 +355,7 @@ async function discoverRemoteLanders(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -295,6 +366,8 @@ async function discoverRemoteLanders(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -304,11 +377,14 @@ async function discoverJobgether(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://jobgether.com/astroapi/ai/jobs.json';
   const pageSize = 25;
   try {
@@ -347,6 +423,7 @@ async function discoverJobgether(
           currency: salary.currency,
           salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
           advertisedMinimum: salary.minimum,
+          salaryProvenance: 'loose_text',
           postedAt: stringValue(job.postedAt),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
@@ -357,6 +434,7 @@ async function discoverJobgether(
       if (!hasMore) break;
       if (page === config.discovery.jobgetherMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the documented ${config.discovery.jobgetherMaxPages}-page limit.`;
       }
     }
@@ -364,6 +442,7 @@ async function discoverJobgether(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -374,6 +453,8 @@ async function discoverJobgether(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };

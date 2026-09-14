@@ -11,15 +11,32 @@
  */
 
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
 import type { WorkspaceDb } from './client.js';
-import { appSettings, applicationArtifacts, applicationAttempts, applications, automationGrants, cvDocuments, letters, savedJobs } from './schema.js';
+import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
 import {
+  appSettings,
+  applicationArtifacts,
+  applicationAttempts,
+  applicationSubmissionReceipts,
+  applications,
+  automationGrants,
+  cvDocuments,
+  letters,
+  savedJobs,
+} from './schema.js';
+import {
+  COMPLETED_ATTEMPT_CHECKPOINTS,
   NON_TERMINAL_ATTEMPT_CHECKPOINTS,
   type ApplicationArtifactInput,
   type ApplicationArtifactRecord,
+  type ApplicationDataResetResult,
+  type ApplicationAttemptCheckpoint,
   type ApplicationAttemptInput,
   type ApplicationAttemptPatch,
   type ApplicationAttemptRecord,
+  type ApplicationSubmissionReceiptInput,
+  type ApplicationSubmissionReceiptRecord,
   type ApplicationFilter,
   type ApplicationInput,
   type ApplicationPatch,
@@ -28,6 +45,7 @@ import {
   type AppSettingsRecord,
   type AutomationGrantInput,
   type AutomationGrantRecord,
+  type CompletedApplicationMatch,
   type CvDocumentInput,
   type CvDocumentPatch,
   type CvDocumentRecord,
@@ -36,6 +54,10 @@ import {
   type LetterInput,
   type LetterPatch,
   type LetterRecord,
+  type PreparedApplicationField,
+  type PreparedApplicationFields,
+  type PreparedFieldProvenance,
+  type PreparedFieldStatus,
   type SavedJobInput,
   type SavedJobPatch,
   type SavedJobRecord,
@@ -62,6 +84,59 @@ export class ApplicationAttemptDuplicateError extends Error {
   }
 }
 
+/**
+ * #275's completed-application refusal, separate from the concurrency one above because the fix is
+ * different: a concurrent attempt can be forced past once the user decides they want a second
+ * *try*, whereas this one means an application already reached the employer and the only honest way
+ * forward is an explicit, recorded reapply.
+ *
+ * The message carries ids and classifications only -- never the company, the role, or the URL. It
+ * is surfaced through IPC and may be logged, and #275 is explicit that discussion of these cases
+ * must not carry candidate or posting data.
+ */
+export class ApplicationAlreadyCompletedError extends Error {
+  constructor(public readonly match: CompletedApplicationMatch) {
+    super(
+      match.checkpoint === 'submission_unknown'
+        ? `a prior attempt at this requisition may already have been submitted and has not been reconciled ` +
+          `(attempt "${match.attemptId}", matched on ${match.matchedOn}); reconcile it or record an explicit reapply`
+        : `this requisition already has a completed application ` +
+          `(attempt "${match.attemptId}", matched on ${match.matchedOn}, evidence ${match.completionEvidence ?? 'unrecorded'}); ` +
+          `record an explicit reapply to send another`,
+    );
+    this.name = 'ApplicationAlreadyCompletedError';
+  }
+}
+
+/**
+ * Refuses to un-protect a completed (or possibly-completed) attempt without saying why. Thrown by
+ * `updateApplicationAttempt`; see its comment for the reconciliation rule this enforces. Carries
+ * the checkpoints rather than a free-text summary so a caller can branch on them.
+ */
+export class ApplicationCompletionDecisionError extends Error {
+  constructor(
+    public readonly attemptId: string,
+    public readonly from: ApplicationAttemptCheckpoint,
+    public readonly to: ApplicationAttemptCheckpoint,
+  ) {
+    super(
+      `moving attempt "${attemptId}" from "${from}" to "${to}" removes this requisition's ` +
+        `duplicate protection, so the patch must record why in "checkpointDetail"`,
+    );
+    this.name = 'ApplicationCompletionDecisionError';
+  }
+}
+
+/** A reapply that does not actually describe a reapply: no completed application at this identity,
+ * a predecessor that belongs to some other requisition, or a missing reason. Refused rather than
+ * recorded, because a reapply record nobody can trust is worse than no reapply path at all. */
+export class ApplicationReapplyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApplicationReapplyError';
+  }
+}
+
 const EMPTY_PROFILE: CvProfile = {
   title: '',
   years: '',
@@ -74,6 +149,19 @@ const EMPTY_PROFILE: CvProfile = {
 
 function iso(value: Date): string {
   return value.toISOString();
+}
+
+/**
+ * Dates a structured source CV with this process's own clock at the moment it is written (#274).
+ *
+ * The write only ever happens from the review drawer, so "written here" and "a person looked at
+ * this and pressed Save" are the same event -- and `describeCvSourceGaps` refuses to let an
+ * unreviewed source back a final export. That gate is only worth anything if the timestamp behind
+ * it cannot be supplied by the caller, which is why `validate.ts` drops any incoming `reviewedAt`
+ * and this is the one place it is set, mirroring `savedJobs.gapAnalysisAt` exactly.
+ */
+function stampReviewed(source: CvSourceDocument | null): CvSourceDocument | null {
+  return source ? { ...source, reviewedAt: new Date().toISOString() } : null;
 }
 
 // ---------------------------------------------------------------------------- saved jobs
@@ -256,6 +344,27 @@ export function deleteApplication(db: WorkspaceDb, id: string): DeleteResult {
 
 type CvDocumentRow = typeof cvDocuments.$inferSelect;
 
+/**
+ * #274: the reviewed structured source CV, filled in from `EMPTY_CV_SOURCE` for the same reason
+ * `profile` is filled in from `EMPTY_PROFILE` -- a row written by an older build (or hand-edited)
+ * can be missing a field the renderer treats as required.
+ *
+ * The one thing this never does is invent a *section*. A row with no `source_cv` at all comes back
+ * as `null`, not as an empty-but-present structure: "this CV has never had its source extracted" and
+ * "this CV's source was extracted and genuinely has no projects" are different facts, and every
+ * record that predates this column is the first one. Collapsing them would make a pre-#274 profile
+ * look like a reviewed, complete source with nothing in it, which is precisely the fabricated state
+ * this ticket's migration criterion forbids.
+ */
+function toCvSource(value: CvSourceDocument | null): CvSourceDocument | null {
+  if (!value) return null;
+  return {
+    ...EMPTY_CV_SOURCE,
+    ...value,
+    contact: { ...EMPTY_CV_SOURCE.contact, ...(value.contact ?? {}) },
+  };
+}
+
 function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
   return {
     id: row.id,
@@ -266,6 +375,7 @@ function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
     // `profile` is a JSON column: an older row (or a hand-edited database) could be missing
     // fields the renderer treats as required, so it is filled in rather than trusted.
     profile: { ...EMPTY_PROFILE, ...(row.profile ?? {}) },
+    source: toCvSource(row.sourceCv ?? null),
     isDefault: row.isDefault,
     uploadedAt: iso(row.uploadedAt),
     updatedAt: iso(row.updatedAt),
@@ -279,6 +389,16 @@ export function listCvDocuments(db: WorkspaceDb): CvDocumentRecord[] {
     .orderBy(desc(cvDocuments.isDefault), asc(cvDocuments.uploadedAt))
     .all()
     .map(toCvDocument);
+}
+
+/** Single-row lookup (#156's export action): every other CV verb so far only ever needed the
+ * whole list or an id-plus-patch, so this is the first one-row read. Throws the same
+ * `WorkspaceNotFoundError` `updateCvDocument`/`deleteCvDocument` throw for a missing id, rather
+ * than returning `undefined`, so the export handler does not need its own "no such CV" branch. */
+export function getCvDocument(db: WorkspaceDb, id: string): CvDocumentRecord {
+  const row = db.select().from(cvDocuments).where(eq(cvDocuments.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('CV document', id);
+  return toCvDocument(row);
 }
 
 export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDocumentRecord {
@@ -298,6 +418,7 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
         targetRole: input.targetRole ?? '',
         text: input.text ?? '',
         profile: { ...EMPTY_PROFILE, ...(input.profile ?? {}) },
+        sourceCv: stampReviewed(input.source ?? null),
         isDefault: shouldBeDefault,
       })
       .returning()
@@ -319,6 +440,11 @@ export function updateCvDocument(db: WorkspaceDb, id: string, values: CvDocument
   // field in the CV drawer cannot silently wipe the others.
   if (values.profile !== undefined) {
     set.profile = { ...EMPTY_PROFILE, ...(existing.profile ?? {}), ...values.profile };
+  }
+  // Replaced whole, not merged: see `parseCvDocumentPatch`'s own comment for why a source CV's
+  // arrays cannot be merged entry by entry without making a deletion during review unexpressible.
+  if (values.source !== undefined) {
+    set.sourceCv = stampReviewed(values.source);
   }
 
   const [row] = db.update(cvDocuments).set(set).where(eq(cvDocuments.id, id)).returning().all();
@@ -452,12 +578,85 @@ export function duplicateLetter(db: WorkspaceDb, id: string): LetterRecord {
 
 type ApplicationAttemptRow = typeof applicationAttempts.$inferSelect;
 
+const PREPARED_FIELD_STATUSES: readonly PreparedFieldStatus[] = ['committed', 'awaiting_you', 'left_blank', 'pending_upload'];
+const PREPARED_FIELD_CONTROL_TYPES: readonly PreparedApplicationField['controlType'][] = [
+  'text',
+  'textarea',
+  'select',
+  'checkbox',
+  'radio',
+  'file',
+  'unknown',
+];
+const PREPARED_FIELD_PROVENANCES: readonly PreparedFieldProvenance[] = ['cv', 'profile', 'user_answer', 'jd'];
+
+/**
+ * Reads the `prepared_fields` JSON column back into a record, or `null` for anything this build
+ * cannot interpret -- an empty column (every attempt from before #272), malformed JSON, or a
+ * future shape. Fail-closed rather than partially-parsed on purpose: this is what a review renders
+ * as "the answers committed for this application", and half a record read as a whole one would be
+ * a claim nothing checked.
+ */
+function parsePreparedApplicationFields(raw: string): PreparedApplicationFields | null {
+  if (raw.trim().length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const source = parsed as Record<string, unknown>;
+  if (source.version !== 1 || source.verification !== 'applied') return null;
+  if (typeof source.preparedAt !== 'string' || typeof source.company !== 'string' || typeof source.role !== 'string') return null;
+  if (!Array.isArray(source.fields)) return null;
+
+  const fields: PreparedApplicationField[] = [];
+  for (const entry of source.fields) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const field = entry as Record<string, unknown>;
+    const { label, controlType, required, status, value, provenance, detail } = field;
+    if (typeof label !== 'string' || typeof required !== 'boolean') return null;
+    if (typeof controlType !== 'string' || !(PREPARED_FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) return null;
+    if (typeof status !== 'string' || !(PREPARED_FIELD_STATUSES as readonly string[]).includes(status)) return null;
+    if (value !== undefined && typeof value !== 'string') return null;
+    if (provenance !== undefined && (typeof provenance !== 'string' || !(PREPARED_FIELD_PROVENANCES as readonly string[]).includes(provenance))) {
+      return null;
+    }
+    if (detail !== undefined && typeof detail !== 'string') return null;
+    fields.push({
+      label,
+      controlType: controlType as PreparedApplicationField['controlType'],
+      required,
+      status: status as PreparedFieldStatus,
+      ...(value === undefined ? {} : { value }),
+      ...(provenance === undefined ? {} : { provenance: provenance as PreparedFieldProvenance }),
+      ...(detail === undefined ? {} : { detail }),
+    });
+  }
+
+  return {
+    version: 1,
+    preparedAt: source.preparedAt,
+    company: source.company,
+    role: source.role,
+    verification: 'applied',
+    fields,
+  };
+}
+
 function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRecord {
   return {
     id: row.id,
     applicationId: row.applicationId,
     vacancyKey: row.vacancyKey,
     canonicalUrl: row.canonicalUrl,
+    // Migration 0012 backfills these three to '' / null on every pre-existing row, so an attempt
+    // created before #275 has an empty identity rather than a missing one -- and an empty identity
+    // never matches anything, which is the right answer for a row nothing derived an identity for.
+    employerKey: row.employerKey,
+    requisitionId: row.requisitionId,
+    canonicalUrlKey: row.canonicalUrlKey,
     company: row.company,
     role: row.role,
     sourceCvId: row.sourceCvId,
@@ -466,6 +665,7 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     jdSnapshotHash: row.jdSnapshotHash,
     jdComplete: row.jdComplete,
     workflowVersion: row.workflowVersion,
+    tailoringMode: row.tailoringMode,
     checkpoint: row.checkpoint,
     checkpointDetail: row.checkpointDetail,
     createdAt: iso(row.createdAt),
@@ -474,6 +674,11 @@ function toApplicationAttempt(row: ApplicationAttemptRow): ApplicationAttemptRec
     formStructureHash: row.formStructureHash,
     scheduledAutomaticSubmitAt: row.scheduledAutomaticSubmitAt ? iso(row.scheduledAutomaticSubmitAt) : null,
     submissionMode: row.submissionMode,
+    completionEvidence: row.completionEvidence,
+    supersedesAttemptId: row.supersedesAttemptId,
+    reapplyReason: row.reapplyReason,
+    reapplyPreviousCvContentHash: row.reapplyPreviousCvContentHash,
+    preparedFields: parsePreparedApplicationFields(row.preparedFields),
   };
 }
 
@@ -487,36 +692,192 @@ export function getApplicationAttempt(db: WorkspaceDb, id: string): ApplicationA
   return toApplicationAttempt(row);
 }
 
+// ------------------------------------------------- completed-application lookup (#275)
+
+/** The columns the completed-application lookup reads. Narrow on purpose: this query runs on every
+ * attempt creation, and nothing here needs the JD snapshot. */
+const COMPLETED_MATCH_COLUMNS = {
+  id: applicationAttempts.id,
+  checkpoint: applicationAttempts.checkpoint,
+  completionEvidence: applicationAttempts.completionEvidence,
+  submittedAt: applicationAttempts.submittedAt,
+  createdAt: applicationAttempts.createdAt,
+  employerKey: applicationAttempts.employerKey,
+  requisitionId: applicationAttempts.requisitionId,
+  canonicalUrlKey: applicationAttempts.canonicalUrlKey,
+  vacancyKey: applicationAttempts.vacancyKey,
+  sourceCvContentHash: applicationAttempts.sourceCvContentHash,
+} as const;
+
+type CompletedCandidateRow = Pick<ApplicationAttemptRow, keyof typeof COMPLETED_MATCH_COLUMNS>;
+
+/** What the lookup compares against: the derived requisition identity plus the source key #198's
+ * guard already used, kept as a last fallback so an attempt with no URL at all is not unprotected. */
+interface CompletedLookupIdentity extends ApplicationIdentity {
+  vacancyKey: string | null;
+}
+
 /**
- * Creates a new attempt, enforcing #198's dedup rule first: refuses a second concurrent attempt
- * for the same vacancy while an existing one is still in a non-terminal checkpoint (see
- * `NON_TERMINAL_ATTEMPT_CHECKPOINTS`), unless `input.force` is set. "Same vacancy" is `vacancyKey`
- * when the attempt has one (the normal case, a real discovery-report row); `canonicalUrl` is the
- * fallback for a manually-entered target with no report key.
+ * Everything the completed-application lookup needs, and nothing else. Deliberately narrower than
+ * `ApplicationAttemptInput`: the whole value of asking *before* building an attempt is that you
+ * have not tailored a CV or captured a JD yet, so demanding their hashes to run the query would
+ * defeat the point. An `ApplicationAttemptInput` satisfies it.
+ */
+export interface ApplicationIdentityQuery {
+  company: string;
+  canonicalUrl?: string;
+  requisitionId?: string | null;
+  vacancyKey?: string | null;
+}
+
+/**
+ * Decides which already-completed attempts count as the same application as `identity`, in
+ * descending confidence order. Pure, so the precedence rule is readable in one place and testable
+ * without a database.
  *
- * Deliberately a plain existence check, not a database unique constraint: a vacancy can
- * legitimately have more than one *historical* (terminal) attempt -- a failed attempt retried, or
- * the user genuinely reapplying later -- so the row shape itself must allow duplicates; only the
- * business rule about *concurrent* ones lives here.
+ * The precedence matters more than it looks. A requisition match is an assertion by the receiving
+ * ATS that these are the same opening, and it holds across sources, spreadsheets and re-listings.
+ * The URL fallback only holds when both attempts came in through the same link. The vacancy-key
+ * fallback is weaker still -- it is a discovery-report row id, which is exactly the thing that
+ * changes when the same posting is re-imported -- so it is consulted last.
+ *
+ * Tiers are tried in order and the first one to find anything answers, including *which* identity
+ * answered. A stronger tier finding nothing falls through to the weaker ones rather than concluding
+ * there is no match: an attempt written before migration 0012 has no derived identity at all, and
+ * one whose apply link this app does not recognise as an ATS has no requisition id, so those can
+ * only ever be caught by a weaker key. Falling through can only ever add protection -- every tier
+ * is exact equality on a stored key, never a fuzzy or partial comparison.
+ *
+ * `employerKey` never matches on its own. Two openings at one employer share it, and #275 requires
+ * the second one to stay eligible.
+ */
+function completedMatches(
+  rows: readonly CompletedCandidateRow[],
+  identity: CompletedLookupIdentity,
+): { row: CompletedCandidateRow; matchedOn: CompletedApplicationMatch['matchedOn'] }[] {
+  const tiers: { matchedOn: CompletedApplicationMatch['matchedOn']; hit: (row: CompletedCandidateRow) => boolean }[] = [];
+  if (identity.employerKey !== '' && identity.requisitionId !== null) {
+    tiers.push({
+      matchedOn: 'requisition',
+      hit: (row) => row.employerKey === identity.employerKey && row.requisitionId === identity.requisitionId,
+    });
+  }
+  if (identity.canonicalUrlKey !== '') {
+    tiers.push({ matchedOn: 'canonical_url', hit: (row) => row.canonicalUrlKey === identity.canonicalUrlKey });
+  }
+  if (identity.vacancyKey !== null && identity.vacancyKey !== '') {
+    tiers.push({ matchedOn: 'vacancy_key', hit: (row) => row.vacancyKey === identity.vacancyKey });
+  }
+
+  for (const tier of tiers) {
+    const hits = rows.filter(tier.hit);
+    if (hits.length > 0) return hits.map((row) => ({ row, matchedOn: tier.matchedOn }));
+  }
+  return [];
+}
+
+function toCompletedMatch(entry: { row: CompletedCandidateRow; matchedOn: CompletedApplicationMatch['matchedOn'] }): CompletedApplicationMatch {
+  return {
+    attemptId: entry.row.id,
+    checkpoint: entry.row.checkpoint,
+    completionEvidence: entry.row.completionEvidence,
+    matchedOn: entry.matchedOn,
+    submittedAt: entry.row.submittedAt ? iso(entry.row.submittedAt) : null,
+  };
+}
+
+/**
+ * #275's completed-application lookup, exposed on its own so a caller can ask "have I already
+ * applied here?" *before* building an attempt -- the import path wants to skip a row quietly, not
+ * catch a refusal thrown halfway through generating documents for it.
+ *
+ * Returns every completed attempt at this identity, newest first. Empty means nothing was found,
+ * which is a real answer and not an error.
+ */
+export function findCompletedApplications(
+  db: WorkspaceDb,
+  input: ApplicationIdentityQuery,
+): CompletedApplicationMatch[] {
+  const rows = db
+    .select(COMPLETED_MATCH_COLUMNS)
+    .from(applicationAttempts)
+    .where(inArray(applicationAttempts.checkpoint, COMPLETED_ATTEMPT_CHECKPOINTS))
+    .orderBy(desc(applicationAttempts.createdAt))
+    .all();
+  return completedMatches(rows, lookupIdentity(input)).map(toCompletedMatch);
+}
+
+/** The newest completed application at this identity, or undefined when there is none. */
+export function findCompletedApplication(
+  db: WorkspaceDb,
+  input: ApplicationIdentityQuery,
+): CompletedApplicationMatch | undefined {
+  return findCompletedApplications(db, input)[0];
+}
+
+function lookupIdentity(input: ApplicationIdentityQuery): CompletedLookupIdentity {
+  return {
+    ...deriveApplicationIdentity({
+      company: input.company,
+      canonicalUrl: input.canonicalUrl,
+      requisitionId: input.requisitionId,
+    }),
+    vacancyKey: input.vacancyKey ?? null,
+  };
+}
+
+/**
+ * Creates a new attempt, enforcing two independent refusals first.
+ *
+ * **#198's concurrency guard.** Refuses a second *concurrent* attempt for the same vacancy while an
+ * existing one is still in a non-terminal checkpoint (see `NON_TERMINAL_ATTEMPT_CHECKPOINTS`),
+ * unless `input.force` is set. "Same vacancy" is `vacancyKey` when the attempt has one (the normal
+ * case, a real discovery-report row); `canonicalUrl` is the fallback for a manually-entered target
+ * with no report key. Unchanged by #275, and still the only thing `force` gets past.
+ *
+ * **#275's completed-application guard.** Refuses an ordinary new attempt when an earlier attempt
+ * at the same *requisition* already reached the employer -- `submitted`, or `submission_unknown`
+ * where it may have. This is a separate check on a separate identity for a separate reason: the
+ * concurrency guard protects against doing the same work twice, this one protects a real person
+ * from sending a second application to a job they already applied for, which is not undoable.
+ * `force` does not reach it. The only way past is `input.reapply`, which records the predecessor,
+ * the reason and the document version that changed.
+ *
+ * Both are deliberately plain existence checks rather than database unique constraints: a vacancy
+ * can legitimately have more than one historical attempt -- a failed attempt retried, a recorded
+ * reapply -- so the row shape itself must allow duplicates; only the business rules live here.
  */
 export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAttemptInput): ApplicationAttemptRecord {
+  const identity = lookupIdentity(input);
   return db.transaction((tx) => {
     if (!input.force) {
-      const identity =
+      const vacancyIdentity =
         input.vacancyKey !== null && input.vacancyKey !== undefined
           ? eq(applicationAttempts.vacancyKey, input.vacancyKey)
           : input.canonicalUrl
             ? eq(applicationAttempts.canonicalUrl, input.canonicalUrl)
             : undefined;
-      if (identity) {
+      if (vacancyIdentity) {
         const existing = tx
           .select({ id: applicationAttempts.id })
           .from(applicationAttempts)
-          .where(and(identity, inArray(applicationAttempts.checkpoint, NON_TERMINAL_ATTEMPT_CHECKPOINTS)))
+          .where(and(vacancyIdentity, inArray(applicationAttempts.checkpoint, NON_TERMINAL_ATTEMPT_CHECKPOINTS)))
           .get();
         if (existing) throw new ApplicationAttemptDuplicateError(existing.id);
       }
     }
+
+    const completed = completedMatches(
+      tx
+        .select(COMPLETED_MATCH_COLUMNS)
+        .from(applicationAttempts)
+        .where(inArray(applicationAttempts.checkpoint, COMPLETED_ATTEMPT_CHECKPOINTS))
+        .orderBy(desc(applicationAttempts.createdAt))
+        .all(),
+      identity,
+    );
+    const reapply = resolveReapply(input, completed);
+    if (!reapply && completed[0]) throw new ApplicationAlreadyCompletedError(toCompletedMatch(completed[0]));
 
     const [row] = tx
       .insert(applicationAttempts)
@@ -524,6 +885,9 @@ export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAtte
         applicationId: input.applicationId ?? null,
         vacancyKey: input.vacancyKey ?? null,
         canonicalUrl: input.canonicalUrl ?? '',
+        employerKey: identity.employerKey,
+        requisitionId: identity.requisitionId,
+        canonicalUrlKey: identity.canonicalUrlKey,
         company: input.company,
         role: input.role,
         sourceCvId: input.sourceCvId ?? null,
@@ -534,6 +898,9 @@ export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAtte
         workflowVersion: input.workflowVersion ?? '',
         checkpoint: input.checkpoint ?? 'queued',
         checkpointDetail: input.checkpointDetail ?? '',
+        supersedesAttemptId: reapply?.supersedesAttemptId ?? null,
+        reapplyReason: reapply?.reason ?? '',
+        reapplyPreviousCvContentHash: reapply?.previousCvContentHash ?? null,
       })
       .returning()
       .all();
@@ -542,6 +909,54 @@ export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAtte
   });
 }
 
+/**
+ * Validates `input.reapply` against the completed attempts actually found at this identity, and
+ * returns the record to write, or undefined when the caller is not reapplying at all.
+ *
+ * The predecessor has to be one of *these* matches, not merely an attempt that exists. Accepting
+ * any attempt id would turn the reapply path into the unconditional bypass `force` deliberately is
+ * not: a caller could name some unrelated finished attempt and send a second application to a job
+ * the user already applied for, which is the exact outcome #275 exists to prevent.
+ */
+function resolveReapply(
+  input: ApplicationAttemptInput,
+  completed: readonly { row: CompletedCandidateRow; matchedOn: CompletedApplicationMatch['matchedOn'] }[],
+): { supersedesAttemptId: string; reason: string; previousCvContentHash: string } | undefined {
+  const request = input.reapply;
+  if (!request) return undefined;
+
+  const reason = request.reason.trim();
+  if (reason === '') throw new ApplicationReapplyError('a reapply must record a non-empty reason');
+  if (completed.length === 0) {
+    throw new ApplicationReapplyError('there is no completed application at this requisition to reapply against');
+  }
+  const predecessor = completed.find((entry) => entry.row.id === request.supersedesAttemptId);
+  if (!predecessor) {
+    throw new ApplicationReapplyError(
+      `attempt "${request.supersedesAttemptId}" is not a completed application at this requisition`,
+    );
+  }
+  return {
+    supersedesAttemptId: predecessor.row.id,
+    reason,
+    previousCvContentHash: predecessor.row.sourceCvContentHash,
+  };
+}
+
+/**
+ * Patches an attempt's progress.
+ *
+ * One #275 rule sits on top of the plain column write: moving an attempt *out of* a completed
+ * checkpoint (`submitted`, or an unreconciled `submission_unknown`) and into one that no longer
+ * protects the requisition requires a non-empty `checkpointDetail` in the same patch.
+ *
+ * That is the "reconciliation or an explicit, recorded user decision" #275 asks for, and it is the
+ * whole resolution path for `submission_unknown`: a receipt turning up later moves it to
+ * `submitted` (still protected, no reason needed, nothing was un-protected); establishing that
+ * nothing was ever sent moves it to `failed` or `skipped`, which frees the requisition for an
+ * ordinary new attempt and therefore has to say on what basis. An unexplained patch that quietly
+ * clears the protection is refused -- it is indistinguishable from the bug #275 fixes.
+ */
 export function updateApplicationAttempt(
   db: WorkspaceDb,
   id: string,
@@ -554,9 +969,84 @@ export function updateApplicationAttempt(
     set.scheduledAutomaticSubmitAt = scheduledAutomaticSubmitAt ? new Date(scheduledAutomaticSubmitAt) : null;
   }
 
-  const [row] = db.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
+  return db.transaction((tx) => {
+    const next = values.checkpoint;
+    if (next !== undefined && !COMPLETED_ATTEMPT_CHECKPOINTS.includes(next)) {
+      const existing = tx
+        .select({ checkpoint: applicationAttempts.checkpoint })
+        .from(applicationAttempts)
+        .where(eq(applicationAttempts.id, id))
+        .get();
+      if (
+        existing &&
+        COMPLETED_ATTEMPT_CHECKPOINTS.includes(existing.checkpoint) &&
+        (values.checkpointDetail ?? '').trim() === ''
+      ) {
+        throw new ApplicationCompletionDecisionError(id, existing.checkpoint, next);
+      }
+    }
+
+    const [row] = tx.update(applicationAttempts).set(set).where(eq(applicationAttempts.id, id)).returning().all();
+    if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+    return toApplicationAttempt(row);
+  });
+}
+
+/**
+ * Records what the preparation pipeline (#272) committed to one attempt's form.
+ *
+ * A function of its own rather than a field on `ApplicationAttemptPatch`, deliberately: the patch
+ * type is what the renderer can send over `workspace:application-attempts:update`, and a renderer
+ * able to write this could claim an application was filled with answers nothing ever applied. Only
+ * main-process pipeline code calls this.
+ *
+ * Passing `null` clears the record, which is what a fresh run does before it starts filling: an
+ * attempt being re-prepared must never show the previous run's answers while the new fill is still
+ * in progress.
+ */
+export function recordPreparedApplicationFields(
+  db: WorkspaceDb,
+  id: string,
+  prepared: PreparedApplicationFields | null,
+): ApplicationAttemptRecord {
+  const [row] = db
+    .update(applicationAttempts)
+    .set({ preparedFields: prepared === null ? '' : JSON.stringify(prepared), updatedAt: new Date() })
+    .where(eq(applicationAttempts.id, id))
+    .returning()
+    .all();
   if (!row) throw new WorkspaceNotFoundError('application attempt', id);
   return toApplicationAttempt(row);
+}
+
+/** Records the person's explicit recovery choice before a failed tailoring run is queued again.
+ * Kept out of `ApplicationAttemptPatch`: renderer code cannot silently change document provenance. */
+export function restartApplicationTailoring(
+  db: WorkspaceDb,
+  id: string,
+  tailoringMode: ApplicationAttemptRecord['tailoringMode'],
+): ApplicationAttemptRecord {
+  return db.transaction((tx) => {
+    const current = tx
+      .select({ checkpoint: applicationAttempts.checkpoint })
+      .from(applicationAttempts)
+      .where(eq(applicationAttempts.id, id))
+      .get();
+    if (!current) throw new WorkspaceNotFoundError('application attempt', id);
+    if (current.checkpoint !== 'needs_user') {
+      throw new Error('only an application waiting for user input can restart tailoring');
+    }
+
+    tx.delete(applicationArtifacts).where(eq(applicationArtifacts.attemptId, id)).run();
+    const [row] = tx
+      .update(applicationAttempts)
+      .set({ tailoringMode, checkpoint: 'queued', checkpointDetail: '', preparedFields: '', updatedAt: new Date() })
+      .where(eq(applicationAttempts.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+    return toApplicationAttempt(row);
+  });
 }
 
 /** Cascades to the attempt's artifacts via the schema's `on delete cascade`. */
@@ -611,6 +1101,12 @@ export function listApplicationArtifacts(db: WorkspaceDb, attemptId: string): Ap
     .map(toApplicationArtifact);
 }
 
+export function getApplicationArtifact(db: WorkspaceDb, id: string): ApplicationArtifactRecord {
+  const row = db.select().from(applicationArtifacts).where(eq(applicationArtifacts.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('application artifact', id);
+  return toApplicationArtifact(row);
+}
+
 export function createApplicationArtifact(db: WorkspaceDb, input: ApplicationArtifactInput): ApplicationArtifactRecord {
   return db.transaction((tx) => {
     const attempt = tx.select({ id: applicationAttempts.id }).from(applicationAttempts).where(eq(applicationAttempts.id, input.attemptId)).get();
@@ -648,6 +1144,107 @@ export function createApplicationArtifact(db: WorkspaceDb, input: ApplicationArt
       .all();
     if (!row) throw new Error('failed to insert application artifact');
     return toApplicationArtifact(row);
+  });
+}
+
+// --------------------------------------------------- application submission receipts (#271)
+
+type ApplicationSubmissionReceiptRow = typeof applicationSubmissionReceipts.$inferSelect;
+
+/** A quota, not a product limit anyone should ever meet, mirroring `APPLICATION_ARTIFACT_QUOTA`'s
+ * reasoning: one attempt accumulates one post-click observation plus, at most, a handful of later
+ * reconciliations. A number far past that means something is writing in a loop. */
+export const APPLICATION_SUBMISSION_RECEIPT_QUOTA = { maxPerAttempt: 50 } as const;
+
+export class ApplicationSubmissionReceiptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApplicationSubmissionReceiptError';
+  }
+}
+
+function toApplicationSubmissionReceipt(row: ApplicationSubmissionReceiptRow): ApplicationSubmissionReceiptRecord {
+  return {
+    id: row.id,
+    attemptId: row.attemptId,
+    outcome: row.outcome,
+    source: row.source,
+    destination: row.destination,
+    evidenceKind: row.evidenceKind,
+    evidenceReference: row.evidenceReference,
+    detail: row.detail,
+    observedAt: iso(row.observedAt),
+    createdAt: iso(row.createdAt),
+  };
+}
+
+/** Oldest first: these read as a timeline (what was observed at the click, then what reconciled it
+ * later), and a timeline that starts at the end is not one. */
+export function listApplicationSubmissionReceipts(db: WorkspaceDb, attemptId: string): ApplicationSubmissionReceiptRecord[] {
+  return db
+    .select()
+    .from(applicationSubmissionReceipts)
+    .where(eq(applicationSubmissionReceipts.attemptId, attemptId))
+    .orderBy(asc(applicationSubmissionReceipts.observedAt), asc(applicationSubmissionReceipts.createdAt))
+    .all()
+    .map(toApplicationSubmissionReceipt);
+}
+
+/**
+ * Writes one observation (#271). The one invariant enforced here, rather than left to callers:
+ * **a `submitted` row must carry real evidence.** `evidenceKind: 'none'`, or an empty
+ * `evidenceReference`, is refused outright for that outcome -- the whole point of this table is
+ * that a claim of delivery is checkable afterwards, and a claim with nothing behind it is exactly
+ * the bug #271 exists to fix, just relocated into a database row.
+ *
+ * `user_reported` is likewise required to say so in its own `source`/`evidenceKind`, so no query
+ * over this table can ever mistake a person's statement for an observed receipt.
+ */
+export function createApplicationSubmissionReceipt(
+  db: WorkspaceDb,
+  input: ApplicationSubmissionReceiptInput,
+): ApplicationSubmissionReceiptRecord {
+  if (input.outcome === 'submitted' && (input.evidenceKind === 'none' || !input.evidenceReference?.trim())) {
+    throw new ApplicationSubmissionReceiptError('a "submitted" receipt must carry a real evidence kind and reference');
+  }
+  if (input.outcome === 'user_reported' && (input.source !== 'user_reported' || input.evidenceKind !== 'user_statement')) {
+    throw new ApplicationSubmissionReceiptError('a "user_reported" receipt must record its source as the person who reported it');
+  }
+  if (input.source === 'user_reported' && input.outcome !== 'user_reported') {
+    throw new ApplicationSubmissionReceiptError('a person\'s own statement is never recorded as an observed outcome');
+  }
+
+  return db.transaction((tx) => {
+    const attempt = tx.select({ id: applicationAttempts.id }).from(applicationAttempts).where(eq(applicationAttempts.id, input.attemptId)).get();
+    if (!attempt) throw new WorkspaceNotFoundError('application attempt', input.attemptId);
+
+    const existing = tx
+      .select({ id: applicationSubmissionReceipts.id })
+      .from(applicationSubmissionReceipts)
+      .where(eq(applicationSubmissionReceipts.attemptId, input.attemptId))
+      .all();
+    if (existing.length + 1 > APPLICATION_SUBMISSION_RECEIPT_QUOTA.maxPerAttempt) {
+      throw new ApplicationSubmissionReceiptError(
+        `an attempt may have at most ${APPLICATION_SUBMISSION_RECEIPT_QUOTA.maxPerAttempt} submission receipts`,
+      );
+    }
+
+    const [row] = tx
+      .insert(applicationSubmissionReceipts)
+      .values({
+        attemptId: input.attemptId,
+        outcome: input.outcome,
+        source: input.source,
+        destination: input.destination ?? '',
+        evidenceKind: input.evidenceKind,
+        evidenceReference: input.evidenceReference ?? '',
+        detail: input.detail ?? '',
+        observedAt: input.observedAt ? new Date(input.observedAt) : new Date(),
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application submission receipt');
+    return toApplicationSubmissionReceipt(row);
   });
 }
 
@@ -796,6 +1393,37 @@ export function updateSettings(db: WorkspaceDb, values: AppSettingsPatch): AppSe
     .all();
   if (!row) throw new Error('failed to update app settings');
   return toSettings(row);
+}
+
+/** Deletes every personal application record and recreates settings from schema defaults. */
+export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResult {
+  return db.transaction((tx) => {
+    const deleted = {
+      savedJobs: tx.select({ id: savedJobs.id }).from(savedJobs).all().length,
+      applications: tx.select({ id: applications.id }).from(applications).all().length,
+      cvDocuments: tx.select({ id: cvDocuments.id }).from(cvDocuments).all().length,
+      letters: tx.select({ id: letters.id }).from(letters).all().length,
+      applicationAttempts: tx.select({ id: applicationAttempts.id }).from(applicationAttempts).all().length,
+      applicationArtifacts: tx.select({ id: applicationArtifacts.id }).from(applicationArtifacts).all().length,
+      submissionReceipts: tx
+        .select({ id: applicationSubmissionReceipts.id })
+        .from(applicationSubmissionReceipts)
+        .all().length,
+      automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
+    };
+
+    tx.delete(applicationAttempts).run();
+    tx.delete(applications).run();
+    tx.delete(letters).run();
+    tx.delete(savedJobs).run();
+    tx.delete(appSettings).run();
+    tx.delete(cvDocuments).run();
+    tx.delete(automationGrants).run();
+
+    const [settings] = tx.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
+    if (!settings) throw new Error('failed to restore default app settings');
+    return { settings: toSettings(settings), deleted };
+  });
 }
 
 /** Convenience for the badge counts the sidebar shows; one round trip instead of three lists. */

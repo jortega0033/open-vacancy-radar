@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import runtimeUnavailableIllustration from '../../../assets/illustrations/runtime-unavailable.svg?no-inline';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
-import { EmptyState } from '../shell/index.js';
+import { EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import { ProviderCard } from './ProviderCard.js';
 
 type VerifyResult =
@@ -128,8 +128,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
 
   return (
     <div className="max-w-3xl">
-      <h2 className="text-lg font-semibold">AI Runtime</h2>
-      <p className="mt-2 text-sm text-base-content/70">
+      <p className="text-sm text-base-content/70">
         Open Vacancy Radar uses an AI CLI already installed and authenticated on this computer,
         through the local AgentDock runtime.
       </p>
@@ -138,11 +137,9 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         Authentication remains managed by the installed CLI.
       </p>
 
-      {daemonState === 'connecting' && (
-        <div className="alert alert-info mt-4">Connecting to local daemon…</div>
-      )}
-      {providersError && <div className="alert alert-error mt-4">{providersError}</div>}
-      {actionError && <div className="alert alert-error mt-4">{actionError}</div>}
+      {daemonState === 'connecting' && <PageLoading label="Connecting to local daemon…" />}
+      {providersError && <ErrorBanner className="mt-4">{providersError}</ErrorBanner>}
+      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 
       {providers && (
         <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
@@ -187,9 +184,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
           </div>
         </div>
       )}
-      {verifyResult?.kind === 'failed' && (
-        <div className="alert alert-error mt-2.5 text-xs">{verifyResult.reason}</div>
-      )}
+      {verifyResult?.kind === 'failed' && <ErrorBanner className="mt-2.5">{verifyResult.reason}</ErrorBanner>}
 
       <p className="mt-5 max-w-xl text-xs text-base-content/50">
         Verification checks that the executable exists, responds to a version query, and reports

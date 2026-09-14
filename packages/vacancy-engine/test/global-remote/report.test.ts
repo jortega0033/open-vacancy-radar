@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -74,6 +74,25 @@ describe('readGlobalRemoteReport', () => {
 
     const read = await readGlobalRemoteReport(projectRoot);
     expect(read).toEqual(report);
+  });
+
+  it('writes browse-all cap state into the HTML report', async () => {
+    const report = {
+      ...sampleReport(),
+      scanBounds: {
+        mode: 'browse_all' as const,
+        resultCap: 5_000,
+        resultCountBeforeCap: 5_001,
+        complete: false,
+        completenessReason: 'Browse-all result cap kept 5,000 of 5,001 discovered vacancies.',
+      },
+    };
+
+    const files = await writeGlobalRemoteReport(report, projectRoot);
+    const html = await readFile(files.latestHtml, 'utf8');
+
+    expect(html).toContain('Incomplete browse-all report');
+    expect(html).toContain('Browse-all result cap kept 5,000 of 5,001 discovered vacancies.');
   });
 
   it('resolves to undefined when no report has ever been written', async () => {

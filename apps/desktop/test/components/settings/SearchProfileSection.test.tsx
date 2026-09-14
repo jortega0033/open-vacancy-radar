@@ -5,7 +5,11 @@ import {
   SearchProfileSection,
   type SearchProfileSectionProps,
 } from '../../../src/components/settings/SearchProfileSection.js';
-import { DEFAULT_CANDIDATE_PROFILE, installVacancyRadarBridge } from '../../workspace-bridge.js';
+import {
+  DEFAULT_CANDIDATE_PROFILE,
+  installVacancyRadarBridge,
+  installWorkspaceBridge,
+} from '../../workspace-bridge.js';
 
 function configuredProfile(overrides: Partial<CandidateProfile> = {}): CandidateProfile {
   return {
@@ -137,5 +141,42 @@ describe('SearchProfileSection', () => {
     await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
     expect(screen.getByRole('heading', { level: 3, name: 'Identity' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 3, name: 'Role matching' })).toBeInTheDocument();
+  });
+
+  it('shows completion and the current default CV from the workspace bridge', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile({ candidateName: 'Jane Doe' })),
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([
+        {
+          id: 'cv-1',
+          name: 'Jane CV',
+          isDefault: true,
+          text: '',
+          profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+        },
+      ]),
+    });
+
+    render(<SearchProfileSection {...baseProps()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.getByLabelText('Profile status')).toHaveTextContent('Profile completion: 4 of 10 fields');
+    expect(screen.getByLabelText('Profile status')).toHaveTextContent('Default CV: Jane CV');
+  });
+
+  it('states when no default CV is selected', async () => {
+    installVacancyRadarBridge({
+      getSearchProfile: vi.fn().mockResolvedValue(configuredProfile()),
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]) });
+
+    render(<SearchProfileSection {...baseProps()} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByLabelText('Profile status')).toHaveTextContent('Default CV: No default CV selected'),
+    );
   });
 });

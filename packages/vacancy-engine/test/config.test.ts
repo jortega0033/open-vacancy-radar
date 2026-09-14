@@ -20,6 +20,7 @@ describe('configuration', () => {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      navArbeidsplassenApiKey: '',
     });
     expect(config.globalConcurrency).toBe(6);
     expect(config.perDomainConcurrency).toBe(1);

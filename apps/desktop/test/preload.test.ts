@@ -162,10 +162,21 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
 });
 
 describe('electron/preload.ts: vacancyRadar bridge', () => {
-  it('exposes exactly the six documented capability functions and nothing else', async () => {
+  it('exposes exactly the ten documented capability functions and nothing else', async () => {
     const api = await loadPreload('vacancyRadar');
     expect(Object.keys(api).sort()).toEqual(
-      ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'].sort(),
+      [
+        'getReport',
+        'getReportSummary',
+        'getStatus',
+        'runScan',
+        'getScanStatus',
+        'onScanProgress',
+        'getSearchProfile',
+        'saveSearchProfile',
+        'getAtsRosterStatus',
+        'refreshAtsRoster',
+      ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
@@ -188,12 +199,20 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
     expect(report).toBeNull();
   });
 
-  it('runScan invokes vacancy:run-scan with no query when called with none', async () => {
+  it('getReportSummary invokes only vacancy:get-report-summary and returns whatever the main process sent', async () => {
+    invoke.mockResolvedValue({ runId: 'run-1', generatedAt: '2026-09-11T12:00:00.000Z', vacancyCount: 20_000 });
+    const api = await loadPreload('vacancyRadar');
+    const summary = await (api.getReportSummary as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledWith('vacancy:get-report-summary');
+    expect(summary).toEqual({ runId: 'run-1', generatedAt: '2026-09-11T12:00:00.000Z', vacancyCount: 20_000 });
+  });
+
+  it('runScan forwards blank input to main so the scan guard can reject it before discovery', async () => {
     invoke.mockResolvedValue({ runId: 'run-1' });
     const api = await loadPreload('vacancyRadar');
-    await (api.runScan as () => Promise<unknown>)();
+    await (api.runScan as (query: string) => Promise<unknown>)('   ');
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', undefined);
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', '   ');
   });
 
   it('getScanStatus invokes only vacancy:get-scan-status, no arguments', async () => {
@@ -208,8 +227,74 @@ describe('electron/preload.ts: vacancyRadar bridge', () => {
   it('runScan forwards the query string to vacancy:run-scan unchanged', async () => {
     invoke.mockResolvedValue({ runId: 'run-1' });
     const api = await loadPreload('vacancyRadar');
-    await (api.runScan as (query?: string) => Promise<unknown>)('frontend engineer');
+    await (api.runScan as (query: string) => Promise<unknown>)('frontend engineer');
     expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', 'frontend engineer');
+  });
+
+  it('runScan forwards an explicit browse-all request unchanged', async () => {
+    invoke.mockResolvedValue({ runId: 'run-1' });
+    const api = await loadPreload('vacancyRadar');
+    await (api.runScan as (request: { mode: 'browse_all' }) => Promise<unknown>)({ mode: 'browse_all' });
+    expect(invoke).toHaveBeenCalledWith('vacancy:run-scan', { mode: 'browse_all' });
+  });
+
+  it('onScanProgress subscribes to vacancy:scan-progress and forwards a well-formed payload', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const received: unknown[] = [];
+    (api.onScanProgress as (cb: (event: unknown) => void) => () => void)((event) => received.push(event));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+    const vacancies = [{ key: 'himalayas:1', title: 'Frontend Engineer' }];
+    listener?.({}, { sourceId: 'himalayas', vacancies });
+
+    expect(received).toEqual([{ sourceId: 'himalayas', vacancies }]);
+  });
+
+  it('onScanProgress drops a malformed payload instead of forwarding it', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const received: unknown[] = [];
+    (api.onScanProgress as (cb: (event: unknown) => void) => () => void)((event) => received.push(event));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    listener?.({}, { sourceId: 'himalayas' }); // vacancies missing
+    listener?.({}, { vacancies: [] }); // sourceId missing
+    listener?.({}, null);
+
+    expect(received).toEqual([]);
+  });
+
+  it('onScanProgress returns an unsubscribe function that removes exactly its own listener', async () => {
+    const api = await loadPreload('vacancyRadar');
+    const unsubscribe = (api.onScanProgress as (cb: (event: unknown) => void) => () => void)(() => {});
+
+    const listener = on.mock.calls.find((call) => call[0] === 'vacancy:scan-progress')?.[1];
+    unsubscribe();
+
+    expect(removeListener).toHaveBeenCalledWith('vacancy:scan-progress', listener);
+  });
+
+  it('getAtsRosterStatus invokes only vacancy:ats-roster:get-status, no arguments', async () => {
+    invoke.mockResolvedValue(null);
+    const api = await loadPreload('vacancyRadar');
+    const status = await (api.getAtsRosterStatus as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:ats-roster:get-status');
+    expect(status).toBeNull();
+  });
+
+  it('refreshAtsRoster invokes only vacancy:ats-roster:refresh, no arguments, and returns whatever main sent', async () => {
+    const result = { file: 'ats-roster-v1.json', importedAt: '2026-09-11T00:00:00.000Z', totalEntries: 3, providers: [] };
+    invoke.mockResolvedValue(result);
+    const api = await loadPreload('vacancyRadar');
+    const received = await (api.refreshAtsRoster as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('vacancy:ats-roster:refresh');
+    expect(received).toEqual(result);
   });
 });
 
@@ -218,6 +303,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'getSettings',
     'updateSettings',
     'getCounts',
+    'resetApplicationData',
     'listSavedJobs',
     'createSavedJob',
     'updateSavedJob',
@@ -231,6 +317,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'updateCvDocument',
     'deleteCvDocument',
     'setDefaultCvDocument',
+    'exportCvDocument',
     'listLetters',
     'createLetter',
     'updateLetter',
@@ -244,7 +331,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'revokeAutomationGrant',
   ];
 
-  it('exposes exactly the twenty-seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload('workspace');
     expect(Object.keys(api).sort()).toEqual([...EXPECTED_CAPABILITIES].sort());
     for (const [name, value] of Object.entries(api)) {
@@ -268,6 +355,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     const cases: [name: string, channel: string, call: (fn: never) => Promise<unknown>][] = [
       ['getSettings', 'workspace:settings:get', (fn: never) => (fn as () => Promise<unknown>)()],
       ['getCounts', 'workspace:counts:get', (fn: never) => (fn as () => Promise<unknown>)()],
+      ['resetApplicationData', 'workspace:data:reset', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listSavedJobs', 'workspace:saved-jobs:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listCvDocuments', 'workspace:cv-documents:list', (fn: never) => (fn as () => Promise<unknown>)()],
       ['listLetters', 'workspace:letters:list', (fn: never) => (fn as () => Promise<unknown>)()],
@@ -304,6 +392,20 @@ describe('electron/preload.ts: workspace bridge', () => {
     expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:set-default', { id: 'cv-3' });
   });
 
+  it('exportCvDocument (#156) sends an { id, format } envelope to workspace:cv-documents:export', async () => {
+    invoke.mockResolvedValue({ saved: true, path: 'C:/Users/someone/Downloads/resume.pdf' });
+    const api = await loadPreload('workspace');
+    const result = await (api.exportCvDocument as (id: string, format: string) => Promise<unknown>)('cv-1', 'pdf');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:export', { id: 'cv-1', format: 'pdf' });
+    expect(result).toEqual({ saved: true, path: 'C:/Users/someone/Downloads/resume.pdf' });
+
+    invoke.mockReset();
+    invoke.mockResolvedValue({ saved: false });
+    const api2 = await loadPreload('workspace');
+    await (api2.exportCvDocument as (id: string, format: string) => Promise<unknown>)('cv-2', 'docx');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-documents:export', { id: 'cv-2', format: 'docx' });
+  });
+
   it('defaults the applications filter to "all" instead of sending undefined', async () => {
     invoke.mockResolvedValue([]);
     const api = await loadPreload('workspace');
@@ -333,6 +435,35 @@ describe('electron/preload.ts: workspace bridge', () => {
     api = await loadPreload('workspace');
     await (api.listApplicationArtifacts as (attemptId: string) => Promise<unknown>)('attempt-1');
     expect(invoke).toHaveBeenCalledWith('workspace:application-artifacts:list', { attemptId: 'attempt-1' });
+  });
+
+  it('removes app-owned storage paths from artifact metadata before it reaches the renderer', async () => {
+    invoke.mockResolvedValue([
+      {
+        id: 'artifact-1',
+        attemptId: 'attempt-1',
+        kind: 'cv_pdf',
+        fileName: 'cv.pdf',
+        mimeType: 'application/pdf',
+        byteSize: 42,
+        contentHash: 'hash',
+        storagePath: 'C:\\private\\application-artifacts\\cv.pdf',
+        createdAt: '2026-09-11T00:00:00.000Z',
+      },
+    ]);
+    const api = await loadPreload('workspace');
+    const [artifact] = await (api.listApplicationArtifacts as (attemptId: string) => Promise<Record<string, unknown>[]>)('attempt-1');
+    expect(artifact).toEqual({
+      id: 'artifact-1',
+      attemptId: 'attempt-1',
+      kind: 'cv_pdf',
+      fileName: 'cv.pdf',
+      mimeType: 'application/pdf',
+      byteSize: 42,
+      contentHash: 'hash',
+      createdAt: '2026-09-11T00:00:00.000Z',
+    });
+    expect(artifact).not.toHaveProperty('storagePath');
   });
 });
 
@@ -466,11 +597,31 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'setMcpCredential',
     'removeMcpProvider',
   ],
-  vacancyRadar: ['getReport', 'getStatus', 'runScan', 'getScanStatus', 'getSearchProfile', 'saveSearchProfile'],
+  // Added by issue #252, same reasoning as `workspace`'s own #202/#203 comment below:
+  // `onScanProgress` is a legitimate widening of this namespace for progressive search results,
+  // not something ADI-06/07 touched, so the literal grows here rather than blocking real growth.
+  //
+  // `getAtsRosterStatus`/`refreshAtsRoster` added wiring up issue #251/#264's ATS-roster import
+  // trigger (the manual "Refresh company roster" Settings action), same reasoning again.
+  // `getReportSummary` is a cheap metadata read for foreground resume: Search can avoid pulling
+  // a 20k-row report over IPC when the stored report has not changed.
+  vacancyRadar: [
+    'getReport',
+    'getReportSummary',
+    'getStatus',
+    'runScan',
+    'getScanStatus',
+    'onScanProgress',
+    'getSearchProfile',
+    'saveSearchProfile',
+    'getAtsRosterStatus',
+    'refreshAtsRoster',
+  ],
   workspace: [
     'getSettings',
     'updateSettings',
     'getCounts',
+    'resetApplicationData',
     'listSavedJobs',
     'createSavedJob',
     'updateSavedJob',
@@ -484,6 +635,10 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'updateCvDocument',
     'deleteCvDocument',
     'setDefaultCvDocument',
+    // Added by issue #156, same reasoning as #202/#203 below: `workspace` legitimately grows here
+    // (a manual CV export action, alongside the CV library verbs it belongs next to), so the
+    // literal is updated rather than left blocking real growth.
+    'exportCvDocument',
     'listLetters',
     'createLetter',
     'updateLetter',
@@ -1246,28 +1401,43 @@ describe('electron/preload.ts: applicationQueue bridge (#200)', () => {
   });
 });
 
+const READINESS_RESULT = {
+  ready: true,
+  verifiedFilledCount: 2,
+  discoveredFieldCount: 2,
+  requiredFieldCount: 2,
+  requiredFieldsSatisfied: 2,
+  blockers: [],
+};
+
 const SNAPSHOT_RESULT = {
   snapshot: {
     generation: 1,
     capturedAt: '2026-01-01T00:00:00.000Z',
     challengeDetected: false,
+    activeFrameId: 0,
+    pageStateFingerprint: 'a'.repeat(64),
     fields: [
-      { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true },
+      { fieldRef: 'f0000000000000001', label: 'fullName', controlType: 'text', required: true, frameId: 0, active: true },
       {
         fieldRef: 'f0000000000000002',
         label: 'workAuthorization',
         controlType: 'select',
         required: true,
+        frameId: 0,
+        active: true,
         options: [{ optionRef: 'o0000000000000001', label: 'Yes' }],
       },
     ],
     submitControls: [{ controlRef: 'c0000000000000001', label: 'Submit Application' }],
   },
   screenshotBase64: 'ZmFrZQ==',
+  readiness: READINESS_RESULT,
+  handoffShown: false,
 };
 
 describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
-  it('exposes exactly the eight documented capability functions and nothing else', async () => {
+  it('exposes exactly the documented capability functions and nothing else', async () => {
     const api = await loadPreload('applicationExecutor');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -1279,6 +1449,13 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
         'requestAutomationGrant',
         'scheduleAutomaticSubmission',
         'cancelScheduledAutomaticSubmission',
+        // #277's live handoff. Both take an attempt id and nothing else: the renderer cannot name a
+        // window, supply bounds, or reach a view for an attempt with no open review.
+        'showHandoff',
+        'hideHandoff',
+        'recordUserReportedSubmission',
+        'saveArtifact',
+        'openArtifact',
       ].sort(),
     );
     for (const [name, value] of Object.entries(api)) {
@@ -1314,13 +1491,46 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
         generation: 1,
         capturedAt: '2026-01-01T00:00:00.000Z',
         challengeDetected: false,
-        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false }],
+        activeFrameId: 0,
+        pageStateFingerprint: 'b'.repeat(64),
+        fields: [{ fieldRef: 'f1', label: 'x', controlType: 'not-a-real-type', required: false, frameId: 0, active: true }],
         submitControls: [],
       },
       screenshotBase64: 'ZmFrZQ==',
+      readiness: READINESS_RESULT,
+      handoffShown: false,
     });
     const api = await loadPreload('applicationExecutor');
     await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unrecognized control type/);
+  });
+
+  it('openReview throws rather than downgrading an unreadable readiness reading to an empty one (#277)', async () => {
+    // The single worst direction for this value to fail in: a dropped readiness object would read
+    // as zero blockers, which is indistinguishable from "ready to submit".
+    invoke.mockResolvedValue({ ...SNAPSHOT_RESULT, readiness: { ready: true } });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.openReview as (i: unknown) => Promise<unknown>)({})).rejects.toThrow(/unexpected readiness response/);
+  });
+
+  it('showHandoff invokes the hard-coded show-handoff channel with nothing but the attempt id (#277)', async () => {
+    invoke.mockResolvedValue({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.showHandoff as (i: string) => Promise<unknown>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:show-handoff', 'attempt-1');
+    expect(result).toEqual({ ok: true, company: 'Acme Corp', role: 'Senior Engineer' });
+  });
+
+  it('showHandoff rejects an unrecognized refusal reason rather than passing it through', async () => {
+    invoke.mockResolvedValue({ ok: false, reason: 'something-new' });
+    const api = await loadPreload('applicationExecutor');
+    await expect((api.showHandoff as (i: string) => Promise<unknown>)('attempt-1')).rejects.toThrow(/unrecognized handoff refusal reason/);
+  });
+
+  it('hideHandoff invokes the hard-coded hide-handoff channel with nothing but the attempt id', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('applicationExecutor');
+    await (api.hideHandoff as (i: string) => Promise<void>)('attempt-1');
+    expect(invoke).toHaveBeenCalledWith('application-executor:hide-handoff', 'attempt-1');
   });
 
   it('applyFieldMap invokes the hard-coded apply-field-map channel and passes the result through', async () => {
@@ -1337,6 +1547,47 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     const api = await loadPreload('applicationExecutor');
     const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
     expect(result).toEqual({ ok: false, reason: 'stale_snapshot_generation', detail: 'targets generation 1, current is 2' });
+  });
+
+  it('applyFieldMap passes confirmed attachments through, and drops anything path-shaped main did not promise (#273)', async () => {
+    invoke.mockResolvedValue({
+      ok: true,
+      appliedCount: 1,
+      attachments: [
+        {
+          artifactId: 'artifact-1',
+          fieldRef: 'f0000000000000001',
+          fileName: 'resume.pdf',
+          attachedFileName: 'abc123-resume.pdf',
+          // Not part of the contract: a path must never survive this bridge even if main sent one.
+          localFilePath: '/staged/attempt-1/abc123-resume.pdf',
+        },
+      ],
+    });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
+    expect(result).toEqual({
+      ok: true,
+      appliedCount: 1,
+      attachments: [{ artifactId: 'artifact-1', fieldRef: 'f0000000000000001', fileName: 'resume.pdf', attachedFileName: 'abc123-resume.pdf' }],
+    });
+  });
+
+  it('applyFieldMap surfaces a manual upload handoff rather than a bare refusal (#273)', async () => {
+    invoke.mockResolvedValue({
+      ok: false,
+      reason: 'attachment_requires_manual_handoff',
+      detail: 'target policy "x" does not permit automated uploads',
+      manualHandoff: { fieldRef: 'f0000000000000001', artifactId: 'artifact-1', fileName: 'resume.pdf', reason: 'unsupported_control' },
+    });
+    const api = await loadPreload('applicationExecutor');
+    const result = await (api.applyFieldMap as (i: unknown) => Promise<unknown>)({});
+    expect(result).toEqual({
+      ok: false,
+      reason: 'attachment_requires_manual_handoff',
+      detail: 'target policy "x" does not permit automated uploads',
+      manualHandoff: { fieldRef: 'f0000000000000001', artifactId: 'artifact-1', fileName: 'resume.pdf', reason: 'unsupported_control' },
+    });
   });
 
   it('applyFieldMap throws rather than returning a fabricated result when main sends an unexpected shape', async () => {
@@ -1436,5 +1687,93 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     const api = await loadPreload('applicationExecutor');
     await (api.cancelScheduledAutomaticSubmission as (id: string) => Promise<void>)('attempt-1');
     expect(invoke).toHaveBeenCalledWith('application-executor:cancel-scheduled-automatic-submission', 'attempt-1');
+  });
+
+  it('records manual completion and opens or saves staged documents through fixed channels', async () => {
+    const api = await loadPreload('applicationExecutor');
+    invoke.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ saved: true }).mockResolvedValueOnce({ opened: true });
+
+    await expect((api.recordUserReportedSubmission as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({ ok: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:record-user-reported-submission', 'attempt-1');
+
+    await expect((api.saveArtifact as (id: string) => Promise<unknown>)('artifact-1')).resolves.toEqual({ saved: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:save-artifact', 'artifact-1');
+
+    await expect((api.openArtifact as (id: string) => Promise<unknown>)('artifact-1')).resolves.toEqual({ opened: true });
+    expect(invoke).toHaveBeenCalledWith('application-executor:open-artifact', 'artifact-1');
+  });
+});
+
+describe('electron/preload.ts: applicationPipeline bridge (#272)', () => {
+  it('exposes exactly the preparation entry and recovery points', async () => {
+    const api = await loadPreload('applicationPipeline');
+    expect(Object.keys(api)).toEqual(['start', 'startFromVacancy', 'retryTailoring', 'useOriginalCv', 'resume']);
+    expect(typeof api.start).toBe('function');
+    expect(typeof api.startFromVacancy).toBe('function');
+    expect(typeof api.retryTailoring).toBe('function');
+    expect(typeof api.useOriginalCv).toBe('function');
+    expect(typeof api.resume).toBe('function');
+  });
+
+  it('exposes no generic IPC passthrough', async () => {
+    const api = await loadPreload('applicationPipeline');
+    expect(api.invoke).toBeUndefined();
+    expect(api.send).toBeUndefined();
+    expect(api.ipcRenderer).toBeUndefined();
+  });
+
+  it('start invokes the hard-coded channel with only the saved-job id', async () => {
+    invoke.mockResolvedValue({ ok: true, attemptId: 'attempt-1' });
+    const api = await loadPreload('applicationPipeline');
+    const result = await (api.start as (id: string) => Promise<unknown>)('saved-1');
+    expect(invoke).toHaveBeenCalledWith('application-pipeline:start', { savedJobId: 'saved-1' });
+    expect(result).toEqual({ ok: true, attemptId: 'attempt-1' });
+  });
+
+  it('startFromVacancy invokes the fixed channel with only the vacancy key', async () => {
+    invoke.mockResolvedValue({ ok: true, attemptId: 'attempt-1', savedJobId: 'saved-1', created: true });
+    const api = await loadPreload('applicationPipeline');
+    const result = await (api.startFromVacancy as (key: string) => Promise<unknown>)('vacancy-1');
+    expect(invoke).toHaveBeenCalledWith('application-pipeline:start-from-vacancy', { vacancyKey: 'vacancy-1' });
+    expect(result).toEqual({ ok: true, attemptId: 'attempt-1', savedJobId: 'saved-1', created: true });
+  });
+
+  it('tailoring recovery invokes fixed channels and verifies the returned attempt and mode', async () => {
+    invoke
+      .mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'ai' })
+      .mockResolvedValueOnce({ ok: true, attemptId: 'attempt-1', tailoringMode: 'original' });
+    const api = await loadPreload('applicationPipeline');
+
+    await expect((api.retryTailoring as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({
+      ok: true, attemptId: 'attempt-1', tailoringMode: 'ai',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'application-pipeline:retry-tailoring', { attemptId: 'attempt-1' });
+
+    await expect((api.useOriginalCv as (id: string) => Promise<unknown>)('attempt-1')).resolves.toEqual({
+      ok: true, attemptId: 'attempt-1', tailoringMode: 'original',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'application-pipeline:use-original-cv', { attemptId: 'attempt-1' });
+  });
+
+  it('carries a refusal and the attempt already in progress back unchanged', async () => {
+    invoke.mockResolvedValue({
+      ok: false,
+      reason: 'attempt_already_in_progress',
+      attemptId: 'attempt-existing',
+      detail: 'an application for this vacancy is already in progress',
+    });
+    const api = await loadPreload('applicationPipeline');
+    expect(await (api.start as (id: string) => Promise<unknown>)('saved-1')).toEqual({
+      ok: false,
+      reason: 'attempt_already_in_progress',
+      attemptId: 'attempt-existing',
+      detail: 'an application for this vacancy is already in progress',
+    });
+  });
+
+  it('fails closed on a shape this build cannot interpret rather than reporting success', async () => {
+    invoke.mockResolvedValue({ nonsense: true, reason: 'something_new', extra: 'should not cross' });
+    const api = await loadPreload('applicationPipeline');
+    expect(await (api.start as (id: string) => Promise<unknown>)('saved-1')).toEqual({ ok: false });
   });
 });

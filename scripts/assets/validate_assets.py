@@ -54,6 +54,7 @@ ILLUSTRATION_VIEWBOXES = {
     "empty-letters.svg": "0 0 160 160",
     "empty-saved-jobs.svg": "0 0 160 160",
     "empty-search.svg": "0 0 160 160",
+    "empty-sessions.svg": "0 0 160 160",
     "no-results.svg": "0 0 160 160",
     "runtime-unavailable.svg": "0 0 160 160",
 }

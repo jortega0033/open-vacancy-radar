@@ -26,12 +26,17 @@ import {
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
+  readAtsRosterStatus,
   readGlobalRemoteReport,
+  runAtsRosterImport,
   runGlobalRemoteScan,
+  type AtsRosterImportResult,
+  type AtsRosterStatus,
   type CandidateProfile,
   type Database,
   type GlobalRemoteReport,
   type ScanLock,
+  type ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   AGENT_WORKSPACE_ACTIVITY_CHANNEL,
@@ -42,6 +47,20 @@ import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
 import type { ActivityPush } from './agent-workspace-types.js';
 import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
 import type { ApplicationQueueEvent } from './application-queue-types.js';
+import { ApplicationDataResetGate } from './application-data-reset-gate.js';
+import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
+import {
+  recoverInterruptedApplicationAttempts,
+  resumeApplicationAttempt,
+  restartApplicationTailoring,
+  runNextApplicationAttempt,
+  startApplicationAttempt,
+  type ApplicationPipelineDeps,
+  type ApplicationQueueEntryState,
+  type ApplicationQueuePort,
+  type PipelineVacancy,
+} from './application-pipeline.js';
+import type { ApplicationValueProfile } from './application-value-table.js';
 import {
   applyApplicationFieldMap,
   cancelScheduledAutomaticSubmission,
@@ -49,11 +68,18 @@ import {
   closeApplicationReview,
   evaluateAndScheduleAutomaticSubmission,
   fireDueAutomaticSubmissions,
+  hideApplicationReviewHandoff,
   openApplicationReview,
+  showApplicationReviewForHandoff,
+  showApplicationReviewHandoff,
   submitApplicationReview,
+  recordUserReportedSubmission,
 } from './application-review-session.js';
 import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { requestAutomationGrant } from './automatic-submission-grant.js';
+import { notifyApplicationPreparation } from './application-preparation-notify.js';
+import { notifyVacancyScanCompleted, notifyVacancyScanFailed } from './vacancy-scan-notify.js';
+import { isWindowInBackground } from './app-background-state.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
@@ -70,6 +96,7 @@ import {
   resolveVacancyEngineMigrationsFolder,
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
+import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
@@ -83,6 +110,7 @@ import {
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
+import type { CvExportResult } from './workspace/types.js';
 import {
   parseApplicationAttemptPatch,
   parseApplicationFilter,
@@ -90,6 +118,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvExportInput,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -99,6 +128,11 @@ import {
   parseSavedJobPatch,
   parseSettingsPatch,
 } from './workspace/validate.js';
+import { printHtmlToPdf } from './application-artifact-staging.js';
+import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
+import { renderResumeDocx } from './resume-docx.js';
+import { renderResumeHtml } from './resume-html.js';
+import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -268,6 +302,10 @@ let vacancyEngineDataRootInit: Promise<void> | undefined;
  * every scan for the rest of the process's lifetime.
  */
 async function vacancyEngineDataRoot(): Promise<string> {
+  // Real Electron layout tests seed an isolated report tree. Keep that fixture out of the
+  // developer's repository report directory, and never honor the hook in a packaged build.
+  const e2eDataRoot = process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT?.trim();
+  if (!app.isPackaged && e2eDataRoot) return e2eDataRoot;
   const root = resolveVacancyEngineDataRoot({
     vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
     isPackaged: app.isPackaged,
@@ -487,6 +525,10 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
         // so this attaches proactively -- "reopening the window reflects current queue state"
         // needs the stream live before any renderer even asks.
         applicationQueueRelay.attach();
+        // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+        // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+        // must not wait on workspace recovery.
+        void recoverApplicationPipelineOnStartup();
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -800,6 +842,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
+    minWidth: 760,
+    minHeight: 600,
     ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
@@ -953,6 +997,8 @@ const guardedIpc = createGuardedIpc(ipcMain, {
     // repeat what the renderer already sent or describe this process's internals.
     console.warn(`[ipc-sender-guard] refused an invoke on '${channel}' from an unverified sender`),
 });
+
+const applicationDataResetGate = new ApplicationDataResetGate();
 
 guardedIpc.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
 
@@ -1214,10 +1260,12 @@ function parseAttemptId(value: unknown): string {
 }
 
 guardedIpc.handle('application-queue:enqueue', async (_event, input: unknown) => {
-  const attemptId = parseAttemptId(input);
-  const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
-  if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
-  return ((await res.json()) as { entry: unknown }).entry;
+  return applicationDataResetGate.runMutation(async () => {
+    const attemptId = parseAttemptId(input);
+    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+    return ((await res.json()) as { entry: unknown }).entry;
+  });
 });
 
 /**
@@ -1235,10 +1283,18 @@ async function applicationQueueTransition(verb: 'pause' | 'resume' | 'skip' | 'c
   if (!res.ok) throw new Error(await applicationQueueRefusal(res, `could not ${verb} this attempt`));
   return ((await res.json()) as { entry: unknown }).entry;
 }
-guardedIpc.handle('application-queue:pause', (_event, input: unknown) => applicationQueueTransition('pause', input));
-guardedIpc.handle('application-queue:resume', (_event, input: unknown) => applicationQueueTransition('resume', input));
-guardedIpc.handle('application-queue:skip', (_event, input: unknown) => applicationQueueTransition('skip', input));
-guardedIpc.handle('application-queue:cancel', (_event, input: unknown) => applicationQueueTransition('cancel', input));
+guardedIpc.handle('application-queue:pause', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('pause', input)),
+);
+guardedIpc.handle('application-queue:resume', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('resume', input)),
+);
+guardedIpc.handle('application-queue:skip', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('skip', input)),
+);
+guardedIpc.handle('application-queue:cancel', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('cancel', input)),
+);
 
 guardedIpc.handle('application-queue:get-status', async () => {
   const body = await daemonGetJson('/v2/applications');
@@ -1287,6 +1343,7 @@ function parseOpenReviewInput(input: unknown): OpenApplicationReviewInput {
     attemptId: parseAttemptId(source.attemptId),
     policyId: parsePolicyId(source.policyId),
     targetUrl: parseTargetUrl(source.targetUrl),
+    ...(source.refresh === true ? { refresh: true } : {}),
   };
 }
 
@@ -1322,15 +1379,27 @@ function parseApplyFieldMapInput(input: unknown): ApplyApplicationFieldMapInput 
 }
 
 guardedIpc.handle('application-executor:open-review', async (_event, input: unknown) => {
-  return openApplicationReview(parseOpenReviewInput(input));
+  return applicationDataResetGate.runMutation(() => openApplicationReview(parseOpenReviewInput(input)));
 });
 
 guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
-  return applyApplicationFieldMap(parseApplyFieldMapInput(input));
+  return applicationDataResetGate.runMutation(async () => {
+    const parsed = parseApplyFieldMapInput(input);
+    const result = await applyApplicationFieldMap(await ensureWorkspaceDb(), parsed);
+    // An upload control the executor may not drive is handed to the user as a real, visible page
+    // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
+    // still carries `manualHandoff` so the review UI can say which document to pick.
+    if (result.manualHandoff && mainWindow) {
+      showApplicationReviewForHandoff(parsed.attemptId, mainWindow, await ensureWorkspaceDb());
+    }
+    return result;
+  });
 });
 
 guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {
-  return submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () =>
+    submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
 });
 
 guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: unknown) => {
@@ -1339,6 +1408,22 @@ guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: 
 
 guardedIpc.handle('application-executor:close-review', async (_event, input: unknown) => {
   await closeApplicationReview(parseAttemptId(input));
+});
+
+/*
+ * The live handoff (#277). Two channels, both taking nothing but an attempt id: the renderer can
+ * ask for *its own* attempt's already-open view to be put on screen or taken off it, and can say
+ * nothing else about what happens. It cannot name a window, supply bounds, choose a URL, or reach a
+ * view for an attempt that has no open review -- `showApplicationReviewHandoff` resolves the window
+ * from this module's own `mainWindow` and the view from the main-process registry, exactly as every
+ * other channel here resolves a policy from the compiled table rather than from its caller.
+ */
+guardedIpc.handle('application-executor:show-handoff', async (_event, input: unknown) => {
+  return showApplicationReviewHandoff(await ensureWorkspaceDb(), mainWindow, parseAttemptId(input));
+});
+
+guardedIpc.handle('application-executor:hide-handoff', (_event, input: unknown) => {
+  hideApplicationReviewHandoff(mainWindow, parseAttemptId(input));
 });
 
 function parseRequestAutomationGrantInput(input: unknown): { policyId: string; durationMs: number } {
@@ -1351,17 +1436,286 @@ function parseRequestAutomationGrantInput(input: unknown): { policyId: string; d
 }
 
 guardedIpc.handle('application-executor:request-automation-grant', async (_event, input: unknown) => {
-  const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
-  const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
-  return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+  return applicationDataResetGate.runMutation(async () => {
+    const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
+    const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
+    return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+  });
 });
 
 guardedIpc.handle('application-executor:schedule-automatic-submission', async (_event, input: unknown) => {
-  return evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () =>
+    evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
 });
 
 guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', async (_event, input: unknown) => {
-  cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  return applicationDataResetGate.runMutation(async () => {
+    cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  });
+});
+
+guardedIpc.handle('application-executor:record-user-reported-submission', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const db = await ensureWorkspaceDb();
+    const attemptId = parseAttemptId(input);
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    const manualState = attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user';
+    const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+    if (!manualState || resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) !== undefined || artifacts.length === 0) {
+      throw new Error('this attempt is not in a prepared manual-application state');
+    }
+    return recordUserReportedSubmission(db, attemptId);
+  });
+});
+
+guardedIpc.handle('application-executor:save-artifact', async (_event, input: unknown) => {
+  if (!mainWindow) return { saved: false };
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: artifact.fileName || 'application-document.pdf',
+    filters: [{ name: 'PDF document', extensions: ['pdf'] }],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  await cp(artifact.storagePath, result.filePath);
+  return { saved: true };
+});
+
+guardedIpc.handle('application-executor:open-artifact', async (_event, input: unknown) => {
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const detail = await shell.openPath(artifact.storagePath);
+  return detail ? { opened: false, detail } : { opened: true };
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * #272: the preparation pipeline that joins the pieces above into one production path -- queue,
+ * JD/CV snapshots, document staging, field-map generation, filling, ready-for-review.
+ *
+ * Pipeline IPC takes app-owned record ids, not a URL, company, or job description: everything an
+ * attempt is made of is resolved here, main-process
+ * side, from this app's own records. The renderer cannot name where an application goes, which CV
+ * it is built from, or what text it is tailored against.
+ *
+ * Nothing here changes what happens at the submit decision. This path stops at review; the submit
+ * kill switch, the human confirmation, the rate limits and the CAPTCHA refusal all still sit
+ * between `ready` and any real submission, untouched.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Where staged CV/letter PDFs live. App-owned, per-user, and never a path the renderer supplies. */
+function applicationArtifactStorageRoot(): string {
+  return join(app.getPath('userData'), 'application-artifacts');
+}
+
+const APPLICATION_QUEUE_ENTRY_STATES: readonly ApplicationQueueEntryState[] = [
+  'queued',
+  'active',
+  'paused',
+  'cancelled',
+  'done',
+  'failed',
+];
+
+/** The daemon's queue as the pipeline consumes it. Every method is one HTTP call to a route the
+ * daemon owns -- this process keeps no queue state of its own, so a daemon restart is the daemon's
+ * recovery to perform, not this one's to reconstruct. */
+const applicationQueuePort: ApplicationQueuePort = {
+  async enqueue(attemptId: string): Promise<void> {
+    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+  },
+
+  async acquireLease() {
+    const res = await daemonFetch('/v2/applications/lease/acquire', { method: 'POST' });
+    if (!res.ok) return null;
+    const body = (await res.json().catch(() => ({}))) as { lease?: unknown };
+    const lease = body.lease && typeof body.lease === 'object' ? (body.lease as Record<string, unknown>) : undefined;
+    if (!lease || typeof lease.leaseId !== 'string' || typeof lease.attemptId !== 'string') return null;
+    return { leaseId: lease.leaseId, attemptId: lease.attemptId };
+  },
+
+  async release(leaseId: string, outcome: 'completed' | 'failed' | 'requeue'): Promise<void> {
+    await daemonFetch('/v2/applications/lease/release', { method: 'POST', body: { leaseId, outcome } });
+  },
+
+  async entryState(attemptId: string) {
+    const body = await daemonGetJson(`/v2/applications/${encodeURIComponent(attemptId)}`);
+    const entry = body?.entry && typeof body.entry === 'object' ? (body.entry as Record<string, unknown>) : undefined;
+    const state = entry?.state;
+    if (typeof state !== 'string' || !(APPLICATION_QUEUE_ENTRY_STATES as readonly string[]).includes(state)) return null;
+    return state as ApplicationQueueEntryState;
+  },
+};
+
+/** The narrow projection of the search profile the pipeline's value table draws on. A profile that
+ * has never been configured produces `null`, contributing no values rather than assumed ones. */
+async function loadApplicationValueProfile(): Promise<ApplicationValueProfile | null> {
+  try {
+    const profile = await loadCandidateProfile(await candidateProfilePath());
+    return {
+      candidateName: profile.candidateName,
+      currentRole: profile.currentRole,
+      location: profile.location,
+      professionalLanguage: profile.constraints.professionalLanguage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
+  const db = await ensureWorkspaceDb();
+  return {
+    db,
+    storageRoot: applicationArtifactStorageRoot(),
+    queue: applicationQueuePort,
+    async generateFieldMap(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      // The one production caller `application-generation-runner.ts` was written for. `cwd` is the
+      // app's own empty scratch directory, the same one every other one-shot text session gets:
+      // this session is hardened to the daemon's 'no-network' profile and is never asked to touch
+      // a file.
+      return runFieldMapGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    async generateTailoredResume(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        // Only Claude's adapter implements the daemon's no-network hardening profile.
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    async generateCoverLetter(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    loadProfile: loadApplicationValueProfile,
+    log: (message, meta) => console.warn(`[application-pipeline] ${message}`, meta ?? {}),
+  };
+}
+
+/**
+ * One vacancy as this app's own discovery data records it, or `undefined` when the latest report
+ * has no row for that key (the report was replaced by a newer scan, or the saved job predates one).
+ *
+ * `applyUrl` is preferred over the raw discovered `url` only when issue #278's own resolver marked
+ * it `verified`; anything weaker falls back to the discovered URL rather than treating a careers
+ * page or an aggregator listing as a place to apply.
+ */
+function resolvePipelineVacancy(vacancyKey: string): PipelineVacancy | undefined {
+  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+  if (!row) return undefined;
+  const verifiedApplyUrl = row.applyUrl?.status === 'verified' ? row.applyUrl.url : null;
+  return {
+    vacancyKey: row.key,
+    company: row.company,
+    role: row.title,
+    applyUrl: verifiedApplyUrl ?? row.url,
+    description: row.description,
+    // No discovery source this app reads truncates a description: each returns the posting's text
+    // whole or returns none at all (`DiscoveryVacancyAudit.description` is null in that case, never
+    // a shortened string). A source that ever starts truncating has to report that here instead.
+    descriptionComplete: true,
+  };
+}
+
+async function startPipelineForSavedJob(savedJobId: string) {
+  const deps = await applicationPipelineDeps();
+  const job = workspace.listSavedJobs(deps.db).find((saved) => saved.id === savedJobId);
+  if (!job) throw new Error('no such saved job');
+
+  const vacancy = (job.vacancyKey ? resolvePipelineVacancy(job.vacancyKey) : undefined) ?? {
+    vacancyKey: job.vacancyKey,
+    company: job.company,
+    role: job.role,
+    applyUrl: job.sourceUrl ?? '',
+    description: null,
+    descriptionComplete: false,
+  };
+  const result = await startApplicationAttempt(deps, { vacancy });
+  if (result.ok) void runApplicationPipelineTick();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const savedJobId = parseId(source.savedJobId, 'savedJobId');
+    return startPipelineForSavedJob(savedJobId);
+  });
+});
+
+guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
+    const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+    if (!row) throw new Error('this vacancy is no longer available in the latest report');
+
+    const db = await ensureWorkspaceDb();
+    let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
+    const created = savedJob === undefined;
+    savedJob ??= workspace.createSavedJob(db, {
+      role: row.title,
+      company: row.company,
+      location: row.location,
+      vacancyKey: row.key,
+      matchPercent: row.profileScore,
+      sourceUrl: row.url,
+      status: 'considering',
+    });
+
+    const result = await startPipelineForSavedJob(savedJob.id);
+    if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
+      return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
+    }
+    return { ...result, savedJobId: savedJob.id, created };
+  });
+});
+
+async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
+  const result = await restartApplicationTailoring(await applicationPipelineDeps(), attemptId, mode);
+  if (result.ok) void runApplicationPipelineTick();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:retry-tailoring', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'ai');
+  });
+});
+
+guardedIpc.handle('application-pipeline:use-original-cv', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'original');
+  });
+});
+
+guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+    if (result.ok) void runApplicationPipelineTick();
+    return result;
+  });
 });
 
 guardedIpc.handle('dialog:select-directory', async () => {
@@ -1485,6 +1839,15 @@ guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; erro
 });
 
 guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number } | null =>
+  latestVacancyReport
+    ? {
+        runId: latestVacancyReport.runId,
+        generatedAt: latestVacancyReport.generatedAt,
+        vacancyCount: latestVacancyReport.discoveryAudit.length,
+      }
+    : null,
+);
 
 /**
  * Lets a (re)mounted Search page notice a scan already in flight -- most often its own, started
@@ -1495,29 +1858,129 @@ guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestV
 guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
 
 /**
- * Shared by the `vacancy:run-scan` IPC handler and the background-scan timer (#195): a
- * `setInterval` callback has no IPC sender, so it cannot go through `guardedIpc` -- this is the
- * body the guard used to wrap directly, factored out so both callers run the identical scan path
- * (same lock, same report bookkeeping) rather than risking two copies drifting apart.
+ * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
+ * own "one-way push, not a handle channel" rule (issue #252).
+ *
+ * A narrow, typed push: every payload is exactly one engine `ScanProgressEvent` (a source id plus
+ * that source's own freshly discovered rows), never a generic "here is some data" envelope. The
+ * renderer only ever reads this to show provisional, honestly-unscored rows sooner -- it is not a
+ * second source of truth for the scan's outcome, which `vacancy:run-scan`'s own resolved value (or
+ * a `vacancy:get-scan-status` poll, for a page that reattaches mid-scan) still is.
  */
-async function runVacancyScan(query?: string): Promise<GlobalRemoteReport> {
+const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
+const BROWSE_ALL_RESULT_CAP = 5_000;
+
+/** `isWindowInBackground` bound to this module's own `mainWindow`; see that function's own doc
+ * comment for the policy (issue #366). */
+function isAppInBackground(): boolean {
+  return isWindowInBackground(mainWindow);
+}
+
+/** A scan notification is a courtesy, never a requirement: nothing about deciding whether to show
+ * one, or showing it, may ever fail the scan whose completion/failure it is reporting (issue #366). */
+function notifyScanOutcome(show: () => void): void {
+  try {
+    if (isAppInBackground()) show();
+  } catch (error) {
+    console.error('[vacancy-scan] failed to show scan notification', error);
+  }
+}
+
+/**
+ * Shared scan body for user-triggered vacancy discovery. A normal scan must supply a role or
+ * keyword; browse-all must be explicit and gets capped below.
+ *
+ * `onProgress` (#252) pushes each discovery sub-source's own rows to the renderer the moment that
+ * source resolves, well before this whole function's promise settles -- purely an additional,
+ * best-effort notification layered on top of the scan below. The renderer can be hidden or off the
+ * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
+ * unconditional rather than gated on "is anyone currently on the Search page".
+ *
+ * The single choke point both the manual `vacancy:run-scan` IPC handler and the unattended
+ * `scheduleBackgroundScanTick` timer call through, so it is also the one place scan-finished/
+ * scan-failed notifications (#366) need to live: whichever path started the scan, this is where it
+ * actually resolves or rejects. A losing race against another already-running scan
+ * (`isExpectedScanBusyError`) is not a real failure of *this* attempt -- the renderer already treats
+ * it as "reattach and wait", never as an error to report -- so it never produces a failure
+ * notification either.
+ */
+async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
+  const db = await ensureVacancyEngine();
+  try {
+    const report = await runExclusiveScan(
+      async () => {
+        const config = vacancyEngineConfig();
+        const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
+          ...(request.mode === 'query'
+            ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
+            : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
+          onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+        });
+        latestVacancyReport = result.report;
+        return result.report;
+      },
+      { takeAdvisoryLock: true },
+    );
+    notifyScanOutcome(() =>
+      notifyVacancyScanCompleted({
+        kept: report.discoveryAudit.length,
+        complete: report.scanBounds?.complete ?? true,
+      }),
+    );
+    return report;
+  } catch (error) {
+    if (!isExpectedScanBusyError(error)) {
+      notifyScanOutcome(() =>
+        notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
+      );
+    }
+    throw error;
+  }
+}
+
+guardedIpc.handle('vacancy:run-scan', (_event, request: unknown): Promise<GlobalRemoteReport> =>
+  runVacancyScan(parseVacancyScanRequest(request)),
+);
+
+/**
+ * The missing trigger for issue #251/#264's ATS-roster (Greenhouse/Lever/Ashby/Recruitee/Personio)
+ * scan: that PR shipped `runAtsRosterDiscovery` (reads `.data/ats-roster-v1.json`) and the import
+ * step that writes it (`runAtsRosterImport`), but nothing under `electron/` ever called the import
+ * step -- it was reachable only via `node dist/cli.js ats-roster:import`, so a real user's roster
+ * file never existed and every scan found zero companies on these five providers.
+ *
+ * Deliberately a manual Settings action (`AtsRosterSection.tsx`), not an automatic background fetch
+ * like `scheduleBackgroundScanTick` below: the import step itself documents that it is "re-runnable
+ * on a deliberate refresh cadence, not a live fetch at scan time" (see
+ * `pipeline/ats-roster-import.ts`), and this app's one existing automatic recurring network
+ * operation is opt-in and off by default (`autoScanEnabled`) rather than silently on. A roster
+ * refresh is rarer and heavier (five third-party CSV fetches) than a normal scan, so it gets the
+ * same "the user asks for it, and sees an honest status" treatment as every other data-management
+ * action on that page, rather than a new always-on background timer.
+ *
+ * Shares `runExclusiveScan`/the cross-process advisory lock with `runVacancyScan` above -- the same
+ * mutual exclusion the CLI already applies between `ats-roster:import` and `global-remote:scan`
+ * (see cli.ts's `runExclusiveCommand`), so a refresh triggered from Settings can never race a scan's
+ * own read of the roster file. A scan that starts before any import has ever run is unaffected: the
+ * engine's `loadAtsRoster` already tolerates a missing file by returning no roster entries rather
+ * than failing (see `companies/ats-roster-repository.ts`), so this never blocks a normal scan.
+ */
+async function runAtsRosterRefresh(): Promise<AtsRosterImportResult> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
-      const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
-        query,
-      });
-      latestVacancyReport = result.report;
-      return result.report;
+      return runAtsRosterImport(db, config, createLogger(config), await vacancyEngineDataRoot());
     },
     { takeAdvisoryLock: true },
   );
 }
 
-guardedIpc.handle('vacancy:run-scan', (_event, query: unknown): Promise<GlobalRemoteReport> =>
-  runVacancyScan(typeof query === 'string' ? query : undefined),
+guardedIpc.handle('vacancy:ats-roster:get-status', async (): Promise<AtsRosterStatus> =>
+  readAtsRosterStatus(await vacancyEngineDataRoot()),
 );
+
+guardedIpc.handle('vacancy:ats-roster:refresh', (): Promise<AtsRosterImportResult> => runAtsRosterRefresh());
 
 // #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker
 // UI is future scope, not this one.
@@ -1529,22 +1992,29 @@ const BACKGROUND_SCAN_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const BACKGROUND_SCAN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Started once in `app.whenReady()`, runs for the process's whole lifetime. `createScanGuard`
- * throws plain `Error`s, not a distinguishable subclass or code, so "another scan already owns
- * the lock" is recognized by comparing `error.message` against the guard's own exported
- * constants -- both are real, expected outcomes (a manual "Search" click won, or a `pnpm
- * vacancies:scan` in another process did) and are swallowed silently. Any other error is logged
- * (so a genuinely broken background scan doesn't fail forever in total silence) but never allowed
- * to escape as an unhandled rejection inside the timer callback, which would crash the process.
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime. A scheduled worldwide
+ * scan now needs the same upstream-effective narrowing signal as a manual scan (#315). Until a
+ * saved-search profile exists for that signal, the timer wakes, records why it skipped, and does no
+ * network work.
  */
 function scheduleBackgroundScanTick(): void {
   setInterval(() => {
     if (!autoScanEnabled) return;
     if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
-    void runVacancyScan().catch((error: unknown) => {
-      if (isExpectedScanBusyError(error)) return;
-      console.error('[background-scan] scheduled scan failed', error);
-    });
+    void candidateProfilePath()
+      .then((path) => loadCandidateProfile(path))
+      .then((profile) => {
+        const query = scheduledScanQueryFromProfile(profile);
+        if (query === null) {
+          console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
+          return null;
+        }
+        return runVacancyScan({ mode: 'query', query });
+      })
+      .catch((error: unknown) => {
+        if (isExpectedScanBusyError(error)) return;
+        console.error('[background-scan] scheduled scan failed', error);
+      });
   }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
 }
 
@@ -1569,10 +2039,10 @@ let automaticSubmissionTickInFlight = false;
  */
 function scheduleAutomaticSubmissionTick(): void {
   setInterval(() => {
-    if (automaticSubmissionTickInFlight) return;
+    if (automaticSubmissionTickInFlight || applicationDataResetGate.isResetting) return;
     automaticSubmissionTickInFlight = true;
-    void ensureWorkspaceDb()
-      .then((db) => fireDueAutomaticSubmissions(db))
+    void applicationDataResetGate
+      .runMutation(async () => fireDueAutomaticSubmissions(await ensureWorkspaceDb()))
       .catch((error: unknown) => {
         console.error('[automatic-submission] scheduled tick failed', error);
       })
@@ -1580,6 +2050,70 @@ function scheduleAutomaticSubmissionTick(): void {
         automaticSubmissionTickInFlight = false;
       });
   }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
+}
+
+/** How often main asks the daemon whether there is an application to prepare. Short enough that a
+ * resumed or newly-queued attempt starts promptly, long enough that an idle app is not polling a
+ * local HTTP route constantly. A start requested from the UI does not wait for it (see
+ * `application-pipeline:start`). */
+const APPLICATION_PIPELINE_TICK_INTERVAL_MS = 15 * 1000;
+
+/** Same reasoning as `automaticSubmissionTickInFlight`: one preparation involves a real PDF render,
+ * a real generation session and a real page load, comfortably longer than the poll interval, and
+ * `setInterval` does not wait for the previous callback. A skipped tick costs nothing -- the queue
+ * still holds the attempt, and the next tick picks it up. */
+let applicationPipelineTickInFlight = false;
+
+/** One turn of the preparation worker. Swallows its own errors on purpose: this is called both from
+ * a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
+ * surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read. */
+async function runApplicationPipelineTick(): Promise<void> {
+  if (applicationPipelineTickInFlight || applicationDataResetGate.isResetting) return;
+  applicationPipelineTickInFlight = true;
+  try {
+    await applicationDataResetGate.runMutation(async () => {
+      const deps = await applicationPipelineDeps();
+      const { result } = await runNextApplicationAttempt(deps);
+      if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
+        const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
+        notifyApplicationPreparation({
+          company: attempt.company,
+          role: attempt.role,
+          needsUser: result.checkpoint === 'needs_user',
+        });
+      }
+    });
+  } catch (error: unknown) {
+    console.error('[application-pipeline] preparation tick failed', error);
+  } finally {
+    applicationPipelineTickInFlight = false;
+  }
+}
+
+function scheduleApplicationPipelineTick(): void {
+  setInterval(() => {
+    void runApplicationPipelineTick();
+  }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
+}
+
+/**
+ * Re-queues every attempt a previous run of the app left mid-preparation, once, at startup.
+ *
+ * Runs after the daemon is reachable, since re-queuing is a daemon call. A failure here is logged
+ * and dropped rather than retried: the attempts stay durably recorded either way, and the next
+ * launch runs this again.
+ */
+async function recoverApplicationPipelineOnStartup(): Promise<void> {
+  try {
+    const recovered = await applicationDataResetGate.runMutation(async () =>
+      recoverInterruptedApplicationAttempts(await applicationPipelineDeps()),
+    );
+    if (recovered.length > 0) {
+      console.warn('[application-pipeline] re-queued interrupted application attempts', { count: recovered.length });
+    }
+  } catch (error: unknown) {
+    console.error('[application-pipeline] startup recovery failed', error);
+  }
 }
 
 async function candidateProfilePath(): Promise<string> {
@@ -1630,24 +2164,26 @@ function nextProfileVersion(): string {
  * stale scores survive a profile edit.
  */
 guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
-  const patch = parseCandidateProfilePatch(rawPatch);
-  return withProfileSaveQueue(async () => {
-    const path = await candidateProfilePath();
-    const current = await loadCandidateProfile(path);
-    const next: CandidateProfile = candidateProfileSchema.parse({
-      ...current,
-      ...patch,
-      constraints: { ...current.constraints, ...patch.constraints },
-      profileVersion: nextProfileVersion(),
+  return applicationDataResetGate.runMutation(() => {
+    const patch = parseCandidateProfilePatch(rawPatch);
+    return withProfileSaveQueue(async () => {
+      const path = await candidateProfilePath();
+      const current = await loadCandidateProfile(path);
+      const next: CandidateProfile = candidateProfileSchema.parse({
+        ...current,
+        ...patch,
+        constraints: { ...current.constraints, ...patch.constraints },
+        profileVersion: nextProfileVersion(),
+      });
+      const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+        await rename(temporary, path);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+      return next;
     });
-    const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-      await rename(temporary, path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
-    return next;
   });
 });
 
@@ -1667,29 +2203,97 @@ guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknow
 guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
-  const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
-  // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
-  minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
-  autoScanEnabled = updated.autoScanEnabled;
-  return updated;
+  return applicationDataResetGate.runMutation(async () => {
+    const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
+    // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
+    minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
+    autoScanEnabled = updated.autoScanEnabled;
+    return updated;
+  });
 });
 
 /** Badge counts for the sidebar: a dedicated read so the shell never has to fetch three lists. */
 guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
 
+guardedIpc.handle('workspace:data:reset', async () => {
+  return applicationDataResetGate.runReset(async () => {
+    if (applicationPipelineTickInFlight || automaticSubmissionTickInFlight) {
+      throw new Error('wait for the active application task to finish before resetting data');
+    }
+
+    closeAllApplicationReviews();
+    const queueStatus = await daemonGetJson('/v2/applications');
+    const lease = queueStatus?.lease;
+    const expectedLeaseId =
+      lease && typeof lease === 'object' && typeof (lease as { leaseId?: unknown }).leaseId === 'string'
+        ? (lease as { leaseId: string }).leaseId
+        : null;
+    const queueReset = await daemonFetch('/v2/applications', { method: 'DELETE', body: { expectedLeaseId } });
+    if (!queueReset.ok) throw new Error('the application queue could not be reset');
+
+    const result = workspace.resetApplicationData(await ensureWorkspaceDb());
+    try {
+      await rm(applicationArtifactStorageRoot(), { recursive: true, force: true });
+
+      await withProfileSaveQueue(async () => {
+        const path = await candidateProfilePath();
+        const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+        const emptyProfile: CandidateProfile = candidateProfileSchema.parse({
+          profileVersion: nextProfileVersion(),
+          candidateName: '',
+          currentRole: '',
+          location: '',
+          experienceYears: 0,
+          strongestSkills: [],
+          additionalSkills: [],
+          targetRoles: [],
+          consideredRoles: [],
+          excludedRoleFamilies: [],
+          constraints: {
+            professionalLanguage: 'English',
+            dutchRequired: false,
+            primaryCountry: '',
+            allowRemoteEuSupportingNetherlands: false,
+            minimumMonthlyBaseEur: 0,
+          },
+        });
+        await mkdir(dirname(path), { recursive: true });
+        try {
+          await writeFile(temporary, `${JSON.stringify(emptyProfile, null, 2)}\n`, 'utf8');
+          await rename(temporary, path);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      });
+    } catch {
+      throw new Error('application records were reset, but local files could not be cleared; close open files and retry');
+    }
+
+    minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
+    autoScanEnabled = result.settings.autoScanEnabled;
+    return result;
+  });
+});
+
 guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
-  workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
-  workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) =>
@@ -1697,54 +2301,137 @@ guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) 
 );
 
 guardedIpc.handle('workspace:applications:create', async (_event, input: unknown) =>
-  workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:applications:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
-  workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
-  workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
-  workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
-  workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
+
+/**
+ * #156: the manual "export my CV as PDF/DOCX with the default app-authored template" action.
+ * Reuses the same rendering machinery #199 built for the unattended auto-apply pipeline
+ * (`resume-html.ts`/`resume-docx.ts`/`resume-pdf-validation.ts`/`printHtmlToPdf`) rather than a
+ * second implementation of either the template or the PDF step, and reads the candidate's name
+ * from the Search page's own candidate profile (the one place in this app that is real,
+ * user-entered identity data) rather than inventing one -- see `cv-export.ts`'s doc comment.
+ *
+ * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
+ * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
+ * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
+ * `BrowserWindow` that only this process has.
+ */
+guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { id, format } = parseCvExportInput(input);
+  const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
+  if (!mainWindow) return { saved: false };
+
+  // #274: a CV whose structured source was never read to the end must not produce a document that
+  // looks complete. Refused here, before anything is rendered, with the reasons the user needs to
+  // fix it -- never quietly exported minus whatever came after the limit.
+  const blockers = describeCvExportBlockers(doc);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be exported yet: ${blockers.join('; ')}`);
+  }
+
+  // A fresh install ships with no search profile configured (#156's own "no default bias" stance
+  // extends here too): rather than blocking the export, the resume simply renders with no name.
+  let candidate: CandidateProfile | null;
+  try {
+    candidate = await loadCandidateProfile(await candidateProfilePath());
+  } catch {
+    candidate = null;
+  }
+  const resume = cvDocumentToTailoredResume(doc, candidate);
+
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export CV',
+    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
+});
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:letters:create', async (_event, input: unknown) =>
-  workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:letters:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:letters:delete', async (_event, input: unknown) =>
-  workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
-  workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /**
@@ -1762,8 +2449,10 @@ guardedIpc.handle('workspace:application-attempts:get', async (_event, input: un
 );
 
 guardedIpc.handle('workspace:application-attempts:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+  });
 });
 
 guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: unknown) => {
@@ -1780,7 +2469,9 @@ guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: 
 guardedIpc.handle('workspace:automation-grants:list', async () => workspace.listAutomationGrants(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:automation-grants:revoke', async (_event, input: unknown) =>
-  workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  applicationDataResetGate.runMutation(async () =>
+    workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /*
@@ -1829,6 +2520,7 @@ if (gotSingleInstanceLock) {
     void hydrateLatestVacancyReport();
     scheduleBackgroundScanTick();
     scheduleAutomaticSubmissionTick();
+    scheduleApplicationPipelineTick();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

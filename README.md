@@ -24,7 +24,9 @@ For any vacancy that normalizes to a Netherlands location, a best-effort check a
 up the employer by name against the IND's official recognised-sponsor register. This is a
 name-keyed, unverified lookup, not a curated evidence chain, so a match is always reported as a
 "possible sponsor match" rather than a confirmed one -- confirm the legal entity yourself before
-relying on sponsorship.
+relying on sponsorship. Like every discovery source, it runs on a bounded budget: one scan resolves
+a capped number of distinct employers against Wikidata rather than one lookup per listing, and any
+employer it did not reach is reported as unchecked, never as unmatched.
 
 The pipeline is deterministic-first: official ATS APIs and structured feeds before plain HTTP,
 before JSON-LD, before HTML parsing, with a narrowly-scoped headless-browser fallback only where
@@ -48,8 +50,8 @@ On top of that, the desktop app is a full personal tracker:
 - **Letters:** generate motivation letters, cover letters, recruiter messages, or short
   application-form blurbs from a CV + vacancy pair, in a chosen tone and length, with a library of
   saved drafts.
-- **Settings:** theme (light/dark/system), density, default market, and data export/reset, all
-  persisted locally.
+- **Settings:** theme (light/dark/system), density, default market, application-data reset, and
+  documented manual backup, all persisted locally.
 - **AI Runtime:** the AgentDock provider panel: pick a provider (Claude Code, Codex) and, where
   supported, a specific model, and watch a run's events stream live.
 

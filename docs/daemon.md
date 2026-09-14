@@ -117,6 +117,34 @@ control stay on the v1 routes. See
 [the ADR](adr-agentdock-v2-provenance.md#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
 for the full deferral note.
 
+### Stage-routing eligibility (issue #284)
+
+One further read-only route, registered alongside the v2 read routes above and subject to the same
+durable-store condition:
+
+| Route | Behavior |
+|---|---|
+| `GET /v2/stage-routing` | `{ schemaVersion: 1, stages: [...] }`: for each generation stage (CV field extraction, source-CV capture, gap analysis, CV tailoring, cover letter, application field map) its workload class, required provider capabilities, attempt ceiling, and which registered providers are eligible or rejected, with the reason |
+
+It answers an eligibility question and does nothing else: no session is started, no model is
+selected, and there is no write path. A client uses it to explain *before* making a request why an
+AI feature is unavailable, rather than discovering it at refusal time.
+
+Two things it deliberately does not do:
+
+- **It does not rank or pick a model.** `routeStage` orders eligible pairings by an operator-declared
+  tier, and nothing in this build declares one: a provider's live catalog (`ProviderModelV2`) reports
+  an id, a display name and a default flag, and says nothing about model size. Every candidate this
+  route builds is therefore `tier: 'unknown'` and every price is `unknown`, which is the honest
+  label. A per-stage model preference is a settings surface and lands with one.
+- **It is not the enforcement point for the field-map hardening contract.**
+  `POST /sessions/application-field-map` keeps its own literal provider check, which consults neither
+  this route nor any capability a provider declares about itself. The
+  `ProviderCapabilities.hardenedNoNetwork` flag reported here says which adapter *implements* the
+  `'no-network'` profile (only Claude's `buildClaudeArgs` reads `opts.hardened` at all); it exists so
+  a policy layer outside `packages/agent-runtime` can refuse a selection without branching on a
+  provider id, not so that guarantee can move onto an adapter's self-description.
+
 ### Workspace trust routes
 
 ADI-06 adds four routes governing whether a session may run in a real directory of the user's, plus

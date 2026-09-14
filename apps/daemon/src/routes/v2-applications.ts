@@ -18,6 +18,7 @@ import {
 
 const attemptIdParamSchema = z.object({ attemptId: z.string().min(1).max(200) });
 const enqueueBodySchema = z.object({ attemptId: z.string().min(1).max(200) });
+const clearBodySchema = z.object({ expectedLeaseId: z.string().min(1).max(200).nullable() });
 const releaseBodySchema = z.object({
   leaseId: z.string().min(1).max(200),
   outcome: z.enum(['completed', 'failed', 'requeue']),
@@ -36,6 +37,17 @@ export function registerV2ApplicationRoutes(app: FastifyInstance, store: Applica
 
   app.get('/v2/applications', async (_req, reply) => {
     reply.send({ schemaVersion: 1, entries: store.list(), lease: store.currentLease() });
+  });
+
+  app.delete('/v2/applications', async (req, reply) => {
+    const parsed = clearBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid request body', code: 'invalid_body' });
+    }
+    if (store.currentLease()?.leaseId !== (parsed.data.expectedLeaseId ?? undefined)) {
+      return reply.code(409).send({ schemaVersion: 1, code: 'application_queue_busy' });
+    }
+    reply.send({ schemaVersion: 1, cleared: store.clear() });
   });
 
   app.get('/v2/applications/:attemptId', async (req, reply) => {

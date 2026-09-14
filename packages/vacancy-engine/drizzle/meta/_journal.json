@@ -15,6 +15,13 @@
       "when": 1788528298509,
       "tag": "0001_tricky_the_enforcers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789085184803,
+      "tag": "0002_lethal_spectrum",
+      "breakpoints": true
     }
   ]
 }

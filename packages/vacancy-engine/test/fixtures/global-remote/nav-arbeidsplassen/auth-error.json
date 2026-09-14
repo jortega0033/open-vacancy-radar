@@ -1,0 +1,4 @@
+{
+  "error": "invalid_token",
+  "message": "The provided bearer token is invalid or expired."
+}

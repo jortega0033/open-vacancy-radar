@@ -43,8 +43,30 @@ describe('ALLOWED_CDP_METHODS', () => {
       'Page.navigate',
       'Page.captureScreenshot',
       'Page.getFrameTree',
+      // #277's two additions, both pure reads of one named node.
+      'DOM.getContentQuads',
+      'Accessibility.getPartialAXTree',
     ]) {
       expect(isAllowedCdpMethod(method), method).toBe(true);
+    }
+  });
+
+  it('#277 added exactly two methods, both read-only, and widened nothing else', () => {
+    // The allowlist is the whole security story for this package, so its size is worth asserting
+    // on directly: a future edit that quietly adds a third method fails here rather than passing
+    // because it happens to be in a domain nothing else objects to.
+    expect(ALLOWED_CDP_METHODS).toHaveLength(16);
+    // Nothing that writes, navigates, or reaches another target came along with them.
+    for (const method of [
+      'DOM.setAttributeValue',
+      'DOM.setOuterHTML',
+      'DOM.removeAttribute',
+      'Accessibility.enable',
+      'Accessibility.queryAXTree',
+      'Page.reload',
+      'Input.synthesizeScrollGesture',
+    ]) {
+      expect(isAllowedCdpMethod(method), method).toBe(false);
     }
   });
 

@@ -278,7 +278,11 @@ describe('ApplicationExecutor: snapshot', () => {
 });
 
 describe('ApplicationExecutor: fill', () => {
-  it('focuses the real backend node then inserts text, for a plain text field', async () => {
+  it('focuses the real backend node, replaces its whole contents, blurs to commit, then reads back', async () => {
+    // The sequence #277 made explicit. `Input.insertText` alone inserts at the caret, so the
+    // selectAll before it is what makes this a replace rather than an append; the Tab after it is
+    // what commits the value (a real `change` fires on blur); and the read-back is what turns
+    // "a command was sent" into "the control holds this".
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
@@ -286,9 +290,13 @@ describe('ApplicationExecutor: fill', () => {
 
     await executor.fill(nameField.fieldRef, 'Jamie Rivera');
 
-    const relevant = calls.slice(-2);
+    // focus, selectAll (down/up), insertText, Tab (down/up), read-back.
+    const relevant = calls.slice(-7);
     expect(relevant[0]).toMatchObject({ method: 'DOM.focus', params: { backendNodeId: 2 } });
-    expect(relevant[1]).toMatchObject({ method: 'Input.insertText', params: { text: 'Jamie Rivera' } });
+    expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { commands: ['selectAll'] } });
+    expect(relevant[3]).toMatchObject({ method: 'Input.insertText', params: { text: 'Jamie Rivera' } });
+    expect(relevant[4]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Tab', type: 'keyDown' } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 2 } });
   });
 
   it('clicks the checkbox at its real box-model center when the value is true', async () => {
@@ -307,7 +315,7 @@ describe('ApplicationExecutor: fill', () => {
     expect(mouseCalls[0]).toMatchObject({ params: { type: 'mousePressed', x: 20, y: 30 } });
   });
 
-  it('does nothing for a checkbox fill of "false" when it is already unchecked', async () => {
+  it('clicks nothing for a checkbox fill of "false" when it is already unchecked, but still reads it back', async () => {
     const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
     const executor = new ApplicationExecutor(transport, fullPolicy());
     const snapshot = await executor.snapshot();
@@ -315,10 +323,14 @@ describe('ApplicationExecutor: fill', () => {
     const before = calls.length;
 
     await executor.fill(checkbox.fieldRef, 'false');
-    expect(calls.length).toBe(before); // no new CDP calls at all
+
+    // No click: the box is already in the desired state. But the read-back still happens (#277) --
+    // "we decided not to touch it" is not evidence of what it holds, and a box the page had
+    // re-rendered between the snapshot and now would otherwise go unnoticed entirely.
+    expect(calls.slice(before).map((c) => c.method)).toEqual(['Accessibility.getPartialAXTree']);
   });
 
-  it('does nothing for a checkbox fill of "true" when it is already checked', async () => {
+  it('clicks nothing for a checkbox fill of "true" when it is already checked', async () => {
     const preCheckedTree = {
       root: {
         nodeName: 'BODY',
@@ -334,7 +346,8 @@ describe('ApplicationExecutor: fill', () => {
     const before = calls.length;
 
     await executor.fill(snapshot.fields[0]!.fieldRef, 'true');
-    expect(calls.length).toBe(before); // already in the desired state -- no click needed
+    // Already in the desired state, so no click -- only the read-back (#277).
+    expect(calls.slice(before).map((c) => c.method)).toEqual(['Accessibility.getPartialAXTree']);
   });
 
   it('clicks a pre-checked checkbox to uncheck it when the value is "false"', async () => {
@@ -419,10 +432,13 @@ describe('ApplicationExecutor: select', () => {
     // NAME_INPUT_TREE's select has exactly one option (index 0): focus, one normalizing ArrowUp
     // (options.length -- see select()'s own doc comment on why this always runs, even for index 0),
     // zero ArrowDown (index 0), then Enter.
-    const relevant = calls.slice(-3);
+    // ...followed by the blur that commits the selection and the read-back that verifies it (#277).
+    const relevant = calls.slice(-6);
     expect(relevant[0]).toMatchObject({ method: 'DOM.focus', params: { backendNodeId: 4 } });
     expect(relevant[1]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'ArrowUp' } });
     expect(relevant[2]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Enter' } });
+    expect(relevant[3]).toMatchObject({ method: 'Input.dispatchKeyEvent', params: { key: 'Tab', type: 'keyDown' } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 4 } });
   });
 
   it('refuses an optionRef that is not on the given field', async () => {
@@ -452,7 +468,8 @@ describe('ApplicationExecutor: select', () => {
     const arrowDownCount = keyEvents.filter((k) => k === 'ArrowDown').length;
     expect(arrowUpCount).toBe(3); // options.length
     expect(arrowDownCount).toBe(2); // sponsorOption's index
-    expect(keyEvents.at(-1)).toBe('Enter');
+    // The drive itself still ends on Enter; the Tab pair after it is the commit blur (#277).
+    expect(keyEvents.filter((k) => k !== 'Tab').at(-1)).toBe('Enter');
     // Every ArrowUp precedes every ArrowDown, so the normalize pass always completes before the
     // real navigation starts -- an interleaved order would defeat the whole point of resetting first.
     expect(keyEvents.lastIndexOf('ArrowUp')).toBeLessThan(keyEvents.indexOf('ArrowDown'));
@@ -489,7 +506,10 @@ describe('ApplicationExecutor: attach', () => {
 
     await executor.attach(fileField.fieldRef, A_VALID_PDF);
 
-    expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles', params: { files: ['/staged/resume.pdf'], backendNodeId: 6 } });
+    // The upload, then the read-back that turns "the command resolved" into "the control reports
+    // holding this file" (#277).
+    expect(calls.at(-2)).toMatchObject({ method: 'DOM.setFileInputFiles', params: { files: ['/staged/resume.pdf'], backendNodeId: 6 } });
+    expect(calls.at(-1)).toMatchObject({ method: 'Accessibility.getPartialAXTree', params: { backendNodeId: 6 } });
   });
 
   it('refuses to attach to a non-file field', async () => {
@@ -544,7 +564,98 @@ describe('ApplicationExecutor: attach', () => {
     const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
 
     await executor.attach(fileField.fieldRef, { localFilePath: '/staged/exact.pdf', mimeType: 'application/pdf', byteSize: 500 });
-    expect(calls.at(-1)).toMatchObject({ method: 'DOM.setFileInputFiles' });
+    expect(calls.map((c) => c.method)).toContain('DOM.setFileInputFiles');
+  });
+
+  it('replaces, never accumulates, a file input\'s selection when the same field is attached twice', async () => {
+    // The property #273's retry case rests on: `DOM.setFileInputFiles` always carries the full
+    // intended selection, so a second attach cannot leave the first file behind alongside it.
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+
+    const uploads = calls.filter((call) => call.method === 'DOM.setFileInputFiles');
+    expect(uploads).toHaveLength(2);
+    for (const upload of uploads) expect(upload.params).toMatchObject({ files: ['/staged/resume.pdf'], backendNodeId: 6 });
+  });
+});
+
+describe('ApplicationExecutor: readBackAttachment', () => {
+  /** One `Accessibility.getFullAXTree` response naming the fixture tree's file input (backend node
+   * 6) -- what a real browser reports once a file is actually selected on that control. */
+  function axTree(reported: unknown, backendDOMNodeId = 6) {
+    return { nodes: [{ backendDOMNodeId, value: { type: 'string', value: reported } }] };
+  }
+
+  it('returns what the browser reports on that exact control, matched by backend node id', async () => {
+    const { transport, calls } = fakeTransport({
+      'DOM.getDocument': NAME_INPUT_TREE,
+      'Accessibility.getFullAXTree': {
+        nodes: [
+          { backendDOMNodeId: 2, value: { type: 'string', value: 'a totally different control' } },
+          { backendDOMNodeId: 6, value: { type: 'string', value: 'abc123-resume.pdf' } },
+        ],
+      },
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    await executor.attach(fileField.fieldRef, A_VALID_PDF);
+
+    expect(await executor.readBackAttachment(fileField.fieldRef)).toBe('abc123-resume.pdf');
+    expect(calls.at(-1)?.method).toBe('Accessibility.getFullAXTree');
+  });
+
+  it('reports an empty control as exactly what the page said, never as a confirmed attachment', async () => {
+    const { transport } = fakeTransport({
+      'DOM.getDocument': NAME_INPUT_TREE,
+      'Accessibility.getFullAXTree': axTree('No file chosen'),
+    });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+
+    expect(await executor.readBackAttachment(fileField.fieldRef)).toBe('No file chosen');
+  });
+
+  it('returns null when the control is absent from the tree, or reports a non-string value', async () => {
+    const absent = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE, 'Accessibility.getFullAXTree': { nodes: [] } });
+    const absentExecutor = new ApplicationExecutor(absent.transport, fullPolicy());
+    const absentField = (await absentExecutor.snapshot()).fields.find((f) => f.controlType === 'file')!;
+    expect(await absentExecutor.readBackAttachment(absentField.fieldRef)).toBeNull();
+
+    const nonString = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE, 'Accessibility.getFullAXTree': axTree(42) });
+    const nonStringExecutor = new ApplicationExecutor(nonString.transport, fullPolicy());
+    const nonStringField = (await nonStringExecutor.snapshot()).fields.find((f) => f.controlType === 'file')!;
+    expect(await nonStringExecutor.readBackAttachment(nonStringField.fieldRef)).toBeNull();
+  });
+
+  it('refuses a non-file field and an unknown fieldRef, never reaching the transport', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    const textField = snapshot.fields.find((f) => f.controlType === 'text')!;
+    const before = calls.length;
+
+    await expect(executor.readBackAttachment(textField.fieldRef)).rejects.toThrow(ExecutorPolicyError);
+    await expect(executor.readBackAttachment('f0000000000000000')).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before);
+  });
+
+  it('refuses on a policy that does not permit uploads at all', async () => {
+    const { transport, calls } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy({ killSwitches: { navigate: false, fill: false, upload: true, submit: false } }));
+    const snapshot = await executor.snapshot();
+    const fileField = snapshot.fields.find((f) => f.controlType === 'file')!;
+    const before = calls.length;
+
+    await expect(executor.readBackAttachment(fileField.fieldRef)).rejects.toThrow(ExecutorPolicyError);
+    expect(calls.length).toBe(before);
   });
 });
 
@@ -684,6 +795,223 @@ describe('ApplicationExecutor: submit', () => {
     expect(snapshot.challengeDetected).toBe(true);
     expect(snapshot.submitControls).toHaveLength(1); // the button itself resolves unambiguously
     await expect(executor.submit(snapshot.submitControls[0]!.controlRef)).rejects.toThrow(ExecutorPolicyError);
+  });
+});
+
+describe('ApplicationExecutor: observeSubmissionOutcome (#271)', () => {
+  const BOX = { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
+
+  function textNode(value: string) {
+    return { nodeName: '#text', nodeType: 3, backendNodeId: 0, nodeValue: value };
+  }
+
+  /** The fixture form, plus whatever the page turns into after the click. Nothing here reaches a
+   * network at all: the "page" is two hand-built CDP trees and a swap on the click. */
+  function submitFixture(afterClickTree: unknown) {
+    let clicked = false;
+    const calls: string[] = [];
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        calls.push(method);
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') return clicked ? afterClickTree : NAME_INPUT_TREE;
+        return {};
+      },
+    };
+    return { transport, calls };
+  }
+
+  const REQUIRED_ERROR_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'DIV', nodeType: 1, backendNodeId: 8, attributes: ['class', 'field-error'], children: [textNode('Full name is required')] },
+        { nodeName: 'INPUT', nodeType: 1, backendNodeId: 2, attributes: ['type', 'text', 'name', 'fullName', 'aria-invalid', 'true'] },
+        { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 7, children: [textNode('Submit Application')] },
+      ],
+    },
+  };
+
+  const CONFIRMATION_TREE = {
+    root: {
+      nodeName: 'BODY',
+      nodeType: 1,
+      backendNodeId: 1,
+      children: [
+        { nodeName: 'H1', nodeType: 1, backendNodeId: 2, children: [textNode('Your application has been submitted')] },
+        { nodeName: 'P', nodeType: 1, backendNodeId: 3, children: [textNode('Application reference: FIXTURE-2026-000123')] },
+      ],
+    },
+  };
+
+  it('acceptance 1: a click whose handler returns but leaves a required-field error is never submitted', async () => {
+    const { transport } = submitFixture(REQUIRED_ERROR_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef); // resolves perfectly normally
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report.outcome).toBe('rejected');
+    expect(report).toMatchObject({ reason: 'form_validation_error' });
+  });
+
+  it('acceptance 2: a confirmation page that replaced the form records submitted with a real evidence reference', async () => {
+    const { transport } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report.outcome).toBe('submitted');
+    expect(report.outcome === 'submitted' && report.evidence.kind).toBe('confirmation_page');
+    expect(report.observedAt).toEqual(expect.any(String));
+  });
+
+  it('waits for a confirmation that only appears a few polls after the click, rather than deciding on the first read', async () => {
+    let clicked = false;
+    let readsAfterClick = 0;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') {
+          if (!clicked) return NAME_INPUT_TREE;
+          readsAfterClick += 1;
+          // The form is gone immediately, but the confirmation text lands three reads later.
+          return readsAfterClick < 3
+            ? { root: { nodeName: 'BODY', nodeType: 1, backendNodeId: 1, children: [] } }
+            : CONFIRMATION_TREE;
+        }
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 5_000, pollIntervalMs: 1 });
+
+    expect(report.outcome).toBe('submitted');
+    expect(readsAfterClick).toBe(3);
+  });
+
+  it('acceptance 3: a page that can no longer be read after the click reports unknown (navigation lost), never submitted', async () => {
+    let clicked = false;
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'Input.dispatchMouseEvent') {
+          clicked = true;
+          return {};
+        }
+        if (method === 'DOM.getDocument') {
+          if (clicked) throw new Error('the renderer went away');
+          return NAME_INPUT_TREE;
+        }
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 1_000, pollIntervalMs: 10 });
+
+    expect(report).toMatchObject({ outcome: 'unknown', reason: 'navigation_lost' });
+    expect(report.detail).toContain('the renderer went away');
+  });
+
+  it('acceptance 3: a form still standing with nothing conclusive times out into unknown, under a real bounded budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, calls } = submitFixture(NAME_INPUT_TREE); // unchanged page: the click did nothing visible
+      const executor = new ApplicationExecutor(transport, fullPolicy());
+      const snapshot = await executor.snapshot();
+      await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+      const pending = executor.observeSubmissionOutcome();
+      await vi.advanceTimersByTimeAsync(60_000);
+      const report = await pending;
+
+      expect(report).toMatchObject({ outcome: 'unknown', reason: 'observation_timeout' });
+      // Bounded, and emphatically never a second click: retrying a submit is the exact thing an
+      // unknown outcome exists to prevent.
+      expect(calls.filter((method) => method === 'Input.dispatchMouseEvent')).toHaveLength(2); // the one press/release from submit()
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('acceptance 5: an HTTP success carrying an application-error payload is not accepted as delivery, even on a confirmation page', async () => {
+    const { transport } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({
+      timeoutMs: 1_000,
+      pollIntervalMs: 10,
+      response: { status: 200, body: JSON.stringify({ errors: [{ field: 'workAuthorization', message: 'unanswered' }] }) },
+    });
+
+    expect(report).toMatchObject({ outcome: 'rejected', reason: 'application_error_payload' });
+  });
+
+  it('never claims a confirmation the page was already showing before the click', async () => {
+    // The same tree before and after: a posting whose own copy reads "thank you for applying".
+    const BOILERPLATE_TREE = {
+      root: {
+        nodeName: 'BODY',
+        nodeType: 1,
+        backendNodeId: 1,
+        children: [
+          { nodeName: 'P', nodeType: 1, backendNodeId: 2, children: [textNode('Thank you for applying to Fixture Employer.')] },
+          { nodeName: 'BUTTON', nodeType: 1, backendNodeId: 7, children: [textNode('Submit Application')] },
+        ],
+      },
+    };
+    const transport: CdpTransport = {
+      async sendCommand(method) {
+        if (method === 'DOM.getBoxModel') return BOX;
+        if (method === 'DOM.getDocument') return BOILERPLATE_TREE;
+        return {};
+      },
+    };
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+
+    const report = await executor.observeSubmissionOutcome({ timeoutMs: 30, pollIntervalMs: 10 });
+    expect(report.outcome).toBe('unknown');
+  });
+
+  it('refuses to report on an executor that never clicked submit at all', async () => {
+    const { transport } = fakeTransport({ 'DOM.getDocument': NAME_INPUT_TREE });
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    await executor.snapshot();
+    await expect(executor.observeSubmissionOutcome()).rejects.toThrow(ExecutorPolicyError);
+  });
+
+  it('only ever sends allowlisted CDP methods while observing', async () => {
+    const { transport, calls } = submitFixture(CONFIRMATION_TREE);
+    const executor = new ApplicationExecutor(transport, fullPolicy());
+    const snapshot = await executor.snapshot();
+    await executor.submit(snapshot.submitControls[0]!.controlRef);
+    await executor.observeSubmissionOutcome({ timeoutMs: 100, pollIntervalMs: 10 });
+
+    const { isAllowedCdpMethod } = await import('../src/cdp-allowlist.js');
+    for (const method of calls) expect(isAllowedCdpMethod(method), method).toBe(true);
   });
 });
 

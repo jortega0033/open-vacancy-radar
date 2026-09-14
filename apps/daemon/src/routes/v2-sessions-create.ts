@@ -12,7 +12,7 @@ import {
   type ProviderStatus,
 } from '@agent-dock/shared';
 import { resolveModelSelection } from '@agent-dock/vacancy-agent-adapter';
-import type { ProviderRegistry } from '@agent-dock/agent-runtime';
+import type { AgentProvider, ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { AuditStore } from '../audit-store.js';
 import { ActiveSessionLimitError } from '../active-session-limiter.js';
 import {
@@ -267,6 +267,46 @@ function resolveCapability(
   return { kind: 'unavailable', id: extension.id, reason: 'unsupported_capability' };
 }
 
+/**
+ * ADI-22a. The `catalog` argument fed to `resolveCapability`, for one fresh session's capability
+ * resolution loop -- prefers a provider's own live `fetchModelCatalog()` over the static
+ * `status.availableModels` `detect()` already reported, and falls back to that same static list
+ * whenever a live catalog isn't actually available.
+ *
+ * Scoped to Codex only, per this ticket's own non-goals: Claude has no `fetchModelCatalog` until
+ * #144, and `providerId !== 'codex'` short-circuits before ever touching `providerImpl` for any
+ * other provider, present or future, so nothing here changes Claude's resolution path even if a
+ * caller passed a Claude provider that happened to implement the method. `capabilities` being
+ * empty or absent also short-circuits: there is nothing to spend a live RPC round trip resolving
+ * when the request named no capabilities at all.
+ *
+ * A failed or timed-out live probe is caught here, never allowed to propagate: per
+ * `resolveCapability`'s own documented three-way split, an unavailable catalog is
+ * `unavailableOptional`, not a request failure, and that has to hold exactly as much for "the live
+ * probe itself broke" as it already does for "the provider has no catalog at all". Falling back to
+ * `staticCatalog` on any failure keeps that guarantee: the shipped pre-ADI-22a behavior for a fresh
+ * Codex session (resolve against `status.availableModels`, today always `undefined` for Codex, so
+ * `no_catalog`) still holds byte-for-byte whenever the live probe can't answer, whatever the
+ * reason.
+ */
+async function liveOrStaticModelCatalog(
+  providerId: ProviderStatus['id'],
+  providerImpl: AgentProvider,
+  capabilities: readonly OpaqueExtension[] | undefined,
+  cwd: string,
+  staticCatalog: readonly string[] | undefined,
+): Promise<readonly string[] | undefined> {
+  if (providerId !== 'codex' || !providerImpl.fetchModelCatalog || !capabilities || capabilities.length === 0) {
+    return staticCatalog;
+  }
+  try {
+    const models = await providerImpl.fetchModelCatalog({ cwd });
+    return models.map((model) => model.id);
+  } catch {
+    return staticCatalog;
+  }
+}
+
 export function registerV2SessionCreateRoute(
   app: FastifyInstance,
   options: V2SessionCreateRouteOptions,
@@ -413,8 +453,21 @@ export function registerV2SessionCreateRoute(
       const enabled: OpaqueExtension[] = [];
       const unavailableOptional: { id: string; reason: CapabilityUnavailableReasonV2 }[] = [];
 
+      // ADI-22a: Codex's app-server transport already has a live, RPC-backed model/list; prefer
+      // that catalog over the static `status.availableModels` this route has always used, so a
+      // model becomes selectable the moment Codex's own account reports it. See
+      // `liveOrStaticModelCatalog`'s own doc comment for the Codex-only scoping and the fallback
+      // guarantee on a failed/timed-out probe.
+      const catalog = await liveOrStaticModelCatalog(
+        provider,
+        providerImpl,
+        capabilities,
+        identity.canonicalPath,
+        status.availableModels,
+      );
+
       for (const extension of capabilities ?? []) {
-        const outcome = resolveCapability(extension, status.availableModels);
+        const outcome = resolveCapability(extension, catalog);
         if (outcome.kind === 'invalid') {
           await deny(REFUSALS.invalid_capability_request, identity);
           return;

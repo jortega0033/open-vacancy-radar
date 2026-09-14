@@ -12,7 +12,13 @@ import {
   type ProviderId,
   type ProviderStatus,
 } from '@agent-dock/shared';
-import type { CandidateProfile, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type {
+  AtsRosterImportResult,
+  AtsRosterStatus,
+  CandidateProfile,
+  GlobalRemoteReport,
+  ScanProgressEvent,
+} from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
 import type {
@@ -23,13 +29,24 @@ import type {
   ApplicationQueueStatus,
 } from './application-queue-types.js';
 import type {
+  ApplicationAttachmentResult,
   ApplicationExecutorBridge,
+  ApplicationManualHandoff,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewResult,
   RequestAutomationGrantResult,
   ScheduleAutomaticSubmissionResult,
+  ShowApplicationHandoffResult,
   SubmitApplicationReviewResult,
 } from './application-executor-types.js';
+import type {
+  ApplicationPipelineBridge,
+  RestartApplicationTailoringResult,
+  StartApplicationFromVacancyResult,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from './application-pipeline-types.js';
+import type { FormReadiness } from '@agent-dock/application-executor';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
@@ -65,6 +82,8 @@ export interface AgentDockBridge {
 }
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyScanRequest = string | { mode: 'query'; query: string; country?: string; employment?: string; salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean } } | { mode: 'browse_all' };
 
 /**
  * A second, independent bridge namespace (rather than folding these onto `AgentDockBridge`)
@@ -77,18 +96,44 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
+  getReportSummary(): Promise<VacancyReportSummary | null>;
   /**
    * `query` scopes each source's own server-side search parameter for this run (see
    * `GlobalRemoteScanOptions.query` in the engine) instead of always harvesting the same static
-   * default and filtering everything client-side afterward. Omitted or blank keeps that default.
+   * default and filtering everything client-side afterward. Blank input is rejected before any
+   * discovery request, so the renderer cannot accidentally trigger the checked-in fallback query.
    */
-  runScan(query?: string): Promise<GlobalRemoteReport>;
+  runScan(request: VacancyScanRequest): Promise<GlobalRemoteReport>;
   /** Whether a scan is currently running -- possibly one this window started before the user
    * navigated away from Search and back, since the scan itself outlives the page's own state. */
   getScanStatus(): Promise<{ scanning: boolean }>;
+  /**
+   * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
+   * own freshly discovered rows, pushed the moment that source resolves rather than only once the
+   * whole scan finishes -- mirroring `agentDock.onSessionEvent`'s push pattern. Fires for *any* scan
+   * in this process, not just one this window started, the same as `getScanStatus` already reflects
+   * a scan the page did not itself start. Returns an unsubscribe function; call it on unmount so a
+   * remounted Search page (navigate away and back) ends up with exactly one live listener, never
+   * zero or two.
+   */
+  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
   /** The candidate profile deterministic scoring matches results against. */
   getSearchProfile(): Promise<CandidateProfile>;
   saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /**
+   * Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
+   * `null` when the import has never run yet against this data directory, so a scan will find zero
+   * companies on these five providers until `refreshAtsRoster` below runs at least once.
+   */
+  getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  /**
+   * Runs the roster import now: fetches each provider's CSV, re-verifies every row through this
+   * repo's own ATS URL detectors, and writes the local roster file the next vacancy scan reads.
+   * Deliberately never called automatically -- see `main.ts#runAtsRosterRefresh` for why this is a
+   * manual action, not a background timer. Mutually exclusive with a running vacancy scan (the same
+   * advisory lock the `ats-roster:import` CLI command already takes).
+   */
+  refreshAtsRoster(): Promise<AtsRosterImportResult>;
 }
 
 /**
@@ -198,17 +243,36 @@ const vacancyApi: VacancyRadarBridge = {
   getReport() {
     return ipcRenderer.invoke('vacancy:get-report');
   },
-  runScan(query) {
-    return ipcRenderer.invoke('vacancy:run-scan', query);
+  getReportSummary() {
+    return ipcRenderer.invoke('vacancy:get-report-summary');
+  },
+  runScan(request) {
+    return ipcRenderer.invoke('vacancy:run-scan', request);
   },
   getScanStatus() {
     return ipcRenderer.invoke('vacancy:get-scan-status');
+  },
+  onScanProgress(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const p = payload as { sourceId?: unknown; vacancies?: unknown } | null;
+      if (p && typeof p.sourceId === 'string' && Array.isArray(p.vacancies)) {
+        callback({ sourceId: p.sourceId, vacancies: p.vacancies as ScanProgressEvent['vacancies'] });
+      }
+    };
+    ipcRenderer.on('vacancy:scan-progress', listener);
+    return () => ipcRenderer.removeListener('vacancy:scan-progress', listener);
   },
   getSearchProfile() {
     return ipcRenderer.invoke('vacancy:get-search-profile');
   },
   saveSearchProfile(patch) {
     return ipcRenderer.invoke('vacancy:save-search-profile', patch);
+  },
+  getAtsRosterStatus() {
+    return ipcRenderer.invoke('vacancy:ats-roster:get-status');
+  },
+  refreshAtsRoster() {
+    return ipcRenderer.invoke('vacancy:ats-roster:refresh');
   },
 };
 
@@ -230,6 +294,9 @@ const workspaceApi: WorkspaceBridge = {
   },
   getCounts() {
     return ipcRenderer.invoke('workspace:counts:get');
+  },
+  resetApplicationData() {
+    return ipcRenderer.invoke('workspace:data:reset');
   },
 
   listSavedJobs() {
@@ -273,6 +340,9 @@ const workspaceApi: WorkspaceBridge = {
   setDefaultCvDocument(id) {
     return ipcRenderer.invoke('workspace:cv-documents:set-default', { id });
   },
+  exportCvDocument(id, format) {
+    return ipcRenderer.invoke('workspace:cv-documents:export', { id, format });
+  },
 
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');
@@ -299,8 +369,24 @@ const workspaceApi: WorkspaceBridge = {
   updateApplicationAttempt(id, patch) {
     return ipcRenderer.invoke('workspace:application-attempts:update', { id, patch });
   },
-  listApplicationArtifacts(attemptId) {
-    return ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+  async listApplicationArtifacts(attemptId) {
+    const result: unknown = await ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+    if (!Array.isArray(result)) throw new Error('the workspace returned unexpected application artifacts');
+    return result.map((entry) => {
+      const source = asRecord(entry);
+      if (!source) throw new Error('the workspace returned an unexpected application artifact');
+      const kind = requiredString(source, 'kind');
+      return {
+        id: requiredString(source, 'id'),
+        attemptId: requiredString(source, 'attemptId'),
+        kind: kind === 'cv_pdf' || kind === 'cover_letter_pdf' || kind === 'combined_pdf' ? kind : 'other',
+        fileName: requiredString(source, 'fileName'),
+        mimeType: requiredString(source, 'mimeType'),
+        byteSize: nonNegativeInt(source.byteSize),
+        contentHash: requiredString(source, 'contentHash'),
+        createdAt: requiredString(source, 'createdAt'),
+      };
+    });
   },
   listAutomationGrants() {
     return ipcRenderer.invoke('workspace:automation-grants:list');
@@ -1035,12 +1121,19 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const rawFields = snapshotSource?.fields;
   const rawSubmitControls = snapshotSource?.submitControls;
   const challengeDetected = snapshotSource?.challengeDetected;
+  const activeFrameId = snapshotSource?.activeFrameId;
+  const pageStateFingerprint = snapshotSource ? optionalString(snapshotSource, 'pageStateFingerprint') : undefined;
+  const activeFormScope = snapshotSource?.activeFormScope;
+  const handoffShown = source?.handoffShown;
   if (
     typeof generation !== 'number' ||
     !capturedAt ||
     !Array.isArray(rawFields) ||
     !Array.isArray(rawSubmitControls) ||
     typeof challengeDetected !== 'boolean' ||
+    typeof activeFrameId !== 'number' ||
+    !pageStateFingerprint ||
+    typeof handoffShown !== 'boolean' ||
     !screenshotBase64
   ) {
     throw new Error('the application executor returned an unexpected response');
@@ -1062,7 +1155,16 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     const label = fieldSource ? optionalString(fieldSource, 'label') : undefined;
     const controlType = fieldSource ? optionalString(fieldSource, 'controlType') : undefined;
     const required = fieldSource?.required;
-    if (!fieldRef || label === undefined || !controlType || typeof required !== 'boolean') {
+    const frameId = fieldSource?.frameId;
+    const active = fieldSource?.active;
+    if (
+      !fieldRef ||
+      label === undefined ||
+      !controlType ||
+      typeof required !== 'boolean' ||
+      typeof frameId !== 'number' ||
+      typeof active !== 'boolean'
+    ) {
       throw new Error(`the application executor returned an unexpected field shape at index ${index}`);
     }
     if (!(FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) {
@@ -1084,17 +1186,156 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     if (classification !== undefined && !(FIELD_CLASSIFICATIONS as readonly string[]).includes(classification)) {
       throw new Error(`the application executor returned an unrecognized classification at index ${index}`);
     }
+    const formScope = fieldSource?.formScope;
+    const rendered = fieldSource?.rendered;
+    const invalid = fieldSource?.invalid;
+    const name = fieldSource ? optionalString(fieldSource, 'name') : undefined;
+    // Untrusted third-party page text, carried across verbatim as a plain string for a person to
+    // read. Nothing on either side of this bridge interprets it.
+    const validationMessage = fieldSource ? optionalString(fieldSource, 'validationMessage') : undefined;
     return {
       fieldRef,
       label,
       controlType: controlType as OpenApplicationReviewResult['snapshot']['fields'][number]['controlType'],
       required,
+      frameId,
+      active,
+      ...(name ? { name } : {}),
+      ...(typeof formScope === 'number' ? { formScope } : {}),
+      ...(typeof rendered === 'boolean' ? { rendered } : {}),
+      ...(typeof invalid === 'boolean' ? { invalid } : {}),
+      ...(validationMessage ? { validationMessage } : {}),
       ...(options ? { options } : {}),
       ...(classification ? { classification: classification as 'credential_field' | 'consent_field' } : {}),
     };
   });
 
-  return { snapshot: { generation, fields, submitControls, capturedAt, challengeDetected }, screenshotBase64 };
+  return {
+    snapshot: {
+      generation,
+      fields,
+      submitControls,
+      capturedAt,
+      challengeDetected,
+      activeFrameId,
+      pageStateFingerprint,
+      ...(typeof activeFormScope === 'number' ? { activeFormScope } : {}),
+    },
+    screenshotBase64,
+    readiness: toFormReadiness(source?.readiness),
+    handoffShown,
+  };
+}
+
+const READINESS_BLOCKER_KINDS = [
+  'required_field_empty',
+  'validation_error',
+  'value_mismatch',
+  'unverified_write',
+  'attachment_missing',
+  'stale_page_state',
+  'challenge_detected',
+] as const;
+
+/** Fail-closed like every other converter here: a readiness reading this build cannot interpret
+ * throws rather than being silently downgraded to an empty one, which would read as "ready" and is
+ * the single worst direction for this particular value to fail in (#277). */
+function toFormReadiness(value: unknown): FormReadiness {
+  const source = asRecord(value);
+  const ready = source?.ready;
+  const verifiedFilledCount = source?.verifiedFilledCount;
+  const discoveredFieldCount = source?.discoveredFieldCount;
+  const requiredFieldCount = source?.requiredFieldCount;
+  const requiredFieldsSatisfied = source?.requiredFieldsSatisfied;
+  const rawBlockers = source?.blockers;
+  if (
+    typeof ready !== 'boolean' ||
+    typeof verifiedFilledCount !== 'number' ||
+    typeof discoveredFieldCount !== 'number' ||
+    typeof requiredFieldCount !== 'number' ||
+    typeof requiredFieldsSatisfied !== 'number' ||
+    !Array.isArray(rawBlockers)
+  ) {
+    throw new Error('the application executor returned an unexpected readiness response');
+  }
+
+  const blockers = rawBlockers.map((rawBlocker, index) => {
+    const blockerSource = asRecord(rawBlocker);
+    const kind = blockerSource ? optionalString(blockerSource, 'kind') : undefined;
+    if (!kind || !(READINESS_BLOCKER_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(`the application executor returned an unrecognized readiness blocker at index ${index}`);
+    }
+    return {
+      kind,
+      ...(blockerSource ? { fieldRef: optionalString(blockerSource, 'fieldRef') } : {}),
+      ...(blockerSource ? { label: optionalString(blockerSource, 'label') } : {}),
+      ...(blockerSource ? { message: optionalString(blockerSource, 'message') } : {}),
+      ...(blockerSource ? { detail: optionalString(blockerSource, 'detail') } : {}),
+      // The discriminated union on the other side of this bridge is narrower than what arrives over
+      // IPC (each blocker kind carries only its own fields). This asserts the shape the union
+      // describes after the `kind` above has already been checked against the closed set, which is
+      // the one fact the structural check cannot express to the compiler on its own.
+    } as unknown as FormReadiness['blockers'][number];
+  });
+
+  return { ready, verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers };
+}
+
+const SHOW_HANDOFF_REFUSAL_REASONS = ['no_open_review', 'no_window', 'already_submitting'] as const;
+
+function toShowApplicationHandoffResult(value: unknown): ShowApplicationHandoffResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  if (reason !== undefined && !(SHOW_HANDOFF_REFUSAL_REASONS as readonly string[]).includes(reason)) {
+    throw new Error('the application executor returned an unrecognized handoff refusal reason');
+  }
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const company = source ? optionalString(source, 'company') : undefined;
+  const role = source ? optionalString(source, 'role') : undefined;
+  const bannerHeightPx = source?.bannerHeightPx;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ShowApplicationHandoffResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(company ? { company } : {}),
+    ...(role ? { role } : {}),
+    ...(typeof bannerHeightPx === 'number' && Number.isFinite(bannerHeightPx) ? { bannerHeightPx } : {}),
+  };
+}
+
+/** Rebuilt field by field, like every other converter here: only the four metadata strings an
+ * attachment result is defined to carry cross this bridge, so a future main-process change that
+ * added a path-shaped field to that object could not leak it into the renderer by accident. */
+function toApplicationAttachments(value: unknown): ApplicationAttachmentResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.flatMap((entry) => {
+    const source = asRecord(entry);
+    if (!source) return [];
+    return [
+      {
+        artifactId: requiredString(source, 'artifactId'),
+        fieldRef: requiredString(source, 'fieldRef'),
+        fileName: requiredString(source, 'fileName'),
+        attachedFileName: requiredString(source, 'attachedFileName'),
+      },
+    ];
+  });
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function toApplicationManualHandoff(value: unknown): ApplicationManualHandoff | undefined {
+  const source = asRecord(value);
+  if (!source) return undefined;
+  return {
+    fieldRef: requiredString(source, 'fieldRef'),
+    artifactId: requiredString(source, 'artifactId'),
+    fileName: requiredString(source, 'fileName'),
+    reason: requiredString(source, 'reason', 'unsupported_control') as ApplicationManualHandoff['reason'],
+  };
 }
 
 function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
@@ -1106,11 +1347,18 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   const reason = source ? optionalString(source, 'reason') : undefined;
   const detail = source ? optionalString(source, 'detail') : undefined;
   const appliedCount = source?.appliedCount;
+  const verifiedCount = source?.verifiedCount;
+  const attachments = source ? toApplicationAttachments(source.attachments) : undefined;
+  const manualHandoff = source ? toApplicationManualHandoff(source.manualHandoff) : undefined;
   return {
     ok,
     ...(reason ? { reason: reason as NonNullable<ApplyApplicationFieldMapResult['reason']> } : {}),
     ...(detail ? { detail } : {}),
     ...(typeof appliedCount === 'number' ? { appliedCount } : {}),
+    ...(typeof verifiedCount === 'number' ? { verifiedCount } : {}),
+    ...(source?.readiness !== undefined ? { readiness: toFormReadiness(source.readiness) } : {}),
+    ...(attachments ? { attachments } : {}),
+    ...(manualHandoff ? { manualHandoff } : {}),
   };
 }
 
@@ -1181,6 +1429,15 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
     await ipcRenderer.invoke('application-executor:close-review', attemptId);
   },
 
+  async showHandoff(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:show-handoff', attemptId);
+    return toShowApplicationHandoffResult(result);
+  },
+
+  async hideHandoff(attemptId) {
+    await ipcRenderer.invoke('application-executor:hide-handoff', attemptId);
+  },
+
   async resolveTargetPolicyId(canonicalUrl) {
     const result = await ipcRenderer.invoke('application-executor:resolve-target-policy', canonicalUrl);
     return typeof result === 'string' ? result : null;
@@ -1199,6 +1456,127 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
   async cancelScheduledAutomaticSubmission(attemptId) {
     await ipcRenderer.invoke('application-executor:cancel-scheduled-automatic-submission', attemptId);
   },
+
+  async recordUserReportedSubmission(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:record-user-reported-submission', attemptId);
+    const source = asRecord(result);
+    const ok = source?.ok;
+    if (typeof ok !== 'boolean') throw new Error('the application executor returned an unexpected response');
+    const reason = source ? optionalString(source, 'reason') : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(reason ? { reason: reason as 'already_observed' | 'attempt_not_found' } : {}),
+      ...(detail ? { detail } : {}),
+    };
+  },
+
+  async saveArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:save-artifact', artifactId);
+    const source = asRecord(result);
+    return { saved: source?.saved === true };
+  },
+
+  async openArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:open-artifact', artifactId);
+    const source = asRecord(result);
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      opened: source?.opened === true,
+      ...(detail ? { detail } : {}),
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('applicationExecutor', applicationExecutorApi);
+
+const START_APPLICATION_REFUSALS: readonly StartApplicationAttemptRefusal[] = [
+  'no_apply_url',
+  'no_cv_available',
+  'attempt_already_in_progress',
+];
+
+/**
+ * #272's preparation pipeline. Rebuilt field by field on the way back, the same fail-closed
+ * discipline every other bridge here uses: an `ok` this build cannot interpret becomes a refusal
+ * with no reason rather than a success, and nothing beyond the four documented fields crosses even
+ * if main sent it.
+ */
+const applicationPipelineApi: ApplicationPipelineBridge = {
+  async start(savedJobId): Promise<StartApplicationAttemptResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start', { savedJobId });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+  async startFromVacancy(vacancyKey): Promise<StartApplicationFromVacancyResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start-from-vacancy', { vacancyKey });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const savedJobId = source ? optionalString(source, 'savedJobId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(savedJobId === undefined ? {} : { savedJobId }),
+      ...(source?.created === true || source?.created === false ? { created: source.created } : {}),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+  async retryTailoring(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:retry-tailoring', { attemptId }),
+      attemptId,
+      'ai',
+    );
+  },
+  async useOriginalCv(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:use-original-cv', { attemptId }),
+      attemptId,
+      'original',
+    );
+  },
+  async resume(attemptId): Promise<RestartApplicationTailoringResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', { attemptId });
+    const source = asRecord(result);
+    const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+    return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
+  },
+};
+
+function parseRestartTailoringResult(
+  result: unknown,
+  requestedAttemptId: string,
+  requestedMode: RestartApplicationTailoringResult['tailoringMode'],
+): RestartApplicationTailoringResult {
+  const source = asRecord(result);
+  const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+  const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok: source?.ok === true && attemptId === requestedAttemptId && mode === requestedMode,
+    attemptId: attemptId ?? requestedAttemptId,
+    tailoringMode: mode === 'original' ? 'original' : 'ai',
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
+
+contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);

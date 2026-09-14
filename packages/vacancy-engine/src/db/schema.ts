@@ -72,6 +72,28 @@ export const indSponsorSnapshots = sqliteTable(
   (table) => [index('ind_sponsor_snapshots_accepted_retrieved_idx').on(table.accepted, table.retrievedAt)],
 );
 
+/**
+ * One row per employer name the worldwide sponsor check has already asked Wikidata about, so a
+ * scan only ever spends its (very small) Wikidata budget on employers it has never resolved.
+ *
+ * Not served by `httpCache`: that cache is conditional-revalidation only (`SafeHttpClient` always
+ * re-issues the request with `if-none-match`), and the Wikidata action API sends no validator, so
+ * a cached response there still costs a full round trip -- which is the entire cost here, since
+ * Wikidata rate-limits anonymous clients to roughly ten requests a minute. This caches the
+ * *resolved* answer instead, which is also why only the Wikidata half is stored: whether that KVK
+ * number is currently an active IND-recognised sponsor is re-read from `ind_sponsors` on every
+ * scan (a local query), so a register change is never masked by this cache.
+ */
+export const worldwideSponsorLookups = sqliteTable('worldwide_sponsor_lookups', {
+  /** The employer name, normalized exactly as `sponsorMatchCompanyKey` normalizes it. */
+  companyKey: text('company_key').primaryKey(),
+  /** The name as it was queried, kept for auditing which spelling produced the answer. */
+  companyName: text('company_name').notNull(),
+  /** Null is a real, cacheable answer: "Wikidata resolved no unambiguous KVK for this name". */
+  kvkNumber: text('kvk_number'),
+  resolvedAt: timestampMs('resolved_at').notNull(),
+});
+
 export const httpCache = sqliteTable('http_cache', {
   cacheKey: text('cache_key').primaryKey(),
   url: text('url').notNull(),

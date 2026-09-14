@@ -29,10 +29,29 @@ Everything the app stores lives in Electron's per-user application-data director
   stage the attempt has reached, and records of the tailored CV/cover-letter files staged for it.
   This is the same category of personal/third-party data `workspace.db` already holds (your CV
   content, in this case a full third-party job posting's text), stored so a crash or a closed
-  window can never silently duplicate or lose an in-progress application. Nothing in this table
-  causes an application to be sent — as of this stage of the feature, nothing reads a browser,
-  fills a form, or submits anything at all; see the auto-apply tracking issues for what each
-  later stage adds and when.
+  window doesn't silently duplicate or lose an in-progress application. Real employer URLs stop
+  at explicit human review and continue on the employer site. Automated form filling and
+  submission are enabled only for the bundled test fixture; no production target policy permits
+  them in this release.
+
+  Since #275 each attempt also stores a derived *requisition identity* — the employer and job id
+  read out of the apply URL, plus that URL reduced to the parts that identify the posting — so the
+  app can recognise a vacancy you have already applied to when it turns up again from another
+  source, and refuse to queue a second application for it. These are derived from the job link and
+  the employer name that are already stored on the row next to them; they add no new category of
+  data. Alongside them it stores how a completion is known (you told the app, or a receipt was
+  observed) and, when you deliberately apply again to the same opening, the reason you gave for
+  doing so. That reason is free text you write, kept on the attempt row for as long as the attempt
+  is kept, and it is retained under the same rules as the rest of this table.
+- **Submission receipts** (`workspace.db`, `application_submission_receipts` table — #271): one
+  row per observation of what actually happened after a submit action, so a claim that an
+  application was delivered can be checked afterwards rather than taken on trust. Each row holds
+  the attempt it belongs to, the URL it was submitted to, when the observation happened, and a
+  short excerpt of the evidence itself — a matched confirmation sentence, a receipt reference the
+  employer's page printed, or your own note if you told the app you completed the application by
+  hand. The excerpt is bounded in size and is third-party page text: the app displays it and never
+  acts on it. Rows are added, never rewritten, so a later reconciliation is visible as a second
+  record rather than as a silently changed first one.
 - **`application-artifacts/`** (#199): the actual generated PDF files the record above tracks —
   a tailored CV and/or cover letter, rendered locally through the app's own default template.
   Rendering never opens a Save dialog for this unattended path (the existing manual "Copy to
@@ -153,11 +172,14 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   actually done, and quietly discarding it would undermine the very durability #198 exists to
   provide. Deleting the `applications` row an attempt is linked to does not delete the attempt
   itself (`on delete set null`); deleting `workspace.db` removes the database records, but not the
-  generated files under `application-artifacts/` themselves — those are only removed by deleting
-  that directory, or (for one attempt's files) by the app's own artifact-deletion path. Generated
-  artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
+  generated files under `application-artifacts/` themselves. Settings > Advanced > Reset
+  application data deletes all attempt rows, submission receipts, automation grants, queue ids,
+  generated files and the search profile together with saved jobs, applications, CVs and letters.
+  Generated artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
   row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
-  runs, rather than silently ignored.
+  runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they
+  are bounded per attempt by a fixed count quota, are never pruned on their own, and are deleted
+  with the attempt (`on delete cascade`).
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.
@@ -188,7 +210,7 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
 - It cannot audit or control what an installed `claude`/`codex` CLI, or an MCP provider you
   connect, does with data once it leaves this app's process — that's between you and that
   provider.
-- There is currently no built-in export or backup tool beyond copying the files above yourself; see
+- There is currently no built-in export or backup tool beyond copying the documented files yourself; see
   [docs/troubleshooting.md#backing-up-and-restoring-your-workspace](troubleshooting.md#backing-up-and-restoring-your-workspace).
 
 ## Questions or a data-handling concern

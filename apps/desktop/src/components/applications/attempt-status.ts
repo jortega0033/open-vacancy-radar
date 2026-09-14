@@ -26,6 +26,7 @@ export const ATTEMPT_CHECKPOINT_LABEL: Record<ApplicationAttemptCheckpoint, stri
   skipped: 'Skipped',
   failed: 'Failed',
   submission_unknown: 'Submission unknown',
+  user_reported: 'Reported as applied',
 };
 
 export type AttemptCheckpointTone = 'neutral' | 'success' | 'warning' | 'error';
@@ -43,6 +44,9 @@ const ATTEMPT_CHECKPOINT_TONE: Record<ApplicationAttemptCheckpoint, AttemptCheck
   skipped: 'neutral',
   failed: 'error',
   submission_unknown: 'warning',
+  // Neutral, not success: a person's own word that they applied is a real outcome, but it is not
+  // the evidence-backed `submitted` and must not be shown as if it were (#271).
+  user_reported: 'neutral',
 };
 
 export const ATTEMPT_CHECKPOINT_BADGE_CLASS: Record<ApplicationAttemptCheckpoint, string> = Object.fromEntries(

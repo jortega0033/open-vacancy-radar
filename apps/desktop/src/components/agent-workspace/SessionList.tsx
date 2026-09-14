@@ -1,4 +1,6 @@
+import emptySessionsIllustration from '../../../assets/illustrations/empty-sessions.svg?no-inline';
 import type { SessionCapacity } from '../../window.js';
+import { EmptyState } from '../shell/index.js';
 import { STATUS_BADGE_CLASS, formatInstant, provenanceLine, statusCopy } from './status.js';
 import type { SessionEntry, WorkspaceState } from './workspace-reducer.js';
 import { visibleSessionIds } from './workspace-reducer.js';
@@ -38,9 +40,11 @@ export function SessionList({ state, archived, onSelect, onSetArchived, onLoadMo
 
   if (ids.length === 0) {
     return (
-      <p className="p-3 text-sm text-base-content/60" data-testid="session-list-empty">
-        {archived ? 'No archived sessions.' : 'No agent sessions yet. Start one to see it here.'}
-      </p>
+      <EmptyState
+        illustration={emptySessionsIllustration}
+        title={archived ? 'No archived sessions' : 'No agent sessions yet'}
+        description={archived ? undefined : 'Start one to see it here.'}
+      />
     );
   }
 
@@ -107,7 +111,7 @@ function SessionRow({ entry, selected, onSelect, onToggleArchived }: SessionRowP
         <div className="mt-1.5 truncate text-sm font-medium">{provenanceLine(entry.view)}</div>
         <div className="mt-0.5 truncate text-xs text-base-content/50">{formatInstant(entry.view.startedAt)}</div>
         {streaming && (
-          <div className="mt-1 text-xs text-info" data-testid="live-indicator">
+          <div className="mt-1 text-xs text-success" data-testid="live-indicator">
             {entry.liveStatus === 'attaching' ? 'Connecting to live updates' : 'Live'}
           </div>
         )}

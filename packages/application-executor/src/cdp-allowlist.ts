@@ -20,6 +20,24 @@ export const ALLOWED_CDP_METHODS: readonly string[] = Object.freeze([
   'DOM.getBoxModel',
   'DOM.focus',
   'DOM.setFileInputFiles',
+  // #277, read-only, added one at a time with a reason (see this file's own header):
+  //
+  // `DOM.getContentQuads` returns the rendered geometry of ONE node named by `backendNodeId`, and
+  // nothing else. It is the narrowest allowed answer to the one question `dom-extract.ts` documents
+  // it cannot answer from markup alone: is this control actually laid out, or is it a stylesheet-
+  // hidden duplicate? The `hidden` attribute and `type="hidden"` are markup facts the extractor
+  // already reads; `display: none` applied by a stylesheet is not, and a page carrying a hidden
+  // decoy copy of its own form is exactly the case where filling the wrong one is invisible. This
+  // reads geometry only -- never text, never a value, never anything the page authored.
+  'DOM.getContentQuads',
+  // `Accessibility.getPartialAXTree` reads the accessibility node for ONE `backendNodeId`, which is
+  // where the browser itself publishes a control's *committed* state: the value the control really
+  // holds (not the text we asked it to insert), its checked state, whether the page marked it
+  // invalid, and the message it is describing itself with. `Accessibility.getFullAXTree` (already
+  // allowed, for whole-page reads) would answer the same question by pulling the entire third-party
+  // page's accessibility tree on every field read; the partial form is strictly narrower, so
+  // per-field read-back uses it rather than widening an existing read.
+  'Accessibility.getPartialAXTree',
   'Accessibility.getFullAXTree',
   'Input.insertText',
   'Input.dispatchKeyEvent',

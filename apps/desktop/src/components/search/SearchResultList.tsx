@@ -1,6 +1,8 @@
+import { memo, useLayoutEffect, useRef } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
-import { decisionLabel, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
+import { descriptionExcerpt, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
 
 export interface SearchResultRowProps {
   result: SearchResult;
@@ -9,17 +11,33 @@ export interface SearchResultRowProps {
   saved: boolean;
 }
 
-export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
+export const SearchResultRow = memo(function SearchResultRow({
+  result,
+  selected,
+  onSelect,
+  saved,
+}: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
+  const excerpt = descriptionExcerpt(result.description);
   // Verification has the identical "not available" tone on almost every row (the pipeline has no
   // per-employer verification step for most vacancies), so the badge would carry zero per-row
   // information there -- it is already explained once, correctly, in the detail pane. Only a real
   // per-row outcome (a possible sponsor match) earns a badge here.
+  //
+  // `decision` (the pipeline's internal `DiscoveryDecision`, e.g. `role_mismatch`) deliberately does
+  // NOT get a badge here. QA audit finding: in every populated screenshot reviewed, this read as
+  // "role mismatch" on essentially every card, which looks exactly like "this job doesn't match you"
+  // on 100% of listings to a candidate -- it is a pipeline classification, not a per-candidate match
+  // rejection, and styling it identically to the salary/employment-type chips actively misled. It
+  // already has an accurate home, unchanged, in the detail pane's Overview section ("Discovery
+  // decision" -- see `VacancyDetail.tsx`).
   const badges = [
+    // Always first: a provisional row (issue #364's live view) must never read as an ordinary,
+    // fully-final result -- it has no score and no official-source cross-reference yet.
+    result.provisional ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
-    { text: decisionLabel(result.raw.decision), tone: null },
   ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (
@@ -50,6 +68,8 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
           {result.company} · {orNotStated(result.location)}
         </div>
 
+        {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60">{excerpt}</p>}
+
         {badges.length > 0 && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             {badges.map((badge) => (
@@ -75,12 +95,12 @@ export function SearchResultRow({ result, selected, onSelect, saved }: SearchRes
             {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
             {stale ? ' (over a month old)' : ''}
           </span>
-          <span className="flex-none text-xs text-base-content/50">{result.provider}</span>
+          <span className="flex-none text-xs text-base-content/50">{discoveryProviderLabel(result.provider)}</span>
         </div>
       </div>
     </button>
   );
-}
+});
 
 export interface SearchResultListProps {
   /** Already sliced to the current page: `page * pageSize` .. `(page + 1) * pageSize`. */
@@ -96,9 +116,11 @@ export interface SearchResultListProps {
   page: number;
   pageCount: number;
   onPageChange: (page: number) => void;
+  scrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
 }
 
-export function SearchResultList({
+export const SearchResultList = memo(function SearchResultList({
   results,
   totalCount,
   selectedKey,
@@ -108,14 +130,36 @@ export function SearchResultList({
   page,
   pageCount,
   onPageChange,
+  scrollTop = 0,
+  onScrollTopChange,
 }: SearchResultListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
+  }, [scrollTop]);
+  // `flex-1` below `lg`, `flex-none` from `lg` up. `SearchPage` stacks this pane above
+  // `VacancyDetail` in a column flex below `lg` -- and the app's own default window is 1000px wide,
+  // narrower than `lg`'s 1024px, so that stacked layout is what a user gets out of the box.
+  // `VacancyDetail` is `flex-1`, i.e. `flex: 1 1 0%` (a flex basis of zero), while this pane used to
+  // be `flex: 0 1 auto`, basing itself on its own page-of-25-rows-tall content. That left the column
+  // with no free space to distribute, so the detail pane stayed at its zero basis: it rendered at
+  // zero height, below the bottom of a `<main>` that does not itself scroll, which made the entire
+  // detail view -- "Save job", "Generate Letter", the verification cards -- invisible and
+  // unclickable. Matching `VacancyDetail`'s `flex-1` gives the two panes an even split of the column
+  // instead, each scrolling internally. `lg:flex-none` restores `flex: 0 0 auto` from `lg` up, so
+  // the side-by-side layout's `lg:w-2/5`/`lg:min-w-80`/`lg:max-w-md` sizing is entirely unchanged.
   return (
-    <div className="flex min-h-0 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
+    <div className="flex min-h-0 flex-1 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:flex-none lg:border-r">
       <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 px-4 py-2 text-xs text-base-content/60">
         {summary}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        aria-label="Vacancy results"
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+      >
         {results.length === 0 ? (
           <EmptyState
             illustration={noResultsIllustration}
@@ -164,4 +208,4 @@ export function SearchResultList({
       )}
     </div>
   );
-}
+});

@@ -97,4 +97,42 @@ test.describe('Settings', () => {
       window.getByRole('group', { name: 'Density' }).getByRole('button', { name: 'Comfortable' }),
     ).toHaveAttribute('aria-pressed', 'true');
   });
+
+  test('reset application data clears records and search profile through the real bridge', async ({ window }) => {
+    await expect
+      .poll(() => window.evaluate(() => globalThis.window.agentDock.getDaemonStatus()), { timeout: 20_000 })
+      .toMatchObject({ state: 'ready' });
+
+    await window.evaluate(async () => {
+      await globalThis.window.workspace.createSavedJob({ role: 'Frontend Engineer', company: 'Example', location: 'Remote' });
+      await globalThis.window.workspace.createCvDocument({
+        name: 'Test CV',
+        kind: 'manual',
+        isDefault: true,
+        profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+      });
+      await globalThis.window.vacancyRadar.saveSearchProfile({ candidateName: 'Test User', targetRoles: ['Frontend Engineer'] });
+    });
+
+    await goto(window, 'Settings');
+    await window.getByRole('tab', { name: 'Advanced' }).click();
+    await window.getByRole('button', { name: 'Reset application data' }).click();
+    const confirm = window.getByRole('alertdialog');
+    await expect(confirm).toContainText(/public vacancy cache stays available/i);
+    await confirm.getByRole('button', { name: 'Delete everything' }).click();
+    await expect(window.getByRole('status').filter({ hasText: 'Application data reset' })).toBeVisible();
+
+    const state = await window.evaluate(async () => ({
+      savedJobs: await globalThis.window.workspace.listSavedJobs(),
+      cvs: await globalThis.window.workspace.listCvDocuments(),
+      attempts: await globalThis.window.workspace.listApplicationAttempts(),
+      grants: await globalThis.window.workspace.listAutomationGrants(),
+      profile: await globalThis.window.vacancyRadar.getSearchProfile(),
+    }));
+    expect(state.savedJobs).toEqual([]);
+    expect(state.cvs).toEqual([]);
+    expect(state.attempts).toEqual([]);
+    expect(state.grants).toEqual([]);
+    expect(state.profile).toMatchObject({ candidateName: '', targetRoles: [] });
+  });
 });

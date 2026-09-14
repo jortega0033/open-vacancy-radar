@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
+import type { ProviderId } from '@agent-dock/shared';
+import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
+import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState } from '../shell/index.js';
+import { EmptyState, ErrorBanner } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
-import { VacancyDetail, type SaveState } from './VacancyDetail.js';
+import { createSearchSessionState, type SearchSessionState } from './search-session.js';
+import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
   DEFAULT_FILTERS,
+  buildSearchResultIndex,
   employmentOptions,
-  filterResults,
+  filterSearchResultIndex,
   isWebUrl,
-  sortResults,
+  salaryCounts,
+  sortSearchResultIndex,
   sourceOptions,
+  toPartialResults,
   toWorldwideResults,
   type SearchFilters,
   type SearchResult,
@@ -30,6 +38,27 @@ type EngineState = 'checking' | 'ready' | 'unavailable';
 const PAGE_SIZE = 25;
 
 const SALARY_NOTE = 'Salary shown only where advertised';
+const BROWSE_ALL_RESULT_CAP = 5_000;
+
+function useSearchSessionField<K extends keyof SearchSessionState>(
+  session: SearchSessionState,
+  setSession: Dispatch<SetStateAction<SearchSessionState>>,
+  key: K,
+): [SearchSessionState[K], Dispatch<SetStateAction<SearchSessionState[K]>>] {
+  const setValue = useCallback<Dispatch<SetStateAction<SearchSessionState[K]>>>(
+    (action) => {
+      setSession((current) => {
+        const previous = current[key];
+        const next = typeof action === 'function'
+          ? (action as (value: SearchSessionState[K]) => SearchSessionState[K])(previous)
+          : action;
+        return Object.is(previous, next) ? current : { ...current, [key]: next };
+      });
+    },
+    [key, setSession],
+  );
+  return [session[key], setValue];
+}
 
 /**
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
@@ -87,7 +116,7 @@ export function savedJobInputFor(result: SearchResult): SavedJobInput {
  */
 function SearchLoadingSkeleton() {
   return (
-    <div className="mt-3 flex min-h-0 flex-1 flex-col lg:flex-row" aria-hidden="true">
+    <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0" aria-hidden="true">
       <div className="flex flex-none flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
         {Array.from({ length: 6 }, (_, index) => (
           <div key={index} className="ovr-row space-y-2 border-b border-base-300 px-4">
@@ -119,15 +148,9 @@ function SearchLoadingSkeleton() {
  * pipeline last produced and never starts a network scan on its own. Scanning hits real external
  * feeds and can take a couple of minutes, so it is always something the user asked for.
  *
- * Filtering (role/keyword, location, chips) is entirely client-side over the loaded report, but
- * deliberately does not apply as those fields change: the form fields are a draft (`filters`)
- * separate from what's actually driving the list (`appliedFilters`), and only clicking "Search"
- * (or pressing Enter in a text field) commits the draft and re-scans. The one "Search" button is
- * the single, always-the-same action for both applying the form and going to get fresh data,
- * whether or not a report is already loaded -- there is deliberately no second "just filter" vs.
- * "rescan" button, which used to be confusing (one of the two did nothing once a report existed).
- * "Clear filters" is the one exception: it resets and re-applies immediately, since an explicit
- * reset needs no confirmation click of its own.
+ * Role, location, and employment controls are draft scan criteria. A successful scan installs
+ * their snapshot with its report; failure leaves the prior applied criteria intact. Result-only
+ * refinements such as source and posted date filter the loaded report immediately.
  */
 export interface SearchPageProps {
   /**
@@ -137,66 +160,115 @@ export interface SearchPageProps {
    * supplied.
    */
   onGenerateLetter?: (vacancy: SelectedVacancy) => void;
+  onOpenSearchProfile?: () => void;
+  onSavedJobsChanged?: () => void;
+  onViewApplicationAttempt?: (attemptId: string) => void;
+  preferredSelectedKey?: string | null;
+  session?: SearchSessionState;
+  onSessionChange?: Dispatch<SetStateAction<SearchSessionState>>;
 }
 
-export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
+export function SearchPage({
+  onGenerateLetter,
+  onOpenSearchProfile,
+  onSavedJobsChanged,
+  onViewApplicationAttempt,
+  preferredSelectedKey = null,
+  session: controlledSession,
+  onSessionChange,
+}: SearchPageProps = {}) {
+  const [localSession, setLocalSession] = useState(createSearchSessionState);
+  const session = controlledSession ?? localSession;
+  const setSession = onSessionChange ?? setLocalSession;
   const [engineState, setEngineState] = useState<EngineState>('checking');
   const [engineError, setEngineError] = useState<string>();
 
-  const [worldwideReport, setWorldwideReport] = useState<GlobalRemoteReport | null>(null);
+  const [worldwideReport, setWorldwideReport] = useSearchSessionField(session, setSession, 'report');
+  const [reportHydrated, setReportHydrated] = useSearchSessionField(session, setSession, 'reportHydrated');
+  const [settingsHydrated, setSettingsHydrated] = useSearchSessionField(session, setSession, 'settingsHydrated');
   // Whether the stored report has already been read once. A pipeline that has never been run
   // legitimately answers `null`, so "did we ask?" cannot be inferred from the report state itself.
-  const hasHydrated = useRef(false);
+  const hasHydrated = useRef(reportHydrated);
+  // Every hydration or scan completion owns one generation. A slower, older request may finish,
+  // but it cannot replace state installed by the newer owner.
+  const reportRequestGenerationRef = useRef(0);
+  const hadPendingScanOnMountRef = useRef(session.pendingScanFilters !== null);
   // Settings hydration (the persisted default country) is async, so the user can already have
   // changed the country filter by the time it lands. Restoring the persisted default at that point
   // would clobber a selection the user already made, so hydration only ever writes the filter if
   // the user hasn't touched it yet.
   const hasEditedLocationRef = useRef(false);
 
-  // `filters` is the draft the form fields are bound to; `appliedFilters` is what actually drives
-  // `visible` below. They only sync on an explicit Search (or Clear) -- see the class doc comment.
-  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
-  const [appliedFilters, setAppliedFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
+  // `filters` is editable form state; `appliedFilters` drives the current report. Local-only
+  // refinements sync immediately, while scan criteria commit with a successful report.
+  const [filters, setFilters] = useSearchSessionField(session, setSession, 'filters');
+  const [appliedFilters, setAppliedFilters] = useSearchSessionField(session, setSession, 'appliedFilters');
+  const [, setPendingScanFilters] = useSearchSessionField(session, setSession, 'pendingScanFilters');
 
   useEffect(() => {
+    if (settingsHydrated) return;
     let cancelled = false;
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (cancelled || hasEditedLocationRef.current) return;
+        if (cancelled) return;
         // Mirrors Settings' own "Default search location" selector: a persisted country pre-fills
         // the same country filter this page's own selector writes to, so opening the page for the
         // first time already reflects that choice.
-        if (settings.defaultLocation) {
-          const withCountry = { ...DEFAULT_FILTERS, country: settings.defaultLocation };
-          setFilters(withCountry);
-          setAppliedFilters(withCountry);
+        if (!hasEditedLocationRef.current && settings.defaultLocation) {
+          setFilters((current) => ({ ...current, country: settings.defaultLocation }));
+          setAppliedFilters((current) => ({ ...current, country: settings.defaultLocation }));
         }
+        setSettingsHydrated(true);
       })
       .catch(() => {
         // default filters (already applied) stand
+        if (!cancelled) setSettingsHydrated(true);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setAppliedFilters, setFilters, setSettingsHydrated, settingsHydrated]);
 
   const [hydrating, setHydrating] = useState(true);
   const [loadError, setLoadError] = useState<string>();
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string>();
+  const [scanGuard, setScanGuard] = useState<string>();
+  const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
+  // User opt-out from the live view during an active rescan that already has a saved report loaded
+  // (issue #364): reset to `false` -- i.e. default to live -- at the start of every scan, so a fresh
+  // rescan always shows its own progress first, with an explicit way back to the saved report.
+  const [viewingSaved, setViewingSaved] = useState(false);
+  const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
+  const [searchProfileError, setSearchProfileError] = useState<string>();
 
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [assistantForKey, setAssistantForKey] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
+  // used only while no final report is loaded yet (see `results` below). Reset whenever this page
+  // itself starts a fresh scan; otherwise left to accumulate for as long as the page stays mounted.
+  // A page that (re)mounts mid-scan starts empty here and just waits for the next progress event or
+  // the scan's own completion, rather than replaying rows a previous mount already saw -- see
+  // `onScanProgress`'s own doc comment on `VacancyRadarBridge` for that trade-off.
+  const [partialVacancies, setPartialVacancies] = useSearchSessionField(session, setSession, 'partialVacancies');
+
+  const [selectedKey, setSelectedKey] = useSearchSessionField(session, setSession, 'selectedKey');
+  const [assistantForKey, setAssistantForKey] = useSearchSessionField(session, setSession, 'assistantForKey');
+  const [page, setPage] = useSearchSessionField(session, setSession, 'page');
   // Collapsed by default: which sources came back partial/incomplete is useful detail, not
   // something worth greeting every search with a wall of amber text for.
-  const [sourceWarningsOpen, setSourceWarningsOpen] = useState(false);
+  const [sourceWarningsOpen, setSourceWarningsOpen] = useSearchSessionField(session, setSession, 'sourceWarningsOpen');
+  const [listScrollTop, setListScrollTop] = useSearchSessionField(session, setSession, 'listScrollTop');
+  const [detailScrollTop, setDetailScrollTop] = useSearchSessionField(session, setSession, 'detailScrollTop');
 
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const [saveStates, setSaveStates] = useState<Record<string, SaveState>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
+  const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
+  // Which CLI the gap-analysis offer below actually runs through, so its copy names the real
+  // provider instead of assuming Claude Code. A failure here just leaves that default in place.
+  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -242,27 +314,29 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     }
 
     let cancelled = false;
+    const requestGeneration = ++reportRequestGenerationRef.current;
     setHydrating(true);
     setLoadError(undefined);
 
     void (async () => {
       try {
         const report = await window.vacancyRadar.getReport();
-        if (cancelled) return;
+        if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
         setWorldwideReport(report);
         hasHydrated.current = true;
+        setReportHydrated(true);
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || requestGeneration !== reportRequestGenerationRef.current) return;
         setLoadError(describeError(error, 'could not load the report'));
       } finally {
-        if (!cancelled) setHydrating(false);
+        if (!cancelled && requestGeneration === reportRequestGenerationRef.current) setHydrating(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [reloadTick]);
+  }, [reloadTick, setReportHydrated, setWorldwideReport]);
 
   const retryLoad = useCallback(() => {
     hasHydrated.current = false;
@@ -276,12 +350,33 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   // collision in `runScan` below) and must not each own an independent, only-sometimes-cleaned-up
   // timer.
   const unmountedRef = useRef(false);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
       unmountedRef.current = true;
-    },
-    [],
-  );
+    };
+  }, []);
+
+  /**
+   * Subscribes to `vacancy:scan-progress` for the lifetime of this mount (issue #252), accumulating
+   * each source's freshly discovered rows into `partialVacancies` -- deduplicated on `key`, since a
+   * source can in principle appear more than once across a run's own retries and the same vacancy
+   * must not render twice. Always subscribed, not just while `scanning` is true: this is what lets a
+   * page that (re)mounts onto a scan already in flight pick up the *rest* of that scan's progress
+   * events as they arrive, rather than only its final completion via `waitForScanToFinish`'s poll
+   * (rows from before this mount are not replayed -- see `partialVacancies`'s own doc comment).
+   * Unsubscribing on unmount is what keeps a navigate-away-and-back cycle at exactly one live
+   * listener rather than accumulating one per mount.
+   */
+  useEffect(() => {
+    return window.vacancyRadar.onScanProgress((event) => {
+      setPartialVacancies((current) => {
+        const seen = new Set(current.map((vacancy) => vacancy.key));
+        const additions = event.vacancies.filter((vacancy) => !seen.has(vacancy.key));
+        return additions.length > 0 ? [...current, ...additions] : current;
+      });
+    });
+  }, []);
 
   /**
    * Polls until a scan this page did not itself start (or lost the race to start) finishes, then
@@ -292,38 +387,67 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
    * only way the page can ever stop looking idle/failed while a scan it knows nothing else about
    * is genuinely still running.
    */
-  const waitForScanToFinish = useCallback(function poll() {
-    void (async () => {
-      try {
-        const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
-        if (unmountedRef.current) return;
-        if (stillScanning) {
-          setTimeout(poll, 3000);
-          return;
+  const waitForScanToFinish = useCallback((requestedGeneration?: number) => {
+    const requestGeneration = requestedGeneration ?? ++reportRequestGenerationRef.current;
+    const poll = (): void => {
+      void (async () => {
+        try {
+          const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
+          if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
+          if (stillScanning) {
+            setTimeout(poll, 3000);
+            return;
+          }
+          // Finished, successfully or not; either way `getReport()` reflects the true current
+          // state, so pick that up rather than staying on whatever was loaded (or not) before.
+          const report = await window.vacancyRadar.getReport();
+          if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
+          setSession((current) => {
+            const reportChanged =
+              (report?.runId ?? null) !== (current.report?.runId ?? null) ||
+              (report?.generatedAt ?? null) !== (current.report?.generatedAt ?? null);
+            if (!reportChanged) {
+              return current.pendingScanFilters === null && current.reportHydrated
+                ? current
+                : { ...current, pendingScanFilters: null, reportHydrated: true };
+            }
+            return {
+              ...current,
+              report,
+              reportHydrated: true,
+              appliedFilters: current.pendingScanFilters ?? current.appliedFilters,
+              pendingScanFilters: null,
+              selectedKey: null,
+              page: 0,
+              listScrollTop: 0,
+              detailScrollTop: 0,
+            };
+          });
+          hasHydrated.current = true;
+          // The real, final report is now the source of truth (see `results` below); provisional
+          // rows from this run have served their purpose and stop being retained.
+          setPartialVacancies([]);
+          setScanning(false);
+        } catch {
+          // A failed status check just stops reattaching; it does not invent a scan failure for a
+          // scan this page never itself started and has no error message for.
+          if (!unmountedRef.current && requestGeneration === reportRequestGenerationRef.current) setScanning(false);
         }
-        // Finished, successfully or not; either way `getReport()` reflects the true current
-        // state, so pick that up rather than staying on whatever was loaded (or not) before.
-        setScanning(false);
-        const report = await window.vacancyRadar.getReport();
-        if (unmountedRef.current) return;
-        setWorldwideReport(report);
-        hasHydrated.current = true;
-      } catch {
-        // A failed status check just stops reattaching; it does not invent a scan failure for a
-        // scan this page never itself started and has no error message for.
-        if (!unmountedRef.current) setScanning(false);
-      }
-    })();
-  }, []);
+      })();
+    };
+    poll();
+  }, [setPartialVacancies, setSession]);
 
   // Reattaches to a scan already running when this page mounts (see `waitForScanToFinish` above).
   useEffect(() => {
     void (async () => {
       try {
         const { scanning: alreadyScanning } = await window.vacancyRadar.getScanStatus();
-        if (unmountedRef.current || !alreadyScanning) return;
-        setScanning(true);
-        waitForScanToFinish();
+        if (unmountedRef.current) return;
+        if (alreadyScanning || hadPendingScanOnMountRef.current) {
+          setScanning(true);
+          waitForScanToFinish();
+        }
       } catch {
         // No status available (e.g. engine not initialized yet): nothing to reattach to.
       }
@@ -335,31 +459,39 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
    * which the mount-time reattachment effect above does not cover -- that effect runs once, only
    * on mount, and only reattaches when a scan is *still* running; it does nothing for one that
    * already finished while hidden, so showing the window again would otherwise keep displaying a
-   * stale report. On `visibilitychange` to `'visible'`, unconditionally re-fetch the report by
-   * resetting `hasHydrated` and bumping `reloadTick` (re-running the hydration effect above), and
-   * separately re-check scan status to re-arm the "Scanning..." banner if one is still running.
-   * The two checks are independent, not one replacing the other: a finished scan's result and a
-   * still-running scan's status are different questions.
+   * stale report. On `visibilitychange` to `'visible'`, check cheap scan/report metadata first:
+   * if the latest report is unchanged, keep the current 20k-row collection in place and avoid the
+   * heavy `getReport()` transfer/recompute path.
    */
   useEffect(() => {
     function onVisibilityChange(): void {
       if (document.visibilityState !== 'visible') return;
-      hasHydrated.current = false;
-      setReloadTick((tick) => tick + 1);
       void (async () => {
         try {
           const { scanning: stillScanning } = await window.vacancyRadar.getScanStatus();
-          if (unmountedRef.current || !stillScanning) return;
-          setScanning(true);
-          waitForScanToFinish();
+          if (unmountedRef.current) return;
+          if (stillScanning) {
+            setScanning(true);
+            waitForScanToFinish();
+            return;
+          }
+          const summary = await window.vacancyRadar.getReportSummary();
+          if (unmountedRef.current) return;
+          const currentRunId = worldwideReport?.runId ?? null;
+          const currentGeneratedAt = worldwideReport?.generatedAt ?? null;
+          if ((summary?.runId ?? null) === currentRunId && (summary?.generatedAt ?? null) === currentGeneratedAt) {
+            return;
+          }
+          hasHydrated.current = false;
+          setReloadTick((tick) => tick + 1);
         } catch {
-          // No status available: nothing to reattach to.
+          // No status/summary available: keep the current report instead of forcing a large reload.
         }
       })();
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [waitForScanToFinish]);
+  }, [waitForScanToFinish, worldwideReport?.generatedAt, worldwideReport?.runId]);
 
   // Which vacancies are already in the workspace, so a row can say "Saved" rather than offering a
   // duplicate. A failure here is not worth an error banner: it costs a label, not a capability.
@@ -397,12 +529,77 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
     };
   }, []);
 
-  const results = useMemo<SearchResult[]>(
-    () => (worldwideReport ? sortResults(toWorldwideResults(worldwideReport)) : []),
+  useEffect(() => {
+    let cancelled = false;
+    void window.workspace
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) setDefaultProvider(settings.defaultProvider);
+      })
+      .catch(() => {
+        // the card falls back to the Claude Code default
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.vacancyRadar
+      .getSearchProfile()
+      .then((loaded) => {
+        if (!cancelled) {
+          setSearchProfile(loaded);
+          setSearchProfileError(undefined);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSearchProfile(null);
+          setSearchProfileError(describeError(error, 'could not load the search profile'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const hasReport = worldwideReport !== null;
+  const liveProgressCount = partialVacancies.length;
+  const hasLiveRows = liveProgressCount > 0;
+  // Whether the currently displayed list is the scan's own live/provisional rows rather than the
+  // saved report (issue #364). Two cases:
+  //  - No saved report exists yet: live rows are shown as soon as any arrive, same as before #364.
+  //  - A saved report is already loaded: a rescan's live rows now replace the visible list the
+  //    moment the first one arrives too, rather than staying hidden behind a "N have arrived" count
+  //    for the whole scan -- `viewingSaved` is the explicit, user-driven way back to the saved
+  //    report without waiting for the rescan to finish.
+  const showLiveResults = hasLiveRows && (!hasReport || (scanning && !viewingSaved));
+
+  // While no live rows are being shown, fall back to the saved report if one exists, or to nothing.
+  // This never merges partial rows into a loaded report: the final displayed list, once a real
+  // `GlobalRemoteReport` is in view, is exactly what a non-streaming scan would have shown,
+  // byte-for-byte.
+  const results = useMemo<SearchResult[]>(() => {
+    if (showLiveResults) return toPartialResults(partialVacancies);
+    if (worldwideReport) return toWorldwideResults(worldwideReport);
+    return [];
+  }, [showLiveResults, worldwideReport, partialVacancies]);
+
+  // The saved report's own rows, independent of whichever view is currently on screen -- drives
+  // report-level messaging (e.g. "this report has no scores yet") that must stay about the saved
+  // report even while the live view is what's actually rendered.
+  const savedResults = useMemo<SearchResult[]>(
+    () => (worldwideReport ? toWorldwideResults(worldwideReport) : []),
     [worldwideReport],
   );
 
-  const visible = useMemo(() => filterResults(results, appliedFilters), [results, appliedFilters]);
+  const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
+  const visible = useMemo(
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, appliedFilters)),
+    [resultIndex, appliedFilters],
+  );
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const pageItems = useMemo(
@@ -413,44 +610,127 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
   const sources = useMemo(() => sourceOptions(results), [results]);
   const employmentTypes = useMemo(() => employmentOptions(results), [results]);
 
-  // A new filtered set (a fresh search or a rescan) always starts back on page one: a page index
-  // left over from a longer previous list could point past the end of a shorter new one.
+  // Revalidate restored view state together. If a newer report removed the selected vacancy or
+  // shortened the result set, the detail pane follows the first row on the surviving page.
   useEffect(() => {
-    setPage(0);
-  }, [visible]);
+    setSession((current) => {
+      let nextPage = Math.min(current.page, pageCount - 1);
+      let nextSelectedKey = current.selectedKey;
+      const preferredIndex = preferredSelectedKey
+        ? visible.findIndex((result) => result.key === preferredSelectedKey)
+        : -1;
 
-  // Keep the selection on a row that is actually in the list, so the detail pane and the list can
-  // never disagree about what is selected after a filter change or a rescan.
-  useEffect(() => {
-    if (visible.length === 0) {
-      setSelectedKey(null);
-      return;
-    }
-    setSelectedKey((current) =>
-      current && visible.some((result) => result.key === current) ? current : visible[0]!.key,
-    );
-  }, [visible]);
+      if (preferredIndex >= 0) {
+        nextPage = Math.floor(preferredIndex / PAGE_SIZE);
+        nextSelectedKey = preferredSelectedKey;
+      } else if (!nextSelectedKey || !visible.some((result) => result.key === nextSelectedKey)) {
+        nextSelectedKey = visible[nextPage * PAGE_SIZE]?.key ?? visible[0]?.key ?? null;
+      }
+
+      const pageChanged = nextPage !== current.page;
+      const selectionChanged = nextSelectedKey !== current.selectedKey;
+      if (!pageChanged && !selectionChanged) return current;
+      return {
+        ...current,
+        page: nextPage,
+        selectedKey: nextSelectedKey,
+        listScrollTop: pageChanged ? 0 : current.listScrollTop,
+        detailScrollTop: selectionChanged ? 0 : current.detailScrollTop,
+        assistantForKey: selectionChanged ? null : current.assistantForKey,
+      };
+    });
+  }, [pageCount, preferredSelectedKey, setSession, visible]);
 
   const selected = useMemo(
     () => visible.find((result) => result.key === selectedKey) ?? null,
     [visible, selectedKey],
   );
 
-  const profileNotConfigured = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
-  const sourceWarnings = worldwideReport?.discoverySources.filter((source) => source.status !== 'success') ?? [];
-  const hasReport = worldwideReport !== null;
+  const reportHasOnlyUnscoredRows =
+    worldwideReport !== null && savedResults.length > 0 && savedResults.every((r) => r.profileScore === null);
+  const currentProfileConfigured =
+    searchProfile !== null && (searchProfile.targetRoles.length > 0 || searchProfile.strongestSkills.length > 0);
+  const currentProfileScanQuery =
+    searchProfile?.targetRoles.find((role) => role.trim())?.trim() ??
+    searchProfile?.strongestSkills.find((skill) => skill.trim())?.trim() ??
+    '';
+  const profileNotConfigured = reportHasOnlyUnscoredRows && searchProfile !== null && !currentProfileConfigured;
+  const reportNeedsRescore = reportHasOnlyUnscoredRows && currentProfileConfigured;
+  const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
+  const sourceWarnings =
+    worldwideReport?.discoverySources.filter((source) => source.status !== 'success' || source.complete === false) ?? [];
+  const scanBounds = worldwideReport?.scanBounds;
+  const scanIncomplete = scanBounds?.complete === false;
+  // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
+  // both the "not final" messaging and gating of report-only actions like Prepare application.
+  // Deliberately never checks `profileNotConfigured` (which requires a real report): a streaming
+  // row's null `profileScore` is expected and temporary, never "profile not configured".
+  const isStreamingPartial = showLiveResults;
   const busy = hydrating || scanning;
 
-  const runScan = useCallback(async () => {
+  const runScan = useCallback(async (queryOverride?: string) => {
+    const scanFilters = queryOverride === undefined ? filters : { ...filters, query: queryOverride };
+    const query = scanFilters.query.trim();
+    if (!query) {
+      setScanning(false);
+      setScanError(undefined);
+      setScanGuard('Add a role or keyword before starting a new worldwide scan.');
+      return;
+    }
+    const salaryMinimum = scanFilters.salaryMinimum ?? '';
+    try {
+      parseMinimumAnnualSalary(salaryMinimum);
+    } catch (error) {
+      setScanError(describeError(error, 'invalid minimum annual salary'));
+      return;
+    }
+    const requestGeneration = ++reportRequestGenerationRef.current;
     setScanning(true);
     setScanError(undefined);
+    setScanGuard(undefined);
     setLoadError(undefined);
+    setPendingScanFilters(scanFilters);
+    // A fresh scan this page itself starts has no partial rows yet -- clear whatever an earlier
+    // run (or an earlier mount's now-gone accumulation) left behind, so a rescan's own progress
+    // events build a clean list rather than mixing in a previous run's provisional rows.
+    setPartialVacancies([]);
+    // Every new scan defaults back to its own live view (issue #364), not whatever the user had
+    // chosen for a previous rescan.
+    setViewingSaved(false);
     try {
-      setWorldwideReport(await window.vacancyRadar.runScan(filters.query));
+      const report = await window.vacancyRadar.runScan({
+        mode: 'query',
+        query,
+        ...(scanFilters.country !== 'all' ? { country: scanFilters.country } : {}),
+        ...(scanFilters.employment !== 'any' ? { employment: scanFilters.employment } : {}),
+        ...(salaryMinimum.trim()
+          ? {
+              salary: {
+                minimumAnnual: salaryMinimum,
+                currency: scanFilters.salaryCurrency ?? 'EUR',
+                includeUnknown: scanFilters.includeUnknownSalary ?? true,
+              },
+            }
+          : {}),
+      });
+      if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
+      setSession((current) => ({
+        ...current,
+        report,
+        reportHydrated: true,
+        appliedFilters: current.pendingScanFilters ?? current.appliedFilters,
+        pendingScanFilters: null,
+        selectedKey: null,
+        page: 0,
+        listScrollTop: 0,
+        detailScrollTop: 0,
+      }));
       hasHydrated.current = true;
       setScanning(false);
+      setPartialVacancies([]);
     } catch (error) {
       const message = describeError(error, 'scan failed');
+      if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       // The reattachment effect above disables Search while a scan (including one from before
       // this page mounted) is already running, so this should be unreachable in normal use. It
       // survives as a safety net for a narrow race (e.g. a scan started by another process just
@@ -458,49 +738,120 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
       // scan to finish, rather than reporting this attempt's own rejection as "scan failed", which
       // would read as this attempt having broken something.
       if (message.includes('already running')) {
-        waitForScanToFinish();
+        waitForScanToFinish(requestGeneration);
       } else {
+        setPendingScanFilters(null);
         setScanning(false);
         setScanError(message);
       }
     }
-  }, [filters.query, waitForScanToFinish]);
+  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
-  // "Search" commits the draft filters (so the list reflects exactly what the form currently
-  // shows) and goes to get fresh data, whether or not a report already exists -- there is
-  // deliberately no separate "just filter" vs. "rescan" action any more (the two used to be
-  // different buttons, one of which did nothing once a report was loaded, which read as a dead
-  // control rather than a real second action).
+  const runBrowseAllScan = useCallback(async () => {
+    const requestGeneration = ++reportRequestGenerationRef.current;
+    setConfirmBrowseAll(false);
+    setScanning(true);
+    setScanError(undefined);
+    setScanGuard(undefined);
+    setLoadError(undefined);
+    setPendingScanFilters(filters);
+    setPartialVacancies([]);
+    setViewingSaved(false);
+    try {
+      const report = await window.vacancyRadar.runScan({ mode: 'browse_all' });
+      if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
+      setSession((current) => ({
+        ...current,
+        report,
+        reportHydrated: true,
+        appliedFilters: current.pendingScanFilters ?? current.appliedFilters,
+        pendingScanFilters: null,
+        selectedKey: null,
+        page: 0,
+        listScrollTop: 0,
+        detailScrollTop: 0,
+      }));
+      hasHydrated.current = true;
+      setScanning(false);
+      setPartialVacancies([]);
+    } catch (error) {
+      const message = describeError(error, 'scan failed');
+      if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
+      if (message.includes('already running')) {
+        waitForScanToFinish(requestGeneration);
+      } else {
+        setPendingScanFilters(null);
+        setScanning(false);
+        setScanError(message);
+      }
+    }
+  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+
+  const handleRescore = useCallback(() => {
+    const query = currentProfileScanQuery;
+    if (!query) return;
+    const nextFilters = { ...filters, query };
+    setFilters(nextFilters);
+    void runScan(query);
+  }, [currentProfileScanQuery, filters, runScan, setFilters]);
+
+  // Commits the current draft only when the upstream refresh succeeds and installs its report.
   const handleSearch = useCallback(() => {
-    setAppliedFilters(filters);
     void runScan();
-  }, [filters, runScan]);
+  }, [runScan]);
 
-  const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+  const handleBrowseAll = useCallback(() => {
+    setConfirmBrowseAll(true);
   }, []);
 
-  /** The filter bar's country selector: a plain, instant, client-side filter over whatever is
-   * already loaded. Moving off "Netherlands" also clears `sponsorOnly`: that checkbox is hidden
-   * for every other country (the engine never attempts the check outside Netherlands), so a
-   * value left on here would silently keep narrowing the list with no visible control to undo it. */
+  const handleFiltersChange = useCallback((patch: Partial<SearchFilters>) => {
+    if (typeof patch.query === 'string' && patch.query.trim()) setScanGuard(undefined);
+    setFilters((current) => ({ ...current, ...patch }));
+    const changesScanCriteria =
+      patch.query !== undefined ||
+      patch.country !== undefined ||
+      patch.employment !== undefined ||
+      patch.salaryMinimum !== undefined ||
+      patch.salaryCurrency !== undefined ||
+      patch.includeUnknownSalary !== undefined;
+    if (changesScanCriteria) return;
+    setAppliedFilters((current) => ({ ...current, ...patch }));
+    setPendingScanFilters((current) => (current ? { ...current, ...patch } : null));
+    setPage(0);
+    setListScrollTop(0);
+  }, [setAppliedFilters, setFilters, setListScrollTop, setPage, setPendingScanFilters]);
+
+  /** Country is a draft scan criterion. Moving off Netherlands also clears the hidden sponsor-only
+   * refinement in applied state so it cannot keep narrowing results invisibly. */
   const handleLocationChange = useCallback((value: string) => {
     hasEditedLocationRef.current = true;
     const patch = value === 'Netherlands' ? { country: value } : { country: value, sponsorOnly: false };
     setFilters((current) => ({ ...current, ...patch }));
-    setAppliedFilters((current) => ({ ...current, ...patch }));
-  }, []);
+    if (value !== 'Netherlands') {
+      setAppliedFilters((current) => ({ ...current, sponsorOnly: false }));
+      setPendingScanFilters((current) => (current ? { ...current, sponsorOnly: false } : null));
+    }
+  }, [setAppliedFilters, setFilters, setPendingScanFilters]);
 
   // The one filter action that applies immediately, with no separate Search click: an explicit
   // reset is already a deliberate commitment, not a still-being-typed draft.
   const handleClearFilters = useCallback(() => {
-    setFilters(DEFAULT_FILTERS);
-    setAppliedFilters(DEFAULT_FILTERS);
-  }, []);
+    setSession((current) => ({
+      ...current,
+      filters: { ...DEFAULT_FILTERS },
+      appliedFilters: { ...DEFAULT_FILTERS },
+      pendingScanFilters: null,
+      selectedKey: null,
+      page: 0,
+      listScrollTop: 0,
+      detailScrollTop: 0,
+    }));
+  }, [setSession]);
 
   const handleSelect = useCallback((result: SearchResult) => {
     setSelectedKey(result.key);
-  }, []);
+    setDetailScrollTop(0);
+  }, [setDetailScrollTop, setSelectedKey]);
 
   const handleSave = useCallback(async () => {
     if (!selected) return;
@@ -514,170 +865,338 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
       await window.workspace.createSavedJob(savedJobInputFor(selected));
       setSaveStates((current) => ({ ...current, [key]: 'saved' }));
       setSavedKeys((current) => new Set(current).add(key));
+      onSavedJobsChanged?.();
     } catch (error) {
       setSaveStates((current) => ({ ...current, [key]: 'idle' }));
       setSaveErrors((current) => ({ ...current, [key]: describeError(error, 'could not save this job') }));
     }
-  }, [selected]);
+  }, [onSavedJobsChanged, selected]);
 
   const handleGenerateLetter = useCallback(() => {
     if (!selected) return;
     onGenerateLetter?.(selectedVacancyFor(selected));
   }, [selected, onGenerateLetter]);
 
+  const handlePrepare = useCallback(async () => {
+    // Gated on the selected row's own `provisional` flag, not the page-level scanning state
+    // (issue #363): a provisional row must never start application preparation, whether it's
+    // provisional because no report has loaded yet or because the user is viewing a rescan's live
+    // rows while an old report still exists.
+    if (!selected || selected.provisional) return;
+    const key = selected.key;
+    setPrepareStates((current) => ({ ...current, [key]: 'preparing' }));
+    setPrepareErrors((current) => {
+      const { [key]: _removed, ...rest } = current;
+      return rest;
+    });
+    try {
+      const result = await window.applicationPipeline.startFromVacancy(key);
+      if (!result.ok || !result.attemptId) {
+        throw new Error(result.detail ?? 'could not prepare this application');
+      }
+      setSavedKeys((current) => new Set(current).add(key));
+      setSaveStates((current) => ({ ...current, [key]: 'saved' }));
+      onSavedJobsChanged?.();
+      onViewApplicationAttempt?.(result.attemptId);
+    } catch (error) {
+      setPrepareErrors((current) => ({
+        ...current,
+        [key]: describeError(error, 'could not prepare this application'),
+      }));
+    } finally {
+      setPrepareStates((current) => ({ ...current, [key]: 'idle' }));
+    }
+  }, [onSavedJobsChanged, onViewApplicationAttempt, selected]);
+
   const saveState: SaveState = selected
     ? (saveStates[selected.key] ?? (savedKeys.has(selected.key) ? 'saved' : 'idle'))
     : 'idle';
   const saveError = selected ? saveErrors[selected.key] : undefined;
+  const prepareState: PrepareState = selected ? (prepareStates[selected.key] ?? 'idle') : 'idle';
+  const prepareError = selected ? prepareErrors[selected.key] : undefined;
 
   // The count of what is actually shown after filtering, not the raw size of the loaded report:
   // the latter isn't a number a user can do anything with here (there is no "browse everything"
   // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
   // rather than useful context.
-  const summary = hasReport
-    ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}`
-    : 'No report loaded';
+  const reportSalaryCounts = useMemo(() => salaryCounts(results, appliedFilters), [appliedFilters, results]);
+  const salaryNote = appliedFilters.salaryMinimum?.trim()
+    ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
+    : SALARY_NOTE;
+
+  const summary =
+    hasReport || isStreamingPartial
+      ? `${visible.length} ${visible.length === 1 ? 'vacancy' : 'vacancies'}${isStreamingPartial ? ' so far' : ''}`
+      : 'No report loaded';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <SearchFilterBar
-        onLocationChange={handleLocationChange}
-        filters={filters}
-        onFiltersChange={handleFiltersChange}
-        onSearch={handleSearch}
-        onClear={handleClearFilters}
-        sources={sources}
-        employmentTypes={employmentTypes}
-        busy={busy}
-        salaryNote={SALARY_NOTE}
-      />
+      <div className="px-6">
+        <SearchFilterBar
+          onLocationChange={handleLocationChange}
+          filters={filters}
+          onFiltersChange={handleFiltersChange}
+          onSearch={handleSearch}
+          onBrowseAll={handleBrowseAll}
+          onClear={handleClearFilters}
+          sources={sources}
+          employmentTypes={employmentTypes}
+          busy={busy}
+          salaryNote={salaryNote}
+          hasReport={hasReport}
+        />
+      </div>
 
-      <div className="flex-none">
+      <div className="flex-none px-6">
         {engineState === 'unavailable' && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>
-              Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still
-              be shown, but no new scan can run.
-            </span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={retryEngineCheck}
-              disabled={checkingEngine}
-            >
-              {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-              Retry
-            </button>
-          </div>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={retryEngineCheck}
+                disabled={checkingEngine}
+              >
+                {checkingEngine && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                Retry
+              </button>
+            }
+          >
+            Vacancy engine unavailable: {engineError ?? 'unknown error'}. Stored reports may still be
+            shown, but no new scan can run.
+          </ErrorBanner>
         )}
         {scanning && (
-          <div className="alert alert-info alert-soft mt-3 text-sm">
+          <div className="alert alert-info mt-3 flex items-center gap-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            Scanning live sources: this hits real external APIs and feeds, and can take anywhere
-            from about ten seconds up to a couple of minutes. The app is not frozen.
+            <span className="flex-1">
+              {showLiveResults
+                ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
+                : hasReport
+                ? `Scanning live sources in the background. The list below is your saved report filtered locally${hasLiveRows ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when you choose to view them, or when the scan finishes.`
+                : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
+            </span>
+            {hasReport && hasLiveRows && (
+              <button
+                type="button"
+                className="btn btn-outline btn-xs flex-none"
+                onClick={() => setViewingSaved((current) => !current)}
+              >
+                {showLiveResults ? 'View saved report' : `View live results (${liveProgressCount.toLocaleString()})`}
+              </button>
+            )}
           </div>
         )}
         {scanError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>Scan failed: {scanError}</span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={() => void runScan()}
-              disabled={busy}
-            >
-              Retry
-            </button>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={() => void runScan()}
+                disabled={busy}
+              >
+                Retry
+              </button>
+            }
+          >
+            Scan failed: {scanError}
+          </ErrorBanner>
+        )}
+        {scanGuard && (
+          <div className="alert alert-warning alert-soft mt-3 flex items-center justify-between gap-3 text-sm" role="alert">
+            <span>{scanGuard}</span>
+            {hasReport && (
+              <button
+                type="button"
+                className="btn btn-warning btn-sm"
+                onClick={() => {
+                  setAppliedFilters(filters);
+                  setPage(0);
+                  setListScrollTop(0);
+                  setDetailScrollTop(0);
+                  setScanGuard(undefined);
+                }}
+              >
+                Browse saved report
+              </button>
+            )}
+          </div>
+        )}
+        {scanIncomplete && (
+          <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+            {scanBounds.completenessReason ??
+              `Browse-all scan is capped at ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} rows, so this report is not exhaustive.`}
           </div>
         )}
         {loadError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
-            <span>{loadError}</span>
-            <button
-              type="button"
-              className="btn btn-outline btn-xs ml-auto flex-none"
-              onClick={retryLoad}
-              disabled={busy}
-            >
-              Retry
-            </button>
-          </div>
+          <ErrorBanner
+            className="mt-3"
+            action={
+              <button
+                type="button"
+                className="btn btn-outline btn-xs ml-auto flex-none"
+                onClick={retryLoad}
+                disabled={busy}
+              >
+                Retry
+              </button>
+            }
+          >
+            {loadError}
+          </ErrorBanner>
         )}
       </div>
 
       {hydrating && !hasReport ? (
         <>
-          <div className="alert alert-info alert-soft mt-3 text-sm">
+          <div className="alert alert-info mx-6 mt-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             Loading the latest report…
           </div>
           <SearchLoadingSkeleton />
         </>
-      ) : scanning && !hasReport ? (
+      ) : scanning && !hasReport && !isStreamingPartial ? (
+        // Nothing has come back from any source yet -- there is genuinely nothing to show, streamed
+        // or otherwise, so this is still the plain loading state.
         <SearchLoadingSkeleton />
-      ) : !hasReport ? (
-        <EmptyState
-          illustration={emptySearchIllustration}
-          title="No search yet"
-          description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
-          action={
-            <button className="btn btn-primary btn-sm" type="button" onClick={() => void runScan()} disabled={busy}>
-              Run the first scan
-            </button>
-          }
-        />
-      ) : profileNotConfigured ? (
-        // Distinct from "No search yet": a scan genuinely ran and found vacancies, but scoring
-        // never ran because the candidate profile has no target roles or strongest skills. Showing
-        // the normal results view here would render "0 of N vacancies" -- indistinguishable from a
-        // real, exhaustive search that found nothing -- rather than the actionable truth.
-        <EmptyState
-          illustration={emptySearchIllustration}
-          title="Your search profile isn't set up yet"
-          description={`${results.length} vacancies were found, but none were scored: the search profile has no target roles or strongest skills configured, so there's nothing to match them against. Fill it in under Settings to see ranked matches.`}
-        />
-      ) : (
-        // Dimmed, not hidden or disabled, while a rescan is in flight: the results/detail pane
-        // still shows the last-known data (real, just about to be replaced), and staying
-        // interactive lets someone keep reading/saving from it during a scan that can take up to a
-        // couple of minutes, rather than locking the page for that whole time.
-        <div
-          className={`mt-3 flex min-h-0 flex-1 flex-col lg:flex-row ${scanning ? 'opacity-60 transition-opacity' : ''}`}
-        >
-          <SearchResultList
-            results={pageItems}
-            totalCount={results.length}
-            selectedKey={selectedKey}
-            onSelect={handleSelect}
-            savedKeys={savedKeys}
-            summary={summary}
-            page={page}
-            pageCount={pageCount}
-            onPageChange={setPage}
+      ) : !hasReport && !isStreamingPartial ? (
+        <div className="min-h-0 flex-1 px-6">
+          <EmptyState
+            illustration={emptySearchIllustration}
+            title="No search yet"
+            description="No scan has been run yet, so there is nothing to filter. Run a scan to discover vacancies from public job feeds."
+            action={
+              <button className="btn btn-primary btn-sm" type="button" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                Run the first scan
+              </button>
+            }
           />
-
-          {selected ? (
-            <VacancyDetail
-              result={selected}
-              defaultCvName={defaultCvName}
-              saveState={saveState}
-              {...(saveError ? { saveError } : {})}
-              onSave={() => void handleSave()}
-              onGenerateLetter={handleGenerateLetter}
-              assistantOpen={assistantForKey === selected.key}
-              onToggleAssistant={() =>
-                setAssistantForKey((current) => (current === selected.key ? null : selected.key))
-              }
-              assistant={<CvAssistant vacancy={toVacancyLead(selected)} />}
-            />
-          ) : (
-            <div className="min-w-0 flex-1">
-              <EmptyState
-                title="Select a vacancy"
-                description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
-              />
+        </div>
+      ) : (
+        // Never dimmed while a rescan is in flight (issue #363): a page-wide "looks disabled" opacity
+        // over a pane that stays fully interactive is exactly the misleading state the issue reported.
+        // The results/detail pane always shows real, currently-safe data -- the saved report, or the
+        // scan's own live rows once `showLiveResults` switches the list over -- and every action that
+        // is not safe for the exact selected row (a provisional row's Prepare application, above all)
+        // is gated per-row via `VacancyDetail`'s own `prepareAvailable`/`result.provisional`, not by
+        // dimming the whole pane.
+        <>
+          {profileNotConfigured && (
+            <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+              <span>
+                {results.length.toLocaleString()} vacancies were found, but none were scored because
+                the search profile has no target roles or strongest skills. You can still browse,
+                save and filter these vacancies; fill the profile under Settings to rank future scans.
+              </span>
+              {onOpenSearchProfile && (
+                <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
+                  Fill search profile
+                </button>
+              )}
             </div>
           )}
+          {reportNeedsRescore && (
+            <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
+              <span>
+                Search profile is saved, but this report was generated before it could be scored.
+                Cached vacancies remain browseable; rescan to score them with the current profile.
+              </span>
+              <button type="button" className="btn btn-warning btn-sm" onClick={handleRescore} disabled={busy || !currentProfileScanQuery}>
+                Rescan and score
+              </button>
+            </div>
+          )}
+          {profileScoringUnknown && (
+            <div className="alert alert-warning alert-soft mx-6 mt-3 text-sm" role="status">
+              Cached vacancies are browseable, but the app could not check whether the current
+              search profile can score this report: {searchProfileError}
+            </div>
+          )}
+          {worldwideReport && (
+            <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
+              {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+            </p>
+          )}
+          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0">
+            <SearchResultList
+              results={pageItems}
+              totalCount={results.length}
+              selectedKey={selectedKey}
+              onSelect={handleSelect}
+              savedKeys={savedKeys}
+              summary={summary}
+              page={page}
+              pageCount={pageCount}
+              onPageChange={(nextPage) => {
+                setPage(nextPage);
+                setListScrollTop(0);
+              }}
+              scrollTop={listScrollTop}
+              onScrollTopChange={setListScrollTop}
+            />
+
+            {selected ? (
+              <VacancyDetail
+                result={selected}
+                defaultCvName={defaultCvName}
+                providerLabel={PROVIDER_LABEL[defaultProvider]}
+                saveState={saveState}
+                prepareState={prepareState}
+                prepareAvailable={!selected.provisional}
+                {...(saveError ? { saveError } : {})}
+                {...(prepareError ? { prepareError } : {})}
+                onSave={() => void handleSave()}
+                onPrepare={() => void handlePrepare()}
+                onGenerateLetter={handleGenerateLetter}
+                assistantOpen={assistantForKey === selected.key}
+                onToggleAssistant={() =>
+                  setAssistantForKey((current) => (current === selected.key ? null : selected.key))
+                }
+                scrollTop={detailScrollTop}
+                onScrollTopChange={setDetailScrollTop}
+                assistant={
+                  <CvAssistant
+                    vacancy={toVacancyLead(selected)}
+                    onBackToVacancy={() => setAssistantForKey(null)}
+                  />
+                }
+              />
+            ) : (
+              <div className="min-w-0 flex-1">
+                <EmptyState
+                  illustration={emptySearchIllustration}
+                  title="Select a vacancy"
+                  description="Pick a vacancy from the list to see what this scan actually verified about it, save it, or compare it against your CV."
+                />
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {confirmBrowseAll && (
+        <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="browse-all-title">
+          <div className="modal-box max-w-lg">
+            <h3 id="browse-all-title" className="text-base font-semibold">
+              Browse all vacancies?
+            </h3>
+            <p className="mt-2 text-sm text-base-content/70">
+              This starts a broad live scan without a role or keyword. It can take longer and hit
+              more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
+            </p>
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-warning btn-sm" onClick={() => void runBrowseAllScan()}>
+                Browse all vacancies
+              </button>
+            </div>
+          </div>
+          <button type="button" className="modal-backdrop" aria-label="Close" onClick={() => setConfirmBrowseAll(false)} />
         </div>
       )}
 
@@ -685,7 +1204,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
           outside the scrollable results/detail area above), for diagnostic/provenance metadata
           that's useful on demand but not worth greeting every visit with above the results. */}
       {(sourceWarnings.length > 0 || worldwideReport) && (
-        <div className="flex-none border-t border-base-300 px-1 pt-2">
+        <div className="flex-none border-t border-base-300 px-6 pt-2">
           {sourceWarnings.length > 0 && (
             <>
               <button
@@ -702,7 +1221,7 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
                   <div>
                     {sourceWarnings.map((source) => (
                       <span key={source.id} className="block">
-                        {source.provider}: {source.error ?? source.status}
+                        {discoveryProviderLabel(source.provider)}: {source.completenessReason ?? source.error ?? source.status}
                       </span>
                     ))}
                   </div>
@@ -711,8 +1230,11 @@ export function SearchPage({ onGenerateLetter }: SearchPageProps = {}) {
             </>
           )}
           {worldwideReport && (
-            <p className="px-2 pb-1.5 text-xs text-base-content/60">
+            <p className="pb-1.5 text-xs text-base-content/60">
               Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
+              {scanBounds?.mode === 'browse_all'
+                ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
+                : ''}
             </p>
           )}
         </div>

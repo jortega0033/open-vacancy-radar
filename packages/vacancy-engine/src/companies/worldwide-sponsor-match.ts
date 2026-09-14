@@ -18,6 +18,50 @@ export type WorldwideSponsorMatch = {
 };
 
 /**
+ * The location gate `resolveWorldwideSponsorMatch` applies below, exposed on its own so a caller
+ * enriching a whole scan's worth of rows can tell "this row could produce a lookup" from "this row
+ * can only ever be `null`" *before* paying for one. `applyWorldwideSponsorMatches` needs exactly
+ * that to group the eligible rows by employer and bound how many distinct lookups a scan performs;
+ * without it, the only way to find out a row was ineligible was to call the resolver and have it
+ * return `null` after the fact, which is why the enrichment pass used to walk all ~21k discovery
+ * rows one by one instead of the few hundred employers that can actually resolve to anything.
+ */
+export function isWorldwideSponsorMatchEligible(location: string): boolean {
+  return normalizeCountry(location) === 'Netherlands';
+}
+
+/**
+ * The network half on its own: an employer name to the one KVK number Wikidata unambiguously
+ * attributes to it, or `null` for every other outcome (no exact name match, ambiguous name,
+ * no/duplicate KVK claim). Split out from the composition below because it is the only expensive,
+ * cacheable part -- Wikidata rate-limits anonymous clients hard, so a scan that has already
+ * resolved a name must never spend a request resolving it again (see
+ * `worldwide-sponsor-lookup-cache.ts`). `null` is a genuine answer worth remembering, not a
+ * failure: it means Wikidata was asked and had nothing unambiguous to say.
+ */
+export async function resolveWorldwideSponsorKvk(
+  http: AtsHttpClient,
+  companyName: string,
+): Promise<string | null> {
+  const outcome = await findWikidataCompanyByName(http, companyName);
+  return outcome.status === 'match' ? outcome.kvkNumber : null;
+}
+
+/**
+ * The local half: a KVK number to an active IND-recognised sponsor, or `null`. Deliberately never
+ * cached alongside the Wikidata answer -- the register is re-synced independently, and a company
+ * gaining or losing recognition must show up on the very next scan.
+ */
+export async function sponsorMatchForKvk(
+  database: Database,
+  kvkNumber: string | null,
+): Promise<WorldwideSponsorMatch | null> {
+  if (kvkNumber === null) return null;
+  const sponsor = await findActiveSponsorByKvk(database, kvkNumber);
+  return sponsor === null ? null : { legalName: sponsor.legalName, kvkNumber };
+}
+
+/**
  * Resolves a worldwide vacancy's employer against the IND register on a best-effort basis, or
  * `null` for "no claim" -- covering both "never attempted" (not a Netherlands-located vacancy) and
  * "attempted and found nothing/ambiguous". Unlike the Netherlands pipeline, which distinguishes
@@ -38,13 +82,9 @@ export async function resolveWorldwideSponsorMatch(params: {
   companyName: string;
   location: string;
 }): Promise<WorldwideSponsorMatch | null> {
-  if (normalizeCountry(params.location) !== 'Netherlands') return null;
-
-  const outcome = await findWikidataCompanyByName(params.http, params.companyName);
-  if (outcome.status !== 'match') return null;
-
-  const sponsor = await findActiveSponsorByKvk(params.database, outcome.kvkNumber);
-  if (sponsor === null) return null;
-
-  return { legalName: sponsor.legalName, kvkNumber: outcome.kvkNumber };
+  if (!isWorldwideSponsorMatchEligible(params.location)) return null;
+  return sponsorMatchForKvk(
+    params.database,
+    await resolveWorldwideSponsorKvk(params.http, params.companyName),
+  );
 }

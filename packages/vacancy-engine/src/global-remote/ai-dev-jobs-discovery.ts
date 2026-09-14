@@ -1,9 +1,16 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
+  incompleteAudit,
   isoPostedAt,
   numberValue,
   parsedRoot,
@@ -143,6 +150,7 @@ function normalizeAiDevJob(
     currency,
     salaryPeriod,
     advertisedMinimum,
+    salaryProvenance: 'reviewed_structured',
     description,
     postedAt: isoPostedAt(stringValue(job.published_at)) ?? isoPostedAt(stringValue(job.created_at)),
     raw,
@@ -166,11 +174,14 @@ export async function discoverAiDevJobs(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = AI_DEV_JOBS_JOBS_URL;
   try {
     for (let page = 1; page <= config.discovery.aiDevJobsMaxPages; page += 1) {
@@ -195,6 +206,7 @@ export async function discoverAiDevJobs(
       if (rawJobs.length === 0 || hasNext !== true) break;
       if (page === config.discovery.aiDevJobsMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.aiDevJobsMaxPages}-page limit.`;
       }
     }
@@ -202,6 +214,7 @@ export async function discoverAiDevJobs(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -212,6 +225,8 @@ export async function discoverAiDevJobs(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };

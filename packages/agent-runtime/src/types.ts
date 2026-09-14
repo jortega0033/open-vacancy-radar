@@ -1,4 +1,4 @@
-import type { AgentEvent, ProviderId, ProviderStatus } from '@agent-dock/shared';
+import type { AgentEvent, ProviderId, ProviderModelV2, ProviderStatus } from '@agent-dock/shared';
 
 export interface StartSessionOptions {
   /** Daemon-generated session UUID. Used only for logging/correlation, never as a process id. */
@@ -122,6 +122,19 @@ export interface ProviderSessionHandle {
 }
 
 /**
+ * Options for `AgentProvider.fetchModelCatalog()` (ADI-22a). `cwd` matters only to an
+ * implementation whose live probe needs a real directory to spawn a process into (Codex's
+ * app-server transport does; a future SDK-backed probe may not) -- optional and defaulted by the
+ * implementation itself when a caller has no session-specific directory to offer, e.g. `GET
+ * /v2/providers/:providerId/models`, which asks for a provider's catalog outside of any one
+ * session's workspace.
+ */
+export interface ProviderModelCatalogOptions {
+  cwd?: string;
+  signal?: AbortSignal;
+}
+
+/**
  * One AI CLI integration. Implementations own everything provider-specific: executable
  * discovery, command construction, process spawning, output parsing, and normalization into
  * AgentEvent. Nothing outside this package should need to know a provider's native event shape.
@@ -131,4 +144,20 @@ export interface AgentProvider {
   readonly name: string;
   detect(): Promise<ProviderStatus>;
   startSession(options: StartSessionOptions): ProviderSessionHandle;
+  /**
+   * Fetches this provider's live, reviewed model catalog (ADI-22a) -- richer than, and the source
+   * of truth over, the static `availableModels: string[]` `detect()` reports on `ProviderStatus`.
+   * Optional: a provider with no live catalog (every provider before this ticket, and Claude until
+   * #144) simply omits this method, and every caller must treat an absent method exactly like a
+   * present one that always resolves to an empty array -- never as an error to special-case.
+   *
+   * Implementations are expected to fail closed on infrastructure trouble (a missing CLI, an RPC
+   * that times out or protocol-violates) by *rejecting*, not by silently resolving to `[]`: the two
+   * callers this repo ships (`GET /v2/providers/:providerId/models` and
+   * `POST /v2/sessions`'s capability resolution) both already treat "no live catalog available"
+   * and "the live probe just failed" as the same fact and catch accordingly, and collapsing that
+   * distinction inside the adapter itself would make a real failure indistinguishable from a
+   * provider that legitimately has nothing to offer.
+   */
+  fetchModelCatalog?(options: ProviderModelCatalogOptions): Promise<readonly ProviderModelV2[]>;
 }

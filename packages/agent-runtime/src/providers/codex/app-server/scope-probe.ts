@@ -57,6 +57,19 @@ function waitForProbe<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
 }
 
 /**
+ * The subset of `CodexAppServerScopeProbeOptions` any short-lived, read-only app-server probe
+ * needs -- i.e. everything except `detectedAuthSource` and `pinnedModel`, which are specific to
+ * `probeCodexAppServerScope`'s own account/model-binding check. Exported so a second probe with no
+ * use for those two fields (ADI-22a's `probeCodexModelCatalog`, `model-catalog.ts`) can share this
+ * shape and `withCodexAppServerRpc` itself, rather than redeclaring the same seven fields or
+ * spawning its own process/RPC pair from scratch.
+ */
+export type CodexAppServerProbeOptions = Pick<
+  CodexAppServerScopeProbeOptions,
+  'executable' | 'cwd' | 'env' | 'signal' | 'executableArgs' | 'processPlatform' | 'windowsJobHostPath'
+>;
+
+/**
  * Opens a short-lived app-server process, completes the `initialize`/`initialized` handshake, runs
  * `body` against the live RPC connection, and always tears the process down afterward. No thread or
  * turn request is ever sent here, so an unsupported/misbehaving version can be probed without ever
@@ -65,9 +78,14 @@ function waitForProbe<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
  *
  * No `await processHost.ready` step, unlike upstream: this repo's `ManagedAppServerProcess` (see
  * its own doc comment) has no readiness race to wait out in the first place.
+ *
+ * Exported (ADI-22a) for `model-catalog.ts`'s `probeCodexModelCatalog`, the second real caller of
+ * this process/RPC scaffolding -- see that module for why a second short-lived probe is exactly the
+ * kind of caller this function's own doc comment already anticipated ("a future settings/
+ * diagnostics surface", `transport-selection.ts`).
  */
-async function withCodexAppServerRpc<T>(
-  options: Pick<CodexAppServerScopeProbeOptions, 'executable' | 'cwd' | 'env' | 'signal' | 'executableArgs' | 'processPlatform' | 'windowsJobHostPath'>,
+export async function withCodexAppServerRpc<T>(
+  options: CodexAppServerProbeOptions,
   body: (rpc: CodexAppServerRpc) => Promise<T>,
 ): Promise<T> {
   const rpcRef: { current?: CodexAppServerRpc } = {};

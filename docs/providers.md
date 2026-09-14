@@ -84,6 +84,8 @@ interface ProviderCapabilities {
   tools?: boolean;
   usage?: boolean;
   thinking?: boolean;
+  modelCatalog?: boolean;
+  hardenedNoNetwork?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 ```
@@ -104,8 +106,10 @@ boolean belongs in a namespaced extension field on `ProviderStatus`, not a new t
 key.
 
 Both current adapters (`providers/claude/capabilities.ts`, `providers/codex/capabilities.ts`)
-declare every field `true`, and each is true for a specific, checkable reason, not because the two
-CLIs happen to be similar:
+declare the original five fields `true`, and each is true for a specific, checkable reason, not
+because the two CLIs happen to be similar. The two later keys are the interesting ones: each is
+declared by exactly one adapter, and the other adapter's absence is a statement about its own code
+rather than an omission.
 
 | Capability | Claude | Codex | Why |
 |---|---|---|---|
@@ -114,6 +118,8 @@ CLIs happen to be similar:
 | `tools` | ✅ | ✅ | Claude's `tool_use`/`tool_result` blocks and Codex's `command_execution`/`file_change`/`mcp_tool_call` items both normalize to `tool.started`/`tool.completed` |
 | `usage` | ✅ | ✅ | Claude's `message.usage`/`result.usage` and Codex's `turn.completed.usage` both normalize to `usage` events |
 | `thinking` | ✅ | ✅ | Claude's `thinking` content blocks and Codex's `reasoning` items both normalize to `thinking.delta`: **only surfaced when the CLI's own extended-thinking/reasoning-effort configuration produces one**; a `true` here means "the adapter passes it through when present," not "always present" |
+| `modelCatalog` | ❌ | ✅ | Codex implements `AgentProvider.fetchModelCatalog()` over its app-server `model/list` RPC (ADI-22a). Claude's stays absent until #144: there is no live catalog behind it, and the static `availableModels` list is a different, weaker thing |
+| `hardenedNoNetwork` | ✅ | ❌ | Only `buildClaudeArgs` reads `opts.hardened` at all, so only Claude actually applies the reviewed `'no-network'` argv (`CLAUDE_HARDENING_ARGS_NO_NETWORK`). Asking Codex for the profile changes its argv not at all, which is precisely what this flag makes machine-readable. Added by #284 so a policy layer outside this package can refuse a selection without branching on a provider id. It is **not** what gates `POST /sessions/application-field-map`: that route's own literal provider check is deliberately independent of any self-declared capability |
 
 `FakeProvider` (used across the test suite) deliberately declares `resume: false`, `tools: false`,
 `thinking: false` even though it *could* trivially fake any of them: the contrast is what lets

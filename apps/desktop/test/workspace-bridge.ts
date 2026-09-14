@@ -69,6 +69,19 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     getSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     updateSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     getCounts: vi.fn().mockResolvedValue(DEFAULT_COUNTS),
+    resetApplicationData: vi.fn().mockResolvedValue({
+      settings: DEFAULT_SETTINGS,
+      deleted: {
+        savedJobs: 0,
+        applications: 0,
+        cvDocuments: 0,
+        letters: 0,
+        applicationAttempts: 0,
+        applicationArtifacts: 0,
+        submissionReceipts: 0,
+        automationGrants: 0,
+      },
+    }),
 
     listSavedJobs: vi.fn().mockResolvedValue([]),
     createSavedJob: vi.fn(),
@@ -85,6 +98,7 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     updateCvDocument: vi.fn(),
     deleteCvDocument: vi.fn().mockResolvedValue({ deleted: true }),
     setDefaultCvDocument: vi.fn().mockResolvedValue([]),
+    exportCvDocument: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\resume.pdf' }),
 
     listLetters: vi.fn().mockResolvedValue([]),
     createLetter: vi.fn(),
@@ -120,10 +134,19 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
   const bridge: VacancyRadarBridge = {
     getStatus: vi.fn().mockResolvedValue({ ready: false, error: 'not configured in this test' }),
     getReport: vi.fn().mockResolvedValue(null),
+    getReportSummary: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),
     getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
+    // Default: subscribes to nothing and hands back an already-good unsubscribe. A test that cares
+    // about progress events overrides this with its own `vi.fn()` that captures the callback (the
+    // same "override only the one you're about" pattern every other capability here follows).
+    onScanProgress: vi.fn(() => () => {}),
     getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
     saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    // Default: not imported yet, mirroring a fresh checkout/userData directory. A test that cares
+    // about a populated roster overrides this with its own resolved status.
+    getAtsRosterStatus: vi.fn().mockResolvedValue(null),
+    refreshAtsRoster: vi.fn(),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;

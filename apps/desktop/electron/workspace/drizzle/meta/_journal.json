@@ -85,6 +85,34 @@
       "when": 1788648009623,
       "tag": "0011_mixed_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789110302195,
+      "tag": "0012_nosy_veda",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789120980482,
+      "tag": "0013_soft_obadiah_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789136700517,
+      "tag": "0014_high_yellowjacket",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1789166175445,
+      "tag": "0015_windy_tiger_shark",
+      "breakpoints": true
     }
   ]
 }

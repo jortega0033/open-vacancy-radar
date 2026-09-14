@@ -1,0 +1,31 @@
+{
+  "uuid": "55555555-5555-4555-8555-555555555555",
+  "sistEndret": "2026-08-21T09:00:00Z",
+  "status": "ACTIVE",
+  "ad_content": {
+    "uuid": "55555555-5555-4555-8555-555555555555",
+    "published": "2026-08-21T08:00:00Z",
+    "expires": "2099-01-01T00:00:00Z",
+    "updated": "2026-08-21T09:00:00Z",
+    "workLocations": [
+      { "country": "Norway", "address": null, "city": "Bergen", "postalCode": null, "county": "Vestland", "municipal": "Bergen" }
+    ],
+    "contactList": [],
+    "title": "HR Coordinator",
+    "description": "Coordinate hiring processes for Bergen Kommune.",
+    "sourceurl": null,
+    "source": null,
+    "applicationUrl": null,
+    "applicationDue": "2026-09-15",
+    "occupationCategories": [],
+    "categoryList": [],
+    "jobtitle": "HR Coordinator",
+    "link": "https://arbeidsplassen.nav.no/stillinger/stilling/55555555-5555-4555-8555-555555555555",
+    "employer": { "name": "Bergen Kommune", "orgnr": null, "description": null, "homepage": null },
+    "engagementtype": "Vikariat",
+    "extent": "Heltid",
+    "starttime": null,
+    "positioncount": "1",
+    "sector": "Offentlig"
+  }
+}

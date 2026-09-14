@@ -144,6 +144,70 @@ describe('CodexAppServerNormalizer: usage and errors', () => {
     expect(normalizer.normalize('error', { willRetry: true })).toEqual([{ type: 'error', message: 'Codex app-server reported an error', recoverable: true }]);
     expect(normalizer.normalize('error', {})).toEqual([{ type: 'error', message: 'Codex app-server reported an error', recoverable: false }]);
   });
+
+  it('maps account/rateLimits/updated with both primary and secondary windows to a usage.rate_limits event', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('account/rateLimits/updated', {
+        rateLimits: {
+          limitId: 'limit-123',
+          limitName: 'API Monthly',
+          primary: { usedPercent: 75, windowDurationMins: 43200, resetsAt: 1704067200 },
+          secondary: { usedPercent: 50 },
+        },
+      }),
+    ).toEqual([
+      {
+        type: 'usage.rate_limits',
+        limitId: 'limit-123',
+        limitName: 'API Monthly',
+        primary: { usedPercent: 75, windowDurationMins: 43200, resetsAt: 1704067200 },
+        secondary: { usedPercent: 50, windowDurationMins: undefined, resetsAt: undefined },
+      },
+    ]);
+  });
+
+  it('maps account/rateLimits/updated with only primary window to a usage.rate_limits event', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('account/rateLimits/updated', {
+        rateLimits: { limitName: 'Daily', primary: { usedPercent: 25 } },
+      }),
+    ).toEqual([
+      {
+        type: 'usage.rate_limits',
+        limitId: undefined,
+        limitName: 'Daily',
+        primary: { usedPercent: 25, windowDurationMins: undefined, resetsAt: undefined },
+        secondary: undefined,
+      },
+    ]);
+  });
+
+  it('maps account/rateLimits/updated with only secondary window to a usage.rate_limits event', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(
+      normalizer.normalize('account/rateLimits/updated', {
+        rateLimits: { secondary: { usedPercent: 90, resetsAt: 1234567890 } },
+      }),
+    ).toEqual([
+      {
+        type: 'usage.rate_limits',
+        limitId: undefined,
+        limitName: undefined,
+        primary: undefined,
+        secondary: { usedPercent: 90, windowDurationMins: undefined, resetsAt: 1234567890 },
+      },
+    ]);
+  });
+
+  it('does not emit an event for account/rateLimits/updated with neither primary nor secondary window', () => {
+    const normalizer = new CodexAppServerNormalizer();
+    expect(normalizer.normalize('account/rateLimits/updated', { rateLimits: {} })).toEqual([]);
+    expect(
+      normalizer.normalize('account/rateLimits/updated', { rateLimits: { limitId: 'some-id', limitName: 'some-name' } }),
+    ).toEqual([]);
+  });
 });
 
 describe('CodexAppServerNormalizer: deliberate no-ops', () => {

@@ -1,7 +1,23 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { ApplicationExecutor, ExecutorPolicyError, isNavigationAllowed, resolveSubmitControl, validateFieldMap, type FormSnapshot } from '@agent-dock/application-executor';
-import { createApplicationView, type ApplicationView } from './application-view.js';
+import { basename } from 'node:path';
+import type { BrowserWindow } from 'electron';
+import {
+  ApplicationExecutor,
+  ExecutorPolicyError,
+  classifyDelayedReceipt,
+  describeBlockers,
+  isActionAllowed,
+  isNavigationAllowed,
+  resolveSubmitControl,
+  validateFieldMap,
+  type ApplicationTargetPolicy,
+  type FormSnapshot,
+  type ObservedResponse,
+  type SubmissionOutcomeReport,
+} from '@agent-dock/application-executor';
+import { listOwnedArtifactIds, resolveUploadArtifact, type UploadReadyArtifact } from './application-artifact-upload.js';
+import { createApplicationView, HANDOFF_BANNER_HEIGHT_PX, type ApplicationView } from './application-view.js';
+import { AcceptedBytesChangedError, readAcceptedArtifactBytes } from './document-readiness.js';
 import { resolveApplicationTargetPolicy, resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
 import { runPreSubmitGate, type PreSubmitGateRefusalReason } from './application-submit-gate.js';
 import {
@@ -15,18 +31,20 @@ import { notifyAutomaticSubmission } from './automatic-submission-notify.js';
 import * as workspace from './workspace/repository.js';
 import { WorkspaceNotFoundError } from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
-import type { ApplicationAttemptRecord } from './workspace/types.js';
+import type { ApplicationAttemptRecord, ApplicationSubmissionReceiptInput } from './workspace/types.js';
 import type {
+  ApplicationAttachmentResult,
   ApplyApplicationFieldMapInput,
   ApplyApplicationFieldMapResult,
   OpenApplicationReviewInput,
   OpenApplicationReviewResult,
+  ShowApplicationHandoffResult,
 } from './application-executor-types.js';
 
 /**
  * The main-process orchestration behind `window.applicationExecutor` (issue #201): owns the
- * per-attempt `{ view, executor }` registry so `main.ts`'s IPC handlers stay thin, and so this
- * module is reachable directly (no IPC) from a Node test.
+ * per-attempt `{ view, executor, policy }` registry so `main.ts`'s IPC handlers stay thin, and so
+ * this module is reachable directly (no IPC) from a Node test.
  *
  * Deliberately Electron-adjacent, not Electron-free like `packages/application-executor` itself:
  * `createApplicationView` is real Electron. Kept in its own module rather than inlined into
@@ -38,9 +56,34 @@ import type {
 interface ActiveReview {
   view: ApplicationView;
   executor: ApplicationExecutor;
+  /** The URL this review was opened against -- the "destination" every submission receipt records
+   * (#271). Kept from the open call rather than re-read from the live page: what a receipt has to
+   * name is where this app deliberately sent the application, not wherever the page ended up. */
+  targetUrl: string;
+  /** The same compiled policy the executor was constructed with. Kept here too so the artifact
+   * resolution in `applyApplicationFieldMap` can check a candidate upload against this target's own
+   * constraints *before* calling `attach`, without re-resolving a policy id and risking the two
+   * halves disagreeing about which policy this review is running under. */
+  policy: ApplicationTargetPolicy;
+  /** What `openApplicationReview` was called with, kept so reopening the same attempt can be
+   * answered from the live view it already has rather than by building a second one (#277). */
+  input: OpenApplicationReviewInput;
 }
 
 const activeReviews = new Map<string, ActiveReview>();
+
+/**
+ * The one attempt whose live view is currently covering the main window (#277), or `undefined`.
+ *
+ * Exactly one attempt can hold the handoff at a time, because there is one main window to cover.
+ * Everything about how that is enforced is deliberately additive: showing attempt B's view hides
+ * attempt A's, and nothing else about attempt A changes -- its `WebContentsView` stays alive, its
+ * executor keeps its snapshot, its generation and its verifications, and its entry stays in
+ * `activeReviews`. A person switching between two pending attempts must not find that looking at
+ * one of them silently discarded the other's state, which is what tearing views down here (or
+ * refusing to show a second one at all) would have produced.
+ */
+let handoffAttemptId: string | undefined;
 
 /** Attempt ids currently mid-`submitApplicationReview`. The manual (renderer IPC) and automatic
  * (timer tick) paths are otherwise entirely independent callers of the same function with no other
@@ -48,10 +91,45 @@ const activeReviews = new Map<string, ActiveReview>();
  * `executor.submit()` for the same attempt at once. */
 const submittingAttemptIds = new Set<string>();
 
+/**
+ * Opens (or reopens) the live review for one attempt.
+ *
+ * Reopening the same attempt returns the review it already has (#277): a fresh screenshot and
+ * readiness reading over the *existing* view, executor, snapshot generation and verification
+ * record. It deliberately does not navigate again, does not re-snapshot, and above all does not
+ * build a second `WebContentsView` for the same attempt.
+ *
+ * This used to throw. Closing the review modal and opening it again is an ordinary thing for a
+ * person to do -- and with a live handoff it is the expected thing, since that is how they come
+ * back after solving a CAPTCHA or signing in. Throwing meant the only way back was
+ * `closeReview` + `openReview`, which destroys the view: the session the person had just
+ * authenticated, every verified field, and the snapshot generation the current field map is bound
+ * to, all discarded in exchange for a blank page. A reopen that produces a second executor over a
+ * second view for the same attempt would be worse still -- two independent submit paths for one
+ * application. Reusing the live one is what makes reopening safe.
+ *
+ * A mismatched `policyId`/`targetUrl` for an already-open attempt is refused rather than silently
+ * answered from the existing view: that is a caller bug, and papering over it would hand back a
+ * review of a different page than the one asked for.
+ */
 export async function openApplicationReview(input: OpenApplicationReviewInput): Promise<OpenApplicationReviewResult> {
-  if (activeReviews.has(input.attemptId)) {
-    throw new Error(`attempt ${input.attemptId} already has an open review`);
+  const existing = activeReviews.get(input.attemptId);
+  if (existing) {
+    if (existing.input.policyId !== input.policyId || existing.input.targetUrl !== input.targetUrl) {
+      throw new Error(
+        `attempt ${input.attemptId} already has an open review against a different target; close it before opening another`,
+      );
+    }
+    const snapshot = input.refresh ? await existing.executor.snapshot() : existing.executor.currentSnapshot;
+    if (!snapshot) throw new Error(`attempt ${input.attemptId} has an open review with no snapshot yet`);
+    return {
+      snapshot,
+      screenshotBase64: await existing.executor.capture(),
+      readiness: await existing.executor.evaluateReadiness(),
+      handoffShown: handoffAttemptId === input.attemptId,
+    };
   }
+
   const policy = resolveApplicationTargetPolicy(input.policyId);
   if (!policy) {
     throw new Error(`unknown application target policy: ${input.policyId}`);
@@ -65,13 +143,13 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     (url) => console.warn('[application-executor] blocked an off-policy navigation', { attemptId: input.attemptId, policyId: policy.id, url }),
   );
   const executor = new ApplicationExecutor(view.transport, policy);
-  activeReviews.set(input.attemptId, { view, executor });
+  activeReviews.set(input.attemptId, { view, executor, targetUrl: input.targetUrl, policy, input });
 
   try {
     await executor.openTarget(input.targetUrl);
     const snapshot = await executor.snapshot();
     const screenshotBase64 = await executor.capture();
-    return { snapshot, screenshotBase64 };
+    return { snapshot, screenshotBase64, readiness: await executor.evaluateReadiness(), handoffShown: false };
   } catch (err) {
     // A failed open leaves nothing for the caller to clean up -- release it here rather than
     // requiring a matching closeReview() the caller has no way to know it needs to make.
@@ -81,7 +159,48 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
   }
 }
 
-export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult> {
+/** How much of a page-reported file name is ever echoed back to the renderer. The string comes off
+ * the target page, so it is third-party text however plausible it looks -- bounded here for the
+ * same reason `maximumSnapshotBytes` bounds a snapshot. */
+const MAX_REPORTED_ATTACHMENT_NAME_LENGTH = 200;
+
+interface PlannedAttachment {
+  fieldRef: string;
+  file: UploadReadyArtifact;
+}
+
+/**
+ * Validates `fieldMap` and applies it (#196 §2.4, #201), now including its `artifact` (file-upload)
+ * assignments (#273).
+ *
+ * The artifact half runs in three deliberate phases rather than one pass:
+ *
+ * 1. **Resolve, before anything is applied.** Every `artifact` assignment is resolved against this
+ *    attempt's own registered artifacts and re-verified (`application-artifact-upload.ts`) --
+ *    ownership, staging location, the target's upload constraints, and a full re-hash of the bytes
+ *    currently on disk. Any failure refuses the whole call here, with nothing typed into the page
+ *    and nothing uploaded. That ordering is the point: a wrong-attempt, changed, missing, oversized
+ *    or wrong-type file must be refused *before* upload, not discovered halfway through one.
+ * 2. **Fill and select**, exactly as before.
+ * 3. **Attach, then read the control back.** `attach` is followed by
+ *    `readBackAttachment(fieldRef)`, and the call only succeeds if the browser itself reports the
+ *    staged file on that control. Nothing here is fire-and-forget: an attachment that cannot be
+ *    confirmed refuses with `attachment_unconfirmed` rather than being reported as applied.
+ *
+ * A retry is safe and is never ambient: phase 1 resolves the artifact id to the one path recorded
+ * for it under this attempt's own staging folder, and `DOM.setFileInputFiles` *replaces* a file
+ * input's selection rather than appending to it, so running this twice sets exactly the same
+ * intended file both times. No part of this path opens a native file picker, reads a directory, or
+ * looks at anything outside that one registered path.
+ *
+ * `db` is a parameter rather than something this module resolves for itself, the same shape
+ * `submitApplicationReview` already has: it keeps this function directly callable from a test
+ * against an in-memory workspace, and keeps the "who owns the database handle" answer in `main.ts`.
+ */
+export async function applyApplicationFieldMap(
+  db: WorkspaceDb,
+  input: ApplyApplicationFieldMapInput,
+): Promise<ApplyApplicationFieldMapResult> {
   const active = activeReviews.get(input.attemptId);
   if (!active) {
     throw new Error(`no open review for attempt ${input.attemptId}`);
@@ -96,11 +215,11 @@ export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapIn
     attemptId: input.attemptId,
     snapshot,
     valueTable: input.valueTable,
-    // Always empty: see this module's own doc comment and `ApplicationExecutorBridge.applyFieldMap`'s
-    // -- artifact ownership resolution (#198) is not wired into this slice, so any `artifact`
-    // assignment fails `validateFieldMap`'s rule 5 (`artifact_not_owned`) by construction, refusing
-    // the whole map rather than silently dropping one field.
-    ownedArtifactIds: [],
+    // #198's real artifact records, scoped in SQL to this exact attempt -- see
+    // `listOwnedArtifactIds`. This was a hardcoded empty array until #273, which made
+    // `validateFieldMap`'s rule 5 refuse every artifact assignment by construction, including an
+    // attempt's own CV.
+    ownedArtifactIds: listOwnedArtifactIds(db, input.attemptId),
     allowJdProvenance: input.allowJdProvenance,
   });
 
@@ -108,22 +227,195 @@ export async function applyApplicationFieldMap(input: ApplyApplicationFieldMapIn
     return { ok: false, reason: result.reason, detail: result.detail };
   }
 
+  // Phase 1: resolve and verify every attachment before a single field is touched.
+  const planned: PlannedAttachment[] = [];
+  for (const assignment of result.fieldMap.assignments) {
+    if (assignment.source.kind !== 'artifact') continue;
+    const { artifactId } = assignment.source;
+    const resolved = await resolveUploadArtifact(db, input.attemptId, artifactId, active.policy);
+    if (!resolved.ok || !resolved.file) {
+      return { ok: false, reason: resolved.reason, detail: resolved.detail };
+    }
+    // The one refusal that is a handoff rather than an error: this target forbids uploads outright
+    // (a compiled kill switch, or a policy that never listed `attach`), so the file is the user's
+    // to add by hand on the page itself. Checked after the artifact resolved so the handoff can
+    // actually name the document the user should pick.
+    if (!isActionAllowed(active.policy, 'attach')) {
+      return {
+        ok: false,
+        reason: 'attachment_requires_manual_handoff',
+        detail: `target policy "${active.policy.id}" does not permit automated uploads`,
+        manualHandoff: { fieldRef: assignment.fieldRef, artifactId, fileName: resolved.file.fileName, reason: 'unsupported_control' },
+      };
+    }
+    planned.push({ fieldRef: assignment.fieldRef, file: resolved.file });
+  }
+
+  // Phase 2: the value/option assignments, unchanged.
   const valueByRef = new Map(input.valueTable.map((entry) => [entry.valueRef, entry.value]));
   let appliedCount = 0;
+  let verifiedCount = 0;
   for (const assignment of result.fieldMap.assignments) {
     if (assignment.source.kind === 'value') {
       const value = valueByRef.get(assignment.source.valueRef);
       if (value === undefined) throw new Error(`valueRef ${assignment.source.valueRef} vanished after validation`);
-      await active.executor.fill(assignment.fieldRef, value);
+      const verification = await active.executor.fill(assignment.fieldRef, value);
       appliedCount += 1;
+      if (verification.status === 'verified') verifiedCount += 1;
     } else if (assignment.source.kind === 'option') {
-      await active.executor.select(assignment.fieldRef, assignment.source.optionRef);
+      const verification = await active.executor.select(assignment.fieldRef, assignment.source.optionRef);
       appliedCount += 1;
+      if (verification.status === 'verified') verifiedCount += 1;
     }
-    // 'artifact' is unreachable here (see above); 'skip' assigns nothing by definition.
+    // 'artifact' is phase 3 below; 'skip' assigns nothing by definition.
   }
 
-  return { ok: true, appliedCount };
+  // Phase 3: attach, then confirm off the control itself.
+  const attachments: ApplicationAttachmentResult[] = [];
+  for (const { fieldRef, file } of planned) {
+    try {
+      await active.executor.attach(fieldRef, file);
+    } catch (err) {
+      if (err instanceof ExecutorPolicyError) {
+        // The executor refused this control (not a file input, or a policy check of its own).
+        // Nothing reached the page, and there is no second way to drive an upload control that
+        // should be tried instead -- hand it to the user, visibly.
+        return {
+          ok: false,
+          reason: 'attachment_requires_manual_handoff',
+          detail: err.message,
+          manualHandoff: { fieldRef, artifactId: file.artifactId, fileName: file.fileName, reason: 'unsupported_control' },
+        };
+      }
+      throw err;
+    }
+
+    const reported = await active.executor.readBackAttachment(fieldRef);
+    // The browser names a file input's selection by the staged file's own on-disk name
+    // (`<contentHash>-<fileName>`, per `stagedArtifactPath`), so that -- not the artifact's logical
+    // file name -- is what a confirmed read-back must contain. An empty control reports its "no
+    // file chosen" placeholder instead, and an unrecognized report is treated the same way: a
+    // concrete failure, never an assumed success.
+    const expected = basename(file.localFilePath);
+    if (reported === null || !reported.includes(expected)) {
+      return {
+        ok: false,
+        reason: 'attachment_unconfirmed',
+        detail: `the page did not report artifact ${file.artifactId} on field ${fieldRef} after the upload`,
+      };
+    }
+    attachments.push({
+      artifactId: file.artifactId,
+      fieldRef,
+      fileName: file.fileName,
+      attachedFileName: reported.slice(0, MAX_REPORTED_ATTACHMENT_NAME_LENGTH),
+    });
+    appliedCount += 1;
+    // An attachment that got this far was confirmed off the control itself, which is the same bar
+    // every other verified write is held to (#277).
+    verifiedCount += 1;
+  }
+
+  // `appliedCount` counts writes this function issued; `verifiedCount` counts the ones the browser
+  // confirmed the control actually holds (#277). They are reported separately, and never merged,
+  // precisely because the gap between them is the interesting number: a controlled input that
+  // rejected a value, a select that did not move, a field the page re-rendered mid-write.
+  return {
+    ok: true,
+    appliedCount,
+    verifiedCount,
+    readiness: await active.executor.evaluateReadiness(),
+    ...(attachments.length > 0 ? { attachments } : {}),
+  };
+}
+
+/**
+ * Surfaces an open review's real page to the user, so an upload control this executor may not drive
+ * ends in something the user can actually see and finish by hand -- #273's "unsupported upload
+ * controls preserve a visible manual handoff". Returns `false` when there is no open review for
+ * `attemptId`, so a caller can tell "shown" from "nothing to show" rather than assuming.
+ *
+ * Called by `main.ts` when `applyApplicationFieldMap` comes back with a `manualHandoff`. Since #277
+ * this is a thin wrapper over `showApplicationReviewHandoff` rather than a second, independent way
+ * to put a view on screen: there is exactly one main window, so there has to be exactly one place
+ * that decides which attempt is covering it, or an automatic upload handoff could leave a different
+ * attempt's view stranded on screen with nothing tracking it.
+ */
+export function showApplicationReviewForHandoff(attemptId: string, window: BrowserWindow, db: WorkspaceDb): boolean {
+  return showApplicationReviewHandoff(db, window, attemptId).ok;
+}
+
+/**
+ * Puts one attempt's live browser view on screen and gives it keyboard focus, so a person can
+ * complete a CAPTCHA, sign in, or finish a control this executor cannot drive (#277). The
+ * `application-view.ts` `show()` this calls has existed since #201 with no production caller; this
+ * is that caller.
+ *
+ * Showing attempt B's handoff hides attempt A's and nothing more: A's view, executor, snapshot
+ * generation and verification record all survive untouched, and A's entry stays registered. That is
+ * the whole contract -- one window means one visible handoff, and it must cost nothing anywhere
+ * else.
+ *
+ * Returns the company/role the handoff is for, read from the attempt record rather than from the
+ * page, so what the person is told they are looking at comes from this app's own data and never
+ * from the third-party page they are about to interact with.
+ */
+export function showApplicationReviewHandoff(
+  db: WorkspaceDb,
+  window: BrowserWindow | undefined,
+  attemptId: string,
+): ShowApplicationHandoffResult {
+  const active = activeReviews.get(attemptId);
+  if (!active) return { ok: false, reason: 'no_open_review', detail: `no open review for attempt ${attemptId}` };
+  if (!window) return { ok: false, reason: 'no_window', detail: 'the app has no main window to show the live view in' };
+
+  // An attempt mid-submit must not have its page handed to a person: the click may already be in
+  // flight, and typing into the form underneath it is exactly the ambiguity #202's checkpoint
+  // machinery exists to avoid.
+  if (submittingAttemptIds.has(attemptId)) {
+    return { ok: false, reason: 'already_submitting', detail: `attempt ${attemptId} is mid-submit` };
+  }
+
+  // Returned as a refusal, not thrown: every other outcome of this function is a structured
+  // `{ ok: false, reason }`, and an attempt row deleted under an open review must not be the one
+  // case that rejects the IPC call instead.
+  let attempt: ApplicationAttemptRecord;
+  try {
+    attempt = workspace.getApplicationAttempt(db, attemptId);
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) {
+      return { ok: false, reason: 'no_open_review', detail: `attempt ${attemptId} no longer exists` };
+    }
+    throw err;
+  }
+
+  if (handoffAttemptId !== undefined && handoffAttemptId !== attemptId) {
+    const previous = activeReviews.get(handoffAttemptId);
+    // Hidden, never destroyed: the other attempt goes back to being an ordinary pending review with
+    // everything it had.
+    previous?.view.hide(window);
+  }
+  // The Escape handler is the way out that does not depend on the target page cooperating: a
+  // keyboard user focused inside the live page cannot Tab back to the app's own banner button, and
+  // a page can swallow every key it is allowed to see. Escape is taken at the Electron layer first.
+  active.view.show(window, () => hideApplicationReviewHandoff(window, attemptId));
+  handoffAttemptId = attemptId;
+  return { ok: true, company: attempt.company, role: attempt.role, bannerHeightPx: HANDOFF_BANNER_HEIGHT_PX };
+}
+
+/** Takes the live view back off the main window, returning focus to the app. A no-op for an
+ * attempt that is not the one currently shown, so a stale call from a closing review can never pull
+ * a different attempt's handoff out from under the person using it. */
+export function hideApplicationReviewHandoff(window: BrowserWindow | undefined, attemptId: string): void {
+  if (handoffAttemptId !== attemptId) return;
+  const active = activeReviews.get(attemptId);
+  if (window) active?.view.hide(window);
+  handoffAttemptId = undefined;
+}
+
+/** Which attempt currently holds the live handoff, if any. */
+export function currentHandoffAttemptId(): string | undefined {
+  return handoffAttemptId;
 }
 
 export type SubmitApplicationReviewRefusalReason =
@@ -133,10 +425,26 @@ export type SubmitApplicationReviewRefusalReason =
   | 'already_submitting'
   | 'already_submitted'
   | 'captcha_detected'
+  /** The live form is not actually ready: a required field is empty, the page is showing a
+   * validation error, an upload never landed, or a write this app made was not committed (#277). */
+  | 'form_not_ready'
+  /** A person currently has this attempt's live page on screen and may be typing into it (#277).
+   * Clicking submit underneath them is exactly the ambiguity #202's checkpoint machinery exists to
+   * avoid, and it is worse on the automatic path, where nobody asked for it at that moment. */
+  | 'handoff_in_progress'
   | 'unresolved_submit_control'
   | 'source_cv_not_found'
   | 'artifact_read_failed'
+  | 'artifact_bytes_changed'
   | 'submit_refused'
+  /** The click landed, and the form (or the endpoint) answered by refusing it (#271). Distinct
+   * from `submission_unknown`: this is a *known* non-delivery, and the attempt goes to
+   * `needs_user` rather than being left ambiguous. */
+  | 'submission_rejected'
+  /** A previous submit on this attempt ended on `submission_unknown` and has not been reconciled.
+   * Refused rather than retried: a blind second click risks a duplicate application on top of one
+   * that may already have gone through (#271's third acceptance case). */
+  | 'submission_outcome_unresolved'
   | 'submission_unknown';
 
 export interface SubmitApplicationReviewResult {
@@ -180,13 +488,21 @@ function computeFormStructureHash(snapshot: FormSnapshot): string {
  * 2. `resolveSubmitControl` must resolve exactly one candidate on the current snapshot -- the same
  *    resolution `executor.submit` re-derives and enforces internally; doing it here first means an
  *    ambiguous page refuses with a clear reason before any CDP call at all.
- * 3. The pre-submit gate: the *current* source CV (re-read live from the CV library by
+ * 3. Form readiness (#277): every active field's committed state is read back out of the browser,
+ *    and the page's own state is re-read and compared against the snapshot under review. An empty
+ *    required field, a validation error the page is displaying, an upload that never landed, a
+ *    write this app made that was not committed, or a page that has changed since a person looked
+ *    at it all refuse here. This is the check that makes "ready to submit" a claim about the live
+ *    form rather than about how many fields a snapshot happened to discover.
+ * 4. The pre-submit gate: the *current* source CV (re-read live from the CV library by
  *    `attempt.sourceCvId`, never trusted from the value stored at attempt-creation time) and the
  *    JD snapshot's own hash must still match what the attempt recorded, and the rendered CV/letter
- *    PDFs (read fresh from disk, not cached) must still name the right company/role and carry no
- *    placeholder text. A `sourceCvId` of `null` (the source CV was never a live library entry, or
- *    the attempt predates that link) has nothing live to re-check, so the hash the attempt was
- *    created with is compared against itself -- vacuously satisfied, not skipped.
+ *    PDFs (read fresh from disk, not cached, and only through #276's accepted-bytes check so a
+ *    file edited since it was validated refuses rather than inheriting that verdict) must still
+ *    address the right company/role and carry no placeholder text. A `sourceCvId` of `null` (the
+ *    source CV was never a live library entry, or the attempt predates that link) has nothing live
+ *    to re-check, so the hash the attempt was created with is compared against itself -- vacuously
+ *    satisfied, not skipped.
  *
  * `ExecutorPolicyError` from the submit call itself (the policy disallows the action, or any other
  * pre-click refusal `executor.submit` performs) is treated as a clean, non-ambiguous refusal --
@@ -194,6 +510,15 @@ function computeFormStructureHash(snapshot: FormSnapshot): string {
  * `submission_unknown`. Any other error (a real CDP/network failure once the click was actually
  * attempted) is genuinely ambiguous and lands on `submission_unknown`, per #202's own acceptance
  * criteria: "never silently retries or silently drops."
+ *
+ * 4. **The click is not the outcome (#271).** Until this slice, a click that returned was written
+ *    down as `submitted` on the next line. It no longer is: `executor.observeSubmissionOutcome()`
+ *    re-reads the page under a bounded budget and only a real receipt -- a confirmation the page
+ *    was not already showing, a printed reference, or an application identifier in an observed
+ *    response -- produces `submitted`, together with a durable evidence row naming the attempt,
+ *    the destination, the timestamp and the evidence itself. A form that came back flagging errors
+ *    produces `needs_user`; anything inconclusive produces the existing `submission_unknown`, which
+ *    this function now also refuses to blindly re-click on a later call.
  */
 export async function submitApplicationReview(
   db: WorkspaceDb,
@@ -211,6 +536,14 @@ export async function submitApplicationReview(
   if (submittingAttemptIds.has(attemptId)) {
     return { ok: false, reason: 'already_submitting', detail: `attempt ${attemptId} is already mid-submit` };
   }
+
+  // The other half of the mutual exclusion `showApplicationReviewHandoff` already enforces (#277).
+  // Without this, only one direction was closed: a handoff refused to open mid-submit, but a submit
+  // could still fire while a person had the live page on screen and was typing into it. That is
+  // most acute on the automatic path, where the timer has no idea anyone is looking.
+  if (handoffAttemptId === attemptId) {
+    return { ok: false, reason: 'handoff_in_progress', detail: `attempt ${attemptId} is open in the live view` };
+  }
   submittingAttemptIds.add(attemptId);
 
   try {
@@ -218,10 +551,25 @@ export async function submitApplicationReview(
     // the review was opened (possibly minutes ago, across the whole cancel window) -- manual mode
     // keeps the existing cached snapshot, since a human is looking at the live view seconds before
     // approving.
+    //
+    // Which makes the freshness baseline the interesting part of this line (#277): the readiness
+    // evaluation below compares a fresh page read against `snapshot`, so on the automatic path
+    // comparing against the snapshot taken one statement ago would compare the page to itself and
+    // could never report a change. The fingerprint from *before* that re-read is the one that
+    // represents the state a person actually reviewed, so it is captured here and checked
+    // separately.
+    const reviewedFingerprint = active.executor.currentSnapshot?.pageStateFingerprint;
     const snapshot = mode === 'automatic' ? await active.executor.snapshot() : active.executor.currentSnapshot;
     if (!snapshot) return { ok: false, reason: 'no_snapshot', detail: `attempt ${attemptId} has no snapshot yet` };
     if (snapshot.challengeDetected) {
       return { ok: false, reason: 'captcha_detected', detail: 'the current page has an active CAPTCHA/bot-detection challenge' };
+    }
+    if (mode === 'automatic' && reviewedFingerprint !== undefined && reviewedFingerprint !== snapshot.pageStateFingerprint) {
+      return {
+        ok: false,
+        reason: 'form_not_ready',
+        detail: 'the page changed during the cancel window, so nothing a person reviewed describes it any more',
+      };
     }
 
     const resolved = resolveSubmitControl(snapshot.submitControls);
@@ -230,8 +578,31 @@ export async function submitApplicationReview(
     }
 
     const attempt = workspace.getApplicationAttempt(db, attemptId);
-    if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+    if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting' || attempt.checkpoint === 'user_reported') {
       return { ok: false, reason: 'already_submitted', detail: `attempt ${attemptId} already reached checkpoint "${attempt.checkpoint}"` };
+    }
+    // #271: an unresolved outcome is the one state where a retry is actively dangerous -- the
+    // previous click may well have delivered, so clicking again risks a second real application at
+    // the same employer. Resolving it takes either a delayed receipt (`reconcileSubmissionOutcome`)
+    // or a person's own statement (`recordUserReportedSubmission`), never another blind click.
+    if (attempt.checkpoint === 'submission_unknown') {
+      return {
+        ok: false,
+        reason: 'submission_outcome_unresolved',
+        detail: `attempt ${attemptId} has an unresolved earlier submission and will not be blindly retried`,
+      };
+    }
+
+    // #277: what the live form actually holds, read back out of the browser, plus a freshness check
+    // against the snapshot under review. Placed after the local checkpoint check (which costs
+    // nothing) and before the checkpoint is ever moved, so an incomplete form refuses without
+    // having been treated as a submission in progress. A required field the page shows as empty, a
+    // validation error it is displaying, an upload that never landed, or a page that changed since
+    // it was reviewed all refuse here, and none of them were visible to the old "the snapshot found
+    // N fields, so N fields are filled" reading this replaces.
+    const readiness = await active.executor.evaluateReadiness();
+    if (!readiness.ready) {
+      return { ok: false, reason: 'form_not_ready', detail: describeBlockers(readiness.blockers) };
     }
 
     let currentSourceCvContentHash = attempt.sourceCvContentHash;
@@ -254,13 +625,19 @@ export async function submitApplicationReview(
     let renderedCvText: string;
     let renderedLetterText: string | null;
     try {
-      renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readFile(cvArtifact.storagePath))) : '';
-      renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readFile(letterArtifact.storagePath))) : null;
+      // #276: read through the accepted-bytes check, never a bare `readFile`. Each artifact row
+      // carries the hash of the bytes the document acceptance contract actually passed; if what is
+      // on disk no longer hashes to it, the earlier "validated" verdict describes a document that
+      // no longer exists, and the attempt must not inherit it. Re-extracting text from whatever is
+      // there now would agree with itself no matter what was swapped in.
+      renderedCvText = cvArtifact ? await extractPdfText(new Uint8Array(await readAcceptedArtifactBytes(cvArtifact))) : '';
+      renderedLetterText = letterArtifact ? await extractPdfText(new Uint8Array(await readAcceptedArtifactBytes(letterArtifact))) : null;
     } catch (err) {
       // Never let a missing/corrupted artifact throw out of this function: the automatic path's
       // caller treats a thrown error very differently from a returned refusal (see
       // `fireDueAutomaticSubmissions`), and only a returned refusal is guaranteed to notify the user.
       const detail = err instanceof Error ? err.message : String(err);
+      if (err instanceof AcceptedBytesChangedError) return { ok: false, reason: 'artifact_bytes_changed', detail };
       return { ok: false, reason: 'artifact_read_failed', detail };
     }
 
@@ -293,16 +670,266 @@ export async function submitApplicationReview(
       return { ok: false, reason: 'submission_unknown', detail };
     }
 
-    workspace.updateApplicationAttempt(db, attemptId, {
-      checkpoint: 'submitted',
-      submittedAt: new Date().toISOString(),
-      submissionMode: mode,
-      formStructureHash: computeFormStructureHash(snapshot),
+    // #271: the click landed. That is all it means. What actually happened is a separate question
+    // with three honest answers, and only one of them is `submitted`.
+    let report: SubmissionOutcomeReport;
+    try {
+      report = await active.executor.observeSubmissionOutcome();
+    } catch (err) {
+      // The observer itself failed (a policy refusal, a transport that is gone). The click already
+      // happened, so this is ambiguous, never a success and never a clean refusal.
+      report = {
+        outcome: 'unknown',
+        reason: 'observation_failed',
+        detail: `the submission outcome could not be observed: ${err instanceof Error ? err.message : String(err)}`,
+        observedAt: new Date().toISOString(),
+      };
+    }
+
+    if (report.outcome === 'submitted') {
+      recordSubmissionReceipt(db, {
+        attemptId,
+        outcome: 'submitted',
+        source: 'page_observation',
+        destination: active.targetUrl,
+        evidenceKind: report.evidence.kind,
+        evidenceReference: report.evidence.reference,
+        detail: report.detail,
+        observedAt: report.observedAt,
+      });
+      workspace.updateApplicationAttempt(db, attemptId, {
+        checkpoint: 'submitted',
+        submittedAt: report.observedAt,
+        submissionMode: mode,
+        formStructureHash: computeFormStructureHash(snapshot),
+        // #275's completion evidence, and the one place in the app entitled to assert it. #275
+        // landed this column with nothing able to write `receipt_confirmed` honestly, because the
+        // observation that could justify it is #271's and did not exist yet. It does now: this
+        // branch is reached only when `observeSubmissionOutcome()` returned `submitted`, which it
+        // does only on a confirmation genuinely new since before the click, or a receipt
+        // identifier. The receipt row written just above is the durable evidence; this column is
+        // the same fact denormalized onto the attempt so #275's completed-application lookup is a
+        // plain column read and does not have to join evidence to answer "has this been applied to?".
+        completionEvidence: 'receipt_confirmed',
+      });
+      return { ok: true };
+    }
+
+    if (report.outcome === 'rejected') {
+      recordSubmissionReceipt(db, {
+        attemptId,
+        outcome: 'rejected',
+        source: 'page_observation',
+        destination: active.targetUrl,
+        evidenceKind: 'none',
+        detail: report.detail,
+        observedAt: report.observedAt,
+      });
+      // `needs_user`, not `failed`: the application still exists and is still fillable, it just has
+      // something unresolved on it that a person has to look at. Not `ready` either -- that would
+      // let the automatic path pick it straight back up and click again into the same refusal.
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'needs_user', checkpointDetail: report.detail });
+      return { ok: false, reason: 'submission_rejected', detail: report.detail };
+    }
+
+    recordSubmissionReceipt(db, {
+      attemptId,
+      outcome: 'unknown',
+      source: 'page_observation',
+      destination: active.targetUrl,
+      evidenceKind: 'none',
+      detail: report.detail,
+      observedAt: report.observedAt,
     });
-    return { ok: true };
+    // `submittedAt` is set here too, matching `schema.ts`'s own comment on the column: it marks the
+    // moment a real, possibly-irreversible submit action was attempted, which is exactly what
+    // happened, regardless of whether it landed.
+    workspace.updateApplicationAttempt(db, attemptId, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: report.detail,
+      submittedAt: report.observedAt,
+    });
+    return { ok: false, reason: 'submission_unknown', detail: report.detail };
   } finally {
     submittingAttemptIds.delete(attemptId);
   }
+}
+
+/**
+ * Writes one durable observation and never lets doing so break the submission path (#271). A
+ * failed *evidence* write must not turn an established outcome into a thrown error the automatic
+ * caller would treat as a crash -- the checkpoint update immediately after this call is what the
+ * user-visible state depends on, and it has to happen either way.
+ */
+function recordSubmissionReceipt(db: WorkspaceDb, input: ApplicationSubmissionReceiptInput): void {
+  try {
+    workspace.createApplicationSubmissionReceipt(db, input);
+  } catch (err) {
+    console.warn('[application-executor] failed to record a submission receipt', {
+      attemptId: input.attemptId,
+      outcome: input.outcome,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export type RecordUserReportedSubmissionRefusalReason = 'already_observed' | 'attempt_not_found';
+
+export interface RecordUserReportedSubmissionResult {
+  ok: boolean;
+  reason?: RecordUserReportedSubmissionRefusalReason;
+  detail?: string;
+}
+
+/**
+ * #271's fourth acceptance case: a person finished this application themselves (in the live view,
+ * in another tab, by email) and says so.
+ *
+ * That lands on its own checkpoint, `user_reported`, and its own receipt outcome -- never on
+ * `submitted`. The distinction is the entire point: `submitted` since #271 means "this app
+ * observed a receipt", and a value that can also be produced by someone simply asserting it is a
+ * value no one can rely on later.
+ *
+ * Just as importantly, nothing anywhere ever moves this state backwards on silence. There is no
+ * code path that reads "no confirmation email arrived" as failure, here or in
+ * `reconcileSubmissionOutcome` below, because the absence of a receipt is not evidence of
+ * non-delivery any more than it is evidence of delivery.
+ *
+ * Refuses outright for an attempt that already has a machine-observed `submitted` outcome: a
+ * person's statement must not overwrite real evidence in either direction.
+ */
+export function recordUserReportedSubmission(
+  db: WorkspaceDb,
+  attemptId: string,
+  statement = '',
+  now: string = new Date().toISOString(),
+): RecordUserReportedSubmissionResult {
+  let attempt: ApplicationAttemptRecord;
+  try {
+    attempt = workspace.getApplicationAttempt(db, attemptId);
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) return { ok: false, reason: 'attempt_not_found', detail: err.message };
+    throw err;
+  }
+
+  if (attempt.checkpoint === 'submitted') {
+    return {
+      ok: false,
+      reason: 'already_observed',
+      detail: `attempt ${attemptId} already has an observed submission receipt; a report cannot overwrite it`,
+    };
+  }
+
+  const detail = statement.trim() || 'reported as applied by the user';
+  workspace.createApplicationSubmissionReceipt(db, {
+    attemptId,
+    outcome: 'user_reported',
+    source: 'user_reported',
+    destination: activeReviews.get(attemptId)?.targetUrl ?? attempt.canonicalUrl,
+    evidenceKind: 'user_statement',
+    evidenceReference: detail,
+    detail,
+    observedAt: now,
+  });
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: 'user_reported',
+    checkpointDetail: detail,
+    // #275's other completion-evidence value, written here for the same reason the observer writes
+    // `receipt_confirmed`: this attempt is now a completed application to its requisition, and
+    // #275's lookup must suppress a duplicate for it just as hard as for an observed one, while
+    // still being able to say *which* kind of completion it was. Recording the checkpoint without
+    // this would leave the lookup unable to tell a person's report from an unrecorded legacy row.
+    completionEvidence: 'user_reported',
+  });
+  return { ok: true };
+}
+
+export type ReconcileSubmissionOutcomeRefusalReason =
+  | 'attempt_not_found'
+  | 'outcome_already_resolved'
+  | 'no_delivery_evidence'
+  | 'application_error_payload';
+
+export interface ReconcileSubmissionOutcomeResult {
+  ok: boolean;
+  reason?: ReconcileSubmissionOutcomeRefusalReason;
+  detail?: string;
+}
+
+/**
+ * The delayed half of #271's fifth acceptance case: an acknowledgement that arrives after the
+ * post-click observation window has already closed and the attempt is sitting on
+ * `submission_unknown`.
+ *
+ * One direction only. This function can move an unresolved attempt to `submitted`, and it can do
+ * nothing else: it never marks anything failed, never touches an attempt whose outcome is already
+ * resolved (a `submitted`, `user_reported` or `needs_user` attempt is left exactly as it is), and
+ * never accepts a transport-level success as delivery -- a `200 OK` carrying an application-error
+ * payload is recorded as a rejection receipt and the checkpoint stays unresolved, because a late
+ * error payload is evidence that *this* response was not a receipt, not proof that nothing was
+ * ever delivered.
+ *
+ * `response` is supplied by whatever observed it; this module does not fetch anything, and the
+ * executor package structurally cannot (its CDP allowlist denies the whole network domain).
+ */
+export function reconcileSubmissionOutcome(
+  db: WorkspaceDb,
+  attemptId: string,
+  response: ObservedResponse,
+  now: string = new Date().toISOString(),
+): ReconcileSubmissionOutcomeResult {
+  let attempt: ApplicationAttemptRecord;
+  try {
+    attempt = workspace.getApplicationAttempt(db, attemptId);
+  } catch (err) {
+    if (err instanceof WorkspaceNotFoundError) return { ok: false, reason: 'attempt_not_found', detail: err.message };
+    throw err;
+  }
+
+  if (attempt.checkpoint !== 'submission_unknown') {
+    return {
+      ok: false,
+      reason: 'outcome_already_resolved',
+      detail: `attempt ${attemptId} is at checkpoint "${attempt.checkpoint}", which reconciliation never overwrites`,
+    };
+  }
+
+  const report = classifyDelayedReceipt(response, now);
+  const destination = activeReviews.get(attemptId)?.targetUrl ?? attempt.canonicalUrl;
+
+  if (report.outcome === 'submitted') {
+    recordSubmissionReceipt(db, {
+      attemptId,
+      outcome: 'submitted',
+      source: 'delayed_receipt',
+      destination,
+      evidenceKind: report.evidence.kind,
+      evidenceReference: report.evidence.reference,
+      detail: report.detail,
+      observedAt: report.observedAt,
+    });
+    workspace.updateApplicationAttempt(db, attemptId, {
+      checkpoint: 'submitted',
+      checkpointDetail: report.detail,
+      submittedAt: attempt.submittedAt ?? report.observedAt,
+    });
+    return { ok: true };
+  }
+
+  recordSubmissionReceipt(db, {
+    attemptId,
+    outcome: report.outcome === 'rejected' ? 'rejected' : 'unknown',
+    source: 'delayed_receipt',
+    destination,
+    evidenceKind: 'none',
+    detail: report.detail,
+    observedAt: report.observedAt,
+  });
+  return {
+    ok: false,
+    reason: report.outcome === 'rejected' ? 'application_error_payload' : 'no_delivery_evidence',
+    detail: report.detail,
+  };
 }
 
 /** Real time between an attempt being cleared for automatic submission and the submit action
@@ -344,7 +971,15 @@ async function checkAutomaticSubmissionEligibility(db: WorkspaceDb, attemptId: s
   if (!active) return { ok: false, reason: 'no_open_review' };
 
   const attempt = workspace.getApplicationAttempt(db, attemptId);
-  if (attempt.checkpoint === 'submitted' || attempt.checkpoint === 'submitting') {
+  // `submission_unknown` and `user_reported` are here alongside the two original states (#271): an
+  // unresolved earlier submit may already have delivered, and a person who says they applied by
+  // hand has not asked for a second, unattended application on top of it.
+  if (
+    attempt.checkpoint === 'submitted' ||
+    attempt.checkpoint === 'submitting' ||
+    attempt.checkpoint === 'submission_unknown' ||
+    attempt.checkpoint === 'user_reported'
+  ) {
     return { ok: false, reason: 'already_submitted' };
   }
 
@@ -484,6 +1119,11 @@ export async function closeApplicationReview(attemptId: string): Promise<void> {
   const active = activeReviews.get(attemptId);
   if (!active) return;
   activeReviews.delete(attemptId);
+  // Only this attempt's own claim on the handoff is released. `view.destroy()` already detaches the
+  // view from whatever window it was shown in, so no window call is needed here -- and crucially,
+  // an attempt that did NOT hold the handoff leaves another attempt's shown view exactly where it
+  // is (#277).
+  if (handoffAttemptId === attemptId) handoffAttemptId = undefined;
   active.view.destroy();
 }
 
@@ -492,4 +1132,5 @@ export async function closeApplicationReview(attemptId: string): Promise<void> {
 export function closeAllApplicationReviews(): void {
   for (const { view } of activeReviews.values()) view.destroy();
   activeReviews.clear();
+  handoffAttemptId = undefined;
 }

@@ -1,0 +1,33 @@
+{
+  "uuid": "44444444-4444-4444-8444-444444444444",
+  "sistEndret": "2026-08-25T09:00:00Z",
+  "status": "ACTIVE",
+  "ad_content": {
+    "uuid": "44444444-4444-4444-8444-444444444444",
+    "published": "2026-08-22T08:00:00Z",
+    "expires": "2099-01-01T00:00:00Z",
+    "updated": "2026-08-25T09:00:00Z",
+    "workLocations": [
+      { "country": "Norway", "address": null, "city": null, "postalCode": null, "county": "Rogaland", "municipal": "Stavanger" }
+    ],
+    "contactList": [
+      { "name": "Ola Nordmann", "email": "ola@example.invalid", "phone": "+47 98765432", "role": "Hiring Manager", "title": null }
+    ],
+    "title": "Senior Frontend Engineer",
+    "description": "Join our platform team building customer-facing UI in Stavanger.",
+    "sourceurl": null,
+    "source": null,
+    "applicationUrl": "https://stavangersoftware.example/jobs/senior-frontend-engineer/apply",
+    "applicationDue": "2026-10-01",
+    "occupationCategories": [ { "level1": "IKT", "level2": "Utvikling" } ],
+    "categoryList": [],
+    "jobtitle": "Senior Frontend Engineer",
+    "link": "https://arbeidsplassen.nav.no/stillinger/stilling/44444444-4444-4444-8444-444444444444",
+    "employer": { "name": "Stavanger Software AS", "orgnr": "934567890", "description": null, "homepage": null },
+    "engagementtype": "Fast",
+    "extent": "Heltid",
+    "starttime": null,
+    "positioncount": "2",
+    "sector": "Privat"
+  }
+}

@@ -49,6 +49,28 @@ describe('enqueue', () => {
   });
 });
 
+describe('clear', () => {
+  it('removes queued entries durably without reusing event sequence ids', () => {
+    const store = new ApplicationQueueStore({ stateRoot });
+    store.enqueue('attempt-1');
+    store.enqueue('attempt-2');
+
+    expect(store.clear()).toBe(2);
+    expect(store.list()).toEqual([]);
+    expect(store.currentLease()).toBeNull();
+
+    const next = store.enqueue('attempt-3');
+    expect(next.attemptId).toBe('attempt-3');
+
+    const reopened = new ApplicationQueueStore({ stateRoot });
+    expect(reopened.list()).toEqual([expect.objectContaining({ attemptId: 'attempt-3' })]);
+    expect(reopened.currentLease()).toBeNull();
+    const replayed: Array<{ seq: number; attemptId: string }> = [];
+    reopened.subscribe(0, (event) => replayed.push({ seq: event.seq, attemptId: event.attemptId }));
+    expect(replayed).toEqual([{ seq: 2, attemptId: 'attempt-3' }]);
+  });
+});
+
 describe('single-worker lease', () => {
   it('acquires the oldest queued entry', () => {
     const store = new ApplicationQueueStore({ stateRoot });

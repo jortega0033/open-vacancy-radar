@@ -197,6 +197,31 @@ export function toActivityEntry(
       };
     }
 
+    case 'usage.rate_limits': {
+      const primary = envelope.primary
+        ? {
+            usedPercent: finiteNumber(envelope.primary.usedPercent) ?? 0,
+            ...(envelope.primary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.primary.windowDurationMins }),
+            ...(envelope.primary.resetsAt === undefined ? {} : { resetsAt: envelope.primary.resetsAt }),
+          }
+        : undefined;
+      const secondary = envelope.secondary
+        ? {
+            usedPercent: finiteNumber(envelope.secondary.usedPercent) ?? 0,
+            ...(envelope.secondary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.secondary.windowDurationMins }),
+            ...(envelope.secondary.resetsAt === undefined ? {} : { resetsAt: envelope.secondary.resetsAt }),
+          }
+        : undefined;
+      return {
+        ...base,
+        kind: 'usage.rate_limits',
+        ...(envelope.limitId === undefined ? {} : { limitId: envelope.limitId }),
+        ...(envelope.limitName === undefined ? {} : { limitName: envelope.limitName }),
+        ...(primary === undefined ? {} : { primary }),
+        ...(secondary === undefined ? {} : { secondary }),
+      };
+    }
+
     case 'error':
       // `message` is never passed through. The user-facing sentence comes from a closed table in
       // `src/components/agent-workspace/refusal-copy.ts`, selected by this `code`, exactly as
@@ -248,6 +273,7 @@ const SANITIZED_EVENT_TYPE_TUPLE = [
   'tool.started',
   'tool.completed',
   'usage',
+  'usage.rate_limits',
   'error',
   'session.completed',
   'session.failed',
@@ -291,6 +317,21 @@ function readDigest(source: Record<string, unknown>, prefix: string): ActivityDi
 /** The unprefixed `{ bytes, sha256 }` pair the two prose records carry. */
 function readBareDigest(source: Record<string, unknown>): ActivityDigest | undefined {
   return asDigest(source.bytes, source.sha256);
+}
+
+/** Extracts a rate limit window object from an unknown value. */
+function readRateLimitWindow(
+  value: unknown,
+): { usedPercent: number; windowDurationMins?: number; resetsAt?: number } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const window = value as Record<string, unknown>;
+  const usedPercent = finiteNumber(window.usedPercent);
+  if (usedPercent === undefined) return undefined;
+  return {
+    usedPercent,
+    ...(typeof window.windowDurationMins === 'number' ? { windowDurationMins: window.windowDurationMins } : {}),
+    ...(typeof window.resetsAt === 'number' ? { resetsAt: window.resetsAt } : {}),
+  };
 }
 
 /**
@@ -386,6 +427,23 @@ export function toHistoryEntry(record: unknown, toolAliases: Map<string, string>
         ...(outputTokens === undefined ? {} : { outputTokens }),
         ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
         ...(cost === undefined ? {} : { cost }),
+      };
+    }
+
+    case 'usage.rate_limits': {
+      const primary = readRateLimitWindow(source.primary);
+      const secondary = readRateLimitWindow(source.secondary);
+      return {
+        ...base,
+        kind: 'usage.rate_limits',
+        ...(source.limitId === undefined || typeof source.limitId !== 'string'
+          ? {}
+          : { limitId: truncateToBytes(source.limitId, 256) }),
+        ...(source.limitName === undefined || typeof source.limitName !== 'string'
+          ? {}
+          : { limitName: truncateToBytes(source.limitName, 256) }),
+        ...(primary === undefined ? {} : { primary }),
+        ...(secondary === undefined ? {} : { secondary }),
       };
     }
 

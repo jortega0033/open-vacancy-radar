@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ApplicationArtifactRecord, ApplicationAttemptRecord } from '../../window.js';
+import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 
 export interface ApplicationAttemptDrawerProps {
@@ -7,7 +7,7 @@ export interface ApplicationAttemptDrawerProps {
   onClose: () => void;
 }
 
-const ARTIFACT_KIND_LABEL: Record<ApplicationArtifactRecord['kind'], string> = {
+const ARTIFACT_KIND_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
   cv_pdf: 'Tailored CV',
   cover_letter_pdf: 'Cover letter',
   combined_pdf: 'Combined document',
@@ -33,7 +33,7 @@ function formatDateTime(iso: string): string {
  * `checkpoint`, never a person from this drawer.
  */
 export function ApplicationAttemptDrawer({ attempt, onClose }: ApplicationAttemptDrawerProps) {
-  const [artifacts, setArtifacts] = useState<ApplicationArtifactRecord[] | null>(null);
+  const [artifacts, setArtifacts] = useState<ApplicationArtifactSummary[] | null>(null);
   const [artifactsError, setArtifactsError] = useState<string>();
 
   useEffect(() => {

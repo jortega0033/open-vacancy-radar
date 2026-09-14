@@ -1,4 +1,5 @@
 import type { AgentDockClient, FieldMapGenerationRequest } from '@agent-dock/client';
+import type { AgentSession } from '@agent-dock/shared';
 
 /**
  * Headless counterpart of `src/components/cv/useAgentRun.ts`, for the one caller that has no
@@ -27,27 +28,17 @@ export interface FieldMapGenerationResult {
   error?: string;
 }
 
-/**
- * Creates the field-map generation session and drains its event stream to completion (or failure,
- * or timeout). Never throws for an ordinary session failure -- those are reported via the returned
- * `ok`/`error` fields, matching `useAgentRun.ts`'s own convention of surfacing failures as state
- * rather than exceptions. A genuinely unexpected error (a network failure the client itself did not
- * turn into an `error` event) still propagates.
- */
-export async function runFieldMapGeneration(
-  client: AgentDockClient,
-  input: FieldMapGenerationRequest,
-): Promise<FieldMapGenerationResult> {
-  const session = await client.sessions.createFieldMapGeneration(input);
+export type TextGenerationResult = FieldMapGenerationResult;
 
+async function drainGenerationSession(
+  client: AgentDockClient,
+  sessionPromise: Promise<AgentSession>,
+  failureLabel: string,
+): Promise<TextGenerationResult> {
+  const session = await sessionPromise;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FIELD_MAP_GENERATION_TIMEOUT_MS);
-
   let text = '';
-  // A *recoverable* error is only ever a fallback explanation for an otherwise-empty completion
-  // (mirroring `useAgentRun.ts`'s own `setError((current) => current ?? event.message)`), never a
-  // verdict on its own: a session that logs a recoverable hiccup and still finishes with real text
-  // is a success. `terminalError` is the actual verdict, set only by an event that ends the run.
   let fallbackError: string | undefined;
   let terminalError: string | undefined;
 
@@ -58,20 +49,14 @@ export async function runFieldMapGeneration(
           text += event.text;
           break;
         case 'error':
-          if (event.recoverable) {
-            fallbackError ??= event.message;
-          } else {
-            // Non-recoverable means the daemon cannot send a terminal event for this session
-            // anymore (e.g. its own event stream died mid-run). Waiting for session.failed/
-            // completed here would wait for the full timeout for no reason -- treat as terminal now.
-            terminalError = event.message;
-          }
+          if (event.recoverable) fallbackError ??= event.message;
+          else terminalError = event.message;
           break;
         case 'session.failed':
-          terminalError = event.message || 'the field-map generation session failed';
+          terminalError = event.message || `${failureLabel} failed`;
           break;
         case 'session.cancelled':
-          terminalError = 'the field-map generation session was cancelled';
+          terminalError = `${failureLabel} was cancelled`;
           break;
         default:
           break;
@@ -89,6 +74,28 @@ export async function runFieldMapGeneration(
   if (terminalError === undefined && text.trim().length === 0) {
     terminalError = fallbackError ?? 'the agent finished without returning any text';
   }
-
   return { ok: terminalError === undefined, text, error: terminalError };
+}
+
+/**
+ * Creates the field-map generation session and drains its event stream to completion (or failure,
+ * or timeout). Never throws for an ordinary session failure -- those are reported via the returned
+ * `ok`/`error` fields, matching `useAgentRun.ts`'s own convention of surfacing failures as state
+ * rather than exceptions. A genuinely unexpected error (a network failure the client itself did not
+ * turn into an `error` event) still propagates.
+ */
+export async function runFieldMapGeneration(
+  client: AgentDockClient,
+  input: FieldMapGenerationRequest,
+): Promise<FieldMapGenerationResult> {
+  return drainGenerationSession(client, client.sessions.createFieldMapGeneration(input), 'the field-map generation session');
+}
+
+export function runTextGeneration(
+  client: AgentDockClient,
+  input: FieldMapGenerationRequest,
+): Promise<TextGenerationResult> {
+  // This client capability selects the daemon's closed-tool, no-network application-generation
+  // profile. Its historical name mentions field maps, but the hardening contract is generic.
+  return drainGenerationSession(client, client.sessions.createFieldMapGeneration(input), 'the document generation session');
 }

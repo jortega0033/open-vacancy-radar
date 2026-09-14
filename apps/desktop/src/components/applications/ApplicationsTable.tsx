@@ -32,8 +32,11 @@ export function ApplicationsTable({
   onDelete,
 }: ApplicationsTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="table">
+    <div
+      className="ovr-responsive-table overflow-x-auto"
+      data-testid="applications-responsive-table"
+    >
+      <table className="table ovr-responsive-table__table">
         <thead>
           <tr>
             <th>Role</th>
@@ -49,12 +52,23 @@ export function ApplicationsTable({
         </thead>
         <tbody>
           {applications.map((application) => (
-            <tr key={application.id} className={`ovr-row ${application.archived ? 'opacity-60' : ''}`}>
-              <td className="font-semibold">{application.role}</td>
-              <td>{application.company}</td>
-              <td>{application.location || '—'}</td>
-              <td>{application.verification || '—'}</td>
-              <td>
+            <tr
+              key={application.id}
+              className={`ovr-row ${application.archived ? 'opacity-60' : ''}`}
+            >
+              <td className="ovr-responsive-table__cell font-semibold" data-label="Role">
+                {application.role}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Company">
+                {application.company}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Location">
+                {application.location || '—'}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Verification">
+                {application.verification || '—'}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Status">
                 <select
                   aria-label="Application status"
                   className={APPLICATION_STATUS_SELECT_CLASS[application.status]}
@@ -68,14 +82,31 @@ export function ApplicationsTable({
                   ))}
                 </select>
               </td>
-              <td className="whitespace-nowrap">{formatAppliedDate(application.appliedAt)}</td>
-              <td>{application.nextStep || '—'}</td>
-              <td>{application.contact || '—'}</td>
-              <td className="text-right whitespace-nowrap">
-                <button type="button" className="btn btn-ghost btn-xs" onClick={() => onEdit(application)}>
+              <td className="ovr-responsive-table__cell whitespace-nowrap" data-label="Applied">
+                {formatAppliedDate(application.appliedAt)}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Next step">
+                {application.nextStep || '—'}
+              </td>
+              <td className="ovr-responsive-table__cell" data-label="Contact">
+                {application.contact || '—'}
+              </td>
+              <td
+                className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
+                data-label="Actions"
+              >
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => onEdit(application)}
+                >
                   Edit
                 </button>
-                <button type="button" className="btn btn-ghost btn-xs" onClick={() => onToggleArchive(application)}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => onToggleArchive(application)}
+                >
                   {application.archived ? 'Restore' : 'Archive'}
                 </button>
                 <button

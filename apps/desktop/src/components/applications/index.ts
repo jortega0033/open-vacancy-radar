@@ -1,4 +1,5 @@
 export { ApplicationsPage } from './ApplicationsPage.js';
+export type { ApplicationsPageProps } from './ApplicationsPage.js';
 export { ApplicationsTable } from './ApplicationsTable.js';
 export type { ApplicationsTableProps } from './ApplicationsTable.js';
 export { ApplicationDrawer } from './ApplicationDrawer.js';
@@ -14,3 +15,5 @@ export {
   toDateInputValue,
 } from './application-status.js';
 export type { ApplicationsFilterTab } from './application-status.js';
+export { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
+export type { ApplicationPreparedSummaryProps } from './ApplicationPreparedSummary.js';

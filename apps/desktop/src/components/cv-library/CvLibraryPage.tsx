@@ -1,15 +1,71 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { CvDocumentRecord } from '../../window.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
+import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
-import { ConfirmDialog, EmptyState } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
+
+/** How long the "Exported" confirmation stays up next to a row, matching `TailorCv`'s own
+ * copy-feedback window. */
+const EXPORT_FEEDBACK_MS = 2_000;
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+function nonEmpty(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function unique(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+async function fillEmptySearchProfileFieldsFromCv(doc: CvDocumentRecord): Promise<boolean> {
+  if (!('vacancyRadar' in window)) return false;
+  const profile = await window.vacancyRadar.getSearchProfile();
+  const patch: CandidateProfilePatch = {};
+
+  const title = nonEmpty(doc.profile.title);
+  const targetRole = nonEmpty(doc.targetRole) ?? title;
+  const years = Number.parseInt(doc.profile.years.trim(), 10);
+  const language = doc.profile.languages
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  const skills = unique(doc.profile.skills);
+
+  if (!profile.currentRole && title) patch.currentRole = title;
+  if (!profile.location && nonEmpty(doc.profile.location)) patch.location = doc.profile.location.trim();
+  if (profile.experienceYears === 0 && Number.isFinite(years) && years > 0) patch.experienceYears = years;
+  if (!profile.constraints.professionalLanguage && language) {
+    patch.constraints = { professionalLanguage: language };
+  }
+  if (profile.strongestSkills.length === 0 && skills.length > 0) {
+    patch.strongestSkills = skills.slice(0, 10);
+  }
+  if (profile.targetRoles.length === 0 && targetRole) {
+    patch.targetRoles = [targetRole];
+  }
+
+  if (Object.keys(patch).length === 0) return false;
+  await window.vacancyRadar.saveSearchProfile(patch);
+  return true;
 }
 
 /**
@@ -37,6 +93,17 @@ export function CvLibraryPage() {
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
+  const [actionStatus, setActionStatus] = useState<string>();
+
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportedId, setExportedId] = useState<string | null>(null);
+  const exportedTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(
+    () => () => {
+      if (exportedTimeoutRef.current !== undefined) clearTimeout(exportedTimeoutRef.current);
+    },
+    [],
+  );
 
   /** Used after a successful upload, where the save flow only reports back a new id, not a row. */
   const reloadDocuments = useCallback(async () => {
@@ -86,18 +153,53 @@ export function CvLibraryPage() {
 
   const handleSetDefault = useCallback(async (doc: CvDocumentRecord) => {
     setActionError(undefined);
+    setActionStatus(undefined);
     try {
       // The whole refreshed library, so the previous default's demotion shows up too: see the
       // bridge doc comment on `setDefaultCvDocument` for why re-fetching would be redundant here.
       const refreshed = await window.workspace.setDefaultCvDocument(doc.id);
       setDocuments(refreshed);
+      const promoted = refreshed.find((entry) => entry.id === doc.id) ?? doc;
+      try {
+        const filled = await fillEmptySearchProfileFieldsFromCv(promoted);
+        if (filled) setActionStatus('Search profile filled from the default CV');
+      } catch (err) {
+        setActionError(`Default CV set, but the search profile was not filled: ${describeError(err, 'unknown error')}`);
+      }
     } catch (err) {
       setActionError(describeError(err, 'could not set this CV as default'));
     }
   }, []);
 
+  /** #156: exports one CV entry to PDF/DOCX via the native save dialog. `{ saved: false }` means
+   * the user cancelled that dialog, not a failure, so it is treated as a silent no-op rather than
+   * an error -- the same distinction `LetterGenerator`'s own export handler makes. */
+  const handleExport = useCallback(async (doc: CvDocumentRecord, format: CvExportFormat) => {
+    if (exportedTimeoutRef.current !== undefined) clearTimeout(exportedTimeoutRef.current);
+    setActionError(undefined);
+    setActionStatus(undefined);
+    setExportingId(doc.id);
+    // Cleared synchronously, not left to the pending timeout above: without this, a second export
+    // started while a previous "Exported" badge is still showing would leave that stale badge
+    // visible for the whole new export's duration, misrepresenting a run that has not finished yet
+    // as already complete.
+    setExportedId(null);
+    try {
+      const result = await window.workspace.exportCvDocument(doc.id, format);
+      if (result.saved) {
+        setExportedId(doc.id);
+        exportedTimeoutRef.current = setTimeout(() => setExportedId(null), EXPORT_FEEDBACK_MS);
+      }
+    } catch (err) {
+      setActionError(describeError(err, 'could not export this CV'));
+    } finally {
+      setExportingId(null);
+    }
+  }, []);
+
   const requestDelete = useCallback((doc: CvDocumentRecord) => {
     setActionError(undefined);
+    setActionStatus(undefined);
     setDeleteTarget(doc);
   }, []);
 
@@ -109,11 +211,15 @@ export function CvLibraryPage() {
     setDeleteTarget(null);
     try {
       await window.workspace.deleteCvDocument(doc.id);
-      setDocuments((prev) => (prev ?? []).filter((row) => row.id !== doc.id));
+      // Not a local filter: deleting the default CV promotes another remaining one to default on
+      // the backend (see `deleteCvDocument` in `electron/workspace/repository.ts`), and only a
+      // refetch picks that promotion up. Filtering the deleted row out of the already-loaded list
+      // would leave every remaining CV looking non-default until the next reload.
+      await reloadDocuments();
     } catch (err) {
       setActionError(describeError(err, 'could not delete this CV'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, reloadDocuments]);
 
   const isLoading = documents === null;
   const hasAnyDocuments = (documents?.length ?? 0) > 0;
@@ -121,10 +227,7 @@ export function CvLibraryPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">CV library</h2>
-          {hasAnyDocuments && <p className="mt-1 text-sm text-base-content/60">{documents?.length} on file</p>}
-        </div>
+        <div>{hasAnyDocuments && <p className="text-sm text-base-content/60">{documents?.length} on file</p>}</div>
         <div className="flex items-center gap-2">
           <CvUploadAction onSaved={() => void reloadDocuments()} />
           <button className="btn btn-outline btn-sm" type="button" onClick={openAddDrawer}>
@@ -133,16 +236,21 @@ export function CvLibraryPage() {
         </div>
       </div>
 
-      {loadError && <div className="alert alert-error mt-4">{loadError}</div>}
-      {actionError && <div className="alert alert-error mt-4">{actionError}</div>}
+      {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+      {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+      {actionStatus && (
+        <div className="alert alert-success alert-soft mt-4 text-sm" role="status">
+          {actionStatus}
+        </div>
+      )}
 
-      {isLoading && !loadError && <div className="alert alert-info mt-4">Loading your CV library…</div>}
+      {isLoading && !loadError && <PageLoading label="Loading your CV library…" />}
 
       {!isLoading && !hasAnyDocuments && (
         <EmptyState
           illustration={emptyCvIllustration}
           title="No CV on file"
-          description="Upload a PDF, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
+          description="Upload a PDF, Word, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
               Add manual profile
@@ -158,6 +266,9 @@ export function CvLibraryPage() {
             onEdit={openEditDrawer}
             onSetDefault={(doc) => void handleSetDefault(doc)}
             onDelete={requestDelete}
+            onExport={(doc, format) => void handleExport(doc, format)}
+            exportingId={exportingId}
+            exportedId={exportedId}
           />
         </div>
       )}

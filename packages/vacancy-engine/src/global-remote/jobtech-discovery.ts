@@ -1,10 +1,17 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
   isoPostedAt,
   numberValue,
   parsedRoot,
@@ -108,6 +115,8 @@ export async function runJobtechDiscovery(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = jobtechSearchUrl(config.discovery.roleQuery);
   try {
     const root = parsedRoot(
@@ -167,6 +176,8 @@ export async function runJobtechDiscovery(
           listings: vacancies.length,
           status: incompleteReasons.length > 0 ? 'partial' : 'success',
           error: incompleteReasons.length > 0 ? incompleteReasons.join(' ') : null,
+          ...networkAttemptFields(counters),
+          ...(incompleteReasons.length > 0 ? incompleteAudit(incompleteReasons.join(' ')) : completeAudit()),
         },
       ],
       vacancies,
@@ -181,6 +192,7 @@ export async function runJobtechDiscovery(
           requests: 1,
           listings: 0,
           ...sourceFailure(error),
+          ...networkAttemptFields(counters),
         },
       ],
       vacancies: [],
