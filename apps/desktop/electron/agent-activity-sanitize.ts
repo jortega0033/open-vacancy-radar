@@ -187,6 +187,8 @@ export function toActivityEntry(
       const outputTokens = finiteNumber(envelope.outputTokens);
       const cachedInputTokens = finiteNumber(envelope.cachedInputTokens);
       const cost = finiteNumber(envelope.cost);
+      const contextTokens = finiteNumber(envelope.contextTokens);
+      const contextWindowTokens = finiteNumber(envelope.contextWindowTokens);
       return {
         ...base,
         kind: 'usage',
@@ -194,24 +196,34 @@ export function toActivityEntry(
         ...(outputTokens === undefined ? {} : { outputTokens }),
         ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
         ...(cost === undefined ? {} : { cost }),
+        ...(contextTokens === undefined ? {} : { contextTokens }),
+        ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
       };
     }
 
     case 'usage.rate_limits': {
-      const primary = envelope.primary
-        ? {
-            usedPercent: finiteNumber(envelope.primary.usedPercent) ?? 0,
-            ...(envelope.primary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.primary.windowDurationMins }),
-            ...(envelope.primary.resetsAt === undefined ? {} : { resetsAt: envelope.primary.resetsAt }),
-          }
-        : undefined;
-      const secondary = envelope.secondary
-        ? {
-            usedPercent: finiteNumber(envelope.secondary.usedPercent) ?? 0,
-            ...(envelope.secondary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.secondary.windowDurationMins }),
-            ...(envelope.secondary.resetsAt === undefined ? {} : { resetsAt: envelope.secondary.resetsAt }),
-          }
-        : undefined;
+      // A missing/NaN/Infinity `usedPercent` drops the whole window rather than faking `0`
+      // (ADI-26): `0` is a real, meaningful value ("this window is not used yet"), so defaulting an
+      // invalid report to it would render indistinguishable from a genuinely idle window. This
+      // matches `readRateLimitWindow` below, the durable-history counterpart of this same case.
+      const primaryUsedPercent = envelope.primary ? finiteNumber(envelope.primary.usedPercent) : undefined;
+      const primary =
+        envelope.primary && primaryUsedPercent !== undefined
+          ? {
+              usedPercent: primaryUsedPercent,
+              ...(envelope.primary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.primary.windowDurationMins }),
+              ...(envelope.primary.resetsAt === undefined ? {} : { resetsAt: envelope.primary.resetsAt }),
+            }
+          : undefined;
+      const secondaryUsedPercent = envelope.secondary ? finiteNumber(envelope.secondary.usedPercent) : undefined;
+      const secondary =
+        envelope.secondary && secondaryUsedPercent !== undefined
+          ? {
+              usedPercent: secondaryUsedPercent,
+              ...(envelope.secondary.windowDurationMins === undefined ? {} : { windowDurationMins: envelope.secondary.windowDurationMins }),
+              ...(envelope.secondary.resetsAt === undefined ? {} : { resetsAt: envelope.secondary.resetsAt }),
+            }
+          : undefined;
       return {
         ...base,
         kind: 'usage.rate_limits',
@@ -420,6 +432,8 @@ export function toHistoryEntry(record: unknown, toolAliases: Map<string, string>
       const outputTokens = finiteNumber(source.outputTokens);
       const cachedInputTokens = finiteNumber(source.cachedInputTokens);
       const cost = finiteNumber(source.cost);
+      const contextTokens = finiteNumber(source.contextTokens);
+      const contextWindowTokens = finiteNumber(source.contextWindowTokens);
       return {
         ...base,
         kind: 'usage',
@@ -427,6 +441,8 @@ export function toHistoryEntry(record: unknown, toolAliases: Map<string, string>
         ...(outputTokens === undefined ? {} : { outputTokens }),
         ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
         ...(cost === undefined ? {} : { cost }),
+        ...(contextTokens === undefined ? {} : { contextTokens }),
+        ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
       };
     }
 

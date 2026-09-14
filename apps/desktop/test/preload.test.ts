@@ -1279,6 +1279,70 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
     unsubscribe();
     expect(removeListener).toHaveBeenCalledWith('agent-workspace:activity', listener);
   });
+
+  it('rebuilds a usage.rate_limits push, dropping an invalid window instead of faking 0 used (ADI-26)', async () => {
+    const api = await loadPreload('agentWorkspace');
+    const received: unknown[] = [];
+    (api.onActivity as (cb: (p: unknown) => void) => () => void)((push) => received.push(push));
+
+    const listener = on.mock.calls.find((call) => call[0] === 'agent-workspace:activity')?.[1] as
+      | ((event: unknown, payload: unknown) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+
+    listener?.(
+      {},
+      {
+        sessionId: 'ses-1',
+        entry: {
+          seq: 0,
+          at: 't',
+          origin: 'live',
+          kind: 'usage.rate_limits',
+          limitId: 'limit-1',
+          limitName: 'API Limit',
+          primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 },
+          secondary: { usedPercent: Number.NaN },
+        },
+      },
+    );
+
+    expect(received).toEqual([
+      {
+        sessionId: 'ses-1',
+        entry: {
+          seq: 0,
+          at: 't',
+          origin: 'live',
+          kind: 'usage.rate_limits',
+          limitId: 'limit-1',
+          limitName: 'API Limit',
+          primary: { usedPercent: 75, windowDurationMins: 60, resetsAt: 1704067200 },
+        },
+      },
+    ]);
+  });
+
+  it('rebuilds a usage entry with contextTokens/contextWindowTokens from history (ADI-26)', async () => {
+    invoke.mockResolvedValue({
+      sessionId: 'ses-1',
+      events: [
+        {
+          seq: 0,
+          at: 't',
+          origin: 'history',
+          kind: 'usage',
+          contextTokens: 62000,
+          contextWindowTokens: 272000,
+        },
+      ],
+    });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.getSessionEvents as (i: string) => Promise<unknown>)('ses-1')) as {
+      events: Array<Record<string, unknown>>;
+    };
+    expect(page.events[0]).toMatchObject({ contextTokens: 62000, contextWindowTokens: 272000 });
+  });
 });
 
 describe('electron/preload.ts: ADI-07 left the six earlier namespaces alone', () => {
