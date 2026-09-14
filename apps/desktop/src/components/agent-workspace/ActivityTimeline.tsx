@@ -1,5 +1,6 @@
 import type { ActivityEntry } from '../../window.js';
 import { HISTORY_ONLY_EXPLANATION } from './refusal-copy.js';
+import { formatInstant } from './status.js';
 import type { SessionEntry } from './workspace-reducer.js';
 import { hasOnlyDigestHistory } from './workspace-reducer.js';
 
@@ -115,6 +116,97 @@ function ProseBody({
   );
 }
 
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+/** `usedPercent` is contract-unbounded above 100 (only a visual meter clamps, never the text), but
+ * still must be finite and non-negative to mean anything. One check shared by both formatters below
+ * so they can never disagree about what counts as a renderable value. */
+function isRenderablePercent(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
+/** One decimal place: `usedPercent` is a computed ratio (e.g. `2.3166666666666664`), not an
+ * integer, and every fixture in this file happens to use round numbers -- rendering the raw value
+ * would show full binary floating-point noise to a real user the first time a real provider sends
+ * one. */
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function formatUsedPercent(usedPercent: number): string {
+  return `${round1(usedPercent)}% used`;
+}
+
+function formatHeadroomPercent(usedPercent: number): string {
+  return `${round1(clampPercent(100 - usedPercent))}% remaining`;
+}
+
+/** `resetsAt` is provider-reported unix **seconds** (see the field's doc comment in
+ * packages/shared/src/events.ts). Any non-finite/negative input fails safely, and so does one far
+ * enough outside `Date`'s representable range (e.g. a provider sending milliseconds or
+ * microseconds by mistake) that `Date` itself could not construct a valid instant from it --
+ * `toISOString()` throws `RangeError` on an invalid `Date`, and nothing in this render tree catches
+ * that, so a single bad `resetsAt` from a provider would otherwise take down the whole workspace
+ * view rather than just omitting one row. */
+function formatResetsAt(resetsAt: number | undefined): { iso: string; label: string } | undefined {
+  if (resetsAt === undefined || !Number.isFinite(resetsAt) || resetsAt < 0) return undefined;
+  const date = new Date(resetsAt * 1000);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const iso = date.toISOString();
+  return { iso, label: formatInstant(iso) };
+}
+
+function RateLimitWindow({
+  label,
+  rateWindow,
+}: {
+  label: string;
+  rateWindow: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+}) {
+  const usedPercentValid = isRenderablePercent(rateWindow.usedPercent);
+  const usedText = usedPercentValid ? formatUsedPercent(rateWindow.usedPercent) : undefined;
+  const headroomText = usedPercentValid ? formatHeadroomPercent(rateWindow.usedPercent) : undefined;
+  const reset = formatResetsAt(rateWindow.resetsAt);
+  const meterPercent = usedPercentValid ? clampPercent(rateWindow.usedPercent) : 0;
+  return (
+    <div className="mt-1">
+      <p className="text-xs font-semibold text-base-content/70">
+        {label}
+        {rateWindow.windowDurationMins !== undefined ? ` (${rateWindow.windowDurationMins} min window)` : ''}
+      </p>
+      {usedText !== undefined ? (
+        <p className="text-xs text-base-content/60">
+          <meter min={0} max={100} value={meterPercent} className="mr-2 align-middle" />
+          {usedText}
+          {headroomText !== undefined ? ` · ${headroomText}` : ''}
+        </p>
+      ) : (
+        <p className="text-xs text-base-content/50">Utilization unavailable</p>
+      )}
+      <p className="text-xs text-base-content/50">
+        Resets:{' '}
+        {reset !== undefined ? <time dateTime={reset.iso}>{reset.label}</time> : <span>Unavailable</span>}
+      </p>
+    </div>
+  );
+}
+
+function RateLimitsRow({ item }: { item: Extract<ActivityEntry, { kind: 'usage.rate_limits' }> }) {
+  return (
+    <>
+      <RowHeading label="Rate limit" at={item.at} />
+      {item.limitName !== undefined && <p className="text-sm">{item.limitName}</p>}
+      {item.primary !== undefined && <RateLimitWindow label="Primary window" rateWindow={item.primary} />}
+      {item.secondary !== undefined && <RateLimitWindow label="Secondary window" rateWindow={item.secondary} />}
+      {item.primary === undefined && item.secondary === undefined && (
+        <p className="text-sm text-base-content/60">No rate-limit window data reported.</p>
+      )}
+    </>
+  );
+}
+
 function TimelineRow({ item, toolNamesByAlias }: RowProps) {
   switch (item.kind) {
     case 'session.started':
@@ -176,7 +268,15 @@ function TimelineRow({ item, toolNamesByAlias }: RowProps) {
       );
     }
 
-    case 'usage':
+    case 'usage': {
+      // Shown only when both are present (ADI-26): a lone current or capacity value is not a
+      // truthful pressure signal on its own, and this deliberately shows raw counts rather than a
+      // derived percentage -- the provider's own "percent remaining" math may reserve a baseline
+      // this normalized contract does not capture.
+      const contextLine =
+        item.contextTokens !== undefined && item.contextWindowTokens !== undefined
+          ? `Context: ${item.contextTokens.toLocaleString()} / ${item.contextWindowTokens.toLocaleString()}`
+          : undefined;
       return (
         <>
           <RowHeading label="Usage" at={item.at} />
@@ -191,13 +291,15 @@ function TimelineRow({ item, toolNamesByAlias }: RowProps) {
               .filter((part): part is string => part !== undefined)
               .join(' · ') || 'No token counts were reported.'}
           </p>
+          {contextLine !== undefined && (
+            <p className="mt-1 text-xs text-base-content/50">{contextLine}</p>
+          )}
         </>
       );
+    }
 
     case 'usage.rate_limits':
-      // Intentionally not rendered: ADI-25 (#239) adds this event for future use, but its
-      // Non-goals explicitly exclude a desktop UI surfacing it until a UI need is scoped.
-      return null;
+      return <RateLimitsRow item={item} />;
 
     case 'error':
       return (
