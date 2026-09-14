@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { RESUME_JSON_SHAPE } from '../electron/resume-schema.js';
 import {
+  ATS_FIT_EVIDENCE_STATUSES,
+  ATS_FIT_MAX_REQUIREMENTS,
   buildAchievementRewritePrompt,
   buildAtsFitPrompt,
   buildBestFitRolesPrompt,
@@ -146,17 +148,38 @@ describe('prompt builders', () => {
     expect(titleLine?.endsWith('…')).toBe(true);
   });
 
-  it('asks the gap analysis for the four fixed sections', () => {
+  it('asks the ATS fit review for the requirement-to-evidence matrix, hard constraints, and priority actions (issue #361)', () => {
     const prompt = buildAtsFitPrompt(CV, VACANCY);
     for (const heading of [
-      '## Strengths',
-      '## Gaps',
-      '## How to close the gaps',
-      '## Overall fit',
+      '## Requirement-to-evidence matrix',
+      '## Hard constraints',
+      '## Priority actions',
     ]) {
       expect(prompt).toContain(heading);
     }
     expect(prompt).toContain('Do not claim to simulate, predict or guarantee');
+    expect(prompt).toContain('never output a numeric score, percentage or pass/fail verdict');
+  });
+
+  it('requests only the five defined evidence-status labels, and explains each', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    for (const status of ATS_FIT_EVIDENCE_STATUSES) {
+      expect(prompt.toLowerCase()).toContain(status);
+    }
+    expect(prompt).toContain('Silence in a CV is not proof the candidate lacks it');
+  });
+
+  it('bounds the review to a fixed requirement count and requires disclosure when capped', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    expect(prompt).toContain(`Review at most ${ATS_FIT_MAX_REQUIREMENTS} deduplicated requirements`);
+    expect(prompt).toContain('how many were reviewed and how many were left out');
+  });
+
+  it('requires a JD anchor and a CV source anchor for every matrix entry, never invented facts', () => {
+    const prompt = buildAtsFitPrompt(CV, VACANCY);
+    expect(prompt).toContain('JD anchor');
+    expect(prompt).toContain('source: <CV section, role or project name>');
+    expect(prompt).toContain('Never invent a line number, a document link, an employer policy');
   });
 
   it('keeps the resume audit grounded and organized around actionable review', () => {
