@@ -127,19 +127,34 @@ function isRenderablePercent(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
 }
 
+/** One decimal place: `usedPercent` is a computed ratio (e.g. `2.3166666666666664`), not an
+ * integer, and every fixture in this file happens to use round numbers -- rendering the raw value
+ * would show full binary floating-point noise to a real user the first time a real provider sends
+ * one. */
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function formatUsedPercent(usedPercent: number): string {
-  return `${usedPercent}% used`;
+  return `${round1(usedPercent)}% used`;
 }
 
 function formatHeadroomPercent(usedPercent: number): string {
-  return `${clampPercent(100 - usedPercent)}% remaining`;
+  return `${round1(clampPercent(100 - usedPercent))}% remaining`;
 }
 
 /** `resetsAt` is provider-reported unix **seconds** (see the field's doc comment in
- * packages/shared/src/events.ts). Any non-finite/negative input fails safely. */
+ * packages/shared/src/events.ts). Any non-finite/negative input fails safely, and so does one far
+ * enough outside `Date`'s representable range (e.g. a provider sending milliseconds or
+ * microseconds by mistake) that `Date` itself could not construct a valid instant from it --
+ * `toISOString()` throws `RangeError` on an invalid `Date`, and nothing in this render tree catches
+ * that, so a single bad `resetsAt` from a provider would otherwise take down the whole workspace
+ * view rather than just omitting one row. */
 function formatResetsAt(resetsAt: number | undefined): { iso: string; label: string } | undefined {
   if (resetsAt === undefined || !Number.isFinite(resetsAt) || resetsAt < 0) return undefined;
-  const iso = new Date(resetsAt * 1000).toISOString();
+  const date = new Date(resetsAt * 1000);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const iso = date.toISOString();
   return { iso, label: formatInstant(iso) };
 }
 
