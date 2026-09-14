@@ -190,6 +190,19 @@ describe('redactEnvelope: digests, not content', () => {
     expect(record).toHaveProperty('detailSha256');
   });
 
+  it('bounds usage.rate_limits limitId/limitName instead of keeping them verbatim (ADI-28)', () => {
+    const record = redactEnvelope({
+      type: 'usage.rate_limits',
+      limitId: 'x'.repeat(1_000),
+      limitName: 'y'.repeat(1_000),
+      sequence: 0,
+      timestamp: 't',
+    });
+    const { limitId, limitName } = record as { limitId: string; limitName: string };
+    expect(Buffer.byteLength(limitId, 'utf8')).toBe(256);
+    expect(Buffer.byteLength(limitName, 'utf8')).toBe(256);
+  });
+
   it('sanitizes an error code to an identifier charset and drops it entirely if nothing survives', () => {
     const withProse = redactEnvelope({
       type: 'error',

@@ -473,20 +473,24 @@ describe('route inventory', () => {
     ['GET', '/v2/sessions'],
     ['GET', '/v2/sessions/:sessionId'],
     ['GET', '/v2/sessions/:sessionId/events'],
+    // ADI-28: bounded literal search over persisted history. A GET like every route above it --
+    // read-only, and encodeURIComponent handles any character a search term can contain, the same
+    // way it already does for `cursor`.
+    ['GET', '/v2/sessions/search'],
     // ADI-29: registered unconditionally alongside the other v2 session routes, whether or not this
     // instance was actually given an attachment store -- the route itself always exists, and 404s
     // at request time when `attachments` is absent (see the dedicated describe block below).
     ['GET', '/v2/sessions/:sessionId/attachments/:attachmentId'],
   ];
 
-  it('registers every v1 route unchanged plus exactly six v2 GET routes', async () => {
+  it('registers every v1 route unchanged plus exactly seven v2 GET routes', async () => {
     const { app } = setup();
     await app.ready();
 
     for (const [method, url] of [...V1_ROUTES, ...V2_ROUTES]) {
       expect(app.hasRoute({ method: method as 'GET', url }), `${method} ${url} is missing`).toBe(true);
     }
-    expect(V2_ROUTES).toHaveLength(6);
+    expect(V2_ROUTES).toHaveLength(7);
   });
 
   it('exposes no v2 write surface: creation and control stay on v1', async () => {
@@ -614,6 +618,56 @@ describe('v2 read routes', () => {
       'session.completed',
     ]);
     expect(res.payload).not.toContain('secret text');
+  });
+
+  it('GET /v2/sessions/search finds a matching tool name and 400s an invalid query (ADI-28)', async () => {
+    const { app, manager, claude } = setup();
+    const session = manager.create('claude', cwd, 'a');
+    const channel = claude.sessions.get(session.id)!;
+    channel.push({ type: 'tool.completed', toolName: 'Bash' });
+    channel.push({ type: 'session.completed' });
+    channel.finish();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const res = await app.inject({ method: 'GET', url: '/v2/sessions/search?query=bash', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.schemaVersion).toBe(1);
+    expect(body.matches).toEqual([
+      { sessionId: session.id, sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+    ]);
+
+    const empty = await app.inject({ method: 'GET', url: '/v2/sessions/search', headers: AUTH });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json().code).toBe('invalid_query');
+
+    const tooLong = await app.inject({
+      method: 'GET',
+      url: `/v2/sessions/search?query=${encodeURIComponent('x'.repeat(500))}`,
+      headers: AUTH,
+    });
+    expect(tooLong.statusCode).toBe(400);
+  });
+
+  it('GET /v2/sessions/search never returns assistant.message text, only allowlisted plaintext fields', async () => {
+    const { app, manager, claude } = setup();
+    const session = manager.create('claude', cwd, 'a');
+    const channel = claude.sessions.get(session.id)!;
+    channel.push({ type: 'assistant.message', text: 'the password is hunter2' });
+    channel.push({ type: 'session.completed' });
+    channel.finish();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const res = await app.inject({ method: 'GET', url: '/v2/sessions/search?query=hunter2', headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().matches).toEqual([]);
+    expect(res.payload).not.toContain('hunter2');
+  });
+
+  it('requires the bearer token for /v2/sessions/search too', async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: 'GET', url: '/v2/sessions/search?query=x' });
+    expect(res.statusCode).toBe(401);
   });
 
   it('serves the v2 provider views and validates the provider id', async () => {

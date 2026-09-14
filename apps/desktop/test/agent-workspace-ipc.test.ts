@@ -12,7 +12,13 @@ import {
   type AgentWorkspaceIpcDeps,
   type IpcInvokeHandler,
 } from '../electron/agent-workspace-ipc.js';
-import type { AttachResult, SessionEventsPage, SessionListPage, SessionSummary } from '../electron/agent-workspace-types.js';
+import type {
+  AttachResult,
+  SessionEventsPage,
+  SessionListPage,
+  SessionSearchPage,
+  SessionSummary,
+} from '../electron/agent-workspace-types.js';
 import type { GuardedIpcHandle } from '../electron/ipc-sender-guard.js';
 
 /**
@@ -319,6 +325,40 @@ describe('the registered handlers behave, against fakes rather than a daemon', (
     expect(JSON.stringify(page)).not.toContain('native-tool-1');
     // The alias came from the book main.ts also hands the live relay.
     expect(h.aliasesFor(SESSION_ID).get('native-tool-1')).toBe(started.toolAlias);
+  });
+
+  it('searches sessions through the v2 search route, path-free (ADI-28)', async () => {
+    const h = harness();
+    h.getJson.mockResolvedValue({
+      matches: [
+        { sessionId: SESSION_ID, sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+        { not: 'a match' },
+      ],
+      nextCursor: 'abc123',
+    });
+
+    const page = (await h.invoke('agent-workspace:search', { query: 'bash', limit: 25 })) as SessionSearchPage;
+
+    expect(h.getJson).toHaveBeenCalledWith('/v2/sessions/search?query=bash&limit=25');
+    // The unreadable record is skipped, not fatal -- same discipline as the events page above.
+    expect(page.matches).toEqual([
+      { sessionId: SESSION_ID, sequence: 0, eventType: 'tool.completed', field: 'toolName', excerpt: 'Bash' },
+    ]);
+    expect(page.nextCursor).toBe('abc123');
+  });
+
+  it('percent-encodes a query containing reserved URL characters', async () => {
+    const h = harness();
+    h.getJson.mockResolvedValue({ matches: [] });
+    await h.invoke('agent-workspace:search', { query: 'a&b=c' });
+    expect(h.getJson).toHaveBeenCalledWith(expect.stringContaining('query=a%26b%3Dc'));
+  });
+
+  it('refuses an empty or overlong search query before it reaches the daemon', async () => {
+    const h = harness();
+    await expect(h.invoke('agent-workspace:search', { query: '' })).rejects.toThrow();
+    await expect(h.invoke('agent-workspace:search', { query: 'x'.repeat(201) })).rejects.toThrow();
+    expect(h.getJson).not.toHaveBeenCalled();
   });
 
   it('passes attach and detach straight through to the relay', async () => {

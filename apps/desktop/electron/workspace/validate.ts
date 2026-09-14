@@ -842,6 +842,22 @@ export function parseAgentWorkspaceEventsInput(
   return { sessionId: parseSessionId(input.sessionId), ...parsePage(input) };
 }
 
+/** `sessionSearchQuerySchema`'s own bound (packages/shared/src/session-v2.ts), restated here for the
+ * same reason `PAGE_LIMIT_BOUNDS` restates `pageLimitV2Schema`'s: this parser runs before the
+ * request ever reaches the daemon, so it should refuse the same inputs the daemon would, not a
+ * looser or stricter set. */
+const SEARCH_QUERY_MAX_LENGTH = 200;
+// eslint-disable-next-line no-control-regex
+const SEARCH_QUERY_PATTERN = /^[^\u0000-\u001f\u007f]+$/;
+
+/** `agent-workspace:search`. */
+export function parseAgentWorkspaceSearchInput(value: unknown): AgentWorkspacePageRequest & { query: string } {
+  const input = asRecord(value, 'search payload');
+  const query = requiredNonEmpty(input.query, 'query', SEARCH_QUERY_MAX_LENGTH);
+  if (!SEARCH_QUERY_PATTERN.test(query)) fail('"query" must not contain control characters');
+  return { query, ...parsePage(input) };
+}
+
 /** `agent-workspace:attachment` (ADI-29). Both ids are session/attachment ids -- the same UUID
  * shape, so `parseSessionId` covers the second with a different field name for its own message. */
 export function parseAgentWorkspaceAttachmentInput(value: unknown): { sessionId: string; attachmentId: string } {

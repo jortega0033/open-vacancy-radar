@@ -6,6 +6,7 @@ import {
   opaqueCursorV2Schema,
   pageLimitV2Schema,
   sessionIdParamSchema,
+  sessionSearchQuerySchema,
   type ActiveSessionCapacityView,
   type AgentSessionV2View,
 } from '@agent-dock/shared';
@@ -201,6 +202,57 @@ export function registerV2SessionRoutes(
         schemaVersion: V2_SESSION_VIEW_SCHEMA_VERSION,
         sessionId: params.data.sessionId,
         events: page.events,
+        ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+      });
+    } catch (err) {
+      if (err instanceof InvalidCursorError) {
+        reply.code(400).send({ error: 'invalid cursor', code: 'invalid_cursor' });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * Bounded literal search over persisted session history (ADI-28). A plain `GET` with `?query=`,
+   * like every other read route in this file -- `encodeURIComponent` handles any character a search
+   * term can legitimately contain, the same way it already does for `cursor`, so there is no reason
+   * for search to be the one route here that reads a body instead of a query string.
+   *
+   * See `SessionLineageStore#searchEvents`'s doc comment for what "search" means here: only the
+   * small set of plaintext fields ADI-05's content-free durable store persists unredacted, never
+   * conversation text.
+   */
+  app.get('/v2/sessions/search', async (req, reply) => {
+    const query = (req.query ?? {}) as Record<string, unknown>;
+
+    const parsedQuery = sessionSearchQuerySchema.safeParse(query.query);
+    if (!parsedQuery.success) {
+      reply.code(400).send({ error: 'invalid query', code: 'invalid_query' });
+      return;
+    }
+
+    const limit = parseLimit(query.limit);
+    if (limit === undefined) {
+      reply.code(400).send({ error: 'invalid limit', code: 'invalid_limit' });
+      return;
+    }
+
+    let cursor: string | undefined;
+    if (query.cursor !== undefined) {
+      const parsedCursor = opaqueCursorV2Schema.safeParse(query.cursor);
+      if (!parsedCursor.success) {
+        reply.code(400).send({ error: 'invalid cursor', code: 'invalid_cursor' });
+        return;
+      }
+      cursor = parsedCursor.data;
+    }
+
+    try {
+      const page = store.searchEvents(parsedQuery.data, { ...(cursor === undefined ? {} : { cursor }), limit });
+      reply.send({
+        schemaVersion: V2_SESSION_VIEW_SCHEMA_VERSION,
+        matches: page.matches,
         ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
       });
     } catch (err) {

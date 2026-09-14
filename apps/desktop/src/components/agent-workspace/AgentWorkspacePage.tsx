@@ -4,6 +4,7 @@ import { ErrorBanner, PageLoading } from '../shell/index.js';
 import { NewSessionPanel } from './NewSessionPanel.js';
 import { CapacityLine, SessionList } from './SessionList.js';
 import { SessionDetail } from './SessionDetail.js';
+import { SessionSearchPanel } from './SessionSearchPanel.js';
 import { useAgentWorkspace } from './useAgentWorkspace.js';
 
 /**
@@ -56,6 +57,16 @@ export function AgentWorkspacePage({ defaultProvider }: AgentWorkspacePageProps)
     [workspace],
   );
 
+  /** A search result (ADI-28) may name a session the currently loaded page never fetched, so this
+   * goes through `openSessionById` rather than the cheaper `select` the list rows use. */
+  const openSearchResult = useCallback(
+    (sessionId: string) => {
+      setComposing(false);
+      void workspace.openSessionById(sessionId);
+    },
+    [workspace],
+  );
+
   const cancel = useCallback(
     (sessionId: string) => {
       setCancelling(sessionId);
@@ -99,6 +110,9 @@ export function AgentWorkspacePage({ defaultProvider }: AgentWorkspacePageProps)
 
       <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-[18rem_1fr]">
         <div className="min-w-0">
+          <div className="mb-3">
+            <SessionSearchPanel onOpenSession={openSearchResult} />
+          </div>
           {state.listStatus === 'loading' && state.order.length === 0 ? (
             <PageLoading label="Loading sessions…" />
           ) : (
