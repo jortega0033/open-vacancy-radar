@@ -60,7 +60,7 @@ describe('GapAnalysis', () => {
     // from the renderer, so the call this component makes cannot even attempt to send one.
     expect(input).not.toHaveProperty('cwd');
     expect(input?.model).toBe('sonnet');
-    expect(input?.prompt).toContain('## Gaps');
+    expect(input?.prompt).toContain('## Requirement-to-evidence matrix');
     expect(input?.prompt).toContain('Senior Frontend Engineer');
     expect(input?.prompt).toContain('Angular architect. 8 years of frontend work.');
     expect(input?.prompt).toContain('=== INPUT COMPLETENESS ===');
@@ -71,11 +71,13 @@ describe('GapAnalysis', () => {
     );
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: '## Strengths' });
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: '## Requirement-to-evidence matrix' });
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Eight years of Angular.' });
 
     await waitFor(() =>
-      expect(screen.getByRole('log', { name: /ats fit/i })).toHaveTextContent('## Strengths'),
+      expect(screen.getByRole('log', { name: /ats fit/i })).toHaveTextContent(
+        '## Requirement-to-evidence matrix',
+      ),
     );
     expect(screen.getByRole('log', { name: /ats fit/i })).toHaveTextContent(
       'Eight years of Angular.',
