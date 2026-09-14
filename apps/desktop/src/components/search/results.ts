@@ -2,6 +2,7 @@ import type {
   DiscoveryVacancyAudit,
   OfficialVacancyAudit,
   GlobalRemoteReport,
+  ProfileMatchBreakdown,
 } from '@open-vacancy-radar/vacancy-engine';
 import {
   assessSalary,
@@ -79,6 +80,15 @@ interface CommonResult {
    * strongest skills configured for this run.
    */
   profileScore: number | null;
+  /**
+   * The structured evidence behind `profileScore` (issue #367): technical/role/seniority fit, role
+   * classification, matching profile signals, and gaps/caps, exactly as the scorer computed them --
+   * never re-derived or re-scored in the renderer. `null` when `profileScore` is itself null.
+   * `undefined`, distinct from `null`, for a report persisted before this field existed even though
+   * it carries a real `profileScore`; `VacancyDetail` renders that case as an honest "breakdown
+   * unavailable" state rather than fabricating one from the number.
+   */
+  profileMatch?: ProfileMatchBreakdown | null;
   /** Deterministic engine findings, where the pipeline produces them. */
   strongPoints: string[];
   gaps: string[];
@@ -249,6 +259,9 @@ function toSearchResult(
     description: vacancy.description,
     verification: worldwideVerification(vacancy),
     profileScore: vacancy.profileScore,
+    // Passed through exactly as the raw row carries it -- undefined stays undefined (older report,
+    // no such field) rather than being collapsed into null (scored, no breakdown) or vice versa.
+    profileMatch: vacancy.profileMatch,
     strongPoints: [],
     gaps: [],
     reasons: vacancy.reasons,

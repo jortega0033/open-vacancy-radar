@@ -244,11 +244,17 @@ export function applyWorldwideProfileScores(
   profile: CandidateProfile,
   minimumAnnualBaseUsd: number | null,
 ): DiscoveryVacancyAudit[] {
-  return vacancies.map((vacancy) => ({
-    ...vacancy,
-    profileScore:
-      scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd)?.deterministicScore ?? null,
-  }));
+  return vacancies.map((vacancy) => {
+    // One scorer call per row (issue #367): both `profileScore` and `profileMatch` are derived from
+    // this same result, never a second scoring pass, so the two can never disagree with each other.
+    const score = scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd);
+    if (!score) return { ...vacancy, profileScore: null, profileMatch: null };
+    // Destructured, not manually listed field-by-field: `profileMatch`'s shape stays structurally
+    // tied to `ProfileMatchBreakdown` (itself an `Omit` of this same type) without a second place
+    // that would silently fall out of sync if `WorldwideDeterministicScore` gains a field.
+    const { relevant: _relevant, deterministicScore, ...profileMatch } = score;
+    return { ...vacancy, profileScore: deterministicScore, profileMatch };
+  });
 }
 
 /**

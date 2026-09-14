@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { WorldwideSponsorMatch } from '../companies/worldwide-sponsor-match.js';
+import type { WorldwideDeterministicScore } from '../filtering/relevance.js';
 import type { ApplyUrlEvidence, VacancyIdentity } from '../vacancies/identity.js';
 
 export type {
@@ -219,6 +220,14 @@ export type VacancySourceReference = {
   url: string;
 };
 
+/**
+ * The scorer's own structured breakdown behind `profileScore` (issue #367): every dimension and
+ * gap `scoreWorldwideVacancy` computed for a row, preserved instead of discarded once only the
+ * composite `deterministicScore` was kept. Omits `relevant` (an internal threshold check, not
+ * something to explain to a candidate) and `deterministicScore` itself (already `profileScore`).
+ */
+export type ProfileMatchBreakdown = Omit<WorldwideDeterministicScore, 'relevant' | 'deterministicScore'>;
+
 export type DiscoveryVacancyAudit = {
   key: string;
   provider: DiscoveryProvider;
@@ -259,6 +268,14 @@ export type DiscoveryVacancyAudit = {
   /** Null until `applyWorldwideProfileScores` runs after discovery (no candidate profile configured,
    * or the run hasn't scored yet), never a real-looking zero. See `scoreWorldwideVacancy`. */
   profileScore: number | null;
+  /**
+   * The structured evidence behind `profileScore` (issue #367) -- see `ProfileMatchBreakdown`. Null
+   * exactly when `profileScore` is null (no candidate profile configured, or not yet scored).
+   * Undefined, distinct from null, for a report persisted before this field existed even though its
+   * `profileScore` is a real number: the desktop UI renders that case as an honest "breakdown
+   * unavailable, rescan to generate it" rather than reverse-engineering detail from the number.
+   */
+  profileMatch?: ProfileMatchBreakdown | null;
   /**
    * Null until `applyWorldwideSponsorMatches` runs after discovery, and null afterwards too unless
    * this vacancy's `location` normalizes to "Netherlands" *and* a best-effort Wikidata name search
