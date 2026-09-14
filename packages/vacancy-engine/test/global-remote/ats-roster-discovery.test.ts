@@ -112,7 +112,20 @@ describe('runAtsRosterDiscovery', () => {
     });
 
     const greenhouseSource = result.sources.find((source) => source.provider === 'ats_roster_greenhouse');
-    expect(greenhouseSource).toMatchObject({ status: 'success', requests: 1, listings: 1 });
+    expect(greenhouseSource).toMatchObject({
+      status: 'success',
+      requests: 1,
+      listings: 1,
+      rosterScan: {
+        mode: 'complete',
+        totalRosterSize: 2,
+        dueSourcesAttempted: 2,
+        explorationSourcesAttempted: 0,
+        newlyVerifiedSources: 2,
+        skippedNotDue: 0,
+        failuresByCategory: {},
+      },
+    });
   });
 
   it('isolates one failing company without failing the rest of that provider scan', async () => {
@@ -136,6 +149,7 @@ describe('runAtsRosterDiscovery', () => {
     const source = result.sources.find((item) => item.provider === 'ats_roster_greenhouse');
     expect(source).toMatchObject({ status: 'partial', requests: 2 });
     expect(source?.error).toContain('1/2 companies failed');
+    expect(source?.rosterScan?.failuresByCategory).toEqual({ not_found: 1 });
   });
 
   it('reports a not-yet-imported provider without failing the run', async () => {

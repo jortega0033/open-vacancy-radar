@@ -23,6 +23,17 @@ export type AtsRosterFile = {
   entries: AtsRosterEntry[];
 };
 
+export function deduplicateAtsRosterEntries(entries: readonly AtsRosterEntry[]): AtsRosterEntry[] {
+  const byKey = new Map<string, AtsRosterEntry>();
+  for (const entry of entries) {
+    const key = `${entry.provider}:${entry.slug.trim().toLowerCase()}`;
+    if (!byKey.has(key)) byKey.set(key, entry);
+  }
+  return [...byKey.values()].sort(
+    (left, right) => left.provider.localeCompare(right.provider) || left.slug.localeCompare(right.slug),
+  );
+}
+
 /**
  * Never throws for a missing roster file (the import step is a separate, deliberate action -- see
  * issue #251's non-goals -- so a scan running before the first import, or against a fresh checkout,
@@ -83,18 +94,20 @@ export async function readAtsRosterStatus(projectRoot: string): Promise<AtsRoste
 export async function writeAtsRoster(
   projectRoot: string,
   entries: readonly AtsRosterEntry[],
-  sourceCounts: Partial<Record<AtsRosterProvider, number>>,
+  _sourceCounts: Partial<Record<AtsRosterProvider, number>>,
   importedAt = new Date(),
 ): Promise<string> {
   const file = atsRosterFilePath(projectRoot);
   await mkdir(path.dirname(file), { recursive: true });
-  const sorted = [...entries].sort(
-    (left, right) => left.provider.localeCompare(right.provider) || left.slug.localeCompare(right.slug),
-  );
+  const sorted = deduplicateAtsRosterEntries(entries);
+  const actualSourceCounts: Partial<Record<AtsRosterProvider, number>> = {};
+  for (const entry of sorted) {
+    actualSourceCounts[entry.provider] = (actualSourceCounts[entry.provider] ?? 0) + 1;
+  }
   const payload: AtsRosterFile = {
     version: 1,
     importedAt: importedAt.toISOString(),
-    sourceCounts,
+    sourceCounts: actualSourceCounts,
     entries: sorted,
   };
   await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');

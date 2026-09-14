@@ -254,7 +254,7 @@ export async function runGlobalRemoteDiscovery(
       withProgress('jobtech', runJobtechDiscovery(http, config), onProgress),
       withProgress('additional', runAdditionalDiscovery(http, config), onProgress),
       withProgress('keyed', runKeyedDiscovery(http, config), onProgress),
-      withProgress('ats_roster', runAtsRosterDiscovery(http, config, atsRoster), onProgress),
+      withProgress('ats_roster', runAtsRosterDiscovery(http, config, atsRoster, projectRoot), onProgress),
     ]);
   const sources = [
     ...himalayas.sources,

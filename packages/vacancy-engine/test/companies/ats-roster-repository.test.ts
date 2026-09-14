@@ -61,6 +61,20 @@ describe('writeAtsRoster', () => {
     expect(file).toBe(atsRosterFilePath(projectRoot));
     expect(file.replaceAll('\\', '/')).toMatch(/\.data\/ats-roster-v1\.json$/u);
   });
+
+  it('deduplicates canonical provider and slug identities case-insensitively', async () => {
+    await writeAtsRoster(
+      projectRoot,
+      [entryA, { ...entryA, slug: 'ACME', company: 'Duplicate' }],
+      { greenhouse: 2 },
+    );
+
+    await expect(loadAtsRoster(projectRoot)).resolves.toEqual([entryA]);
+    await expect(readAtsRosterStatus(projectRoot)).resolves.toMatchObject({
+      totalEntries: 1,
+      sourceCounts: { greenhouse: 1 },
+    });
+  });
 });
 
 describe('readAtsRosterStatus', () => {

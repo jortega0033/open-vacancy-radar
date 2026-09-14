@@ -931,6 +931,7 @@ export async function runGlobalRemoteScan(
       reedApiKey: appConfig.keyedDiscovery.reedApiKey,
       jobspipeApiKey: appConfig.keyedDiscovery.jobspipeApiKey,
       navArbeidsplassenApiKey: appConfig.keyedDiscovery.navArbeidsplassenApiKey,
+      atsRosterFocusCountry: options.country ?? loadedProfile.discovery.atsRosterFocusCountry ?? '',
     },
   };
   const { safeClient, atsClient: http } = createDatabaseBackedHttpClients(appConfig, database, {
@@ -954,9 +955,9 @@ export async function runGlobalRemoteScan(
   // of the three; running it after the other two used to add its own full duration on top of
   // theirs instead of overlapping with it, which is most of the difference between a scan taking
   // a couple of minutes and one taking upwards of ten.
-  // Loaded here, not inside `runGlobalRemoteDiscovery`, so the roster scan's own signature stays
-  // `(http, config, roster)` like every other discovery function's `(http, config)` -- no discovery
-  // function reads the filesystem directly. Skipped entirely when reusing a prior run's discovery
+  // Loaded here, not inside `runGlobalRemoteDiscovery`, so roster ingestion remains a deliberate
+  // pipeline concern. The roster discovery receives `projectRoot` only for its versioned planner
+  // state and never imports or discovers tenants by itself. Skipped entirely when reusing a prior run's discovery
   // output, matching `reuseDiscovery`'s existing "no new discovery-feed requests" contract; an empty
   // roster in that branch is fine because `atsRoster` is never read again when discovery is reused.
   const atsRoster = reuseDiscovery ? [] : await loadAtsRoster(projectRoot);
