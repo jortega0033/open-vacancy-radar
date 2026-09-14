@@ -80,6 +80,7 @@ export function installAgentWorkspaceBridge(
     getSession: vi.fn().mockResolvedValue(null),
     getSessionEvents: vi.fn(async (sessionId: string) => ({ sessionId, events: [] })),
     searchSessions: vi.fn().mockResolvedValue({ matches: [] }),
+    getAttachment: vi.fn().mockResolvedValue(null),
     attachActivity: vi.fn().mockResolvedValue({ ok: true }),
     detachActivity: vi.fn().mockResolvedValue(undefined),
     onActivity: vi.fn((callback: (push: ActivityPush) => void) => {

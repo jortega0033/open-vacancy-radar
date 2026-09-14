@@ -999,7 +999,7 @@ describe('electron/preload.ts: workspaceGrant.startSession (ADI-13)', () => {
 const V2_SESSION_ID = '11111111-2222-4333-8444-555555555555';
 
 describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
-  it('exposes exactly the seven documented capability functions and nothing else', async () => {
+  it('exposes exactly the eight documented capability functions and nothing else', async () => {
     const api = await loadPreload('agentWorkspace');
     expect(Object.keys(api).sort()).toEqual(
       [
@@ -1007,6 +1007,7 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
         'getSession',
         'getSessionEvents',
         'searchSessions',
+        'getAttachment',
         'attachActivity',
         'detachActivity',
         'onActivity',
@@ -1040,6 +1041,11 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
         (fn: never) => (fn as (i: string) => Promise<unknown>)(V2_SESSION_ID),
       ],
       ['searchSessions', 'agent-workspace:search', (fn: never) => (fn as (q: string) => Promise<unknown>)('bash')],
+      [
+        'getAttachment',
+        'agent-workspace:attachment',
+        (fn: never) => (fn as (i: string, a: string) => Promise<unknown>)(V2_SESSION_ID, V2_SESSION_ID),
+      ],
       [
         'attachActivity',
         'agent-workspace:attach',
@@ -1237,6 +1243,41 @@ describe('electron/preload.ts: agentWorkspace bridge (ADI-07)', () => {
     const api = await loadPreload('agentWorkspace');
     await (api.searchSessions as (q: string, p?: unknown) => Promise<unknown>)('bash', { cursor: 'abc', limit: 10 });
     expect(invoke).toHaveBeenCalledWith('agent-workspace:search', { query: 'bash', cursor: 'abc', limit: 10 });
+  });
+
+  it('rebuilds a tool.completed resultPreview/resultAttachmentId, dropping a malformed attachment id (ADI-29)', async () => {
+    invoke.mockResolvedValue({
+      sessionId: 'ses-1',
+      events: [
+        {
+          seq: 0,
+          at: 't',
+          kind: 'tool.completed',
+          toolName: 'Bash',
+          resultPreview: 'the output',
+          resultPreviewTruncated: true,
+          resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+        },
+        {
+          seq: 1,
+          at: 't',
+          kind: 'tool.completed',
+          toolName: 'Bash',
+          resultAttachmentId: 'not-a-uuid',
+        },
+      ],
+    });
+    const api = await loadPreload('agentWorkspace');
+    const page = (await (api.getSessionEvents as (i: string) => Promise<unknown>)('ses-1')) as {
+      events: Array<Record<string, unknown>>;
+    };
+
+    expect(page.events[0]).toMatchObject({
+      resultPreview: 'the output',
+      resultPreviewTruncated: true,
+      resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+    });
+    expect(page.events[1]).not.toHaveProperty('resultAttachmentId');
   });
 
   it('asserts history origin rather than reading it, so a mislabelled entry cannot win the merge', async () => {

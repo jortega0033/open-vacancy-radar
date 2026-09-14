@@ -13,6 +13,7 @@ import { buildServer, type BuildServerV2Options } from './server.js';
 import { SessionManager } from './session-manager.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
 import { openDurableStore } from './open-durable-store.js';
+import { openAttachmentStore } from './open-attachment-store.js';
 import { openApplicationQueueStore } from './open-application-queue-store.js';
 import { openWorkspaceStores } from './open-workspace-stores.js';
 import { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
@@ -64,6 +65,9 @@ async function main() {
   const registry = buildProviderRegistry(logger);
   const limiter = new ActiveSessionLimiter();
   const durable = openDurableStore(appId, logger);
+  // ADI-29. Independent of `durable` above in the same way `applicationQueue` is: opening it does
+  // not require the durable session store to exist, so it is opened unconditionally.
+  const attachments = openAttachmentStore(appId, logger);
   // #200. Independent of `durable` above -- it needs no session/workspace collaborators -- so it
   // is opened unconditionally rather than only when the session store is available.
   const applicationQueue = openApplicationQueueStore(appId, logger);
@@ -84,6 +88,7 @@ async function main() {
     durable,
     workspaceStores ? { trustStore: workspaceStores.trustStore } : undefined,
     leaseManager,
+    attachments,
   );
   const token = generateToken();
   const mcpCredentials = new OsMcpCredentialStore();
@@ -93,6 +98,7 @@ async function main() {
     ? {
         store: durable,
         limiter,
+        ...(attachments ? { attachments } : {}),
         ...(workspaceStores ? { workspace: { ...workspaceStores, leaseManager } } : {}),
       }
     : undefined;

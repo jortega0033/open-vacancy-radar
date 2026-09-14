@@ -98,7 +98,7 @@ Wire shapes (route bodies, the `AgentEvent`/`AgentEventEnvelope` format) are doc
 
 ### v2 read routes
 
-ADI-05 adds six **read-only** routes (ADI-28 added the sixth), registered only when the durable
+ADI-05 adds seven **read-only** routes (ADI-28 added the sixth, ADI-29 the seventh), registered only when the durable
 session store opened successfully (see [Durable session state](#durable-session-state) below). When
 it did not, none of them exist and every path below returns the ordinary `404`.
 
@@ -110,6 +110,7 @@ it did not, none of them exist and every path below returns the ordinary `404`.
 | `GET /v2/sessions/:sessionId` | One session view, or `404 { code: 'session_not_found' }` |
 | `GET /v2/sessions/:sessionId/events?cursor=&limit=` | A **JSON page** of the durable, redacted event log -- not an SSE stream. The live v1 stream at `GET /sessions/:id/events` is unchanged and remains the way to watch a session in progress |
 | `GET /v2/sessions/search?query=&cursor=&limit=` | Bounded, case-insensitive literal search over persisted session history (ADI-28). `{ schemaVersion: 1, matches, nextCursor? }`. Matches only the small set of plaintext fields the durable store persists unredacted -- a tool's name, a status word, an error code, a rate-limit's name -- never conversation text: ADI-05's store keeps assistant/thinking text and tool input/output as SHA-256 digests only, so there is nothing else to search. `query` is 1-200 characters with no control characters; `400 { code: 'invalid_query' }`, `400 { code: 'invalid_limit' }`, or `400 { code: 'invalid_cursor' }` for a malformed request. Scans at most 200 sessions per call regardless of match count, so a query that matches nothing still returns promptly with a `nextCursor` when more history remains unscanned |
+| `GET /v2/sessions/:sessionId/attachments/:attachmentId` | The complete content of one `tool.completed` result too large for the inline preview (ADI-29). `{ schemaVersion: 1, metadata, content }`, or `404 { code: 'attachment_not_found' }` when the id doesn't exist, doesn't belong to that session, or no attachment store is configured for this daemon instance. `400 { code: 'invalid_attachment_reference' }` for a malformed session or attachment id |
 
 There is deliberately **no `POST /v2/sessions`**, no `DELETE`, and no v2 cancel. Creating a session
 over v2 means accepting a capability-negotiation request shape this repo does not have, and

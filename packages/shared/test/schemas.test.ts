@@ -207,6 +207,15 @@ describe('agentEventEnvelopeSchema', () => {
     }
   });
 
+  it('accepts a tool.completed carrying a valid resultAttachmentId, and rejects a non-UUID one (ADI-29)', () => {
+    const base = { sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
+    const valid = { ...base, type: 'tool.completed', resultAttachmentId: '11111111-2222-4333-8444-555555555555' };
+    expect(agentEventEnvelopeSchema.safeParse(valid).success).toBe(true);
+
+    const invalid = { ...base, type: 'tool.completed', resultAttachmentId: 'not-a-uuid' };
+    expect(agentEventEnvelopeSchema.safeParse(invalid).success).toBe(false);
+  });
+
   it('rejects an unrecognized event type', () => {
     const event = { type: 'provider.raw_jsonl', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
     expect(agentEventEnvelopeSchema.safeParse(event).success).toBe(false);

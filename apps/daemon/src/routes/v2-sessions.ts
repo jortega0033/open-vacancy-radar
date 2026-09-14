@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   DEFAULT_PAGE_LIMIT_V2,
   V2_SESSION_VIEW_SCHEMA_VERSION,
@@ -12,6 +13,13 @@ import {
 import { ACTIVE_SESSION_LIMITS, type ActiveSessionLimiter } from '../active-session-limiter.js';
 import { InvalidCursorError, type SessionLineageStore } from '../session-lineage-store.js';
 import type { PersistedSessionRecordV1 } from '../persisted-session-schema.js';
+import type { AttachmentStore } from '../attachment-store.js';
+
+/** `GET /v2/sessions/:sessionId/attachments/:attachmentId`'s params (ADI-29). */
+const attachmentParamSchema = z.object({
+  sessionId: z.string().uuid(),
+  attachmentId: z.string().uuid(),
+});
 
 /**
  * The v2 session **read** routes. Registered only when a durable store is active (see server.ts).
@@ -102,6 +110,7 @@ export function registerV2SessionRoutes(
   app: FastifyInstance,
   store: SessionLineageStore,
   limiter: ActiveSessionLimiter,
+  attachments?: AttachmentStore,
 ): void {
   app.get('/v2/sessions', async (req, reply) => {
     const query = (req.query ?? {}) as Record<string, unknown>;
@@ -253,5 +262,34 @@ export function registerV2SessionRoutes(
       }
       throw err;
     }
+  });
+
+  /**
+   * Retrieves one full tool-result attachment (ADI-29). `attachments` is a separate, optional
+   * collaborator from `store` -- it can be present even when this run has no durable session store
+   * at all, but this route only ever registers alongside the rest of `v2`, so it shares their
+   * downgrade behavior (absent `v2` entirely means this path 404s through the ordinary not-found
+   * handler, not a special case here).
+   *
+   * `AttachmentStore.get()` already refuses an attachment recorded under a different session id
+   * than the one in the URL, so this handler does no separate ownership check of its own -- there is
+   * nothing to add to what the store itself already enforces.
+   */
+  app.get('/v2/sessions/:sessionId/attachments/:attachmentId', async (req, reply) => {
+    if (!attachments) {
+      reply.code(404).send({ error: 'attachment not found', code: 'attachment_not_found' });
+      return;
+    }
+    const params = attachmentParamSchema.safeParse(req.params);
+    if (!params.success) {
+      reply.code(400).send({ error: 'invalid attachment reference', code: 'invalid_attachment_reference' });
+      return;
+    }
+    const found = attachments.get(params.data.sessionId, params.data.attachmentId);
+    if (!found) {
+      reply.code(404).send({ error: 'attachment not found', code: 'attachment_not_found' });
+      return;
+    }
+    reply.send({ schemaVersion: V2_SESSION_VIEW_SCHEMA_VERSION, ...found });
   });
 }

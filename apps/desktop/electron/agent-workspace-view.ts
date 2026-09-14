@@ -1,8 +1,9 @@
 // Subpath, not the `@agent-dock/shared` barrel: these helpers import `node:crypto`, which the
 // barrel must stay clear of so `preload.ts` can keep importing it. See that package's
 // `src/index.ts`. This module is main-process-only.
-import { truncateToBytes } from '@agent-dock/shared/content-digest';
+import { truncateToBytes, utf8Bytes } from '@agent-dock/shared/content-digest';
 import type {
+  AttachmentContent,
   SessionCapacity,
   SessionScopeSummary,
   SessionSearchMatch,
@@ -164,4 +165,29 @@ export function toSearchMatch(value: unknown): SessionSearchMatch | null {
     return null;
   }
   return { sessionId, sequence, eventType, field, excerpt };
+}
+
+/** Matches the daemon's own `MAX_ATTACHMENT_BYTES` -- a second, cheap cap, not the real one. */
+const MAX_ATTACHMENT_CONTENT_BYTES = 1024 * 1024;
+
+/**
+ * The main-process rebuild of one `GET /v2/sessions/:id/attachments/:id` response (ADI-29). Only
+ * `mimeType`/`bytes`/`content` reach the renderer -- the attachment's own `id`, `sessionId`, and
+ * `sha256` are already known to the caller or of no use to it, so they are simply never copied,
+ * the same "rebuilt, never spread" discipline this file's own doc comment states above.
+ */
+export function toAttachmentContent(value: unknown): AttachmentContent | null {
+  const source = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  const metadata = (source.metadata && typeof source.metadata === 'object' ? source.metadata : {}) as Record<
+    string,
+    unknown
+  >;
+  const mimeType = str(metadata.mimeType, MAX_ENUM_BYTES);
+  // Rejected rather than truncated when oversized: a caller asking for "the complete output" that
+  // silently got back a partial one, with nothing saying so, is a worse failure than a clear
+  // absence -- and the daemon's own MAX_ATTACHMENT_BYTES cap means this should never actually
+  // trigger against a well-behaved daemon in the first place.
+  if (typeof source.content !== 'string' || utf8Bytes(source.content) > MAX_ATTACHMENT_CONTENT_BYTES) return null;
+  if (mimeType === undefined) return null;
+  return { mimeType, bytes: nonNegativeInt(metadata.bytes), content: source.content };
 }

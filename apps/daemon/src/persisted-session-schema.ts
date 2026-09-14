@@ -160,6 +160,8 @@ export type PersistedEventRecordV1 = PersistedEventBase &
         isError?: boolean;
         resultBytes?: number;
         resultSha256?: string;
+        /** Opaque attachment store id (ADI-29). Never content -- see `AgentEvent`'s own field doc. */
+        resultAttachmentId?: string;
       }
     | {
         type: 'usage';
@@ -249,6 +251,7 @@ export const persistedEventRecordV1Schema = z.discriminatedUnion('type', [
       isError: z.boolean().optional(),
       resultBytes: z.number().int().nonnegative().optional(),
       resultSha256: z.string().optional(),
+      resultAttachmentId: z.string().uuid().optional(),
     })
     .strict(),
   z
@@ -420,6 +423,7 @@ export function redactEnvelope(envelope: AgentEventEnvelope): PersistedEventReco
           : { toolCallId: truncateToBytes(envelope.toolCallId, MAX_TOOL_CALL_ID_BYTES) }),
         ...(envelope.isError === undefined ? {} : { isError: envelope.isError }),
         ...(result === undefined ? {} : { resultBytes: result.bytes, resultSha256: result.sha256 }),
+        ...(envelope.resultAttachmentId === undefined ? {} : { resultAttachmentId: envelope.resultAttachmentId }),
       };
     }
 

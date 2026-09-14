@@ -67,7 +67,16 @@ describe('redaction exhaustiveness', () => {
       { type: 'assistant.message', text: 'hello', sequence: 2, timestamp: 't' },
       { type: 'thinking.delta', text: 'hmm', sequence: 3, timestamp: 't' },
       { type: 'tool.started', toolName: 'Bash', toolCallId: 'c1', input: { cmd: 'ls' }, sequence: 4, timestamp: 't' },
-      { type: 'tool.completed', toolName: 'Bash', toolCallId: 'c1', result: 'output', isError: false, sequence: 5, timestamp: 't' },
+      {
+        type: 'tool.completed',
+        toolName: 'Bash',
+        toolCallId: 'c1',
+        result: 'output',
+        isError: false,
+        resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+        sequence: 5,
+        timestamp: 't',
+      },
       {
         type: 'usage',
         inputTokens: 1,
@@ -141,6 +150,31 @@ describe('redactEnvelope: digests, not content', () => {
     expect((record as { resultSha256: string }).resultSha256).toBe(
       createHash('sha256').update('<unserializable>', 'utf8').digest('hex'),
     );
+  });
+
+  it('passes resultAttachmentId through untouched -- an opaque id, never content (ADI-29)', () => {
+    const attachmentId = '11111111-2222-4333-8444-555555555555';
+    const record = redactEnvelope({
+      type: 'tool.completed',
+      result: { output: 'a large result' },
+      resultAttachmentId: attachmentId,
+      sequence: 0,
+      timestamp: 't',
+    });
+    expect((record as { resultAttachmentId?: string }).resultAttachmentId).toBe(attachmentId);
+    // Still digested, same as every other tool.completed result -- the attachment id is additive,
+    // never a substitute for the existing content-free digest.
+    expect(record).toHaveProperty('resultSha256');
+  });
+
+  it('omits resultAttachmentId entirely when the envelope did not carry one', () => {
+    const record = redactEnvelope({
+      type: 'tool.completed',
+      result: { output: 'small result' },
+      sequence: 0,
+      timestamp: 't',
+    });
+    expect(record).not.toHaveProperty('resultAttachmentId');
   });
 
   it('keeps only the bounded status label and digests its free-form detail', () => {

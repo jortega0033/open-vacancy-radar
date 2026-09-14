@@ -690,6 +690,7 @@ export type {
   ActivityEntry,
   ActivityPush,
   AgentWorkspaceBridge,
+  AttachmentContent,
   AttachResult,
   HistoryEntry,
   PageRequest,
@@ -706,6 +707,7 @@ import type {
   ActivityEntry as ActivityEntryType,
   ActivityPush as ActivityPushType,
   AgentWorkspaceBridge as AgentWorkspaceBridgeType,
+  AttachmentContent as AttachmentContentType,
   AttachResult as AttachResultType,
   HistoryEntry as HistoryEntryType,
   PageRequest as PageRequestType,
@@ -864,6 +866,8 @@ function toActivityEntry(value: unknown): ActivityEntryType | null {
       const toolName = optionalString(source, 'toolName');
       const toolAlias = optionalString(source, 'toolAlias');
       const result = toDigest(source.result);
+      const resultPreview = optionalString(source, 'resultPreview');
+      const attachmentId = optionalString(source, 'resultAttachmentId');
       return {
         ...base,
         kind: 'tool.completed',
@@ -871,6 +875,13 @@ function toActivityEntry(value: unknown): ActivityEntryType | null {
         ...(toolAlias === undefined ? {} : { toolAlias }),
         ...(typeof source.isError === 'boolean' ? { isError: source.isError } : {}),
         ...(result === undefined ? {} : { result }),
+        ...(resultPreview === undefined ? {} : { resultPreview }),
+        ...(typeof source.resultPreviewTruncated === 'boolean' ? { resultPreviewTruncated: source.resultPreviewTruncated } : {}),
+        // Re-checked against the identifier charset here too, same reason `error.code` is: this
+        // value selects a retrieval target, and a value that is not a UUID has nothing to select.
+        ...(attachmentId !== undefined && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(attachmentId)
+          ? { resultAttachmentId: attachmentId }
+          : {}),
       };
     }
     case 'usage': {
@@ -1035,6 +1046,21 @@ const agentWorkspaceApi: AgentWorkspaceBridgeType = {
     }
     const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
     return { matches, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  },
+
+  async getAttachment(sessionId, attachmentId) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:attachment', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+      attachmentId: typeof attachmentId === 'string' ? attachmentId : '',
+    });
+    const source = asRecord(result);
+    if (!source) return null;
+    const mimeType = optionalString(source, 'mimeType');
+    const bytes = optionalFiniteNumber(source, 'bytes');
+    const content = optionalString(source, 'content');
+    if (mimeType === undefined || bytes === undefined || content === undefined) return null;
+    const known: AttachmentContentType = { mimeType, bytes, content };
+    return known;
   },
 
   async attachActivity(sessionId, lastSeq) {

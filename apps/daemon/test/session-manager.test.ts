@@ -7,6 +7,7 @@ import type { AgentEvent, AgentEventEnvelope, ProviderId, ProviderStatus } from 
 import { ProviderRegistry, noopLogger } from '@agent-dock/agent-runtime';
 import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '@agent-dock/agent-runtime';
 import { ActiveSessionLimiter } from '../src/active-session-limiter.js';
+import { ATTACHMENT_WORTHY_RESULT_BYTES, AttachmentStore, MAX_ATTACHMENT_BYTES } from '../src/attachment-store.js';
 import { SessionLineageStore } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
 import { makeRecord, readAllText, seedManifest, seedRecord } from './support/lineage-fixtures.js';
@@ -120,6 +121,25 @@ function setupDurable(stateRoot: string) {
   return { provider, sessionManager, store };
 }
 
+/** The same wiring `index.ts` uses when the attachment store opened successfully (ADI-29). */
+function setupWithAttachments(stateRoot: string) {
+  const provider = new TestProvider();
+  const registry = new ProviderRegistry();
+  registry.register(provider);
+  const attachments = new AttachmentStore({ stateRoot });
+  const sessionManager = new SessionManager(
+    registry,
+    noopLogger,
+    undefined,
+    new ActiveSessionLimiter(),
+    undefined,
+    undefined,
+    undefined,
+    attachments,
+  );
+  return { provider, sessionManager, attachments };
+}
+
 afterEach(() => {
   for (const stateRoot of stateRoots.splice(0)) rmSync(stateRoot, { recursive: true, force: true });
 });
@@ -201,6 +221,159 @@ describe('SessionManager: normal lifecycle', () => {
     testSession.finish();
     await tick();
     expect(sessionManager.get(session.id)?.status).toBe('cancelled');
+  });
+});
+
+describe('SessionManager: tool result attachments (ADI-29)', () => {
+  it('attaches a result over the "worth it" threshold, retrievable by session id and the same content', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500);
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const fetched = attachments.get(session.id, completed.resultAttachmentId!);
+    expect(fetched?.content).toBe(JSON.stringify({ output }));
+  });
+
+  it('attaches a plain-string result as readable text/plain, not JSON-quoted-and-escaped application/json', async () => {
+    // Every other test in this block uses an object result, which is exactly the shape that hid
+    // the JSON-escaping bug this covers: a plain string (a Bash tool's typical stdout shape) has to
+    // be previewed and attached as itself, not as `"line1\nline2\n"` with literal escapes.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = `line1\n${'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500)}\nline3\n`;
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: output });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const fetched = attachments.get(session.id, completed.resultAttachmentId!);
+    expect(fetched?.metadata.mimeType).toBe('text/plain');
+    expect(fetched?.content).toBe(output);
+  });
+
+  it('does not attach a result under the threshold, and the live event carries no attachment id', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { exitCode: 0 } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+  });
+
+  it('leaves the original result on the live envelope unchanged, whether or not it was attached', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500);
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { result?: unknown };
+    // Attaching only ever *adds* a retrieval path -- the envelope's own result is never rewritten,
+    // truncated, or removed as a side effect of writing an attachment.
+    expect((completed.result as { output: string }).output).toBe(output);
+  });
+
+  it('does not attach a result at exactly MAX_ATTACHMENT_BYTES\'s encoded size or beyond it, and the whole-envelope ceiling still governs a truly oversized event', async () => {
+    // MAX_ATTACHMENT_BYTES and the pre-existing MAX_EVENT_ENVELOPE_BYTES ceiling are both 1 MiB
+    // today, so a result too large for an attachment is -- at present -- also too large for the
+    // envelope itself and fails the whole session (unchanged, pre-existing ADI-17 behavior). This
+    // proves attaching never interferes with that existing ceiling, whichever of the two constants
+    // a future change makes the tighter one.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output: 'x'.repeat(MAX_ATTACHMENT_BYTES + 1) } });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    expect(events.at(-1)?.type).toBe('session.failed');
+  });
+
+  it('skips attaching, rather than orphaning a file, when adding the id would tip the envelope over the ceiling', async () => {
+    // A result whose own encoded size fits MAX_ATTACHMENT_BYTES, but whose envelope (result plus
+    // toolName/sequence/timestamp overhead) is already close enough to MAX_EVENT_ENVELOPE_BYTES that
+    // adding a `resultAttachmentId` field would push it over. Attaching first and only checking the
+    // final envelope size afterward would write a real file to disk for an event that then gets
+    // discarded by the oversized-envelope path -- an attachment no surviving envelope references.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output: 'x'.repeat(1_048_399) } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    // The session completes normally -- the base envelope (without an attachment id) fits under
+    // MAX_EVENT_ENVELOPE_BYTES on its own, so this is not the whole-envelope-ceiling failure case.
+    expect(events.at(-1)?.type).toBe('session.completed');
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+    // And nothing was left behind on disk for an id nothing ever referenced.
+    expect(attachments.listMetadata(session.id)).toEqual([]);
+  });
+
+  it('never attaches anything when no attachment store was injected, exactly as before this feature existed', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({
+      type: 'tool.completed',
+      toolName: 'Bash',
+      result: { output: 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500) },
+    });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+  });
+
+  it('is best-effort: a session with no result at all, or a non-tool.completed event, never touches the attachment store', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash' }); // no result at all
+    testSession.push({ type: 'assistant.message', text: 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500) });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await collectUntilTerminal(sessionManager, session.id);
+
+    expect(attachments.listMetadata(session.id)).toEqual([]);
   });
 });
 

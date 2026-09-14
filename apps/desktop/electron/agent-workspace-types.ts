@@ -62,6 +62,18 @@ export type ActivityBody =
       toolAlias?: string;
       isError?: boolean;
       result?: ActivityDigest;
+      /**
+       * A bounded snippet of the result's own text (ADI-29), live sessions only -- the durable
+       * history record has no content to build one from, so a reloaded/history entry never carries
+       * this, the same "live keeps prose, history keeps only digests" split every other content
+       * field in this union already follows.
+       */
+      resultPreview?: string;
+      resultPreviewTruncated?: boolean;
+      /** Opaque attachment-store id (ADI-29), present on both live and history entries once the
+       * daemon has written one -- unlike `resultPreview`, this survives a reload because it names
+       * where to fetch the full content from, rather than being the content itself. */
+      resultAttachmentId?: string;
     }
   | {
       kind: 'usage';
@@ -210,6 +222,13 @@ export interface PageRequest {
   limit?: number;
 }
 
+/** One tool result too large for the inline preview, fetched in full on request (ADI-29). */
+export interface AttachmentContent {
+  mimeType: string;
+  bytes: number;
+  content: string;
+}
+
 /**
  * The `window.agentWorkspace` capability list: exactly seven functions, no `invoke`, no `channel`,
  * and no argument anywhere that could name a location.
@@ -224,6 +243,9 @@ export interface AgentWorkspaceBridge {
   attachActivity(sessionId: string, lastSeq?: number): Promise<AttachResult>;
   detachActivity(sessionId: string): Promise<void>;
   onActivity(callback: (push: ActivityPush) => void): () => void;
+  /** Fetches one tool result's complete content (ADI-29), or `null` when it does not exist, does
+   * not belong to `sessionId`, or the daemon has no attachment store configured. */
+  getAttachment(sessionId: string, attachmentId: string): Promise<AttachmentContent | null>;
 }
 
 export type { StartSessionDenialReason };

@@ -1,7 +1,8 @@
 import { toHistoryEntry } from './agent-activity-sanitize.js';
-import { toCapacity, toSearchMatch, toSessionSummary } from './agent-workspace-view.js';
+import { toAttachmentContent, toCapacity, toSearchMatch, toSessionSummary } from './agent-workspace-view.js';
 import type { GuardedIpcHandle } from './ipc-sender-guard.js';
 import type {
+  AttachmentContent,
   AttachResult,
   HistoryEntry,
   SessionEventsPage,
@@ -12,6 +13,7 @@ import type {
 } from './agent-workspace-types.js';
 import {
   parseAgentWorkspaceAttachInput,
+  parseAgentWorkspaceAttachmentInput,
   parseAgentWorkspaceDetachInput,
   parseAgentWorkspaceEventsInput,
   parseAgentWorkspaceGetInput,
@@ -23,7 +25,7 @@ import {
  * ---------------------------------------------------------------------------------------------
  * AI Workspace IPC (ADI-07): the seventh preload namespace.
  *
- * Six channels, and the same rule the grant channels in main.ts keep: **none of them accepts or
+ * Seven channels, and the same rule the grant channels in main.ts keep: **none of them accepts or
  * returns a location**. Every request payload is parsed by an allow-listing validator
  * (workspace/validate.ts) that has no `path`, `cwd`, `workspaceId`, or `incarnation` parser at all,
  * and every response is rebuilt field by field (agent-workspace-view.ts, agent-activity-sanitize.ts)
@@ -33,11 +35,11 @@ import {
  * The renderer never talks to the daemon. These handlers are the only thing that does, over
  * loopback, with a bearer token that stays in the main process.
  *
- * ## Why this is a module rather than six `ipcMain.handle` calls inline in main.ts
+ * ## Why this is a module rather than seven `ipcMain.handle` calls inline in main.ts
  *
  * main.ts registers roughly fifty IPC channels at module scope and has never been importable by a
  * test: importing it boots Electron. That is a pre-existing problem this feature does not try to
- * solve. What it does do is keep its own six channels, its own paging helpers, and its own alias
+ * solve. What it does do is keep its own seven channels, its own paging helpers, and its own alias
  * book out of that module scope entirely, behind one call. The whole feature is therefore
  * removable by deleting a single line from main.ts, and testable without main.ts -- see
  * test/agent-workspace-ipc.test.ts, which registers these handlers against a stub registrar.
@@ -45,7 +47,7 @@ import {
  */
 
 /**
- * Every channel this feature owns, in one place so a test can assert that all six are additive and
+ * Every channel this feature owns, in one place so a test can assert that all seven are additive and
  * that none of them collides with a channel some other part of main.ts already answers.
  */
 export const AGENT_WORKSPACE_CHANNELS = [
@@ -53,6 +55,7 @@ export const AGENT_WORKSPACE_CHANNELS = [
   'agent-workspace:get',
   'agent-workspace:events',
   'agent-workspace:search',
+  'agent-workspace:attachment',
   'agent-workspace:attach',
   'agent-workspace:detach',
 ] as const;
@@ -143,7 +146,7 @@ function readCursor(body: Record<string, unknown> | undefined): string | undefin
 }
 
 /**
- * Registers the five AI Workspace channels. Called once, from main.ts.
+ * Registers the seven AI Workspace channels. Called once, from main.ts.
  *
  * Not calling it is the feature's off switch: nothing else in main.ts reads anything this module
  * owns, so the remaining channels behave identically with or without this call.
@@ -201,6 +204,14 @@ export function registerAgentWorkspaceHandlers(ipc: GuardedIpcHandle, deps: Agen
     }
     const nextCursor = readCursor(body);
     return { matches, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  });
+
+  ipc.handle('agent-workspace:attachment', async (_event, input: unknown): Promise<AttachmentContent | null> => {
+    const { sessionId, attachmentId } = parseAgentWorkspaceAttachmentInput(input);
+    const body = await getJson(
+      `/v2/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    );
+    return body === undefined ? null : toAttachmentContent(body);
   });
 
   ipc.handle('agent-workspace:attach', (_event, input: unknown): AttachResult => {
