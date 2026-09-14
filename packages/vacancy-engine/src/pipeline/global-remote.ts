@@ -248,22 +248,12 @@ export function applyWorldwideProfileScores(
     // One scorer call per row (issue #367): both `profileScore` and `profileMatch` are derived from
     // this same result, never a second scoring pass, so the two can never disagree with each other.
     const score = scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd);
-    return {
-      ...vacancy,
-      profileScore: score?.deterministicScore ?? null,
-      profileMatch: score
-        ? {
-            technicalFit: score.technicalFit,
-            roleFit: score.roleFit,
-            seniorityFit: score.seniorityFit,
-            primaryFit: score.primaryFit,
-            matchingSkills: score.matchingSkills,
-            gaps: score.gaps,
-            reasons: score.reasons,
-            unmetMandatoryLanguages: score.unmetMandatoryLanguages,
-          }
-        : null,
-    };
+    if (!score) return { ...vacancy, profileScore: null, profileMatch: null };
+    // Destructured, not manually listed field-by-field: `profileMatch`'s shape stays structurally
+    // tied to `ProfileMatchBreakdown` (itself an `Omit` of this same type) without a second place
+    // that would silently fall out of sync if `WorldwideDeterministicScore` gains a field.
+    const { relevant: _relevant, deterministicScore, ...profileMatch } = score;
+    return { ...vacancy, profileScore: deterministicScore, profileMatch };
   });
 }
 

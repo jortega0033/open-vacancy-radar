@@ -84,6 +84,7 @@ export function discoveryAudit(
     | 'description'
     | 'postedAt'
     | 'profileScore'
+    | 'profileMatch'
     | 'worldwideSponsorMatch'
     | 'identity'
     | 'sourceUrl'

@@ -351,8 +351,8 @@ export function VacancyDetail({
                     Matching profile signals
                   </div>
                   <ul className="list-disc pl-5 text-sm text-base-content/70">
-                    {result.profileMatch.matchingSkills.map((skill) => (
-                      <li key={skill}>{skill}</li>
+                    {result.profileMatch.matchingSkills.map((skill, index) => (
+                      <li key={`${index}-${skill}`}>{skill}</li>
                     ))}
                   </ul>
                 </div>
@@ -364,8 +364,8 @@ export function VacancyDetail({
                     Score gaps and caps
                   </div>
                   <ul className="list-disc pl-5 text-sm text-base-content/70">
-                    {result.profileMatch.gaps.map((gap) => (
-                      <li key={gap}>{gap}</li>
+                    {result.profileMatch.gaps.map((gap, index) => (
+                      <li key={`${index}-${gap}`}>{gap}</li>
                     ))}
                   </ul>
                 </div>
@@ -377,8 +377,8 @@ export function VacancyDetail({
                     Scorer reasons
                   </div>
                   <ul className="list-disc pl-5 text-sm text-base-content/70">
-                    {result.profileMatch.reasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
+                    {result.profileMatch.reasons.map((reason, index) => (
+                      <li key={`${index}-${reason}`}>{reason}</li>
                     ))}
                   </ul>
                 </div>
