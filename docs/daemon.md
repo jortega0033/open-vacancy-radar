@@ -98,9 +98,9 @@ Wire shapes (route bodies, the `AgentEvent`/`AgentEventEnvelope` format) are doc
 
 ### v2 read routes
 
-ADI-05 adds five **read-only** routes, registered only when the durable session store opened
-successfully (see [Durable session state](#durable-session-state) below). When it did not, none of
-them exist and every path below returns the ordinary `404`.
+ADI-05 adds six **read-only** routes (ADI-29 added the sixth), registered only when the durable
+session store opened successfully (see [Durable session state](#durable-session-state) below). When
+it did not, none of them exist and every path below returns the ordinary `404`.
 
 | Route | Behavior |
 |---|---|
@@ -109,6 +109,7 @@ them exist and every path below returns the ordinary `404`.
 | `GET /v2/sessions?cursor=&limit=` | `{ schemaVersion: 1, sessions, nextCursor?, capacity }`, newest-first. Default `limit` 50, maximum 100. `400 { code: 'invalid_cursor' }` for a malformed cursor or one addressing an evicted record |
 | `GET /v2/sessions/:sessionId` | One session view, or `404 { code: 'session_not_found' }` |
 | `GET /v2/sessions/:sessionId/events?cursor=&limit=` | A **JSON page** of the durable, redacted event log -- not an SSE stream. The live v1 stream at `GET /sessions/:id/events` is unchanged and remains the way to watch a session in progress |
+| `GET /v2/sessions/:sessionId/attachments/:attachmentId` | The complete content of one `tool.completed` result too large for the inline preview (ADI-29). `{ schemaVersion: 1, metadata, content }`, or `404 { code: 'attachment_not_found' }` when the id doesn't exist, doesn't belong to that session, or no attachment store is configured for this daemon instance. `400 { code: 'invalid_attachment_reference' }` for a malformed session or attachment id |
 
 There is deliberately **no `POST /v2/sessions`**, no `DELETE`, and no v2 cancel. Creating a session
 over v2 means accepting a capability-negotiation request shape this repo does not have, and

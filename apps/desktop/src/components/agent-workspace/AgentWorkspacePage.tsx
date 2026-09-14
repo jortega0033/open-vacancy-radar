@@ -127,7 +127,14 @@ export function AgentWorkspacePage({ defaultProvider }: AgentWorkspacePageProps)
             />
           ) : (
             selected !== undefined && (
+              // Keyed on the session id so switching sessions remounts the whole detail tree rather
+              // than reusing it in place: `ActivityTimeline`'s rows are keyed by `item.seq`, which
+              // restarts near 0 for every session, so without this key a component holding its own
+              // local state at a given row position (e.g. a fetched attachment's cached content)
+              // would silently carry that state over onto the next session's row at the same
+              // position instead of starting fresh.
               <SessionDetail
+                key={selected.view.id}
                 entry={selected}
                 onCancel={cancel}
                 cancelling={cancelling === selected.view.id}

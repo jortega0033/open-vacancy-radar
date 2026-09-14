@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toCapacity, toSessionSummary } from '../electron/agent-workspace-view.js';
+import { toAttachmentContent, toCapacity, toSessionSummary } from '../electron/agent-workspace-view.js';
 
 /**
  * Main's rebuild of the daemon's v2 session read view (ADI-07).
@@ -152,5 +152,40 @@ describe('toCapacity', () => {
 
   it('clamps a negative or fractional count to zero rather than rendering it', () => {
     expect(toCapacity({ global: { active: -3, limit: 1.5 } }).global).toEqual({ active: 0, limit: 0 });
+  });
+});
+
+describe('toAttachmentContent (ADI-29)', () => {
+  it('rebuilds mimeType/bytes/content, dropping the attachment\'s own id/sessionId/sha256', () => {
+    const result = toAttachmentContent({
+      metadata: { id: 'a', sessionId: 's', mimeType: 'text/plain', bytes: 5, sha256: 'deadbeef' },
+      content: 'hello',
+    });
+    expect(result).toEqual({ mimeType: 'text/plain', bytes: 5, content: 'hello' });
+  });
+
+  it('rejects content over the byte cap measured in UTF-8 bytes, not UTF-16 code units', () => {
+    // Each character below is a 3-byte UTF-8 CJK character, so a string well under the 1 MiB
+    // *character* count can still be several times over the 1 MiB *byte* cap -- a `.length` (UTF-16
+    // code unit) comparison against a byte-named constant would under-count this and wrongly accept
+    // it as within bounds.
+    const oversized = '中'.repeat(500_000); // 500,000 chars, 1,500,000 UTF-8 bytes
+    const result = toAttachmentContent({
+      metadata: { mimeType: 'text/plain', bytes: 1_500_000 },
+      content: oversized,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('accepts content right at the byte cap when it is also well under the UTF-16 length cap', () => {
+    const atCap = 'x'.repeat(1024 * 1024); // ASCII: 1 byte per char, exactly the cap
+    const result = toAttachmentContent({ metadata: { mimeType: 'text/plain', bytes: atCap.length }, content: atCap });
+    expect(result).not.toBeNull();
+  });
+
+  it('rejects a payload with no content string, or no recognizable mimeType', () => {
+    expect(toAttachmentContent({ metadata: { mimeType: 'text/plain' } })).toBeNull();
+    expect(toAttachmentContent({ metadata: {}, content: 'hi' })).toBeNull();
+    expect(toAttachmentContent(null)).toBeNull();
   });
 });

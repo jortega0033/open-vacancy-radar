@@ -8,6 +8,9 @@ import type {
   TerminalReasonV2,
 } from '@agent-dock/shared';
 import { utf8ByteLength } from '@agent-dock/shared';
+// Same subpath reason `persisted-session-schema.ts` imports it from here: `node:crypto`-dependent,
+// daemon-only.
+import { digestAndPreviewOfUnknown } from '@agent-dock/shared/content-digest';
 import type { Logger, ProviderRegistry, ProviderSessionHandle, SessionLaunchProbe } from '@agent-dock/agent-runtime';
 import { AcceptedWorkLatch, UnknownFrameLedger } from '@agent-dock/agent-runtime';
 import { MemorySessionStore, type SessionStore } from './session-store.js';
@@ -17,6 +20,7 @@ import type { SessionLineageStore } from './session-lineage-store.js';
 import type { WorkspaceTrustStore } from './workspace-trust-store.js';
 import { revalidateWorkspaceIdentity } from './workspace-identity.js';
 import type { WorkspaceExecutionLeaseManager, WorkspaceLease } from './workspace-execution-lease.js';
+import { ATTACHMENT_WORTHY_RESULT_BYTES, MAX_ATTACHMENT_BYTES, type AttachmentStore } from './attachment-store.js';
 
 /**
  * Live, non-persistable state for one session: its process handle and buffered event history.
@@ -67,6 +71,11 @@ const MAX_STORED_EVENT_BYTES_PER_SESSION = 16 * 1024 * 1024;
  * session fails rather than silently dropping or truncating provider-controlled content, since v1
  * has no per-event delivery guarantee a silent drop could violate. */
 const MAX_EVENT_ENVELOPE_BYTES = 1024 * 1024;
+
+/** Headroom reserved for the `resultAttachmentId` field (ADI-29): an envelope within this many
+ * bytes of `MAX_EVENT_ENVELOPE_BYTES` before that field is even considered is treated as already
+ * full, so adding the id is never what tips a result over the ceiling. */
+const RESULT_ATTACHMENT_ID_RESERVE_BYTES = 128;
 
 /**
  * Bounds how many terminal (completed/failed/cancelled) sessions' runtime state (event history
@@ -250,6 +259,12 @@ export class SessionManager {
      * route, which can await, and there is deliberately no `acquire()` call anywhere in this class.
      */
     private readonly leases?: WorkspaceExecutionLeaseManager,
+    /**
+     * ADI-29. Optional for the same reason `durable` is: absent, `tool.completed` results simply
+     * never get an attachment (the field stays undefined, exactly as it always has), and every
+     * pre-existing call site and test is unchanged.
+     */
+    private readonly attachments?: AttachmentStore,
   ) {
     this.workspaceTrust = workspace?.trustStore;
     this.revalidateIdentity =
@@ -563,8 +578,24 @@ export class SessionManager {
         // and consistent between what a live subscriber sees and what a replay subscriber sees for
         // the events that are still buffered.
         const sequence = runtime.nextSequence++;
-        const envelope: AgentEventEnvelope = { ...event, sequence, timestamp: new Date().toISOString() };
-        const bytes = utf8ByteLength(JSON.stringify(envelope));
+        const baseEnvelope: AgentEventEnvelope = { ...event, sequence, timestamp: new Date().toISOString() };
+        const baseBytes = utf8ByteLength(JSON.stringify(baseEnvelope));
+        // Attaching is skipped, not just discarded afterward, once the envelope is already within
+        // `RESULT_ATTACHMENT_ID_RESERVE_BYTES` of the ceiling: writing the attachment first and only
+        // checking the final envelope size after would let a result that is small enough to attach
+        // but pushes the envelope (result, overhead, and the new id field together) over
+        // `MAX_EVENT_ENVELOPE_BYTES` leave a real file on disk for an event that is about to be
+        // discarded and replaced by the oversized-envelope failure path below -- an attachment no
+        // surviving envelope ever references.
+        const resultAttachmentId =
+          baseBytes > MAX_EVENT_ENVELOPE_BYTES - RESULT_ATTACHMENT_ID_RESERVE_BYTES
+            ? undefined
+            : this.attachResultIfWorthwhile(id, event);
+        const envelope: AgentEventEnvelope = {
+          ...baseEnvelope,
+          ...(resultAttachmentId === undefined ? {} : { resultAttachmentId }),
+        };
+        const bytes = resultAttachmentId === undefined ? baseBytes : utf8ByteLength(JSON.stringify(envelope));
 
         if (bytes > MAX_EVENT_ENVELOPE_BYTES) {
           // Deliberately stricter than the ordinary history-full path below: this event is never
@@ -666,6 +697,39 @@ export class SessionManager {
     if (!runtime.replayFull) {
       runtime.replayFull = true;
       this.logger.warn('session event history full; further events will not be replayable', { sessionId: id });
+    }
+  }
+
+  /**
+   * Writes a `tool.completed` result to the attachment store when it is both large enough to be
+   * worth retaining separately and small enough to fit (ADI-29), returning the new attachment's id
+   * -- or `undefined` for every other event type, a result under the "worth it" threshold, one over
+   * the attachment store's own hard cap, or any failure along the way (a full store, a rejected
+   * quota). This never affects `event.result` itself: the original, unbounded value still flows
+   * through the envelope exactly as it always has, still subject to the existing
+   * `MAX_EVENT_ENVELOPE_BYTES` ceiling below, and `persistEvent`'s own digest of it still hashes the
+   * true original -- this only ever *adds* a retrieval path, never changes what was already there.
+   *
+   * Best-effort by design, the same posture `persistEvent` already takes toward the durable store:
+   * a full attachment budget must degrade "no full-output retrieval for this one result" and nothing
+   * else, never the live session itself.
+   */
+  private attachResultIfWorthwhile(id: string, event: AgentEvent): string | undefined {
+    if (event.type !== 'tool.completed' || event.result === undefined || !this.attachments) return undefined;
+    const { bytes, preview } = digestAndPreviewOfUnknown(event.result, MAX_ATTACHMENT_BYTES);
+    if (bytes <= ATTACHMENT_WORTHY_RESULT_BYTES || bytes > MAX_ATTACHMENT_BYTES) return undefined;
+    // `preview` is the raw string itself for a string result (see digestAndPreviewOfUnknown), so the
+    // stored attachment's declared type has to follow suit rather than always claiming JSON.
+    const mimeType = typeof event.result === 'string' ? 'text/plain' : 'application/json';
+    try {
+      return this.attachments.put(id, mimeType, preview).id;
+    } catch (error: unknown) {
+      this.logger.warn('could not retain an oversized tool result as an attachment', {
+        sessionId: id,
+        bytes,
+        error,
+      });
+      return undefined;
     }
   }
 

@@ -195,6 +195,45 @@ describe('toActivityEntry: what deliberately does cross', () => {
     );
     expect(entry).toEqual({ seq: 0, at: 't', origin: 'live', kind: 'usage', cost: 1 });
   });
+
+  it('keeps the whole tool.completed result as the live preview when it fits, with no truncation flag (ADI-29)', () => {
+    const entry = toActivityEntry(
+      { type: 'tool.completed', result: { exitCode: 0 }, sequence: 0, timestamp: 't' },
+      new Map(),
+    ) as { resultPreview?: string; resultPreviewTruncated?: boolean };
+    expect(entry.resultPreview).toBe(JSON.stringify({ exitCode: 0 }));
+    expect(entry.resultPreviewTruncated).toBeUndefined();
+  });
+
+  it('truncates an oversized live tool.completed result and flags the cut', () => {
+    const output = 'x'.repeat(MAX_TEXT_BYTES_PER_ENTRY + 500);
+    const entry = toActivityEntry(
+      { type: 'tool.completed', result: { output }, sequence: 0, timestamp: 't' },
+      new Map(),
+    ) as { resultPreview?: string; resultPreviewTruncated?: boolean };
+    expect(Buffer.byteLength(entry.resultPreview ?? '', 'utf8')).toBeLessThanOrEqual(MAX_TEXT_BYTES_PER_ENTRY);
+    expect(entry.resultPreviewTruncated).toBe(true);
+  });
+
+  it('passes a valid resultAttachmentId through, and drops a malformed one', () => {
+    const valid = toActivityEntry(
+      {
+        type: 'tool.completed',
+        result: 'x',
+        resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+        sequence: 0,
+        timestamp: 't',
+      },
+      new Map(),
+    ) as { resultAttachmentId?: string };
+    expect(valid.resultAttachmentId).toBe('11111111-2222-4333-8444-555555555555');
+
+    const invalid = toActivityEntry(
+      { type: 'tool.completed', result: 'x', resultAttachmentId: 'not-a-uuid', sequence: 0, timestamp: 't' },
+      new Map(),
+    ) as { resultAttachmentId?: string };
+    expect(invalid.resultAttachmentId).toBeUndefined();
+  });
 });
 
 describe('toActivityEntry: fail-closed inputs', () => {
@@ -241,6 +280,30 @@ describe('toHistoryEntry: the durable half', () => {
     );
     expect((history as { toolAlias?: string }).toolAlias).toBe('t1');
     expect(JSON.stringify(history)).not.toContain('native-call-1');
+  });
+
+  it('passes resultAttachmentId through from the durable record, but never fabricates a resultPreview (ADI-29)', () => {
+    const entry = toHistoryEntry(
+      {
+        type: 'tool.completed',
+        sequence: 5,
+        timestamp: 't',
+        resultBytes: 20_000,
+        resultSha256: 'c'.repeat(64),
+        resultAttachmentId: '11111111-2222-4333-8444-555555555555',
+      },
+      new Map(),
+    ) as { resultAttachmentId?: string; resultPreview?: string };
+    expect(entry.resultAttachmentId).toBe('11111111-2222-4333-8444-555555555555');
+    expect(entry.resultPreview).toBeUndefined();
+  });
+
+  it('drops a malformed resultAttachmentId read back from a persisted record', () => {
+    const entry = toHistoryEntry(
+      { type: 'tool.completed', sequence: 5, timestamp: 't', resultAttachmentId: 'not-a-uuid' },
+      new Map(),
+    ) as { resultAttachmentId?: string };
+    expect(entry.resultAttachmentId).toBeUndefined();
   });
 
   it('drops the persisted status detail digest so a history row matches its live twin exactly', () => {

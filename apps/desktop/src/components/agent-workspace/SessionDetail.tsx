@@ -107,7 +107,7 @@ export function SessionDetail({ entry, onCancel, cancelling }: SessionDetailProp
       <h4 className="mt-5 mb-2 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
         Activity
       </h4>
-      <ActivityTimeline entry={entry} />
+      <ActivityTimeline sessionId={view.id} entry={entry} />
     </section>
   );
 }

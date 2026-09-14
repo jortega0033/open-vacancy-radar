@@ -178,6 +178,7 @@ export type {
   ActivityEntry,
   ActivityPush,
   AgentWorkspaceBridge,
+  AttachmentContent,
   AttachRefusal,
   AttachResult,
   HistoryEntry,

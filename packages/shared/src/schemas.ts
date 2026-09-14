@@ -114,6 +114,7 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     toolCallId: z.string().optional(),
     result: z.unknown().optional(),
     isError: z.boolean().optional(),
+    resultAttachmentId: z.string().uuid().optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('usage'),

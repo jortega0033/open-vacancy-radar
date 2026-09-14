@@ -17,7 +17,21 @@ export type AgentEvent =
   | { type: 'assistant.message'; text: string }
   | { type: 'thinking.delta'; text: string }
   | { type: 'tool.started'; toolName: string; toolCallId?: string; input?: unknown }
-  | { type: 'tool.completed'; toolName?: string; toolCallId?: string; result?: unknown; isError?: boolean }
+  | {
+      type: 'tool.completed';
+      toolName?: string;
+      toolCallId?: string;
+      result?: unknown;
+      isError?: boolean;
+      /**
+       * Opaque id of the complete result in the daemon's attachment store (ADI-29), present only
+       * when `result`'s serialized size exceeded the bounded inline preview every consumer of this
+       * event already applies. Never the content itself -- an id a caller trusted with this
+       * session's own scope can exchange for the full text through the attachment store's own
+       * session-scoped retrieval, nothing else.
+       */
+      resultAttachmentId?: string;
+    }
   | {
       type: 'usage';
       inputTokens?: number;
