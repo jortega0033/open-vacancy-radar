@@ -130,13 +130,21 @@ export class CodexAppServerNormalizer {
       }
       case 'thread/tokenUsage/updated': {
         const tokenUsage = object(object(params, 'thread/tokenUsage/updated params').tokenUsage, 'token usage');
-        const last = object(tokenUsage.last, 'last token usage');
+        // `last` is validated only when present, not required: a notification that reports only
+        // `modelContextWindow` (e.g. an early context-window announcement before any turn has
+        // produced token usage) must not fail the whole session over an absent `last` (ADI-26).
+        const last = tokenUsage.last === undefined ? undefined : object(tokenUsage.last, 'last token usage');
         return [
           {
             type: 'usage',
-            inputTokens: typeof last.inputTokens === 'number' ? last.inputTokens : undefined,
-            outputTokens: typeof last.outputTokens === 'number' ? last.outputTokens : undefined,
-            cachedInputTokens: typeof last.cachedInputTokens === 'number' ? last.cachedInputTokens : undefined,
+            inputTokens: typeof last?.inputTokens === 'number' ? last.inputTokens : undefined,
+            outputTokens: typeof last?.outputTokens === 'number' ? last.outputTokens : undefined,
+            cachedInputTokens: typeof last?.cachedInputTokens === 'number' ? last.cachedInputTokens : undefined,
+            // `last.totalTokens` is the latest active-context size, distinct from the accumulated
+            // session total this normalizer does not read here (ADI-26).
+            contextTokens: typeof last?.totalTokens === 'number' ? last.totalTokens : undefined,
+            contextWindowTokens:
+              typeof tokenUsage.modelContextWindow === 'number' ? tokenUsage.modelContextWindow : undefined,
           },
         ];
       }

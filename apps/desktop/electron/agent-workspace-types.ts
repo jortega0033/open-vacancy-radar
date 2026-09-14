@@ -69,6 +69,10 @@ export type ActivityBody =
       outputTokens?: number;
       cachedInputTokens?: number;
       cost?: number;
+      /** Latest active-context token count, e.g. Codex's `tokenUsage.last.totalTokens`. */
+      contextTokens?: number;
+      /** Provider-reported context-window capacity in tokens. Absent when unavailable; never hardcoded. */
+      contextWindowTokens?: number;
     }
   | {
       kind: 'usage.rate_limits';
