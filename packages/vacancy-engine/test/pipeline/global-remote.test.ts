@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CandidateProfile } from '../../src/candidate/profile.js';
+import * as relevanceModule from '../../src/filtering/relevance.js';
 import { WIKIDATA_API_ENDPOINT } from '../../src/companies/wikidata-name-source.js';
 import type {
   DiscoveryProvider,
@@ -553,6 +554,68 @@ describe('applyWorldwideProfileScores', () => {
     const scored = applyWorldwideProfileScores(vacancies, unconfiguredProfile, 100_000);
 
     expect(scored.map((item) => item.profileScore)).toEqual([null]);
+  });
+
+  describe('profileMatch breakdown (issue #367)', () => {
+    it('preserves the scorer\'s exact dimension breakdown alongside profileScore, from one scorer call', () => {
+      const vacancies = [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+          description:
+            'Responsibilities\nBuild and own Angular and TypeScript web applications.\nRequirements\nStrong Angular and TypeScript experience.',
+          annualizedMinimumUsd: 150_000,
+        }),
+      ];
+
+      const scored = applyWorldwideProfileScores(vacancies, configuredProfile, 100_000);
+      const row = scored[0]!;
+
+      expect(row.profileMatch).not.toBeNull();
+      expect(row.profileMatch).not.toBeUndefined();
+      // Every dimension the scorer itself reports, verbatim -- not re-derived from profileScore.
+      expect(row.profileMatch).toMatchObject({
+        technicalFit: expect.any(Number),
+        roleFit: expect.any(Number),
+        seniorityFit: expect.any(Number),
+        primaryFit: expect.any(String),
+        matchingSkills: expect.arrayContaining(['Angular', 'TypeScript']),
+        gaps: expect.any(Array),
+        reasons: expect.any(Array),
+        unmetMandatoryLanguages: [],
+      });
+      // No `relevant`/`deterministicScore` leak onto the persisted breakdown -- those stay exactly
+      // `profileScore` and the (unexposed) threshold check.
+      expect(row.profileMatch).not.toHaveProperty('relevant');
+      expect(row.profileMatch).not.toHaveProperty('deterministicScore');
+    });
+
+    it('leaves profileMatch null exactly when profileScore is null (unconfigured profile)', () => {
+      const vacancies = [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+          description: 'Build Angular and TypeScript web applications.',
+        }),
+      ];
+
+      const scored = applyWorldwideProfileScores(vacancies, unconfiguredProfile, 100_000);
+
+      expect(scored[0]!.profileScore).toBeNull();
+      expect(scored[0]!.profileMatch).toBeNull();
+    });
+
+    it('one scorer call per vacancy produces both profileScore and profileMatch, never disagreeing', () => {
+      const scoreSpy = vi.spyOn(relevanceModule, 'scoreWorldwideVacancy');
+      const vacancies = [
+        vacancy('himalayas', 'himalayas:1', 'https://example.test/1', 'Senior Frontend Engineer', {
+          description: 'Build Angular and TypeScript web applications.',
+        }),
+      ];
+
+      const scored = applyWorldwideProfileScores(vacancies, configuredProfile, 100_000);
+
+      expect(scoreSpy).toHaveBeenCalledTimes(1);
+      const returned = scoreSpy.mock.results[0]!.value as { deterministicScore: number } | null;
+      expect(scored[0]!.profileScore).toBe(returned?.deterministicScore ?? null);
+      scoreSpy.mockRestore();
+    });
   });
 
   it('computes a profile score per vacancy while leaving every other field untouched', () => {

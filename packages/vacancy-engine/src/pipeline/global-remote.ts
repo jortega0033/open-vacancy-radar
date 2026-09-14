@@ -244,11 +244,27 @@ export function applyWorldwideProfileScores(
   profile: CandidateProfile,
   minimumAnnualBaseUsd: number | null,
 ): DiscoveryVacancyAudit[] {
-  return vacancies.map((vacancy) => ({
-    ...vacancy,
-    profileScore:
-      scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd)?.deterministicScore ?? null,
-  }));
+  return vacancies.map((vacancy) => {
+    // One scorer call per row (issue #367): both `profileScore` and `profileMatch` are derived from
+    // this same result, never a second scoring pass, so the two can never disagree with each other.
+    const score = scoreWorldwideVacancy(vacancy, profile, minimumAnnualBaseUsd);
+    return {
+      ...vacancy,
+      profileScore: score?.deterministicScore ?? null,
+      profileMatch: score
+        ? {
+            technicalFit: score.technicalFit,
+            roleFit: score.roleFit,
+            seniorityFit: score.seniorityFit,
+            primaryFit: score.primaryFit,
+            matchingSkills: score.matchingSkills,
+            gaps: score.gaps,
+            reasons: score.reasons,
+            unmetMandatoryLanguages: score.unmetMandatoryLanguages,
+          }
+        : null,
+    };
+  });
 }
 
 /**
