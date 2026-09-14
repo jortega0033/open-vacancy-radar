@@ -32,6 +32,7 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
   return {
     raw: discoveryVacancy(key, { title, postedAt: overrides.postedAt }),
     official: null,
+    provisional: false,
     key,
     title,
     company: 'Acme',

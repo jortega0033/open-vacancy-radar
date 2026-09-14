@@ -236,6 +236,10 @@ export function SearchPage({
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
+  // User opt-out from the live view during an active rescan that already has a saved report loaded
+  // (issue #364): reset to `false` -- i.e. default to live -- at the start of every scan, so a fresh
+  // rescan always shows its own progress first, with an explicit way back to the saved report.
+  const [viewingSaved, setViewingSaved] = useState(false);
   const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
   const [searchProfileError, setSearchProfileError] = useState<string>();
 
@@ -561,16 +565,35 @@ export function SearchPage({
     };
   }, []);
 
-  // While no final report is loaded yet, fall back to whatever `vacancy:scan-progress` has pushed
-  // so far (issue #252) -- honestly unscored, provisional rows shown sooner than the scan's own
-  // promise resolves. The moment a real `GlobalRemoteReport` exists, it is the only source of truth
-  // here: this never merges partial rows into a loaded report, so the final displayed list is
-  // exactly what a non-streaming scan would have shown, byte-for-byte.
+  const hasReport = worldwideReport !== null;
+  const liveProgressCount = partialVacancies.length;
+  const hasLiveRows = liveProgressCount > 0;
+  // Whether the currently displayed list is the scan's own live/provisional rows rather than the
+  // saved report (issue #364). Two cases:
+  //  - No saved report exists yet: live rows are shown as soon as any arrive, same as before #364.
+  //  - A saved report is already loaded: a rescan's live rows now replace the visible list the
+  //    moment the first one arrives too, rather than staying hidden behind a "N have arrived" count
+  //    for the whole scan -- `viewingSaved` is the explicit, user-driven way back to the saved
+  //    report without waiting for the rescan to finish.
+  const showLiveResults = hasLiveRows && (!hasReport || (scanning && !viewingSaved));
+
+  // While no live rows are being shown, fall back to the saved report if one exists, or to nothing.
+  // This never merges partial rows into a loaded report: the final displayed list, once a real
+  // `GlobalRemoteReport` is in view, is exactly what a non-streaming scan would have shown,
+  // byte-for-byte.
   const results = useMemo<SearchResult[]>(() => {
+    if (showLiveResults) return toPartialResults(partialVacancies);
     if (worldwideReport) return toWorldwideResults(worldwideReport);
-    if (partialVacancies.length > 0) return toPartialResults(partialVacancies);
     return [];
-  }, [worldwideReport, partialVacancies]);
+  }, [showLiveResults, worldwideReport, partialVacancies]);
+
+  // The saved report's own rows, independent of whichever view is currently on screen -- drives
+  // report-level messaging (e.g. "this report has no scores yet") that must stay about the saved
+  // report even while the live view is what's actually rendered.
+  const savedResults = useMemo<SearchResult[]>(
+    () => (worldwideReport ? toWorldwideResults(worldwideReport) : []),
+    [worldwideReport],
+  );
 
   const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
   const visible = useMemo(
@@ -623,7 +646,8 @@ export function SearchPage({
     [visible, selectedKey],
   );
 
-  const reportHasOnlyUnscoredRows = worldwideReport !== null && results.length > 0 && results.every((r) => r.profileScore === null);
+  const reportHasOnlyUnscoredRows =
+    worldwideReport !== null && savedResults.length > 0 && savedResults.every((r) => r.profileScore === null);
   const currentProfileConfigured =
     searchProfile !== null && (searchProfile.targetRoles.length > 0 || searchProfile.strongestSkills.length > 0);
   const currentProfileScanQuery =
@@ -637,13 +661,11 @@ export function SearchPage({
     worldwideReport?.discoverySources.filter((source) => source.status !== 'success' || source.complete === false) ?? [];
   const scanBounds = worldwideReport?.scanBounds;
   const scanIncomplete = scanBounds?.complete === false;
-  const hasReport = worldwideReport !== null;
-  const liveProgressCount = partialVacancies.length;
-  // A scan is running and has pushed at least one row, but has not produced its final report yet:
-  // `results` above is showing provisional, not-yet-scored rows rather than the empty/loading state.
-  // Deliberately excludes `profileNotConfigured`'s check (which requires a real report): a
-  // streaming row's null `profileScore` is expected and temporary, never "profile not configured".
-  const isStreamingPartial = !hasReport && partialVacancies.length > 0;
+  // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
+  // both the "not final" messaging and gating of report-only actions like Prepare application.
+  // Deliberately never checks `profileNotConfigured` (which requires a real report): a streaming
+  // row's null `profileScore` is expected and temporary, never "profile not configured".
+  const isStreamingPartial = showLiveResults;
   const busy = hydrating || scanning;
 
   const runScan = useCallback(async (queryOverride?: string) => {
@@ -672,6 +694,9 @@ export function SearchPage({
     // run (or an earlier mount's now-gone accumulation) left behind, so a rescan's own progress
     // events build a clean list rather than mixing in a previous run's provisional rows.
     setPartialVacancies([]);
+    // Every new scan defaults back to its own live view (issue #364), not whatever the user had
+    // chosen for a previous rescan.
+    setViewingSaved(false);
     try {
       const report = await window.vacancyRadar.runScan({
         mode: 'query',
@@ -731,6 +756,7 @@ export function SearchPage({
     setLoadError(undefined);
     setPendingScanFilters(filters);
     setPartialVacancies([]);
+    setViewingSaved(false);
     try {
       const report = await window.vacancyRadar.runScan({ mode: 'browse_all' });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
@@ -852,7 +878,11 @@ export function SearchPage({
   }, [selected, onGenerateLetter]);
 
   const handlePrepare = useCallback(async () => {
-    if (!selected || isStreamingPartial) return;
+    // Gated on the selected row's own `provisional` flag, not the page-level scanning state
+    // (issue #363): a provisional row must never start application preparation, whether it's
+    // provisional because no report has loaded yet or because the user is viewing a rescan's live
+    // rows while an old report still exists.
+    if (!selected || selected.provisional) return;
     const key = selected.key;
     setPrepareStates((current) => ({ ...current, [key]: 'preparing' }));
     setPrepareErrors((current) => {
@@ -938,13 +968,24 @@ export function SearchPage({
           </ErrorBanner>
         )}
         {scanning && (
-          <div className="alert alert-info mt-3 text-sm">
+          <div className="alert alert-info mt-3 flex items-center gap-3 text-sm">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
-            {hasReport
-              ? `Scanning live sources in the background. The list below is your saved report filtered locally${liveProgressCount > 0 ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when the scan finishes.`
-              : isStreamingPartial
-              ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
-              : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
+            <span className="flex-1">
+              {showLiveResults
+                ? 'Scanning live sources: showing vacancies as each source finishes. Matching and sponsor checks fill in once the scan completes.'
+                : hasReport
+                ? `Scanning live sources in the background. The list below is your saved report filtered locally${hasLiveRows ? `; ${liveProgressCount.toLocaleString()} live ${liveProgressCount === 1 ? 'vacancy has' : 'vacancies have'} arrived so far` : ''}. It will switch when you choose to view them, or when the scan finishes.`
+                : 'Scanning live sources: this hits real external APIs and feeds, and can take anywhere from about ten seconds up to a couple of minutes. The app is not frozen.'}
+            </span>
+            {hasReport && hasLiveRows && (
+              <button
+                type="button"
+                className="btn btn-outline btn-xs flex-none"
+                onClick={() => setViewingSaved((current) => !current)}
+              >
+                {showLiveResults ? 'View saved report' : `View live results (${liveProgressCount.toLocaleString()})`}
+              </button>
+            )}
           </div>
         )}
         {scanError && (
@@ -1035,10 +1076,13 @@ export function SearchPage({
           />
         </div>
       ) : (
-        // Dimmed, not hidden or disabled, while a rescan is in flight: the results/detail pane
-        // still shows the last-known data (real, just about to be replaced), and staying
-        // interactive lets someone keep reading/saving from it during a scan that can take up to a
-        // couple of minutes, rather than locking the page for that whole time.
+        // Never dimmed while a rescan is in flight (issue #363): a page-wide "looks disabled" opacity
+        // over a pane that stays fully interactive is exactly the misleading state the issue reported.
+        // The results/detail pane always shows real, currently-safe data -- the saved report, or the
+        // scan's own live rows once `showLiveResults` switches the list over -- and every action that
+        // is not safe for the exact selected row (a provisional row's Prepare application, above all)
+        // is gated per-row via `VacancyDetail`'s own `prepareAvailable`/`result.provisional`, not by
+        // dimming the whole pane.
         <>
           {profileNotConfigured && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
@@ -1076,9 +1120,7 @@ export function SearchPage({
               {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
             </p>
           )}
-          <div
-            className={`mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0 ${scanning ? 'opacity-60 transition-opacity' : ''}`}
-          >
+          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0">
             <SearchResultList
               results={pageItems}
               totalCount={results.length}
@@ -1103,7 +1145,7 @@ export function SearchPage({
                 providerLabel={PROVIDER_LABEL[defaultProvider]}
                 saveState={saveState}
                 prepareState={prepareState}
-                prepareAvailable={!isStreamingPartial}
+                prepareAvailable={!selected.provisional}
                 {...(saveError ? { saveError } : {})}
                 {...(prepareError ? { prepareError } : {})}
                 onSave={() => void handleSave()}

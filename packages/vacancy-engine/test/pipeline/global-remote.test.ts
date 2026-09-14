@@ -27,6 +27,7 @@ import {
   applyBrowseAllResultCap,
   applyWorldwideProfileScores,
   applyWorldwideSponsorMatches,
+  capBrowseAllDiscovery,
   planWorldwideSponsorMatches,
   resolveRoleQuery,
   trackProgressiveRows,
@@ -1165,6 +1166,36 @@ describe('applyWorkEligibilityEvidence', () => {
       complete: false,
     });
     expect(capped.scanBounds?.completenessReason).toContain('kept 1 of 2');
+  });
+
+  describe('capBrowseAllDiscovery (issue #365)', () => {
+    it('keeps only the first `resultCap` rows and reports what was discovered before the cap', () => {
+      const vacancies = [
+        vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer'),
+        vacancy('jobicy', 'jobicy:2', 'https://example.test/2', 'Frontend Engineer'),
+        vacancy('himalayas', 'himalayas:3', 'https://example.test/3', 'Frontend Engineer'),
+      ];
+
+      const result = capBrowseAllDiscovery(vacancies, 2);
+
+      // The row(s) beyond the cap are dropped from what enrichment ever sees -- not merely from the
+      // finished report -- which is the whole point of applying the cap this early (issue #365).
+      expect(result.kept).toEqual([vacancies[0], vacancies[1]]);
+      expect(result.resultCap).toBe(2);
+      expect(result.resultCountBeforeCap).toBe(3);
+      expect(result.complete).toBe(false);
+      expect(result.completenessReason).toContain('kept 2 of 3');
+    });
+
+    it('reports complete when discovery does not exceed the cap', () => {
+      const vacancies = [vacancy('remotive', 'remotive:1', 'https://example.test/1', 'Frontend Engineer')];
+
+      const result = capBrowseAllDiscovery(vacancies, 5);
+
+      expect(result.kept).toEqual(vacancies);
+      expect(result.complete).toBe(true);
+      expect(result.completenessReason).toBeNull();
+    });
   });
 
   it('attaches an evidence record to every row, whatever source produced it', () => {

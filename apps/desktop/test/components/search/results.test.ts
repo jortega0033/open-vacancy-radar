@@ -47,6 +47,7 @@ function worldwideResult(overrides: { key: string; location: string | null }): S
   return {
     raw: { worldwideSponsorMatch: null } as never,
     official: null,
+    provisional: false,
     key: overrides.key,
     title: 'Frontend Engineer',
     company: 'Acme',
@@ -306,6 +307,7 @@ describe('sortResults', () => {
     return {
       raw: discoveryVacancy({ key: overrides.key }),
       official: null,
+      provisional: false,
       key: overrides.key,
       title: overrides.title ?? overrides.key,
       company: 'Acme',

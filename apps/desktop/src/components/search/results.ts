@@ -85,6 +85,13 @@ interface CommonResult {
   reasons: string[];
   /** The subset of fields the CV assistant needs to write a prompt. */
   lead: VacancyLead;
+  /**
+   * True for a row from an in-progress scan's live/progressive feed (`toPartialResults`), not yet
+   * in a final `GlobalRemoteReport`: unscored, with no official-source cross-reference, and not
+   * safe to hand to application preparation (issue #363/#364). False for every row `toWorldwideResults`
+   * produces, whether or not this run's report is itself capped/incomplete.
+   */
+  provisional: boolean;
 }
 
 export interface SearchResult extends CommonResult {
@@ -220,10 +227,15 @@ export function isWebUrl(value: string): boolean {
  * `official` lookups) and `toPartialResults` (a still-running scan, `official` always null -- see
  * that function's own doc comment for why).
  */
-function toSearchResult(vacancy: DiscoveryVacancyAudit, official: OfficialVacancyAudit | null): SearchResult {
+function toSearchResult(
+  vacancy: DiscoveryVacancyAudit,
+  official: OfficialVacancyAudit | null,
+  provisional: boolean,
+): SearchResult {
   return {
     raw: vacancy,
     official,
+    provisional,
     key: vacancy.key,
     title: vacancy.title,
     company: vacancy.company,
@@ -257,7 +269,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
   const officialByUrl = new Map<string, OfficialVacancyAudit>();
   for (const entry of report.officialAudit) officialByUrl.set(entry.url, entry);
 
-  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null));
+  return report.discoveryAudit.map((vacancy) => toSearchResult(vacancy, officialByUrl.get(vacancy.url) ?? null, false));
 }
 
 /**
@@ -273,7 +285,7 @@ export function toWorldwideResults(report: GlobalRemoteReport): SearchResult[] {
  * score it was not actually given.
  */
 export function toPartialResults(vacancies: readonly DiscoveryVacancyAudit[]): SearchResult[] {
-  return vacancies.map((vacancy) => toSearchResult(vacancy, null));
+  return vacancies.map((vacancy) => toSearchResult(vacancy, null, true));
 }
 
 export type PostedWithin = 'any' | '1' | '7' | '30';
