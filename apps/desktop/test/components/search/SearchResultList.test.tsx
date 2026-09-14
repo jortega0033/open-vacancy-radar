@@ -32,6 +32,7 @@ function worldwideResult(key: string, title: string, overrides: Partial<SearchRe
   return {
     raw: discoveryVacancy(key, { title, postedAt: overrides.postedAt }),
     official: null,
+    provisional: false,
     key,
     title,
     company: 'Acme',
@@ -195,6 +196,27 @@ describe('SearchResultList', () => {
     );
 
     expect(screen.getByText('Possible sponsor match (best effort)')).toBeInTheDocument();
+  });
+
+  it('marks a provisional (live-scan) row as not yet scored, and never for a final row (issue #364)', () => {
+    const provisionalRow = worldwideResult('1', 'Frontend Engineer', { provisional: true });
+    const finalRow = worldwideResult('2', 'Backend Engineer', { provisional: false });
+
+    render(
+      <SearchResultList
+        results={[provisionalRow, finalRow]}
+        totalCount={2}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="2 vacancies"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText(/live · not yet scored/i)).toHaveLength(1);
   });
 
   it('flags a posting over 30 days old instead of showing its date as if it were fresh', () => {

@@ -138,6 +138,11 @@ export function VacancyDetail({
               {result.company}
             </div>
             <div className="mt-1 text-xs text-base-content/60">{subtitle}</div>
+            {result.provisional && (
+              <span className="badge badge-warning badge-soft badge-sm mt-1.5" role="status">
+                Live result · not yet scored or verified
+              </span>
+            )}
           </div>
 
           <div className="flex max-w-full flex-none flex-wrap gap-2">

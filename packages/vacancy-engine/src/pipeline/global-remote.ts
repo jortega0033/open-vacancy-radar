@@ -724,6 +724,43 @@ export type GlobalRemoteScanOptions = {
   onProgress?: ScanProgressCallback;
 };
 
+/**
+ * The cap decision itself, extracted from `applyBrowseAllResultCap` below so `runGlobalRemoteScan`
+ * can apply it to the discovered row list *before* running the expensive per-row enrichment steps
+ * (profile scoring, the rate-limited sponsor-match network/DB lookups, work-eligibility evidence),
+ * not just to the finished report afterward (issue #365). A discovery run that finds far more than
+ * the cap otherwise still paid for enrichment on every row it found, most of which the saved report
+ * was about to discard anyway.
+ */
+export function capBrowseAllDiscovery(
+  vacancies: readonly DiscoveryVacancyAudit[],
+  resultCap: number,
+): {
+  kept: DiscoveryVacancyAudit[];
+  resultCap: number;
+  resultCountBeforeCap: number;
+  complete: boolean;
+  completenessReason: string | null;
+} {
+  const safeCap = Math.max(0, Math.floor(resultCap));
+  const resultCountBeforeCap = vacancies.length;
+  const complete = resultCountBeforeCap <= safeCap;
+  return {
+    kept: complete ? [...vacancies] : vacancies.slice(0, safeCap),
+    resultCap: safeCap,
+    resultCountBeforeCap,
+    complete,
+    completenessReason: complete
+      ? null
+      : `Browse-all result cap kept ${safeCap.toLocaleString('en-US')} of ${resultCountBeforeCap.toLocaleString('en-US')} discovered vacancies.`,
+  };
+}
+
+/**
+ * Trims an already-finished report to `resultCap`. Kept as its own pure function (and still used by
+ * its own tests below) for report-shape correctness; `runGlobalRemoteScan` itself no longer calls
+ * this -- see `capBrowseAllDiscovery` above for why the cap now applies earlier, before enrichment.
+ */
 export function applyBrowseAllResultCap(report: GlobalRemoteReport, resultCap: number): GlobalRemoteReport {
   const safeCap = Math.max(0, Math.floor(resultCap));
   const resultCountBeforeCap = report.discoveryAudit.length;
@@ -966,8 +1003,15 @@ export async function runGlobalRemoteScan(
   const discoverySources = discovery.sources.map((source) => withFocusedScanPlan(source, focusedCriteria));
   const discoveryAudit = uniqueDiscovery(auditedDiscovery.vacancies);
   const focused = applyFocusedScanCriteria(discoveryAudit, focusedCriteria);
+  // Browse-all's result cap decides which rows survive before they reach any per-row enrichment
+  // below, not after (issue #365) -- see `capBrowseAllDiscovery`'s own doc comment.
+  const browseAllCap =
+    options.browseAll && options.browseAllResultCap !== undefined
+      ? capBrowseAllDiscovery(focused.vacancies, options.browseAllResultCap)
+      : null;
+  const enrichmentInput = browseAllCap ? browseAllCap.kept : focused.vacancies;
   const scoredDiscoveryAudit = applyWorldwideProfileScores(
-    focused.vacancies,
+    enrichmentInput,
     candidateProfile,
     profile.minimumAnnualBaseUsd,
   );
@@ -985,6 +1029,7 @@ export async function runGlobalRemoteScan(
     sponsorMatched.vacancies,
     candidateProfile,
   );
+  const keptUrls = browseAllCap ? new Set(assessedDiscoveryAudit.map((vacancy) => vacancy.url)) : null;
   // The one enrichment step whose cost is not visible from the discovery source audit, and the one
   // that used to make a finished scan look like a hung one -- so its own budget outcome is logged
   // the way every source's request count already is, not left to be inferred from a stopwatch.
@@ -992,10 +1037,15 @@ export async function runGlobalRemoteScan(
     { ...sponsorMatched.statistics, durationMs: Date.now() - sponsorMatchStarted },
     'Worldwide sponsor match enrichment completed',
   );
-  const officialAudit = [...official.audits].sort(
+  const sortedOfficialAudit = [...official.audits].sort(
     (left, right) =>
       left.company.localeCompare(right.company) || left.title.localeCompare(right.title),
   );
+  // Official-source rows for a URL the cap above already discarded never earn a place in the saved
+  // report either -- matches what the old post-hoc `applyBrowseAllResultCap` did to `officialAudit`.
+  const officialAudit = keptUrls
+    ? sortedOfficialAudit.filter((audit) => keptUrls.has(audit.url))
+    : sortedOfficialAudit;
   const groups = groupOfficial(officialAudit);
   const sourceRegistry = globalRemoteSourceRegistry(profile);
   const activeRegistrySources = sourceRegistry.filter((source) => source.state === 'active').length;
@@ -1004,16 +1054,16 @@ export async function runGlobalRemoteScan(
   ).length;
   const manualOrProhibitedRegistrySources =
     sourceRegistry.length - activeRegistrySources - gatedRegistrySources;
-  let report: GlobalRemoteReport = {
+  const report: GlobalRemoteReport = {
     runId: randomUUID(),
     generatedAt: new Date().toISOString(),
     profileVersion: profile.version,
     scanBounds: {
       mode: options.browseAll ? 'browse_all' : 'focused',
-      resultCap: null,
-      resultCountBeforeCap: assessedDiscoveryAudit.length,
-      complete: true,
-      completenessReason: null,
+      resultCap: browseAllCap?.resultCap ?? null,
+      resultCountBeforeCap: browseAllCap?.resultCountBeforeCap ?? assessedDiscoveryAudit.length,
+      complete: browseAllCap?.complete ?? true,
+      completenessReason: browseAllCap?.completenessReason ?? null,
     },
     criteria: {
       role: 'Explicit frontend engineer/developer/architect; no full-stack, backend, or people-manager titles',
@@ -1098,14 +1148,16 @@ export async function runGlobalRemoteScan(
             'Official content and hashes were reused from the immediately prior report; this reclassification made no network requests.',
           ]
         : []),
+      ...(browseAllCap && !browseAllCap.complete
+        ? [
+            `Browse all was explicitly confirmed. The saved report is capped at ${browseAllCap.resultCap.toLocaleString('en-US')} result rows and is marked incomplete when discovery finds more.`,
+          ]
+        : []),
     ],
     attribution: sourceRegistry
       .filter((source) => source.state === 'active')
       .map((source) => ({ name: source.name, url: source.url })),
   };
-  if (options.browseAll && options.browseAllResultCap !== undefined) {
-    report = applyBrowseAllResultCap(report, options.browseAllResultCap);
-  }
   const files = await writeGlobalRemoteReport(report, projectRoot);
   return { report, files };
 }
