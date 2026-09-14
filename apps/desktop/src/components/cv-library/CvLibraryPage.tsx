@@ -250,7 +250,7 @@ export function CvLibraryPage() {
         <EmptyState
           illustration={emptyCvIllustration}
           title="No CV on file"
-          description="Upload a PDF, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
+          description="Upload a PDF, Word, plain text or Markdown file, or add a manual profile, to enable job match analysis and tailored cover letters."
           action={
             <button className="btn btn-primary btn-sm" type="button" onClick={openAddDrawer}>
               Add manual profile

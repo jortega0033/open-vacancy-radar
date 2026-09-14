@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import { expect, goto, test } from './fixtures.js';
 
 const SAMPLE_CV_PATH = fileURLToPath(new URL('./fixtures/sample-cv.txt', import.meta.url));
@@ -62,6 +63,47 @@ test.describe('CV library', () => {
     await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
     await expect(window.getByText('sample-cv.txt')).toBeVisible();
     await expect(window.getByText('Parsed', { exact: true })).toBeVisible();
+  });
+
+  test('uploads a DOCX CV file and saves the extracted text to the library (issue #357)', async ({
+    window,
+    electronApp,
+  }) => {
+    // Built on the fly with the `docx` package (already a dependency, used for CV export) rather
+    // than a committed binary fixture -- same reasoning as the PDF/DOCX export test below: a real
+    // .docx is a ZIP container, and this is the one place actual DOCX bytes get parsed by the app.
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ text: 'Jake Ortega', heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({
+              children: [new TextRun('Senior Frontend Engineer with 8 years of Angular experience.')],
+            }),
+          ],
+        },
+      ],
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'ovr-e2e-cv-upload-docx-'));
+    try {
+      const docxPath = join(dir, 'cv.docx');
+      writeFileSync(docxPath, await Packer.toBuffer(doc));
+
+      await electronApp.evaluate(({ dialog }, filePath) => {
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] });
+      }, docxPath);
+
+      await goto(window, 'CV');
+      await window.getByRole('button', { name: /^upload cv$/i }).click();
+      await expect(window.getByText(/loaded/i)).toContainText('cv.docx');
+
+      await window.getByRole('button', { name: /save to cv library/i }).click();
+      await expect(window.getByRole('button', { name: /^upload cv$/i })).toBeVisible();
+      await expect(window.getByText('cv.docx')).toBeVisible();
+      await expect(window.getByText('Parsed', { exact: true })).toBeVisible();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('moves the default marker when a different CV is set as default', async ({ window }) => {

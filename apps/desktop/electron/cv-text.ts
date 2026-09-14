@@ -20,7 +20,7 @@ export interface CvFileContent {
 }
 
 /** Also the `dialog.showOpenDialog` filter list. See main.ts. */
-export const CV_FILE_EXTENSIONS = ['pdf', 'txt', 'md'] as const;
+export const CV_FILE_EXTENSIONS = ['pdf', 'txt', 'md', 'docx'] as const;
 
 /**
  * A CV is a handful of pages. This bound exists so a mis-selected multi-hundred-megabyte file
@@ -28,11 +28,26 @@ export const CV_FILE_EXTENSIONS = ['pdf', 'txt', 'md'] as const;
  */
 export const MAX_CV_FILE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * A `.docx` is a ZIP container (issue #357): the pre-read `MAX_CV_FILE_BYTES` bound above only
+ * limits the *compressed* size, not what a pathological or malicious archive can decompress to.
+ * This bounds the extracted text every format hands back before it is normalized, so a small
+ * compressed file cannot cause unbounded memory/text growth in this process. Generous for any real
+ * CV -- even a long, multi-page one is a few thousand characters, nowhere near this.
+ */
+export const MAX_CV_EXTRACTED_TEXT_CHARS = 2_000_000;
+
 function tooLargeError(fileName: string, byteLength: number): Error {
   return new Error(
     `"${fileName}" is ${Math.round(byteLength / 1024 / 1024)} MB. CV files are limited to ${
       MAX_CV_FILE_BYTES / 1024 / 1024
     } MB`,
+  );
+}
+
+function tooMuchExtractedTextError(fileName: string): Error {
+  return new Error(
+    `"${fileName}" expanded to an unexpectedly large amount of text and was rejected. If this is a real CV, export or paste it as .txt/.md instead.`,
   );
 }
 
@@ -55,6 +70,30 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   const { extractText } = await import('unpdf');
   const { text } = await extractText(bytes, { mergePages: true });
   return text;
+}
+
+/**
+ * DOCX -> plain text (issue #357), via mammoth's narrow bytes-in/text-out `extractRawText` API --
+ * deliberately not its HTML-conversion path, since this app only ever needs candidate-authored CV
+ * text, never DOCX-derived HTML, images or relationships rendered anywhere (let alone in a
+ * privileged Electron context). Mammoth is pure JS (no native/Python runtime), makes no network
+ * requests, and never executes document content or macros. Imported lazily for the same reason
+ * `extractPdfText` imports `unpdf` lazily: a test or caller that never touches a DOCX never pays for
+ * it, and mammoth's own dependency tree (jszip et al.) only loads when actually needed.
+ */
+async function extractDocxText(buffer: Buffer, fileName: string): Promise<string> {
+  const mammoth = await import('mammoth');
+  try {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  } catch (err) {
+    throw new Error(
+      `could not read "${fileName}" as a Word document: ${
+        err instanceof Error ? err.message : 'the file may be corrupted, encrypted, or not a real .docx'
+      }`,
+      { cause: err },
+    );
+  }
 }
 
 export function cvFileExtension(filePath: string): string {
@@ -94,14 +133,25 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
   // Copied into a standalone Uint8Array: pdf.js takes ownership of (and may detach) the buffer it
   // is handed, which must never be Node's shared allocation pool that `readFile` can return.
   const raw =
-    extension === 'pdf' ? await extractPdfText(Uint8Array.from(buffer)) : buffer.toString('utf8');
+    extension === 'pdf'
+      ? await extractPdfText(Uint8Array.from(buffer))
+      : extension === 'docx'
+        ? await extractDocxText(buffer, fileName)
+        : buffer.toString('utf8');
+
+  // Applied to every format, not just docx, but this is the bound issue #357 exists for: a `.docx`
+  // is a ZIP container, so the pre-read `MAX_CV_FILE_BYTES` check above bounds only what was
+  // downloaded/compressed, never what a pathological archive can expand to once extracted.
+  if (raw.length > MAX_CV_EXTRACTED_TEXT_CHARS) throw tooMuchExtractedTextError(fileName);
 
   const text = normalizeText(raw);
   if (!text) {
     throw new Error(
       extension === 'pdf'
         ? `no selectable text found in "${fileName}". It looks like a scanned image; export a text-based PDF or paste the CV as .txt`
-        : `"${fileName}" is empty`,
+        : extension === 'docx'
+          ? `"${fileName}" contains no readable text`
+          : `"${fileName}" is empty`,
     );
   }
 

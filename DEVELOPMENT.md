@@ -121,6 +121,21 @@ cover. Before shipping a change that touches either file, or the notification ca
   notification appears for completion, capped completion, and a forced failure -- and that no
   notification appears for a scan that finishes while the window is focused and visible.
 
+## Manual QA: DOCX CV import (packaged build)
+
+`cv-text.ts`'s DOCX extraction (via `mammoth`, a pure-JS dependency) is covered by
+`cv-text-docx.test.ts` against real, in-memory-built `.docx` fixtures, but whether the dependency is
+actually present and working inside a *packaged* Electron build is not something those tests can
+prove -- `pnpm dev`/`vitest` both run against `node_modules` directly. Before shipping a change that
+touches `cv-text.ts`'s DOCX path or the `mammoth` dependency itself, verify against a packaged build
+(`pnpm dist` or equivalent), not the dev server:
+
+- Upload a real `.docx` CV through "Upload CV" (CV Library or the CV assistant) and confirm it
+  parses to readable text and saves, the same as a `.pdf`/`.txt`/`.md` CV already does.
+- Confirm the packaged app did not need a native rebuild step for this: `mammoth` and its own
+  dependencies (`jszip` et al.) are pure JS, so nothing here should trigger `electron-rebuild` or
+  require a Python toolchain the way a native module would.
+
 ## Common architectural rules
 
 These aren't style preferences. Breaking them tends to break the security model or the layering
