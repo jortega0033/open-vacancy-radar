@@ -94,6 +94,27 @@ export const worldwideSponsorLookups = sqliteTable('worldwide_sponsor_lookups', 
   resolvedAt: timestampMs('resolved_at').notNull(),
 });
 
+/**
+ * One row per completed global-remote scan (`writeGlobalRemoteReport`'s own caller,
+ * `runGlobalRemoteScan`, inserts it once the report files are actually on disk -- see
+ * `global-remote/discovery-runs-repository.ts`). This is purely a queryable index over those
+ * files: `report_json_path`/`report_html_path` point at the timestamped copies
+ * `writeGlobalRemoteReport` writes alongside `latest.*`, so a row here always resolves even after
+ * a later scan has overwritten `latest.json`. Nothing about a scan's actual findings is
+ * duplicated into this table -- the full report stays exactly where it already lived, on disk.
+ */
+export const discoveryRuns = sqliteTable(
+  'discovery_runs',
+  {
+    id: uuidPrimaryKey(),
+    generatedAt: timestampMs('generated_at').notNull(),
+    vacancyCount: integer('vacancy_count').notNull(),
+    reportJsonPath: text('report_json_path').notNull(),
+    reportHtmlPath: text('report_html_path').notNull(),
+  },
+  (table) => [index('discovery_runs_generated_at_idx').on(table.generatedAt)],
+);
+
 export const httpCache = sqliteTable('http_cache', {
   cacheKey: text('cache_key').primaryKey(),
   url: text('url').notNull(),

@@ -10,6 +10,7 @@ import {
   clampPromptText,
 } from '../cv/prompts.js';
 import type { CvDocument } from '../cv/types.js';
+import { groundedLetterFacts } from '../letters/grounded.js';
 import { buildLetterPrompt } from '../letters/prompt.js';
 import type { SelectedVacancy } from '../letters/types.js';
 
@@ -285,8 +286,11 @@ export function buildBundledDocumentPrompt(
       type: bundle.documentType,
       tone: options.tone ?? 'natural',
       length: bundle.length,
+      // F-J: the letter prompt now asks for a selection over these, not for prose. They are derived
+      // from the bundle here rather than passed in, so no caller can hand the selection a fact list
+      // the bundle does not actually support.
+      facts: groundedLetterFacts(bundle),
       ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
-      documentLanguage: bundle.preferences.documentLanguage,
       maxChars: bundle.constraints.maxChars,
     },
     buildGenerationPromptContext(bundle),

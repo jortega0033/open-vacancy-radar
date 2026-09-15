@@ -682,7 +682,13 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'sidebarCollapsed', (v) => bool(v, 'sidebarCollapsed'));
   patch(input, out, 'lastOpenedPage', (v) => oneOf(v, 'lastOpenedPage', NAV_PAGES));
   patch(input, out, 'minimizeToTrayOnClose', (v) => bool(v, 'minimizeToTrayOnClose'));
+  patch(input, out, 'welcomeSeen', (v) => bool(v, 'welcomeSeen'));
   patch(input, out, 'autoScanEnabled', (v) => bool(v, 'autoScanEnabled'));
+  // `autoApplyEnabled` is deliberately absent, and its absence is the point: this validator is an
+  // allow-list, so a renderer payload carrying it is dropped here rather than reaching Drizzle. The
+  // auto-apply kill switch is the one setting whose "on" state would let this app submit an
+  // application by itself, and nothing the renderer says may put it there -- for this release it
+  // has no writer at all. See `schema.ts`'s comment on the column.
   patch(input, out, 'defaultLocation', (v) => str(v, 'defaultLocation', LIMITS.short));
   patch(input, out, 'defaultCvId', (v) => nullableStr(v, 'defaultCvId', LIMITS.short));
   patch(input, out, 'defaultLetterType', (v) => oneOf(v, 'defaultLetterType', LETTER_TYPES));

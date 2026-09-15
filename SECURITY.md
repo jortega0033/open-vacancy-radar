@@ -416,6 +416,27 @@ directory entirely (an absolute path). Electron's desktop app passes its app id 
 that same environment variable at spawn time, and computes the matching discovery path itself to
 read the file back. See `apps/desktop/electron/main.ts`.
 
+## Desktop workspace storage (`workspace.db`)
+
+`apps/desktop/electron/workspace/client.ts`'s `workspace.db` is the single most sensitive store
+the desktop app owns: a plaintext, unencrypted SQLite file holding a user's CV text, contact info,
+cover letters, application answers, and full job-posting text, plus the generated CV/cover-letter
+PDFs `application-artifact-staging.ts` writes alongside it under `application-artifacts/`. Neither
+is encrypted at rest — that stays out of scope here, same as the daemon's own state stores below —
+but both are created with the same explicit restrictive mode the daemon already relies on for its
+own sensitive stores (`discovery-file.ts`, `application-queue-store.ts`): the containing directory
+at mode `0700`, and the file itself at mode `0600`. `createWorkspaceDb` `chmod`s `workspace.db`
+(and its WAL `-wal`/`-shm` sidecars, which `better-sqlite3` creates itself and which cannot be
+given a mode at construction) right after they exist, since the `Database` constructor takes no
+file-mode argument; `application-artifact-staging.ts` passes `mode: 0o600` to the `writeFile` that
+produces each PDF and `chmod`s it again afterward, since a passed `mode` is still subject to the
+process umask.
+
+POSIX-only in effect, same posture as the daemon's discovery file: on Windows these mode bits are a
+no-op, and the app relies instead on Electron's per-user `userData` directory already being
+protected by NTFS ACL inheritance rather than asserting a POSIX-style check that platform can't
+actually honor.
+
 ## Electron hardening
 
 `apps/desktop/electron/main.ts` creates its `BrowserWindow` with:

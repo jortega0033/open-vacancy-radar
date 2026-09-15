@@ -10,6 +10,7 @@ import { LettersPage, type SelectedVacancy } from './components/letters/index.js
 import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
+import { WelcomeModal } from './components/WelcomeModal.js';
 import {
   AppSidebar,
   ErrorBanner,
@@ -41,6 +42,11 @@ export function App() {
   const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
+
+  // The first-launch CV nudge. Off until settings hydration proves both halves of the gate: the
+  // flag has never been set, *and* the CV library is actually empty. Anything less would flash a
+  // "welcome, upload a CV" modal at an upgrading user who has had one in the library for months.
+  const [showWelcome, setShowWelcome] = useState(false);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
@@ -83,6 +89,17 @@ export function App() {
         const start =
           settings.startPage === 'last_opened' ? settings.lastOpenedPage : settings.startPage;
         if (isNavPage(start) && !hasNavigatedRef.current) setNav(start);
+
+        if (!settings.welcomeSeen) {
+          // A count, not `listCvDocuments()`: this only needs to know whether the library is
+          // empty, not fetch every CV's full extracted text/profile just to read `.length`.
+          const counts = await window.workspace.getCounts();
+          if (cancelled) return;
+          // An existing user who already has a CV has nothing to be welcomed to: retire the flag
+          // silently here so this check happens exactly once for them and the modal never renders.
+          if (counts.cvDocuments > 0) void window.workspace.updateSettings({ welcomeSeen: true }).catch(() => {});
+          else setShowWelcome(true);
+        }
       } catch {
         // defaults already applied by useState
       }
@@ -91,6 +108,15 @@ export function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // The single exit from the welcome modal, whichever way the user took it (skip, close, backdrop,
+  // or a CV they actually uploaded): closing it and marking it seen are the same act, so there is
+  // no path that dismisses the modal without persisting the flag. Fire and forget, like every other
+  // settings write in this shell -- a failed write costs the user one extra welcome, nothing more.
+  const handleWelcomeClosed = useCallback(() => {
+    setShowWelcome(false);
+    void window.workspace.updateSettings({ welcomeSeen: true }).catch(() => {});
   }, []);
 
   const refreshCounts = useCallback(async () => {
@@ -325,6 +351,10 @@ export function App() {
           )}
         </main>
       </div>
+
+      {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
+          Settings: the gate above decides *whether* it appears, never which page it appears over. */}
+      {showWelcome && <WelcomeModal onClose={handleWelcomeClosed} />}
     </div>
   );
 }

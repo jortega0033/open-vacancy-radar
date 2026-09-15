@@ -7,8 +7,6 @@ import type { AtsHttpResponse } from '../../src/ats/http.js';
 import {
   createRemooteSearchCache,
   discoverRemoote,
-  fetchRemooteJobDetail,
-  remooteJobDetailUrl,
   REMOOTE_CACHE_TTL_MS,
   REMOOTE_PUBLIC_LIMIT,
   REMOOTE_SEARCH_URL,
@@ -311,52 +309,6 @@ describe('Remoote linked-index discovery', () => {
         error: expect.stringContaining('HTTP 429'),
       }),
     ]);
-  });
-
-  it('fetches and sanitizes one active detail without retaining its raw response', async () => {
-    const url = remooteJobDetailUrl(12345);
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-valid.json')]]));
-
-    const detail = await fetchRemooteJobDetail(http, 12345);
-
-    expect(detail).toEqual({
-      status: 'active',
-      job: {
-        id: 12345,
-        url: 'https://remoote.app/jobs/12345-senior-frontend-engineer',
-        location: 'Europe, including Netherlands',
-        advertisedMinimum: 120_000,
-        currency: 'USD',
-        salaryPeriod: 'year',
-      },
-    });
-    expect(http.requestedOptions).toEqual([
-      {
-        allowedOrigins: ['https://api.remoote.app'],
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-      },
-    ]);
-    expect(JSON.stringify(detail)).not.toMatch(/apply_action|employer_apply_url/iu);
-  });
-
-  it('maps an inactive detail response without fabricating a vacancy', async () => {
-    const url = remooteJobDetailUrl(999999);
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-inactive.json')]]));
-
-    await expect(fetchRemooteJobDetail(http, 999999)).resolves.toEqual({
-      status: 'inactive',
-      job: null,
-    });
-  });
-
-  it('rejects a malformed or non-canonical detail response', async () => {
-    const url = remooteJobDetailUrl(12345);
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-malformed.json')]]));
-
-    await expect(fetchRemooteJobDetail(http, 12345)).rejects.toThrow(
-      'remoote: detail job contract is invalid',
-    );
   });
 
   it('pins the sanitized public tools contract', () => {

@@ -27,6 +27,7 @@ describe('configuration', () => {
     expect(config.maxResponseBytes).toBe(16 * 1024 * 1024);
     expect(config.maxPostingAgeDays).toBe(365);
     expect(config.httpCacheRetentionDays).toBe(90);
+    expect(config.reportRetentionDays).toBe(90);
     expect(config.requestQueueTimeoutMs).toBe(120_000);
     expect(config.sponsorBaselineMaxAgeDays).toBe(45);
   });
@@ -52,5 +53,9 @@ describe('configuration', () => {
 
   it('rejects an unsafe HTTP cache retention window', () => {
     expect(() => loadConfig({ HTTP_CACHE_RETENTION_DAYS: '6' }, process.cwd())).toThrow();
+  });
+
+  it('rejects an unsafe report retention window', () => {
+    expect(() => loadConfig({ REPORT_RETENTION_DAYS: '6' }, process.cwd())).toThrow();
   });
 });

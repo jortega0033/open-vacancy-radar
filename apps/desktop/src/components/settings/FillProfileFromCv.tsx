@@ -14,8 +14,9 @@ import {
 } from './search-profile-cv-bridge.js';
 
 /**
- * "Fill from CV" (issue #137): prefill the search profile's identity and skills fields from a CV
- * already in the library, instead of retyping what the CV already says.
+ * "Fill from CV" (issue #137, widened at the user's explicit request): prefill the search
+ * profile's identity, skills and role-matching fields from a CV already in the library, instead of
+ * retyping what the CV already says.
  *
  * Two components rather than one, for a reason that matters beyond tidiness: the drawer calls
  * `useAgentRun`, which subscribes to `window.agentDock.onSessionEvent` in a mount effect, and reads
@@ -24,12 +25,13 @@ import {
  * once the user actually opens the drawer means the button costs nothing until it is pressed.
  *
  * The review step is not a formality. Nothing here writes to the profile until the user has seen
- * the six extracted values in editable inputs and pressed Save, matching the CV library's
- * "Parse with AI" drawer: the same "an over-eager guess costs a glance, not your data" contract.
+ * the extracted values in editable inputs and pressed Save, matching the CV library's "Parse with
+ * AI" drawer: the same "an over-eager guess costs a glance, not your data" contract.
  *
- * What this deliberately does not offer: target roles, considered roles, excluded role families,
- * primary country and minimum salary. See `search-profile-cv-bridge.ts` for why, and for the
- * structural reason a model answer naming them cannot reach the profile anyway.
+ * What this deliberately does not offer, and never will regardless of what else is added: excluded
+ * role families and a minimum salary. See `search-profile-cv-bridge.ts` for why -- a CV has no
+ * signal for either -- and for the structural reason a model answer naming them cannot reach the
+ * profile anyway.
  */
 
 interface ReviewForm {
@@ -39,6 +41,9 @@ interface ReviewForm {
   professionalLanguage: string;
   strongestSkills: string;
   additionalSkills: string;
+  targetRoles: string;
+  consideredRoles: string;
+  primaryCountry: string;
 }
 
 function parsedCvReviewForm(profile: CvDocumentRecord['profile'], current: CandidateProfile): ReviewForm {
@@ -50,6 +55,12 @@ function parsedCvReviewForm(profile: CvDocumentRecord['profile'], current: Candi
     professionalLanguage: profile.languages.trim() || current.constraints.professionalLanguage,
     strongestSkills: skillsToText(skills.length > 0 ? skills : current.strongestSkills),
     additionalSkills: skillsToText(current.additionalSkills),
+    // The CV library's own lightweight parse (`CvDocumentRecord['profile']`) has no equivalent of
+    // these three, unlike the full AI-read path below: nothing to prefer over the profile's current
+    // values here.
+    targetRoles: skillsToText(current.targetRoles),
+    consideredRoles: skillsToText(current.consideredRoles),
+    primaryCountry: current.constraints.primaryCountry,
   };
 }
 
@@ -64,6 +75,9 @@ function toReviewForm(extracted: Partial<SearchProfileCvFields>, profile: Candid
     professionalLanguage: extracted.professionalLanguage ?? profile.constraints.professionalLanguage,
     strongestSkills: skillsToText(extracted.strongestSkills ?? profile.strongestSkills),
     additionalSkills: skillsToText(extracted.additionalSkills ?? profile.additionalSkills),
+    targetRoles: skillsToText(extracted.targetRoles ?? profile.targetRoles),
+    consideredRoles: skillsToText(extracted.consideredRoles ?? profile.consideredRoles),
+    primaryCountry: extracted.primaryCountry ?? profile.constraints.primaryCountry,
   };
 }
 
@@ -80,7 +94,7 @@ export interface FillProfileFromCvProps {
   /** The profile as currently saved: the per-field fallback for anything the CV does not state. */
   profile: CandidateProfile;
   disabled?: boolean;
-  /** Saves the six-field patch through the section's own `vacancy:save-search-profile` call.
+  /** Saves the nine-field patch through the section's own `vacancy:save-search-profile` call.
    * Rejecting shows the message inline in the drawer; resolving closes it. */
   onApply: (patch: CandidateProfilePatch) => Promise<void>;
 }
@@ -104,9 +118,15 @@ export interface FillProfileFromCvDrawerProps {
   profile: CandidateProfile;
   onApply: (patch: CandidateProfilePatch) => Promise<void>;
   onClose: () => void;
+  /** Skips straight to reading the (auto-selected, usually the only) CV the moment one is available,
+   * instead of waiting for the user to press "Read CV" themselves. Used by the Welcome modal: a user
+   * who just uploaded their first CV asked to be onboarded, not to find this button in Settings
+   * later. Still never saves anything on its own -- autoStart shortens the path to the review form,
+   * it does not shorten the review form itself. */
+  autoStart?: boolean;
 }
 
-export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfileFromCvDrawerProps) {
+export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }: FillProfileFromCvDrawerProps) {
   const [documents, setDocuments] = useState<CvDocumentRecord[]>();
   const [listError, setListError] = useState<string>();
   const [selectedId, setSelectedId] = useState('');
@@ -202,6 +222,17 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
     void run.start(buildSearchProfileFromCvPrompt(selected.name, selected.text), { provider });
   }
 
+  // Fires `handleRead` itself, once, the first moment a CV is actually selected -- not on mount,
+  // since `selectedId` is still empty then. A ref (not state) guards the "once": this must not
+  // re-fire if the user changes `selectedId` afterward, or every dropdown change would restart a
+  // real AI run autoStart was never asked to control.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current || !selected) return;
+    autoStartedRef.current = true;
+    handleRead();
+  }, [autoStart, selected]);
+
   function set<K extends keyof ReviewForm>(key: K, value: string) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
@@ -219,6 +250,9 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
           professionalLanguage: form.professionalLanguage.trim(),
           strongestSkills: textToSkills(form.strongestSkills),
           additionalSkills: textToSkills(form.additionalSkills),
+          targetRoles: textToSkills(form.targetRoles),
+          consideredRoles: textToSkills(form.consideredRoles),
+          primaryCountry: form.primaryCountry.trim(),
         }),
       );
       onClose();
@@ -250,9 +284,9 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
         <div className="flex flex-1 flex-col overflow-y-auto">
           <div className="flex-1 space-y-3 px-5 py-4">
             <p className="text-xs text-base-content/60">
-              Reads one CV and fills in the fields it can state as fact. Target roles, considered
-              roles, excluded role families, country and salary are never filled in from a CV: a CV
-              says what you have done, not what you are looking for, so those stay yours to type.
+              Reads one CV and fills in the fields it can state or reasonably infer, including target
+              roles, considered roles and country. Excluded role families and minimum salary are never
+              filled in from a CV: a CV has no signal for either, so those stay yours to type.
             </p>
 
             {listError && (
@@ -405,6 +439,46 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose }: FillProfi
                     disabled={saving}
                     onChange={(event) => set('additionalSkills', event.currentTarget.value)}
                     placeholder="Comma-separated"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                    Target roles
+                  </span>
+                  <textarea
+                    className="textarea w-full"
+                    rows={2}
+                    value={form.targetRoles}
+                    disabled={saving}
+                    onChange={(event) => set('targetRoles', event.currentTarget.value)}
+                    placeholder="Comma-separated"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                    Considered roles
+                  </span>
+                  <textarea
+                    className="textarea w-full"
+                    rows={2}
+                    value={form.consideredRoles}
+                    disabled={saving}
+                    onChange={(event) => set('consideredRoles', event.currentTarget.value)}
+                    placeholder="Comma-separated"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                    Country
+                  </span>
+                  <input
+                    className="input w-full"
+                    value={form.primaryCountry}
+                    disabled={saving}
+                    onChange={(event) => set('primaryCountry', event.currentTarget.value)}
                   />
                 </label>
               </>

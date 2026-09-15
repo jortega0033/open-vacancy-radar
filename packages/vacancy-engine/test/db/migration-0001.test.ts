@@ -41,16 +41,19 @@ const PRE_0001_TAGS = ['0000_giant_winter_soldier'];
  * 0001's three survivors on their own -- is what these assertions can compare against.
  * `worldwide_sponsor_lookups` comes from 0002 and is what lets the worldwide sponsor check resume
  * across scans instead of re-paying a rate-limited Wikidata for every employer, every run.
+ * `discovery_runs` comes from 0003 and is the queryable index over `writeGlobalRemoteReport`'s
+ * own report files (see `global-remote/discovery-runs-repository.ts`).
  */
 const SURVIVING_AND_LATER_TABLES = [
+  'discovery_runs',
   'http_cache',
   'ind_sponsor_snapshots',
   'ind_sponsors',
   'worldwide_sponsor_lookups',
 ];
 
-/** Migrations applied on top of `PRE_0001_TAGS` by a full `migrateDatabase` run: 0001 and 0002. */
-const POST_0001_MIGRATION_COUNT = 2;
+/** Migrations applied on top of `PRE_0001_TAGS` by a full `migrateDatabase` run: 0001, 0002 and 0003. */
+const POST_0001_MIGRATION_COUNT = 3;
 
 type JournalEntry = { idx: number; version: string; when: number; tag: string; breakpoints: boolean };
 type Journal = { version: string; dialect: string; entries: JournalEntry[] };

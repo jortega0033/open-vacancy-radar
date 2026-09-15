@@ -82,6 +82,36 @@ export function resolveApplicationTargetPolicy(policyId: string): ApplicationTar
 }
 
 /**
+ * The auto-apply kill switch (`app_settings.auto_apply_enabled`), mirrored here for the same reason
+ * main.ts mirrors `minimizeToTrayOnClose` and `autoScanEnabled`: the resolver below is synchronous
+ * and is called from synchronous plumbing, so it cannot read the database at the moment it needs
+ * the answer. main.ts hydrates it once the workspace database is open and rewrites it on every
+ * settings change.
+ *
+ * It starts *off*, which is the whole design: a build where that wiring is missing, a hydration
+ * that threw, or a test that never touched it all leave this app refusing to consider any URL
+ * automatically submittable, rather than permitting it. Nothing here can turn it on by itself.
+ *
+ * Why the switch lives on the resolver instead of on the policy table: an empty table is a promise
+ * about every future pull request, and the first genuinely eligible ATS someone adds would silently
+ * re-enable automated submission for every user on that release. A guard at the one function every
+ * URL-holding caller goes through cannot be defeated that way -- adding a policy changes nothing
+ * while this is off.
+ */
+let autoApplyEnabled = false;
+
+/** Called by main.ts only, from the settings hydration and every settings write. */
+export function setAutoApplyEnabled(enabled: boolean): void {
+  autoApplyEnabled = enabled;
+}
+
+/** What the kill switch currently says, for callers that want to explain themselves rather than
+ * silently treat "no policy" and "automation is off" as the same thing. */
+export function isAutoApplyEnabled(): boolean {
+  return autoApplyEnabled;
+}
+
+/**
  * Which compiled policy (if any) governs `url`, found the same way `isNavigationAllowed` itself
  * checks -- so this can never claim a policy applies to a URL that policy would then refuse to
  * navigate to. An `ApplicationAttemptRecord` carries a `canonicalUrl` but no `policyId` field of
@@ -89,8 +119,28 @@ export function resolveApplicationTargetPolicy(policyId: string): ApplicationTar
  * that only has the URL -- the review UI, primarily -- finds the right policy to open a review
  * with, without this app needing a whole separate URL-to-policy mapping table for what is, today,
  * a single fixture entry. Returns `undefined` for any URL no compiled policy covers, which is
- * every real (non-fixture) URL today -- see this file's own header comment on why.
+ * every real (non-fixture) URL today -- see this file's own header comment on why -- and, while the
+ * auto-apply kill switch above is off, for every URL full stop.
  */
 export function resolvePolicyIdForCanonicalUrl(url: string): string | undefined {
-  return APPLICATION_TARGET_POLICIES.find((policy) => isNavigationAllowed(policy, url))?.id;
+  return resolvePolicyIdAmong(APPLICATION_TARGET_POLICIES, url);
+}
+
+/**
+ * The lookup `resolvePolicyIdForCanonicalUrl` performs, with the policy table as a parameter.
+ *
+ * Exported for one reason: it is the only way a test can prove the kill switch suppresses a policy
+ * that genuinely *would* have matched. The compiled table holds nothing but local fixtures and is
+ * deliberately not mutable at runtime, so a test that could only reach it through the real table
+ * would be resting on "the table happens to be harmless today" -- exactly the assumption the switch
+ * exists to stop this app from making. Handing a caller-built policy in proves the guard, not the
+ * table's current contents.
+ *
+ * Grants nothing: it returns an id drawn from the list its own caller passed in, and the only path
+ * from an id to a policy object with any authority attached is `resolveApplicationTargetPolicy`,
+ * which still reads the compiled table and nothing else.
+ */
+export function resolvePolicyIdAmong(policies: readonly ApplicationTargetPolicy[], url: string): string | undefined {
+  if (!autoApplyEnabled) return undefined;
+  return policies.find((policy) => isNavigationAllowed(policy, url))?.id;
 }

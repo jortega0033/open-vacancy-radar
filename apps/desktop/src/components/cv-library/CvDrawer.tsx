@@ -7,6 +7,7 @@ import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
+import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
 import { CvSourceReview } from './CvSourceReview.js';
 
 /**
@@ -63,6 +64,34 @@ function toFormState(record: CvDocumentRecord | undefined): FormState {
 }
 
 /**
+ * Merges whichever `CvProfile` fields an extraction actually produced onto the form, leaving every
+ * other field exactly as the user left it. Shared by the AI-parse path and the deterministic
+ * source-CV derivation below precisely because they must land in the form the same way: both are
+ * proposals for review, and neither may blank out a field it had nothing to say about.
+ */
+function applyProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormState {
+  return {
+    ...prev,
+    title: parsed.title ?? prev.title,
+    years: parsed.years ?? prev.years,
+    location: parsed.location ?? prev.location,
+    languages: parsed.languages ?? prev.languages,
+    skillsText: parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+    summary: parsed.summary ?? prev.summary,
+    auth: parsed.auth ?? prev.auth,
+  };
+}
+
+/** How each derivable field is named to the user in the "filled from your source CV" status, in the
+ * form's own label wording rather than the schema's field names. */
+const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
+  title: 'title',
+  years: 'years of experience',
+  location: 'location',
+  summary: 'summary',
+};
+
+/**
  * Add/edit drawer for a CV library entry (`export-src.html` "New manual profile" / "Edit parsed
  * profile", lines ~359-445). One form serves both "add a manual profile" and "edit any CV's
  * profile metadata": an uploaded CV has exactly the same `profile` shape as a manual one, just
@@ -80,12 +109,24 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [parseError, setParseError] = useState<string>();
   const [source, setSource] = useState<CvSourceDocument | null>(() => record?.source ?? null);
   const [sourceError, setSourceError] = useState<string>();
+  /** The fields the last click filled in from the source CV instead of from an AI run, in the
+   * user's wording. `null` means that has not happened for this drawer. */
+  const [derivedFields, setDerivedFields] = useState<string[] | null>(null);
 
   const isEdit = mode === 'edit';
   const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
   // Only the gaps saving cannot close: "not reviewed yet" is what this drawer's own Save button
   // fixes, so listing it here would report a blocker the next click removes.
   const sourceGaps = source ? describeCvSourceContentGaps(source) : [];
+
+  // The same reasoning `sourceGaps` above applies to "reviewed": the record in `source` is the one
+  // on screen, either loaded from an already-reviewed CV or sitting in the review panel with the
+  // candidate looking at it, and saving the drawer is what stamps the review. Either way it is
+  // data a person can see and correct, which is the property the derivation depends on. Recomputed
+  // per render rather than memoized, matching `sourceGaps`: it is arithmetic over a handful of
+  // records, not work worth caching.
+  const derivedProfile = source ? deriveCvProfileFromSource(source) : {};
+  const canDeriveFromSource = coversCvProfileCore(derivedProfile);
 
   // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
   // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
@@ -128,16 +169,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     parseAppliedRef.current = true;
     try {
       const parsed = parseCvAiResponse(parseRun.text);
-      setForm((prev) => ({
-        ...prev,
-        title: parsed.title ?? prev.title,
-        years: parsed.years ?? prev.years,
-        location: parsed.location ?? prev.location,
-        languages: parsed.languages ?? prev.languages,
-        skillsText: parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
-        summary: parsed.summary ?? prev.summary,
-        auth: parsed.auth ?? prev.auth,
-      }));
+      setForm((prev) => applyProfileFields(prev, parsed));
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'could not read the AI response');
     }
@@ -171,10 +203,34 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     };
   }, []);
 
+  /**
+   * Fills the seven summary fields, from the structured source CV when there is one and from the
+   * AI-parse prompt when there is not.
+   *
+   * The branch is the whole point: `buildSourceCvPrompt` has already read this CV end to end into
+   * records the candidate can see, and asking a second model run to re-read the same text for the
+   * title, the years and the location it can be computed from is a wait and a second chance to come
+   * back unparseable, for facts already in hand. When the derivation cannot produce those core
+   * fields -- dates this app cannot read, a CV with no employment history at all -- nothing is
+   * applied and the original AI call runs exactly as it always has, so the fallback is the
+   * behaviour users already know rather than a blank field.
+   */
   function handleParseWithAi() {
     if (!record || !canParseWithAi) return;
-    parseAppliedRef.current = false;
     setParseError(undefined);
+
+    if (canDeriveFromSource) {
+      setForm((prev) => applyProfileFields(prev, derivedProfile));
+      setDerivedFields(
+        (Object.keys(derivedProfile) as (keyof CvProfile)[])
+          .map((key) => DERIVED_FIELD_LABELS[key])
+          .filter((label): label is string => label !== undefined),
+      );
+      return;
+    }
+
+    setDerivedFields(null);
+    parseAppliedRef.current = false;
     void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
   }
 
@@ -265,10 +321,18 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                     </button>
                   )}
                   <span className="text-xs text-base-content/60">
-                    Reads the extracted text and fills in the fields below for you to review.
+                    {canDeriveFromSource
+                      ? 'Fills in the fields below from the CV records you already have, with no second AI run.'
+                      : 'Reads the extracted text and fills in the fields below for you to review.'}
                   </span>
                 </div>
-                {parseSucceeded && (
+                {derivedFields && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    Filled in from your source CV records, no AI run needed: {derivedFields.join(', ')}. Review
+                    before saving.
+                  </p>
+                )}
+                {parseSucceeded && !derivedFields && (
                   <p className="mt-2 text-xs text-success" role="status">
                     Filled in from your CV: review before saving.
                   </p>

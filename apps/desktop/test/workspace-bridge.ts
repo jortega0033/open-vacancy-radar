@@ -26,7 +26,13 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
   minimizeToTrayOnClose: false,
+  // The one deliberate divergence from the schema defaults: `welcome_seen` really does ship as
+  // `false`, but leaving it false here would put the first-launch welcome modal on top of every
+  // unrelated shell test (they all stub an empty CV library too). Tests about the modal set it
+  // back to false explicitly -- see `test/components/WelcomeModal.test.tsx`.
+  welcomeSeen: true,
   autoScanEnabled: false,
+  autoApplyEnabled: false,
   defaultLocation: '',
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
@@ -41,7 +47,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   agentUnreadCounts: {},
 };
 
-export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
+export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 };
 
 /** Mirrors the shipped `config/candidate-profile-v1.json`: empty, not a plausible-looking default. */
 export const DEFAULT_CANDIDATE_PROFILE: CandidateProfile = {

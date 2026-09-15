@@ -20,9 +20,13 @@ import {
 import { AgentDockClient } from '@agent-dock/client';
 import {
   candidateProfileSchema,
+  createDatabaseBackedAtsHttpClient,
   createDatabaseClient,
   createLogger,
   createScanLock,
+  fetchJobgetherOfferDetail,
+  fetchWorkableJobDetail,
+  jobgetherOfferIdFromUrl,
   loadCandidateProfile,
   loadConfig,
   migrateDatabase,
@@ -30,6 +34,7 @@ import {
   readGlobalRemoteReport,
   runAtsRosterImport,
   runGlobalRemoteScan,
+  workableJobReferenceFromUrl,
   type AtsRosterImportResult,
   type AtsRosterStatus,
   type CandidateProfile,
@@ -75,7 +80,7 @@ import {
   submitApplicationReview,
   recordUserReportedSubmission,
 } from './application-review-session.js';
-import { resolvePolicyIdForCanonicalUrl } from './application-target-policies.js';
+import { resolvePolicyIdForCanonicalUrl, setAutoApplyEnabled } from './application-target-policies.js';
 import { requestAutomationGrant } from './automatic-submission-grant.js';
 import { notifyApplicationPreparation } from './application-preparation-notify.js';
 import { notifyVacancyScanCompleted, notifyVacancyScanFailed } from './vacancy-scan-notify.js';
@@ -100,6 +105,7 @@ import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVaca
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
+import { createTick } from './tick.js';
 import { confirmWorkspaceGrant } from './workspace-confirm.js';
 import {
   WorkspaceGrantManager,
@@ -214,6 +220,24 @@ let mainWindowWebContentsId: number | undefined;
  * renderer, so the two can never disagree.
  */
 let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
+/**
+ * How many consecutive respawn attempts `scheduleDaemonRespawn` has made since the daemon last
+ * reached `ready`. Reset to 0 the moment a spawn actually succeeds (`waitForDaemonReady` below),
+ * so a daemon that runs fine for hours and then crashes once gets a fresh retry budget rather than
+ * inheriting exhaustion from an unrelated incident earlier in the app's lifetime.
+ */
+let daemonRespawnAttempts = 0;
+/**
+ * Bumped once per `spawnDaemon()` call and captured by that call's own `waitForDaemonReady` loop.
+ * Respawn means `spawnDaemon()` can now run more than once per app lifetime, and that loop polls
+ * the discovery file for up to 15s with nothing to cancel it if its own child dies early -- without
+ * this, a stale loop left over from an attempt that crashed immediately can still be polling when a
+ * *later* attempt's daemon writes the discovery file, "adopt" that unrelated daemon, and re-run the
+ * ready side effects (attaching the queue relay, recovering the application pipeline) a second time.
+ * Comparing against the live counter lets a stale loop recognize it has been superseded and stand
+ * down instead.
+ */
+let daemonGeneration = 0;
 
 /**
  * Every in-flight **v1** event forward, keyed by session id (ADI-07).
@@ -403,6 +427,12 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     const settings = workspace.getSettings(db);
     minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
     autoScanEnabled = settings.autoScanEnabled;
+    // The auto-apply kill switch is a third mirror of the same kind, kept in the module that
+    // enforces it rather than here: `resolvePolicyIdForCanonicalUrl` is synchronous and is called
+    // from synchronous plumbing. If this line never runs -- a failed open, a migration that threw
+    // -- that module stays in its refusing state, so the failure mode is "nothing is automatically
+    // submittable", never the reverse.
+    setAutoApplyEnabled(settings.autoApplyEnabled);
     return db;
   })();
 
@@ -431,7 +461,55 @@ function sendStatus(status: DaemonStatus): void {
   sendToRenderer(mainWindow, 'daemon:status', status);
 }
 
+// Bounded respawn-with-backoff for an unexpected daemon exit (draft-daemon-auto-respawn). Capped
+// at 4 attempts, doubling from 1s up to 8s (1s/2s/4s/8s, ~15s of total wall-clock retrying): a
+// daemon down for a transient reason -- a port race, a slow disk on first launch -- usually comes
+// back within the first attempt or two, while one that is durably broken (a missing native
+// module, a corrupt install) gets a few increasingly spaced-out tries rather than hammering the
+// machine in a tight crash loop, then gives up and leaves today's `{state:'unavailable'}` in
+// place for the user to act on. Safe to do at all only because a fresh daemon start already
+// reconciles any stale application-queue lease on its own (`ApplicationQueueStore
+// #reconcileStaleLeaseOnStartup`), so a respawned daemon starts from a clean state instead of a
+// wedged one.
+const DAEMON_RESPAWN_MAX_ATTEMPTS = 4;
+const DAEMON_RESPAWN_BASE_DELAY_MS = 1_000;
+const DAEMON_RESPAWN_MAX_DELAY_MS = 8_000;
+
+/**
+ * Called from every path in `spawnDaemon` that can observe the daemon child dying (the `exit`
+ * handler once it was ready, and the early-exit race before it ever became ready). Decides,
+ * in one place, whether that death deserves a retry or is the end of the road.
+ */
+function scheduleDaemonRespawn(reason: string): void {
+  sendStatus({ state: 'unavailable', error: reason });
+
+  // `isQuitting` is set by `before-quit` before `killDaemon()` ever runs (#194), so it is already
+  // true here when this exit was the app's own doing. Without this check, quitting the app would
+  // race a fresh daemon into existence just as the process was tearing everything else down.
+  if (isQuitting) return;
+
+  if (daemonRespawnAttempts >= DAEMON_RESPAWN_MAX_ATTEMPTS) {
+    console.warn(`[daemon] respawn budget exhausted after ${DAEMON_RESPAWN_MAX_ATTEMPTS} attempts, giving up: ${reason}`);
+    return;
+  }
+
+  daemonRespawnAttempts += 1;
+  const delayMs = Math.min(
+    DAEMON_RESPAWN_BASE_DELAY_MS * 2 ** (daemonRespawnAttempts - 1),
+    DAEMON_RESPAWN_MAX_DELAY_MS,
+  );
+  console.warn(
+    `[daemon] respawning after unexpected exit (attempt ${daemonRespawnAttempts}/${DAEMON_RESPAWN_MAX_ATTEMPTS}, retrying in ${delayMs}ms): ${reason}`,
+  );
+  setTimeout(() => {
+    // isQuitting may have flipped true while this timer was pending (the user quit mid-backoff).
+    if (isQuitting) return;
+    spawnDaemon();
+  }, delayMs);
+}
+
 function spawnDaemon(): void {
+  const generation = ++daemonGeneration;
   const { cwd, args } = resolveDaemonEntry({
     mainDir: __dirname,
     isDevServer: !!process.env.VITE_DEV_SERVER_URL,
@@ -492,15 +570,15 @@ function spawnDaemon(): void {
       return;
     }
     client = undefined;
-    sendStatus({ state: 'unavailable', error: `daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})` });
+    scheduleDaemonRespawn(`daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
   });
 
-  Promise.race([waitForDaemonReady(spawnedAt), earlyExit]).catch((err: Error) => {
-    sendStatus({ state: 'unavailable', error: `daemon failed to start: ${err.message}` });
+  Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit]).catch((err: Error) => {
+    scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
   });
 }
 
-async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promise<void> {
+async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const file = discoveryFilePath();
 
@@ -513,12 +591,19 @@ async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promis
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
         const health = await candidate.health();
+        if (generation !== daemonGeneration) {
+          // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
+          // stale loop's poll finally landed. Stand down instead of clobbering its state.
+          console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
+          return;
+        }
         client = candidate;
         daemonConnection = { baseUrl, token: parsed.token };
         // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
         // different process, so every outstanding approval is void. Done before the status goes
         // `ready`, so no renderer can consume a stale grant against the new daemon.
         adoptDaemonInstance(health.daemonInstanceId);
+        daemonRespawnAttempts = 0;
         sendStatus({ state: 'ready' });
         // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
         // request), there is exactly one application queue and no per-session redaction concern,
@@ -556,17 +641,35 @@ const PROVIDER_DISPLAY_NAMES: Readonly<Record<ProviderId, string>> = Object.free
   codex: 'Codex',
 });
 
+/** How long one control-plane call to the daemon may take before this process gives up on it.
+ * Every route this function reaches (queue ops, trust, audit) is a fast, bounded, local operation --
+ * nothing here is a real AI generation call (those go through `@agent-dock/client`'s own streaming
+ * session API, not this helper). 30s is generous for any of them, while still bounded: a hung daemon
+ * without this would hang the caller forever, which for the application-pipeline tick (issue found
+ * live this session) meant one stuck request permanently wedging the whole recurring preparation
+ * worker -- its in-flight guard (now `applicationPipelineTick.inFlight`, see `tick.ts`) never reset,
+ * so every future 15s tick silently no-op'd forever, with no error ever logged, since nothing ever
+ * actually rejected. */
+const DAEMON_FETCH_TIMEOUT_MS = 30 * 1000;
+
 /** One authenticated request to a daemon route `@agent-dock/client` does not model. */
 async function daemonFetch(path: string, init: { method: string; body?: unknown }): Promise<Response> {
   if (!daemonConnection) throw new Error('daemon is not ready yet');
-  return fetch(`${daemonConnection.baseUrl}${path}`, {
-    method: init.method,
-    headers: {
-      Authorization: `Bearer ${daemonConnection.token}`,
-      ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DAEMON_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(`${daemonConnection.baseUrl}${path}`, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${daemonConnection.token}`,
+        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Every message this process is willing to show for a daemon refusal, keyed by the daemon's code. */
@@ -1570,6 +1673,48 @@ async function loadApplicationValueProfile(): Promise<ApplicationValueProfile | 
   }
 }
 
+// Built once, lazily, and reused: `createDatabaseBackedAtsHttpClient` allocates its own
+// `RequestScheduler` per call, so a fresh client per "Prepare application" click would let each
+// click's own scheduler enforce a full, independent `globalConcurrency`/`perDomainConcurrency`
+// budget on top of every other one already in flight, instead of one shared pool actually limiting
+// the app's total outbound request rate the way the config values are meant to.
+let applicationJdHttpClient: ReturnType<typeof createDatabaseBackedAtsHttpClient> | undefined;
+
+async function ensureApplicationJdHttpClient(): Promise<
+  ReturnType<typeof createDatabaseBackedAtsHttpClient>
+> {
+  if (!applicationJdHttpClient) {
+    const vacancyDb = await ensureVacancyEngine();
+    applicationJdHttpClient = createDatabaseBackedAtsHttpClient(vacancyEngineConfig(), vacancyDb);
+  }
+  return applicationJdHttpClient;
+}
+
+/**
+ * The per-listing description lookup behind `ApplicationPipelineDeps.fetchMissingJobDescription`,
+ * for the two sources whose list scans structurally cannot carry one.
+ *
+ * Jobgether's list endpoint returns no description for any row; `workable_global` reads a
+ * `<description>` off Workable's all-customer feed and deliberately discards it rather than
+ * retaining tens of thousands of full job posts in a compact snapshot. Both have a per-listing
+ * endpoint that does carry the real text, and each fetch function's own doc comment records how it
+ * was confirmed live rather than assumed from documentation.
+ *
+ * Any other source's URL falls through to `null` without a request, exactly as if no fetch had been
+ * attempted -- including one that IS scrapable but bot-gated (Himalayas' public job page, confirmed
+ * separately), which stays an honest refusal rather than something this tries to work around. The
+ * shared HTTP client is only built once a URL is actually recognised, so an unrecognised one never
+ * pays for opening the vacancy-engine database.
+ */
+async function fetchOnDemandJobDescription(canonicalUrl: string): Promise<string | null> {
+  const offerId = jobgetherOfferIdFromUrl(canonicalUrl);
+  const workableJob = workableJobReferenceFromUrl(canonicalUrl);
+  if (offerId === null && workableJob === null) return null;
+  const http = await ensureApplicationJdHttpClient();
+  if (offerId !== null) return (await fetchJobgetherOfferDetail(http, offerId)).description;
+  return workableJob === null ? null : (await fetchWorkableJobDetail(http, workableJob)).description;
+}
+
 async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
   const db = await ensureWorkspaceDb();
   return {
@@ -1606,6 +1751,19 @@ async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
       });
     },
     loadProfile: loadApplicationValueProfile,
+    async fetchMissingJobDescription(canonicalUrl: string) {
+      const description = await fetchOnDemandJobDescription(canonicalUrl);
+      if (description === null) return null;
+      // `complete: true` is a claim about THESE fields specifically, not copied from elsewhere.
+      // Jobgether's per-offer `description` is its own canonical, full-length job-posting text, and
+      // Workable's per-job endpoint is what its apply page itself renders from, description plus
+      // requirements plus benefits (both confirmed live -- see each fetch function's doc comment).
+      // Neither is a preview/teaser field a paywall or an "apply to see more" gate could truncate.
+      // If that ever stops being true for some listing, this would need a real signal to detect it,
+      // not this comment alone.
+      return { description, complete: true };
+    },
+    abandonPreparationAfterMs: APPLICATION_PIPELINE_PREPARATION_CEILING_MS,
     log: (message, meta) => console.warn(`[application-pipeline] ${message}`, meta ?? {}),
   };
 }
@@ -1649,7 +1807,7 @@ async function startPipelineForSavedJob(savedJobId: string) {
     descriptionComplete: false,
   };
   const result = await startApplicationAttempt(deps, { vacancy });
-  if (result.ok) void runApplicationPipelineTick();
+  if (result.ok) void applicationPipelineTick.runOnce();
   return result;
 }
 
@@ -1691,7 +1849,7 @@ guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, inpu
 
 async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
   const result = await restartApplicationTailoring(await applicationPipelineDeps(), attemptId, mode);
-  if (result.ok) void runApplicationPipelineTick();
+  if (result.ok) void applicationPipelineTick.runOnce();
   return result;
 }
 
@@ -1713,7 +1871,7 @@ guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) 
   return applicationDataResetGate.runMutation(async () => {
     const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
     const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
-    if (result.ok) void runApplicationPipelineTick();
+    if (result.ok) void applicationPipelineTick.runOnce();
     return result;
   });
 });
@@ -2023,12 +2181,23 @@ function scheduleBackgroundScanTick(): void {
 // add meaningful latency on top of it once it elapses.
 const AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS = 30 * 1000;
 
-/** Guards against two ticks running `fireDueAutomaticSubmissions` at once -- if a batch of due
- * attempts takes longer than `AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS` to process (real CDP round
- * trips, several attempts due at once), `setInterval` does not wait for the previous callback to
- * finish before firing the next one. A skipped tick here costs nothing: the next one still finds
- * every attempt that's actually due. */
-let automaticSubmissionTickInFlight = false;
+// `fireDueAutomaticSubmissions` does "real CDP round trips" (its own doc comment), the same class of
+// call that can hang without a timeout of its own -- this worker had no ceiling on a whole turn
+// until the architecture audit flagged it as the one ticker missing the hard-timeout guard the
+// application-pipeline tick already needed after a real incident. A stuck submit attempt actually
+// reaching the employer's form twice is separately fenced by `submittingAttemptIds`
+// (`application-review-session.ts`), so this ceiling exists to keep the *ticker* alive, not to
+// re-guard submission itself.
+const AUTOMATIC_SUBMISSION_TICK_HARD_TIMEOUT_MS = 4 * 60 * 1000;
+
+const automaticSubmissionTick = createTick({
+  label: 'automatic-submission',
+  hardTimeoutMs: AUTOMATIC_SUBMISSION_TICK_HARD_TIMEOUT_MS,
+  run: async () => {
+    if (applicationDataResetGate.isResetting) return;
+    await applicationDataResetGate.runMutation(async () => fireDueAutomaticSubmissions(await ensureWorkspaceDb()));
+  },
+});
 
 /**
  * Started once in `app.whenReady()`, runs for the process's whole lifetime -- the same
@@ -2039,16 +2208,7 @@ let automaticSubmissionTickInFlight = false;
  */
 function scheduleAutomaticSubmissionTick(): void {
   setInterval(() => {
-    if (automaticSubmissionTickInFlight || applicationDataResetGate.isResetting) return;
-    automaticSubmissionTickInFlight = true;
-    void applicationDataResetGate
-      .runMutation(async () => fireDueAutomaticSubmissions(await ensureWorkspaceDb()))
-      .catch((error: unknown) => {
-        console.error('[automatic-submission] scheduled tick failed', error);
-      })
-      .finally(() => {
-        automaticSubmissionTickInFlight = false;
-      });
+    void automaticSubmissionTick.runOnce();
   }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
 }
 
@@ -2058,19 +2218,39 @@ function scheduleAutomaticSubmissionTick(): void {
  * `application-pipeline:start`). */
 const APPLICATION_PIPELINE_TICK_INTERVAL_MS = 15 * 1000;
 
-/** Same reasoning as `automaticSubmissionTickInFlight`: one preparation involves a real PDF render,
- * a real generation session and a real page load, comfortably longer than the poll interval, and
- * `setInterval` does not wait for the previous callback. A skipped tick costs nothing -- the queue
- * still holds the attempt, and the next tick picks it up. */
-let applicationPipelineTickInFlight = false;
+/** A generous ceiling on one *preparation's* real work -- PDF render, a real generation session, a
+ * real page load, per this worker's own established expectations, comfortably longer than any of
+ * those legitimately take. This is deliberately not about any single external call (`daemonFetch`
+ * already bounds those); it exists so that *whichever* step turns out to hang -- an AI generation
+ * session with no timeout of its own, a page load that never settles, anything not yet hardened --
+ * can never wedge this worker the way a single stuck run did, live: the in-flight guard stayed
+ * `true` forever, so every later tick silently no-op'd with no error ever logged, and a fully
+ * prepared, fully unblocked attempt just sat `queued` indefinitely.
+ *
+ * This is the ceiling that actually fixes that, because `runNextApplicationAttempt` reacts to it by
+ * giving the daemon's lease back and fencing the abandoned run out of every later write (see "the
+ * preparation fence" in `application-pipeline.ts`). Freeing the ticker alone was never enough: the
+ * abandoned call still held the one global lease, so `acquireNextLease()` returned `null` forever
+ * and the queue stayed stopped until the whole app was restarted.
+ */
+const APPLICATION_PIPELINE_PREPARATION_CEILING_MS = 4 * 60 * 1000;
 
-/** One turn of the preparation worker. Swallows its own errors on purpose: this is called both from
- * a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
- * surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read. */
-async function runApplicationPipelineTick(): Promise<void> {
-  if (applicationPipelineTickInFlight || applicationDataResetGate.isResetting) return;
-  applicationPipelineTickInFlight = true;
-  try {
+/** The outer backstop, and now only that: it bounds the parts of a turn that are *not* the
+ * preparation itself (acquiring the lease, reading the attempt back, notifying), which nothing else
+ * bounds. Deliberately a minute longer than the ceiling above, so the inner one -- the only one that
+ * can free the lease -- is what fires on a stuck preparation, and this one only ever fires on
+ * something genuinely unexpected. */
+const APPLICATION_PIPELINE_TICK_HARD_TIMEOUT_MS = APPLICATION_PIPELINE_PREPARATION_CEILING_MS + 60 * 1000;
+
+const applicationPipelineTick = createTick({
+  label: 'application-pipeline',
+  hardTimeoutMs: APPLICATION_PIPELINE_TICK_HARD_TIMEOUT_MS,
+  onError: (error) => console.error('[application-pipeline] preparation tick failed', error),
+  // Swallows its own errors on purpose (via `onError` above, not a throw): this is called both from
+  // a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
+  // surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read.
+  run: async () => {
+    if (applicationDataResetGate.isResetting) return;
     await applicationDataResetGate.runMutation(async () => {
       const deps = await applicationPipelineDeps();
       const { result } = await runNextApplicationAttempt(deps);
@@ -2083,16 +2263,12 @@ async function runApplicationPipelineTick(): Promise<void> {
         });
       }
     });
-  } catch (error: unknown) {
-    console.error('[application-pipeline] preparation tick failed', error);
-  } finally {
-    applicationPipelineTickInFlight = false;
-  }
-}
+  },
+});
 
 function scheduleApplicationPipelineTick(): void {
   setInterval(() => {
-    void runApplicationPipelineTick();
+    void applicationPipelineTick.runOnce();
   }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
 }
 
@@ -2205,9 +2381,12 @@ guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(aw
 guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
     const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
-    // ADI-22: keep both mirrors in sync with every write, not just the initial hydration.
+    // ADI-22: keep the mirrors in sync with every write, not just the initial hydration. The
+    // auto-apply switch is re-read here for completeness only: `parseSettingsPatch` refuses to
+    // carry it, so a renderer write can never be what changes it.
     minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
     autoScanEnabled = updated.autoScanEnabled;
+    setAutoApplyEnabled(updated.autoApplyEnabled);
     return updated;
   });
 });
@@ -2217,7 +2396,7 @@ guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await 
 
 guardedIpc.handle('workspace:data:reset', async () => {
   return applicationDataResetGate.runReset(async () => {
-    if (applicationPipelineTickInFlight || automaticSubmissionTickInFlight) {
+    if (applicationPipelineTick.inFlight || automaticSubmissionTick.inFlight) {
       throw new Error('wait for the active application task to finish before resetting data');
     }
 
@@ -2271,6 +2450,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
 
     minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
     autoScanEnabled = result.settings.autoScanEnabled;
+    setAutoApplyEnabled(result.settings.autoApplyEnabled);
     return result;
   });
 });
@@ -2514,7 +2694,8 @@ if (gotSingleInstanceLock) {
     // Same deal for the workspace database: the first `workspace:*` call awaits this very
     // promise, so a failure here surfaces as that call rejecting with the real reason. It also
     // hydrates the `minimizeToTrayOnClose`/`autoScanEnabled` mirrors the `close` handler and the
-    // background-scan timer read synchronously.
+    // background-scan timer read synchronously, and the auto-apply switch the target-policy
+    // resolver reads synchronously.
     ensureWorkspaceDb().catch(() => {});
     // #195: pick up a report a previous process lifetime's scan already wrote to disk.
     void hydrateLatestVacancyReport();

@@ -13,6 +13,14 @@ export type { LettersLibraryProps } from './LettersLibrary.js';
 export { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
 export type { LetterPromptOptions } from './prompt.js';
 export {
+  canGenerateGroundedLetter,
+  GROUNDED_LETTER_DISCLOSURE,
+  GROUNDED_LETTER_UNAVAILABLE,
+  groundedLetterFacts,
+  renderGroundedLetterFromSelection,
+} from './grounded.js';
+export type { GroundedLetterRequest } from './grounded.js';
+export {
   formatUpdatedAt,
   labelFor,
   LETTER_LENGTH_OPTIONS,

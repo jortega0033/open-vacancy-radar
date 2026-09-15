@@ -328,11 +328,11 @@ describe('counts', () => {
     workspace.createApplication(db, { ...JOB, archived: true });
     workspace.createLetter(db, { title: 'L' });
 
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 2, activeApplications: 1, letters: 1 });
+    expect(workspace.getCounts(db)).toEqual({ savedJobs: 2, activeApplications: 1, letters: 1, cvDocuments: 0 });
   });
 
   it('is all zeros on a fresh database', () => {
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 0, activeApplications: 0, letters: 0 });
+    expect(workspace.getCounts(db)).toEqual({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
   });
 });
 
@@ -412,6 +412,45 @@ describe('application attempts (#198)', () => {
     expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
       workspace.ApplicationAttemptDuplicateError,
     );
+  });
+
+  /**
+   * The gap the September-2026 architecture audit found: this guard used to compare raw
+   * `vacancyKey`/`canonicalUrl` equality, exactly the source-identity comparison #275's own header
+   * comment (`application-identity.ts:4-8`) names as insufficient -- a real requisition re-imported
+   * from a second board, or the same board with different tracking parameters, gets a different
+   * `vacancyKey` and a different URL string, so neither raw check could tell it was the same job
+   * already mid-preparation. That let a second, independent attempt start while the first was still
+   * non-terminal (`ready`, `needs_user`, ...) -- neither #198's old raw check nor #275's
+   * completed-application guard (scoped to terminal checkpoints only) caught it, and nothing
+   * downstream re-checks vacancy identity before submission. This pins the fix: the in-progress
+   * guard now compares the same normalized requisition identity #275 already uses.
+   */
+  it('catches a re-imported posting while the first attempt is still in progress, not just once it completes', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'ready' });
+
+    // Re-discovered via a second source: a different report key, a differently spelled company,
+    // and a pile of tracking parameters -- none of which changes the real requisition.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        company: 'Northwind Labs B.V.',
+        vacancyKey: 'sheet-import-77',
+        canonicalUrl: `${GREENHOUSE_JOB}?utm_source=weekly-digest&gh_src=abc123`,
+      }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+
+    // A genuinely different requisition at the same employer must stay eligible -- the fix must not
+    // start merging distinct openings the way `employerKey` alone deliberately never does.
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-43', canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).not.toThrow();
   });
 
   it('updates the checkpoint and bumps updatedAt, leaving provenance fields untouched', () => {

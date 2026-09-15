@@ -7,9 +7,7 @@ import type { AtsHttpResponse } from '../../src/ats/http.js';
 import {
   AI_DEV_JOBS_JOBS_URL,
   AI_DEV_JOBS_MAX_PAGE_SIZE,
-  aiDevJobDetailUrl,
   discoverAiDevJobs,
-  fetchAiDevJobDetail,
 } from '../../src/global-remote/ai-dev-jobs-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
 import { FixtureHttpClient } from '../ats/helpers.js';
@@ -207,70 +205,6 @@ describe('AI Dev Jobs linked-index discovery', () => {
         error: expect.stringContaining('HTTP 429'),
       }),
     ]);
-  });
-
-  it('fetches and normalizes one active job detail', async () => {
-    const url = aiDevJobDetailUrl('senior-machine-learning-engineer-abc123');
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-valid.json')]]));
-
-    const detail = await fetchAiDevJobDetail(http, 'senior-machine-learning-engineer-abc123', 100_000);
-
-    expect(detail.status).toBe('active');
-    if (detail.status !== 'active') throw new Error('expected an active detail');
-    expect(detail.job).toEqual(
-      expect.objectContaining({
-        key: 'ai_dev_jobs:11111111-1111-4111-8111-111111111111',
-        company: 'Example Corp',
-        title: 'Senior Machine Learning Engineer',
-        url: 'https://boards.greenhouse.io/examplecorp/jobs/1234567',
-      }),
-    );
-    expect(http.requestedOptions).toEqual([
-      {
-        allowedOrigins: ['https://aidevboard.com'],
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-      },
-    ]);
-  });
-
-  it('maps an expired detail response to inactive rather than fabricating a vacancy', async () => {
-    const url = aiDevJobDetailUrl('closed-ml-platform-role-ghi789');
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-inactive.json')]]));
-
-    await expect(fetchAiDevJobDetail(http, 'closed-ml-platform-role-ghi789', 100_000)).resolves.toEqual({
-      status: 'inactive',
-      job: null,
-    });
-  });
-
-  it('maps a 404 detail response to not_found', async () => {
-    const url = aiDevJobDetailUrl('does-not-exist');
-    const response: AtsHttpResponse = {
-      status: 404,
-      finalUrl: url,
-      headers: {},
-      body: fixture('detail-not-found.json'),
-    };
-    const http = new FixtureHttpClient(new Map([[url, response]]));
-
-    await expect(fetchAiDevJobDetail(http, 'does-not-exist', 100_000)).resolves.toEqual({
-      status: 'not_found',
-      job: null,
-    });
-  });
-
-  it('rejects a malformed detail response instead of returning a partial vacancy', async () => {
-    const url = aiDevJobDetailUrl('55555555-5555-4555-8555-555555555555');
-    const http = new FixtureHttpClient(new Map([[url, fixture('detail-malformed.json')]]));
-
-    await expect(
-      fetchAiDevJobDetail(http, '55555555-5555-4555-8555-555555555555', 100_000),
-    ).rejects.toThrow('ai_dev_jobs: detail job contract is invalid');
-  });
-
-  it('rejects id/slug lookups with an empty string before making a request', () => {
-    expect(() => aiDevJobDetailUrl('  ')).toThrow(RangeError);
   });
 
   it('pins the published OpenAPI contract this adapter depends on', () => {

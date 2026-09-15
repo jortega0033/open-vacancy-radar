@@ -20,11 +20,12 @@ test.describe('app shell', () => {
       ['Applications', 'Applications'],
       ['CV', 'CV'],
       ['Letters', 'Letters'],
-      // ADI-07's eighth destination. Reachability only: the page's own behavior (concurrency, the
-      // two 409s, the restart-recovered case) is covered in test/components/agent-workspace/, where
-      // the daemon can be stubbed, and driving a real agent session from an e2e run would need a
-      // real CLI, a real folder, and a real native picker.
-      ['AI Workspace', 'AI Workspace'],
+      // ADI-07's eighth destination, "AI Workspace", is deliberately absent from this list: per the
+      // product decision in `.claude/ticket-drafts/draft-agent-workspace-mvp-scope.md` it is hidden
+      // from the sidebar (see `nav.ts`'s `SECONDARY_NAV` comment), so it is no longer one of the
+      // sidebar's reachable destinations. Its own behavior remains covered where it always was --
+      // test/components/agent-workspace/, where the daemon can be stubbed -- and
+      // `test/App.test.tsx` covers the sidebar no longer listing it.
       ['AI Runtime', 'AI Runtime'],
       ['Settings', 'Settings'],
       ['Search', 'Search Jobs'],

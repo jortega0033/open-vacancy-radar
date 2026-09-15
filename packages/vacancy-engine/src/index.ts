@@ -15,6 +15,16 @@ export {
   type GlobalRemoteScanResult,
 } from './pipeline/global-remote.js';
 export { readGlobalRemoteReport } from './global-remote/report.js';
+export { createDatabaseBackedAtsHttpClient } from './pipeline/ats-http-client.js';
+export {
+  fetchJobgetherOfferDetail,
+  fetchWorkableJobDetail,
+  jobgetherOfferIdFromUrl,
+  workableJobReferenceFromUrl,
+  type JobgetherOfferDetail,
+  type WorkableJobDetail,
+  type WorkableJobReference,
+} from './global-remote/structured-discovery.js';
 export { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
   assessSalary,
@@ -90,18 +100,6 @@ export type {
   ScanProgressCallback,
   GapTelemetryReport,
 } from './global-remote/models.js';
-export {
-  descriptionShingleSimilarity,
-  findCrossCompanyDuplicateGroups,
-  CROSS_COMPANY_DUPLICATE_VERSION,
-  CROSS_COMPANY_MINIMUM_DESCRIPTION_TOKENS,
-  CROSS_COMPANY_MINIMUM_SUBSTANTIVE_DESCRIPTION_TOKENS,
-  CROSS_COMPANY_SHINGLE_LENGTH,
-  CROSS_COMPANY_SHINGLE_SIMILARITY_THRESHOLD,
-  type CrossCompanyDuplicateCandidate,
-  type CrossCompanyDuplicateGroup,
-} from './reporting/cross-company-duplicates.js';
-
 export { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './geo/countries.js';
 
 /**

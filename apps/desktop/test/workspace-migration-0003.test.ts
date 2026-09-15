@@ -371,7 +371,7 @@ describe('migration 0003 applied to a database that already has real data', () =
       });
       expect(application?.appliedAt).toBe(new Date(APPLIED_AT).toISOString());
 
-      expect(workspace.getCounts(db)).toEqual({ savedJobs: 1, activeApplications: 1, letters: 1 });
+      expect(workspace.getCounts(db)).toEqual({ savedJobs: 1, activeApplications: 1, letters: 1, cvDocuments: 1 });
     } finally {
       close();
     }

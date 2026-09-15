@@ -184,6 +184,18 @@ pnpm test        # unit + integration tests (no real CLI calls; see docs/provide
 pnpm lint        # ESLint
 ```
 
+To run vacancy-engine's discovery pipeline standalone, without the desktop app or daemon: copy
+`packages/vacancy-engine/config/.env.example` to `.env` and fill in the keys you need, then
+
+```bash
+pnpm scan            # global-remote:scan -- the full worldwide/remote discovery pipeline
+pnpm roster-import    # ats-roster:import -- imports the tracked ATS roster
+pnpm sponsor-sync     # sponsors:sync -- refreshes the IND sponsor baseline
+```
+
+See [DEVELOPMENT.md#running-vacancy-engines-cli-standalone](DEVELOPMENT.md#running-vacancy-engines-cli-standalone)
+for the rest of `cli.ts`'s commands.
+
 These four also run in CI on every push and pull request, plus a separate Windows job that runs
 `pnpm package:win` and checks a real installer came out. See
 [CONTRIBUTING.md](CONTRIBUTING.md#before-opening-a-pr).

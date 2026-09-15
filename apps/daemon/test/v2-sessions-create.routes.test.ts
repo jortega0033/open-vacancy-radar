@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * `resolveModelSelection` is wrapped rather than spied on, for the same reason the store tests wrap
- * `node:fs`: the adapter package's ESM namespace is not configurable, so `vi.spyOn` cannot touch it.
+ * `node:fs`: agent-runtime's ESM namespace is not configurable, so `vi.spyOn` cannot touch it.
  * The wrapper delegates to the real implementation, so every assertion below runs against the real
  * resolver -- the counter exists only to prove the *resume* path never reaches it.
  */
 const { resolveCalls } = vi.hoisted(() => ({ resolveCalls: [] as unknown[][] }));
 
-vi.mock('@agent-dock/vacancy-agent-adapter', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agent-dock/vacancy-agent-adapter')>();
+vi.mock('@agent-dock/agent-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agent-dock/agent-runtime')>();
   return {
     ...actual,
     resolveModelSelection: (...args: Parameters<typeof actual.resolveModelSelection>) => {
@@ -22,9 +22,8 @@ vi.mock('@agent-dock/vacancy-agent-adapter', async (importOriginal) => {
   };
 });
 
-const { ProviderRegistry, noopLogger } = await import('@agent-dock/agent-runtime');
+const { ProviderRegistry, noopLogger, buildModelSelectConstraints } = await import('@agent-dock/agent-runtime');
 const { MODEL_SELECT_CAPABILITY_ID, agentSessionV2ViewSchema } = await import('@agent-dock/shared');
-const { buildModelSelectConstraints } = await import('@agent-dock/vacancy-agent-adapter');
 const { AuditCapacityError, AuditStore, AuditUnavailableError } = await import('../src/audit-store.js');
 const { ActiveSessionLimitError, ActiveSessionLimiter } = await import('../src/active-session-limiter.js');
 const { SessionLineageStore, StorageFullError } = await import('../src/session-lineage-store.js');

@@ -9,7 +9,6 @@ import { normalizeForMatching, plainText } from '../text/plain.js';
 
 export { plainText } from '../text/plain.js';
 
-export const DETERMINISTIC_SCORING_VERSION = 'deterministic-relevance-v11';
 export const RELEVANCE_THRESHOLD = 70;
 
 type SegmentContext = 'responsibility' | 'requirement' | 'preference' | 'general' | 'team';
