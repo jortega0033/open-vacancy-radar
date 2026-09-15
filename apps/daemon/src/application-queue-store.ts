@@ -151,10 +151,45 @@ export class ApplicationQueueStore {
       this.#snapshot.nextEventSeq = nextEventSeq;
       this.#persist();
     }
+    this.#reconcileStaleLeaseOnStartup();
     this.#logger.info('application queue store ready', {
       entries: this.#snapshot.entries.length,
       leased: this.#snapshot.lease?.attemptId,
     });
+  }
+
+  /**
+   * A lease loaded from a snapshot written by a previous life of this process names work that,
+   * today, cannot possibly still be running: the daemon has exactly one spawn point
+   * (`spawnDaemon()` in `main.ts`, called once at app startup, with no restart-while-the-app-
+   * stays-up path yet), so a fresh daemon process starting at all means Electron main just started
+   * fresh too, and whatever `runApplicationAttempt` call the lease named died with that old process
+   * tree. Reloading that lease verbatim -- what this store used to do -- left `acquireNextLease()`
+   * returning `null` forever, indistinguishable from "queue empty," permanently and silently
+   * blocking every future preparation attempt until someone found and manually edited the on-disk
+   * snapshot (which is how this gap was first diagnosed, live, earlier this session).
+   *
+   * If a bounded daemon auto-respawn is ever added (tracked separately -- see the architecture audit's
+   * F-A/§18 sequencing note), this assumption stops holding and this method must be revisited
+   * together with it: a mid-app-lifetime daemon restart would no longer be a full-app restart, so a
+   * loaded lease might legitimately still be in progress. Until then, every lease this method ever
+   * sees is stale by construction.
+   */
+  #reconcileStaleLeaseOnStartup(): void {
+    const lease = this.#snapshot.lease;
+    if (!lease) return;
+    this.#logger.warn(
+      'application queue store startup: clearing a lease left over from a previous process life -- nothing in this process is doing that work',
+      { attemptId: lease.attemptId, leaseId: lease.leaseId },
+    );
+    const entry = this.#snapshot.entries.find((e) => e.attemptId === lease.attemptId);
+    this.#snapshot.lease = null;
+    if (entry && !TERMINAL_STATES.includes(entry.state)) {
+      entry.state = 'queued';
+      entry.updatedAt = new Date().toISOString();
+    }
+    this.#persist();
+    this.#emit('released', lease.attemptId);
   }
 
   #loadSnapshot(): QueueSnapshot {

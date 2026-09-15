@@ -28,6 +28,50 @@ export interface CdpDomNode {
    * without reading it, a page whose real application form lives inside an iframe would silently
    * extract zero fields at all. */
   contentDocument?: CdpDomNode;
+  /** The URL of the document this node *is* (on a `#document` node) or, on a frame owner node, the
+   * one that frame points at -- CDP populates it in both places. Read here for exactly one purpose:
+   * establishing each frame's own security origin, so `executor.ts` can refuse to type a real
+   * answer into a document the target site does not control. Optional, and its absence means
+   * something specific: "this read said nothing about this frame's origin", which is not the same
+   * claim as "this frame is somewhere else" and is not treated like one. */
+  documentURL?: string;
+}
+
+/** Parses `url` (against `base`, for the relative `src` a same-origin frame is usually embedded
+ * with), or `undefined` for an absent or unparseable one. */
+function parseUrl(url: string | undefined, base: string | undefined): URL | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url, base);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A document's security origin in the same serialization `ApplicationTargetPolicy.origins` uses
+ * (`https://host:port`), or `undefined` when the URL establishes no origin of its own.
+ *
+ * Three deliberate departures from a bare `URL.origin`:
+ *
+ *  - `about:` (what an `<iframe>` with no `src` and an `<iframe srcdoc>` both resolve to) and
+ *    `javascript:` answer `undefined`, because such a document *inherits* its embedder's origin
+ *    rather than having one. The caller resolves that inheritance by falling back to the parent
+ *    frame's origin, which is the real, correct answer for those frames -- not a shrug.
+ *  - Every `file:` URL collapses to the single bucket `"file://"`. `URL.origin` serializes each one
+ *    to the opaque `"null"`, which would make a local fixture page cross-origin with an iframe
+ *    sitting next to it in the same directory. `target-policy.ts` already documents that `origins`
+ *    cannot scope a `file:` target at all (`exactFileUrls` is what does), so this bucket is honest
+ *    about carrying no authority of its own; it exists so local fixture pages behave, not so a
+ *    `file:` frame earns trust.
+ *  - Any other opaque origin keeps WHATWG's `"null"` serialization and is refused downstream by
+ *    `isFrameFillAllowed`, since an opaque origin is same-origin with nothing at all.
+ */
+function originOfUrl(parsed: URL | undefined): string | undefined {
+  if (!parsed) return undefined;
+  if (parsed.protocol === 'about:' || parsed.protocol === 'javascript:') return undefined;
+  if (parsed.protocol === 'file:') return 'file://';
+  return parsed.origin;
 }
 
 /** The internal (never public, never part of `SnapshotField`) map from a minted `fieldRef` to the
@@ -174,6 +218,11 @@ export interface FieldGroup {
   formScope?: number;
   containerNodeId: number;
   fieldRefs: readonly string[];
+  /** The origin of the document this group's fields live in, when the read established one --
+   * `executor.ts` drops a group whose origin the active policy does not authorize a fill into
+   * *before* the field-count/geometry contest runs, so a third party's embedded widget cannot win
+   * that contest by simply having more inputs than the real application form. */
+  frameOrigin?: string;
 }
 
 export interface ExtractedSnapshot {
@@ -191,6 +240,12 @@ export interface ExtractedSnapshot {
   /** The frame/form pair the *field count alone* picked, before any rendering probe. */
   dominantFrameId: number;
   dominantFormScope?: number;
+  /** The top document's own origin, when the read carried a document URL to derive one from. Every
+   * frame's origin is compared against this one (and against the policy) to decide whether it may
+   * be written to at all; `undefined` means the read established no baseline, in which case the
+   * policy's own `origins` are the only authority left -- see `target-policy.ts`'s
+   * `isFrameFillAllowed`. */
+  topFrameOrigin?: string;
   /** `fieldRef -> backendNodeId` AND `controlRef -> backendNodeId`, sharing one map since both are
    * opaque refs `executor.ts` resolves the exact same way (a real CDP node handle to click/focus).
    * For `executor.ts`'s own internal use only. */
@@ -244,6 +299,15 @@ function mostCommon<T>(values: readonly T[]): T | undefined {
  * application form embedded in an iframe is actually reachable at all -- previously requested via
  * `pierce: true` but never consumed, silently extracting zero fields from such a page.
  *
+ * Each frame's own security origin is resolved during that descent and carried on every field it
+ * holds (`SnapshotField.frameOrigin`) and on every group (`FieldGroup.frameOrigin`). Extraction
+ * itself refuses nothing on that basis -- piercing is a read, and seeing a third party's widget is
+ * useful -- but a *write* is a different matter, and `executor.ts` cannot refuse a cross-origin fill
+ * it was never told about. Before this was tracked, the frame holding the most fields won the
+ * active-form contest on count and geometry alone, so a chat or cookie-consent widget with more
+ * inputs than the real application form could quietly become the frame that received an applicant's
+ * answers.
+ *
  * Submit-control candidates are scoped to reduce (not eliminate -- see the caveat below) the
  * chance of resolving to a control that has nothing to do with the application: a control is kept
  * only if it shares BOTH the frame and the nearest enclosing `<form>` (or "no form", if that's
@@ -275,6 +339,12 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   /** The `backendNodeId` of the `<form>` element for each form scope, and of the `<iframe>` element
    * hosting each frame -- what `FieldGroup.containerNodeId` resolves to. */
   const frameOwnerNodeIds = new Map<number, number>();
+  /** Each frame's own document URL and the origin derived from it, by frame id. The URL is kept
+   * alongside the origin because a frame is usually embedded with a *relative* `src`, which only
+   * resolves against the URL of the document that embedded it. A frame missing from either map is
+   * one the read established nothing about, which is distinct from one known to be elsewhere. */
+  const frameUrls = new Map<number, string>();
+  const frameOrigins = new Map<number, string>();
 
   function walk(node: CdpDomNode, frameId: number, formScope: number | undefined): void {
     const id = attr(node, 'id');
@@ -310,6 +380,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
         const fieldRef = mintFieldRef();
         nodeIds.set(fieldRef, node.backendNodeId);
         const ariaInvalid = (attr(node, 'aria-invalid') ?? '').toLowerCase();
+        const frameOrigin = frameOrigins.get(frameId);
         const field: SnapshotField = {
           fieldRef,
           label,
@@ -317,6 +388,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
           ...(name ? { name } : {}),
           required: hasAttr(node, 'required') || attr(node, 'aria-required') === 'true',
           frameId,
+          ...(frameOrigin !== undefined ? { frameOrigin } : {}),
           ...(formScope !== undefined ? { formScope } : {}),
           // Provisional: every field starts active, and the frame/form resolution below demotes
           // the ones that turn out to belong to a duplicate or unrelated form. A page with a
@@ -340,6 +412,17 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
     if (node.nodeName === 'IFRAME' && node.contentDocument) {
       nextFrameId += 1;
       frameOwnerNodeIds.set(nextFrameId, node.backendNodeId);
+      // Where this frame's own origin comes from, most authoritative first: the URL its document
+      // reports (the one that survived any redirect), then the URL CDP records on the frame owner,
+      // then the `src` the embedder asked for. A frame that declares none of those is
+      // `about:blank`-shaped -- no `src`, an `srcdoc`, or simply a tree carrying no URLs -- and such
+      // a document really does inherit its embedder's origin, so the parent's own origin is the
+      // correct answer rather than a guess.
+      const parentUrl = frameUrls.get(frameId);
+      const frameUrl = parseUrl(node.contentDocument.documentURL ?? node.documentURL ?? attr(node, 'src'), parentUrl);
+      if (frameUrl) frameUrls.set(nextFrameId, frameUrl.href);
+      const frameOrigin = originOfUrl(frameUrl) ?? frameOrigins.get(frameId);
+      if (frameOrigin !== undefined) frameOrigins.set(nextFrameId, frameOrigin);
       walk(node.contentDocument, nextFrameId, undefined);
     } else if (node.nodeName !== 'SELECT') {
       // SELECT's own OPTION children are already consumed by extractOptions above; don't also
@@ -347,6 +430,11 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
       for (const child of node.children ?? []) walk(child, frameId, childFormScope);
     }
   }
+
+  const topFrameUrl = parseUrl(root.documentURL, undefined);
+  if (topFrameUrl) frameUrls.set(0, topFrameUrl.href);
+  const topFrameOrigin = originOfUrl(topFrameUrl);
+  if (topFrameOrigin !== undefined) frameOrigins.set(0, topFrameOrigin);
 
   walk(root, 0, undefined);
 
@@ -380,7 +468,10 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
   // One group per distinct frame/form pair that holds fields, in first-seen order. `executor.ts`
   // only probes rendering when there is more than one, so the overwhelmingly common single-form
   // page costs nothing extra.
-  const groupsByKey = new Map<string, { frameId: number; formScope?: number; containerNodeId: number; fieldRefs: string[] }>();
+  const groupsByKey = new Map<
+    string,
+    { frameId: number; formScope?: number; frameOrigin?: string; containerNodeId: number; fieldRefs: string[] }
+  >();
   for (const field of fields) {
     const key = `${field.frameId} ${field.formScope ?? 'none'}`;
     const existing = groupsByKey.get(key);
@@ -396,6 +487,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
     groupsByKey.set(key, {
       frameId: field.frameId,
       ...(field.formScope !== undefined ? { formScope: field.formScope } : {}),
+      ...(field.frameOrigin !== undefined ? { frameOrigin: field.frameOrigin } : {}),
       containerNodeId,
       fieldRefs: [field.fieldRef],
     });
@@ -414,6 +506,7 @@ export function extractSnapshotFields(root: CdpDomNode): ExtractedSnapshot {
     })),
     dominantFrameId,
     ...(dominantFormScope !== undefined ? { dominantFormScope } : {}),
+    ...(topFrameOrigin !== undefined ? { topFrameOrigin } : {}),
   };
 }
 

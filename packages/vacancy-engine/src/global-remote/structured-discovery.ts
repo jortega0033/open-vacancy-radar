@@ -1,5 +1,6 @@
 import type { AtsHttpClient } from '../ats/http.js';
-import { AtsResponseError } from '../ats/http.js';
+import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
 import {
   attributeNetworkRequests,
   networkAttemptFields,
@@ -458,6 +459,218 @@ async function discoverJobgether(
     }],
     vacancies,
   };
+}
+
+export interface JobgetherOfferDetail {
+  /** `null` when the offer carried no description at all, or the offer id was not found (a listing
+   * that has since been taken down between the scan and "Prepare application"). Never an empty
+   * string standing in for either. */
+  description: string | null;
+}
+
+/** A Jobgether offer URL looks like `https://jobgether.com/offer/<24-hex-id>-<slug>`; the id is the
+ * only part the per-offer detail endpoint needs. `null` for anything that doesn't match, so a
+ * caller can tell "not a Jobgether URL" apart from "a Jobgether URL this failed to parse".
+ * The terminator after the id is deliberately permissive -- slug (`-`), path segment (`/`),
+ * query string (`?`), fragment (`#`), or end-of-string -- so a URL a real user actually clicked
+ * (carrying a `?ref=`/`#section` a plain scan-discovered URL never would) still resolves. */
+export function jobgetherOfferIdFromUrl(url: string): string | null {
+  const match = /\/offer\/([a-f0-9]{24})(?:[-/?#]|$)/iu.exec(url);
+  return match ? match[1]! : null;
+}
+
+/**
+ * On-demand single-offer lookup, kept separate from the bulk list scan above because
+ * `discoverJobgether`'s own list endpoint (`astroapi/ai/jobs.json`) never returns a description for
+ * any of the thousands of rows one scan can touch, and fetching this endpoint for every one of them
+ * would trade a scale problem for a rate-limit one. Call this only when a specific vacancy actually
+ * needs its description -- "Prepare application" finding an empty `jdSnapshot`, not the scan itself.
+ *
+ * Confirmed live against the real API (not guessed from documentation): `astroapi/offer/<id>.json`
+ * returns `{ offer: { description: "<p>...</p>...", ... } }`, real HTML with no page chrome mixed
+ * in -- unlike the public `jobgether.com/offer/...` HTML page, which also renders nav, "Related
+ * jobs", "Other jobs at this company", and premium-upsell copy around the same content. Reading the
+ * API response directly is what keeps this from needing to strip that chrome out again.
+ */
+export async function fetchJobgetherOfferDetail(
+  http: AtsHttpClient,
+  offerId: string,
+): Promise<JobgetherOfferDetail> {
+  const response = await http.get(`https://jobgether.com/astroapi/offer/${encodeURIComponent(offerId)}.json`, {
+    allowedOrigins: ['https://jobgether.com'],
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (response.status === 404) return { description: null };
+  requireSuccessfulResponse('jobgether', response);
+  let root: unknown;
+  try {
+    root = JSON.parse(response.body) as unknown;
+  } catch (error) {
+    throw new AtsResponseError('jobgether', 'invalid offer detail JSON', response.status, { cause: error });
+  }
+  const parsed = record(root);
+  const offer = parsed ? record(parsed.offer) : null;
+  const rawDescription = offer ? stringValue(offer.description) : null;
+  return { description: rawDescription ? htmlToText(rawDescription) : null };
+}
+
+/** Every request this makes stays inside Workable's own candidate-facing apply host. */
+const WORKABLE_APPLY_ORIGIN = 'https://apply.workable.com';
+
+/**
+ * Exactly ten uppercase hex characters, verified rather than assumed: all 33,013 job URLs in one
+ * live pull of `WORKABLE_ALL_CUSTOMER_FEED_URL` matched this shape, with no exceptions. Matching
+ * case-insensitively because Workable itself resolves a lowercased shortcode (also checked live)
+ * and a URL a person pasted from somewhere else may well have been lowercased on the way.
+ */
+const WORKABLE_SHORTCODE = /^[0-9a-f]{10}$/iu;
+
+/** The account slug in a Workable apply URL is a DNS-label-shaped board identifier, the same shape
+ * `WorkableAdapter` already validates before putting one in a request path. */
+const WORKABLE_ACCOUNT = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/iu;
+
+/** Only a single retry, unlike a scan's unattended requests: this whole path runs inside a person's
+ * "Prepare application" click, where an honest early refusal beats a retry ladder they sit through. */
+const WORKABLE_DETAIL_MAX_RETRIES = 1;
+
+export type WorkableJobReference = Readonly<{
+  /**
+   * `null` for the short `/j/<shortcode>` form the bulk feed emits, which does not name the hiring
+   * account at all. `fetchWorkableJobDetail` resolves it in that case; it is only carried here when
+   * the URL already spelled it out, so a canonical URL costs one request instead of two.
+   */
+  account: string | null;
+  shortcode: string;
+}>;
+
+export interface WorkableJobDetail {
+  /** `null` when the listing carried no description text, or the shortcode no longer resolves to a
+   * live job (taken down between the scan and "Prepare application"). Never an empty string standing
+   * in for either. */
+  description: string | null;
+}
+
+/**
+ * Recognises the two Workable apply-URL shapes this app can actually end up holding, and `null` for
+ * everything else, so a caller can tell "not a Workable URL" apart from one it failed to parse.
+ *
+ * `workable_global`'s feed parser only ever emits `https://apply.workable.com/j/<shortcode>` (it
+ * rejects a job whose `<url>` is anything else outright), but the URL reaching "Prepare application"
+ * can also be the canonical `https://apply.workable.com/<account>/j/<shortcode>` that short form
+ * redirects to -- that is what a person's browser address bar shows, and what a saved or
+ * hand-corrected apply URL tends to be. Both are accepted; a trailing slash, a tracking query
+ * string, or a fragment on either is ignored rather than treated as a parse failure.
+ */
+export function workableJobReferenceFromUrl(url: string): WorkableJobReference | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'apply.workable.com') {
+    return null;
+  }
+  const segments = parsed.pathname.split('/').filter((segment) => segment.length > 0);
+  if (segments.length === 2) {
+    const [marker = '', shortcode = ''] = segments;
+    return marker === 'j' && WORKABLE_SHORTCODE.test(shortcode)
+      ? { account: null, shortcode: shortcode.toUpperCase() }
+      : null;
+  }
+  if (segments.length === 3) {
+    const [account = '', marker = '', shortcode = ''] = segments;
+    return marker === 'j' && WORKABLE_ACCOUNT.test(account) && WORKABLE_SHORTCODE.test(shortcode)
+      ? { account, shortcode: shortcode.toUpperCase() }
+      : null;
+  }
+  return null;
+}
+
+/**
+ * Turns the account-less short form into the account the detail endpoint needs, by letting Workable
+ * answer the question itself: `/j/<shortcode>` is a 301 to `/<account>/j/<shortcode>`, so the final
+ * URL of a followed request names the account. There is no shortcode-only detail route to use
+ * instead -- the apply site's own JavaScript bundle (`careers.*.js`) only ever builds
+ * `/api/v2/accounts/<account>/jobs/<shortcode>`, and probing `/api/v2/jobs/<shortcode>`,
+ * `/api/v1/widget/jobs/<shortcode>` and `/api/v3/accounts/.../jobs/<shortcode>` live returned 404.
+ *
+ * A shortcode with no live job behind it redirects to `/oops` rather than 404ing, which is why this
+ * reads the destination instead of trusting the status: an unparseable destination means "no such
+ * job", and returns `null` for the caller to refuse on.
+ */
+async function resolveWorkableAccount(
+  http: AtsHttpClient,
+  shortcode: string,
+): Promise<string | null> {
+  const response = await http.get(`${WORKABLE_APPLY_ORIGIN}/j/${encodeURIComponent(shortcode)}`, {
+    allowedOrigins: [WORKABLE_APPLY_ORIGIN],
+    cache: 'no-store',
+    maxRetries: WORKABLE_DETAIL_MAX_RETRIES,
+  });
+  if (response.status === 404) return null;
+  requireSuccessfulResponse('workable', response);
+  return workableJobReferenceFromUrl(response.finalUrl)?.account ?? null;
+}
+
+/**
+ * On-demand single-listing lookup for `workable_global`, kept out of the bulk feed scan for the same
+ * reason `fetchJobgetherOfferDetail` is kept out of `discoverJobgether`: one pull of Workable's
+ * all-customer feed carries tens of thousands of jobs, and fetching a detail endpoint for every one
+ * of them would trade a missing-description problem for a rate-limit problem. Call this only when a
+ * specific vacancy actually needs its description -- "Prepare application" finding an empty
+ * `jdSnapshot`, never the scan itself. The feed parser's deliberate discarding of the `<description>`
+ * element it streams past (see `workable-feed.ts`) stays exactly as it was.
+ *
+ * Confirmed live against the real endpoint rather than guessed from documentation:
+ * `GET https://apply.workable.com/api/v2/accounts/<account>/jobs/<shortcode>` answers 200 with
+ * `{ shortcode, title, description, requirements, benefits, ... }`, where the three text fields are
+ * real posting HTML with no page chrome around them -- this is the same endpoint apply.workable.com's
+ * own front end calls to render the listing. It is read directly because the alternatives are worse:
+ * the public listing page is an 8 KB JavaScript shell with no posting text in it at all, and its
+ * `og:description` meta tag is a truncated teaser, not the description.
+ *
+ * Workable splits one posting across `description`, `requirements` and `benefits`, and a real
+ * listing routinely puts its must-haves only in `requirements`. Tailoring against `description`
+ * alone would silently drop the half of the posting that matters most, so all three are joined in
+ * the order the apply page itself renders them.
+ */
+export async function fetchWorkableJobDetail(
+  http: AtsHttpClient,
+  reference: WorkableJobReference,
+): Promise<WorkableJobDetail> {
+  const account = reference.account ?? (await resolveWorkableAccount(http, reference.shortcode));
+  if (account === null) return { description: null };
+  const response = await http.get(
+    `${WORKABLE_APPLY_ORIGIN}/api/v2/accounts/${encodeURIComponent(account)}/jobs/${encodeURIComponent(reference.shortcode)}`,
+    {
+      allowedOrigins: [WORKABLE_APPLY_ORIGIN],
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      maxRetries: WORKABLE_DETAIL_MAX_RETRIES,
+    },
+  );
+  if (response.status === 404) return { description: null };
+  requireSuccessfulResponse('workable', response);
+  let root: unknown;
+  try {
+    root = JSON.parse(response.body) as unknown;
+  } catch (error) {
+    throw new AtsResponseError('workable', 'invalid job detail JSON', response.status, {
+      cause: error,
+    });
+  }
+  const job = record(root);
+  if (job === null) {
+    throw new AtsResponseError('workable', 'job detail is not an object', response.status);
+  }
+  const sections = ['description', 'requirements', 'benefits'].flatMap((field) => {
+    const html = stringValue(job[field]);
+    const text = html === null ? '' : htmlToText(html);
+    return text.length > 0 ? [text] : [];
+  });
+  return { description: sections.length > 0 ? sections.join('\n\n') : null };
 }
 
 export async function runStructuredDiscovery(

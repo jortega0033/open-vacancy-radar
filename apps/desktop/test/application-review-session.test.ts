@@ -560,6 +560,74 @@ describe('application-review-session', () => {
     ).resolves.toBeDefined();
   });
 
+  /**
+   * Regression for the gap the September 2026 fencing fix-up's own adversarial re-review found: the
+   * catch block used to delete `activeReviews.get(attemptId)` unconditionally on a failed open. That
+   * was harmless before `application-pipeline.ts`'s abandonment path started calling
+   * `closeApplicationReview` for a still-open run (a fix landed in the same effort this test belongs
+   * to): a caller whose `openApplicationReview` is abandoned mid-flight can now have its registration
+   * closed out from under it *before* its own pending CDP call ever settles. If that call later fails
+   * (rather than the happy-path case the neighboring "closes the abandoned run's review" pipeline
+   * test already covers), the old code deleted whatever was in the map for that attempt id by then --
+   * which, if a replacement run has since opened its own review, is the replacement's entry, not the
+   * abandoned run's own. This test reproduces that exact race directly against the module (the
+   * pipeline-level version of this scenario needs the held CDP call to *fail* late, not merely
+   * resolve late, which `application-pipeline.test.ts`'s existing hold/release harness does not do).
+   */
+  it('a run whose open fails late does not tear down a replacement review that has since taken its place', async () => {
+    const { openApplicationReview, applyApplicationFieldMap, closeApplicationReview } = await importSession();
+
+    // Run 1: starts opening, then hangs on the first navigation -- exactly where a real preparation
+    // run registers a review with no snapshot on it yet.
+    const view1 = fakeView();
+    let rejectNavigate!: (error: Error) => void;
+    const realSendCommand1 = view1.transport.sendCommand.getMockImplementation()!;
+    view1.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Page.navigate') return new Promise((_resolve, reject) => (rejectNavigate = reject));
+      return realSendCommand1(method, params);
+    });
+    createApplicationView.mockImplementationOnce(() => view1);
+    const stuckOpen = openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+    // Let the hung navigate actually start before moving on, the same way the pipeline's own
+    // `holdNextCdpCommand` waits for `entered` before proceeding.
+    await vi.waitFor(() => expect(rejectNavigate).toBeDefined());
+
+    // Simulate `application-pipeline.ts`'s abandonment path: it closes run 1's review (destroying
+    // view1 and freeing the attempt id) without waiting for run 1's own open to ever settle.
+    await closeApplicationReview(ATTEMPT_ID);
+    expect(view1.destroy).toHaveBeenCalledTimes(1);
+
+    // Run 2: takes over the same attempt id after run 1's registration was closed, and completes an
+    // ordinary open + field-map apply, exactly as a healthy replacement run would.
+    const view2 = fakeView();
+    createApplicationView.mockImplementationOnce(() => view2);
+    const opened2 = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+    expect(createApplicationView).toHaveBeenCalledTimes(2);
+
+    // Only now does run 1's long-hung navigation finally fail -- after run 2 is already live.
+    rejectNavigate(new Error('navigation timed out'));
+    await expect(stuckOpen).rejects.toThrow('navigation timed out');
+
+    // The bug: run 1's catch block deletes whatever is registered for this attempt id, which by now
+    // is run 2's entry, not its own. Prove it is NOT deleted: applying a field map against run 2's
+    // live review must still find it registered, not throw "no open review for attempt ...".
+    const nameField = opened2.snapshot.fields.find((f) => f.label === 'fullName')!;
+    await expect(
+      applyApplicationFieldMap(FAKE_DB, {
+        attemptId: ATTEMPT_ID,
+        valueTable: [{ valueRef: 'v0000000000000001', value: 'Grace Hopper', provenance: 'profile' }],
+        fieldMap: {
+          attemptId: ATTEMPT_ID,
+          snapshotGeneration: opened2.snapshot.generation,
+          assignments: [{ fieldRef: nameField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } }],
+          unmapped: [],
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    // And run 2's own view was never torn down by run 1's late failure.
+    expect(view2.destroy).not.toHaveBeenCalled();
+  });
+
   it('applies a valid field map: fills the text field, selects the option, fills the checkbox', async () => {
     const { openApplicationReview, applyApplicationFieldMap } = await importSession();
     const view = fakeView();
@@ -647,6 +715,88 @@ describe('application-review-session', () => {
     await expect(
       applyApplicationFieldMap(FAKE_DB, { attemptId: '22222222-2222-4222-8222-222222222222', valueTable: [], fieldMap: { attemptId: '22222222-2222-4222-8222-222222222222', snapshotGeneration: 1, assignments: [], unmapped: [] } }),
     ).rejects.toThrow(/no open review/);
+  });
+
+  /**
+   * The caller-side half of `application-pipeline.ts`'s preparation fence.
+   *
+   * A pipeline run can stop being the one entitled to an attempt at any moment -- it is decided by a
+   * timer that knows nothing about which field is currently being typed -- and this function is a
+   * round trip to the page per assignment. Checking the caller's `stillLive` only on entry would
+   * therefore mean an abandoned run keeps committing keystrokes and uploads to a page a replacement
+   * run now owns, for as long as its assignment list lasts.
+   */
+  describe('a caller that stops being entitled to the page mid-apply', () => {
+    async function openedReview() {
+      const session = await importSession();
+      const view = fakeView();
+      createApplicationView.mockImplementation(() => view);
+      const opened = await session.openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
+      const authField = opened.snapshot.fields.find((f) => f.label === 'workAuthorization')!;
+      const licenseField = opened.snapshot.fields.find((f) => f.label === 'hasDriversLicense')!;
+      // 'No', not the option the control already holds, so a select that moved is visible.
+      const noOption = authField.options!.find((o) => o.label === 'No')!;
+      return {
+        session,
+        view,
+        input: {
+          attemptId: ATTEMPT_ID,
+          valueTable: [
+            { valueRef: 'v0000000000000001', value: 'Ada Lovelace', provenance: 'profile' as const },
+            { valueRef: 'v0000000000000002', value: 'true', provenance: 'user_answer' as const },
+          ],
+          fieldMap: {
+            attemptId: ATTEMPT_ID,
+            snapshotGeneration: opened.snapshot.generation,
+            assignments: [
+              { fieldRef: nameField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000001' } },
+              { fieldRef: authField.fieldRef, source: { kind: 'option', optionRef: noOption.optionRef } },
+              { fieldRef: licenseField.fieldRef, source: { kind: 'value', valueRef: 'v0000000000000002' } },
+            ],
+            unmapped: [],
+          },
+        },
+      };
+    }
+
+    it('types nothing at all when the caller was already fenced out', async () => {
+      const { session, view, input } = await openedReview();
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, input, () => false);
+
+      expect(result).toMatchObject({ ok: false, reason: 'preparation_abandoned' });
+      const calledMethods = view.transport.sendCommand.mock.calls.map(([method]) => method as string);
+      expect(calledMethods).not.toContain('Input.insertText');
+      expect(calledMethods).not.toContain('Input.dispatchMouseEvent');
+      expect(view.controls.get(2)?.value).toBe('Ada Lovelace'); // the page's own prefill, untouched
+      expect(view.controls.get(3)?.value).toBe('Yes');
+      expect(view.controls.get(8)?.checked).toBe(false);
+    });
+
+    it('commits nothing further once the fence moves while a fill is still in flight', async () => {
+      const { session, view, input } = await openedReview();
+
+      // The honest shape of the race: the run is abandoned part-way through the very first write,
+      // which is already out and cannot be called back.
+      let live = true;
+      const realSendCommand = view.transport.sendCommand.getMockImplementation()!;
+      view.transport.sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+        const answer = await realSendCommand(method, params);
+        if (method === 'Input.insertText') live = false;
+        return answer;
+      });
+
+      const result = await session.applyApplicationFieldMap(FAKE_DB, input, () => live);
+
+      expect(result).toMatchObject({ ok: false, reason: 'preparation_abandoned' });
+      // The write that was already in flight landed -- nothing here can cancel a CDP round trip --
+      // and the two that had not started never reached the page at all.
+      const inserts = view.transport.sendCommand.mock.calls.filter(([method]) => method === 'Input.insertText');
+      expect(inserts).toHaveLength(1);
+      expect(view.controls.get(3)?.value).toBe('Yes'); // the select never moved to 'No'
+      expect(view.controls.get(8)?.checked).toBe(false); // the checkbox was never clicked
+    });
   });
 
   /**

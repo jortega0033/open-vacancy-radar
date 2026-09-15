@@ -62,12 +62,20 @@ export const PRIMARY_NAV: readonly NavItem[] = [
  * Below the divider: the AI surfaces and the things that configure the app, rather than the job
  * hunt itself.
  *
- * "AI Workspace" sits directly above "AI Runtime" because the two answer adjacent questions (what
- * is running, and what could run) and because the Workspace's refusal copy points at the Runtime
- * page by name when the local runtime is down.
+ * "AI Workspace" is deliberately absent from this list. Per the product decision recorded in
+ * `.claude/ticket-drafts/draft-agent-workspace-mvp-scope.md`, the general-purpose, full-filesystem
+ * agent it exposes is not MVP surface for this product and is hidden pending further scoping --
+ * "flag off, don't delete," the same treatment already applied to auto-apply
+ * (`application-target-policies.ts`) and the swipe-card UI. The page, its route in `App.tsx`
+ * (`nav === 'agent-workspace'`), `'agent-workspace'`'s place in `NavPage`/`NAV_PAGES` above, and
+ * every IPC channel in `agent-workspace-ipc.ts` all stay intact and covered by their existing
+ * tests; only this sidebar entry is removed, so a user has no click path to it. A user who already
+ * had it as their remembered last-opened page will still restore into it once -- that restore path
+ * is pre-existing persisted state, not a new way in -- and it stops recurring the moment they
+ * navigate anywhere else, since `handleNavigate` in `App.tsx` overwrites `lastOpenedPage` on every
+ * click.
  */
 export const SECONDARY_NAV: readonly NavItem[] = [
-  { id: 'agent-workspace', label: 'AI Workspace' },
   { id: 'runtime', label: 'AI Runtime' },
   { id: 'settings', label: 'Settings' },
 ];

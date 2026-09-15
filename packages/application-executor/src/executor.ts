@@ -18,7 +18,13 @@ import {
 } from './form-snapshot.js';
 import { classifySubmissionOutcome, type ObservedResponse, type SubmissionOutcomeReport } from './submission-receipt.js';
 import { resolveSubmitControl } from './submit-control.js';
-import { isActionAllowed, isNavigationAllowed, type ApplicationTargetPolicy, type ExecutorAction } from './target-policy.js';
+import {
+  isActionAllowed,
+  isFrameFillAllowed,
+  isNavigationAllowed,
+  type ApplicationTargetPolicy,
+  type ExecutorAction,
+} from './target-policy.js';
 
 const EMPTY_SNAPSHOT_RETRY_LIMIT = 20;
 const EMPTY_SNAPSHOT_RETRY_DELAY_MS = 100;
@@ -32,6 +38,33 @@ export const SUBMISSION_OBSERVE_POLL_INTERVAL_MS = 250;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Races `promise` against `policy.timeoutMs` (#196's own `ApplicationTargetPolicy.timeoutMs`,
+ * previously declared but never consumed anywhere in this package -- a field that read as a
+ * per-call safety guarantee while enforcing none). This is the one place that guarantee is now
+ * real: every CDP round trip `send()` makes goes through here, so a target whose page has stopped
+ * responding (a hung navigation, a renderer wedged behind a modal CDP itself never reports) fails
+ * the in-flight step with an `ExecutorTimeoutError` instead of leaving the caller awaiting a
+ * command that may never resolve. A non-positive or non-finite `timeoutMs` is treated as "no
+ * bound" rather than an instant failure, since a fixture/test policy might reasonably set one.
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, method: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ExecutorTimeoutError(method, timeoutMs)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error as Error);
+      },
+    );
+  });
 }
 
 /**
@@ -60,6 +93,20 @@ export class ExecutorPolicyError extends Error {
   ) {
     super(`action "${action}" refused: ${reason}`);
     this.name = 'ExecutorPolicyError';
+  }
+}
+
+/** A CDP call did not resolve within `policy.timeoutMs`. Distinct from `ExecutorPolicyError`: this
+ * is not a policy refusal (the action was permitted and attempted), it is the transport failing to
+ * answer -- the caller's own retry/handoff logic decides what to do with a target that stopped
+ * responding, the same way it already decides what to do with any other transport rejection. */
+export class ExecutorTimeoutError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`CDP method "${method}" did not resolve within ${timeoutMs}ms`);
+    this.name = 'ExecutorTimeoutError';
   }
 }
 
@@ -113,6 +160,11 @@ export class ApplicationExecutor {
    * a control that is no longer the same one.
    */
   #verifications = new Map<string, VerifiedFieldState>();
+  /** The top document's own origin as of the current snapshot, held here so a write can be judged
+   * against it without re-reading the page. `undefined` until a snapshot has been taken, and also
+   * on a read that established no origin at all -- `isFrameFillAllowed` treats those two the same
+   * way, falling back to the policy's own `origins`. */
+  #topFrameOrigin: string | undefined;
 
   constructor(
     private readonly transport: CdpTransport,
@@ -132,7 +184,7 @@ export class ApplicationExecutor {
 
   private send(method: string, params?: Record<string, unknown>): Promise<unknown> {
     assertAllowedCdpMethod(method);
-    return this.transport.sendCommand(method, params);
+    return withTimeout(this.transport.sendCommand(method, params), this.policy.timeoutMs, method);
   }
 
   private requireAction(action: ExecutorAction): void {
@@ -182,6 +234,7 @@ export class ApplicationExecutor {
     this.#currentSnapshot = undefined;
     this.#nodeIds = new Map();
     this.#verifications.clear();
+    this.#topFrameOrigin = undefined;
   }
 
   private async readDom(): Promise<ExtractedSnapshot> {
@@ -230,6 +283,22 @@ export class ApplicationExecutor {
    * of them rendered, or answers for none of them, the count-based resolution stands on its own
    * rather than the executor declaring the whole page unusable on the strength of a heuristic.
    *
+   * Every group from a frame the policy does not authorize a write into is dropped before any of
+   * that runs (`isFrameFillAllowed`). This is the half of the resolution that the count-and-geometry
+   * argument below never covered: that argument is sound for a page choosing among *its own*
+   * controls, and simply does not hold for a third party's embedded document -- a chat widget, a
+   * cookie-consent banner, a job-alert signup are not "the page's own controls", and
+   * `Input.insertText` fires real events their scripts read. Dropping them here rather than only at
+   * `fill` time is what stops such a frame from becoming the active form at all, so nothing
+   * downstream -- a generation session proposing answers, a readiness count, a review screen -- is
+   * ever shown a third party's inputs as the form under review.
+   *
+   * When that leaves exactly one eligible group, it wins outright and the rendering probe is skipped
+   * entirely, so the common "real form plus one embedded widget" page costs no extra CDP calls. When
+   * it leaves none, the count-based fallback stands: the fields are reported as they were found, and
+   * the refusal happens loudly at the write (`requireActiveField`), rather than this method quietly
+   * reporting a page with no active form at all.
+   *
    * Worth being explicit about the limit of this: the geometry answer comes from the page, so a
    * page can steer which of its own forms is treated as active by rendering a larger one. That is a
    * real property, and it is deliberately accepted. It does not widen what this executor can be
@@ -246,11 +315,22 @@ export class ApplicationExecutor {
       ...(extracted.dominantFormScope !== undefined ? { formScope: extracted.dominantFormScope } : {}),
       renderedByRef: new Map<string, boolean>(),
     };
-    if (extracted.fieldGroups.length <= 1) return fallback;
+    const eligible = extracted.fieldGroups.filter((group) =>
+      isFrameFillAllowed(this.policy, extracted.topFrameOrigin, group.frameOrigin),
+    );
+    if (eligible.length === 0) return fallback;
+    if (eligible.length === 1) {
+      const only = eligible[0] as FieldGroup;
+      return {
+        frameId: only.frameId,
+        ...(only.formScope !== undefined ? { formScope: only.formScope } : {}),
+        renderedByRef: new Map<string, boolean>(),
+      };
+    }
 
     const renderedByRef = new Map<string, boolean>();
     const rendered: FieldGroup[] = [];
-    for (const group of extracted.fieldGroups) {
+    for (const group of eligible) {
       const isRendered = await this.isNodeRendered(group.containerNodeId);
       if (isRendered === undefined) continue;
       for (const fieldRef of group.fieldRefs) renderedByRef.set(fieldRef, isRendered);
@@ -356,6 +436,7 @@ export class ApplicationExecutor {
     }
     this.#generation += 1;
     this.#nodeIds = state.extracted.nodeIds;
+    this.#topFrameOrigin = state.extracted.topFrameOrigin;
     // A fresh read means fresh refs: every verification recorded against the previous generation
     // describes controls this snapshot no longer names. Dropped rather than carried forward, so a
     // "verified" claim can never outlive the read it was made against.
@@ -368,6 +449,7 @@ export class ApplicationExecutor {
       challengeDetected: state.extracted.challengeDetected,
       activeFrameId: state.activeFrameId,
       ...(state.activeFormScope !== undefined ? { activeFormScope: state.activeFormScope } : {}),
+      ...(state.extracted.topFrameOrigin !== undefined ? { topFrameOrigin: state.extracted.topFrameOrigin } : {}),
       pageStateFingerprint: state.fingerprint,
     };
     this.#currentSnapshot = result;
@@ -410,11 +492,34 @@ export class ApplicationExecutor {
     return verification;
   }
 
-  /** Refuses any write to a field that is not part of the active form (#277). A field found in a
-   * hidden duplicate frame, a decoy copy, or an unrelated form on the same page has a perfectly
-   * ordinary label and type -- being findable has never been evidence that it is the control an
-   * applicant would have typed into. */
+  /**
+   * Refuses any write to a field in a frame this policy does not authorize writing to: one whose
+   * origin differs from the top document's and is named neither in the policy's own `origins` nor
+   * in its `allowedSubFrameOrigins`.
+   *
+   * Checked here, at the write itself, and not only during active-group resolution, because the two
+   * answer different questions. Resolution decides which form a person is looking at, and a page
+   * where *every* group is cross-origin leaves it nothing to choose between -- so it keeps the
+   * count-based fallback and lets this refuse. Refusing is also the deliberate behaviour rather than
+   * skipping: a field that is silently left blank looks identical to one nobody had an answer for,
+   * and the whole point is that an answer was about to be typed into a third party's document.
+   */
+  private requireFillableFrame(action: string, field: SnapshotField): void {
+    if (isFrameFillAllowed(this.policy, this.#topFrameOrigin, field.frameOrigin)) return;
+    throw new ExecutorPolicyError(
+      action,
+      `fieldRef ${field.fieldRef} is in a cross-origin frame (frame ${field.frameId}, origin ${field.frameOrigin ?? 'unknown'}` +
+        `, top document ${this.#topFrameOrigin ?? 'unknown'}) that policy "${this.policy.id}" does not allow a fill into`,
+    );
+  }
+
+  /** Refuses any write to a field that is not part of the active form (#277), and -- before that --
+   * any write into a frame the policy does not authorize at all (see `requireFillableFrame`). A
+   * field found in a hidden duplicate frame, a decoy copy, an unrelated form on the same page, or a
+   * third party's embedded widget has a perfectly ordinary label and type -- being findable has
+   * never been evidence that it is the control an applicant would have typed into. */
   private requireActiveField(action: string, field: SnapshotField): void {
+    this.requireFillableFrame(action, field);
     if (field.active) return;
     throw new ExecutorPolicyError(
       action,

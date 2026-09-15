@@ -76,6 +76,13 @@ export type SafeHttpGetOptions = {
   allowedOrigins?: readonly string[];
   /** Bypass both cache reads and writes for source contracts that prohibit raw-response retention. */
   cache?: 'default' | 'no-store';
+  /**
+   * May only reduce the constructor retry policy, never raise it -- a per-request option that could
+   * widen the client's own ceiling would make that ceiling meaningless. Use zero for feeds with long
+   * server cooldowns, and a small number for a request someone is actively waiting on, where failing
+   * honestly and early beats a retry ladder that outlives their patience.
+   */
+  maxRetries?: number;
 };
 
 export type SafeHttpStreamGetOptions = SafeHttpGetOptions & {
@@ -83,8 +90,6 @@ export type SafeHttpStreamGetOptions = SafeHttpGetOptions & {
   timeoutMs: number;
   /** Hard decoded-body limit. Required so bulk transfers are always explicitly bounded. */
   maxResponseBytes: number;
-  /** May only reduce the constructor retry policy; use zero for feeds with long server cooldowns. */
-  maxRetries?: number;
   /** Called synchronously while the scheduler slot is held. Throwing cancels the response body. */
   onChunk: (chunk: Uint8Array, signal: AbortSignal) => void;
 };
@@ -581,6 +586,12 @@ export class SafeHttpClient {
     options: SafeHttpGetOptions,
     useCache: boolean,
   ): Promise<SafeHttpResponse> {
+    // Validated before anything reaches the network, so a caller that asks for a retry policy this
+    // client cannot honour fails as the programming error it is rather than after a DNS round trip.
+    const maxRetries = positiveInteger(options.maxRetries ?? this.#maxRetries, 'maxRetries', true);
+    if (maxRetries > this.#maxRetries) {
+      throw new RangeError(`maxRetries must not exceed ${this.#maxRetries}`);
+    }
     const preflightDeadline = this.#now() + this.#timeoutMs;
     const requestedUrl = await this.#awaitBeforeDeadline(
       validatePublicHttpUrl(input, this.#resolver),
@@ -611,6 +622,7 @@ export class SafeHttpClient {
       (response, requestUrl, controller) =>
         readBoundedBody(response, this.#maxResponseBytes, requestUrl, controller),
       this.#timeoutMs,
+      maxRetries,
     );
 
     if (result.kind === 'not_modified') {

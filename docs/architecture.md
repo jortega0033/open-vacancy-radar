@@ -95,16 +95,24 @@ user. See [SECURITY.md](../SECURITY.md#what-this-does-not-claim-to-protect-again
 
 ## Why a separate daemon instead of running the CLI logic in Electron's main process
 
-Three reasons, in order of importance:
+See [adr-daemon-process-boundary.md](adr-daemon-process-boundary.md) for the full decision record,
+including the file:line evidence and an open question for the product owner. In short, three
+properties actually depend on the daemon being a separate OS process (in order of importance):
 
-1. **A malicious webpage should never be able to run a coding agent on your machine.** Keeping
-   agent execution behind an HTTP+token boundary (see [SECURITY.md](../SECURITY.md)) is a much
-   smaller, more auditable surface than "whatever the renderer/main process can reach."
-2. **The daemon has to outlive one specific UI.** A VS Code extension, a CLI client, or a second
-   desktop shell should all be able to talk to the same daemon over the same HTTP+SSE API without
-   re-implementing process management.
-3. **Testability.** `pnpm daemon` runs and can be curled directly, with no Electron, no display
-   server, and no GUI test harness required.
+1. **Crash isolation.** A daemon crash surfaces as a renderer-visible status, not a crash of all of
+   Electron main.
+2. **Process-tree-kill-on-cancel.** Cancellation kills the CLI's whole process tree as a group; this
+   is implemented and tested against the current daemon/CLI process topology.
+3. **Potential upstream/multi-frontend reuse.** A VS Code extension, a CLI client, or a second
+   desktop shell could in principle talk to the same daemon over the same HTTP+SSE API without
+   re-implementing process management — the ADR flags whether a real second consumer exists today
+   or this is still aspirational.
+
+Testability is a side benefit, not a driver: `pnpm daemon` runs and can be curled directly, with no
+Electron, no display server, and no GUI test harness required. **Note:** `SECURITY.md`'s bearer
+token / main-renderer secrecy rationale is a real property of this design but, on its own, does not
+require an OS-process boundary — see the ADR for why it should not be cited as the reason for this
+decision.
 
 ## Runtime flow: what happens when a user presses "Run"
 

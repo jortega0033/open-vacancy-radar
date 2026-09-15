@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LettersPage } from '../../../src/components/letters/index.js';
 import { installBridges } from '../../cv-bridges.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
-import { LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
+import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
 
 function setup(workspace: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   const bridges = installBridges();
@@ -84,7 +84,8 @@ describe('LettersPage', () => {
     fireEvent.click(generate);
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, generated text.' });
+    // A fact selection, not prose: the generator assembles the letter from it (F-J).
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
     fireEvent.click(await screen.findByRole('button', { name: /save letter/i }));

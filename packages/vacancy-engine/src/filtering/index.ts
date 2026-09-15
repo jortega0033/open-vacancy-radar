@@ -1,5 +1,4 @@
 export {
-  DETERMINISTIC_SCORING_VERSION,
   RELEVANCE_THRESHOLD,
   isDeterministicallyRelevant,
   plainText,

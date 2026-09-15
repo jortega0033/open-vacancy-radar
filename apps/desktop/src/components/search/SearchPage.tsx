@@ -92,6 +92,9 @@ export function selectedVacancyFor(result: SearchResult): SelectedVacancy {
  * deterministic relevance score (a real 0-100 figure against the engine's configured candidate
  * profile) and stays null when scoring didn't run for this vacancy. It is not a comparison against
  * any CV in the library; the only real CV comparison in this app is the on-demand gap analysis.
+ * `arrangement` seeds from the discovery result's own `employmentType`, staying null when the
+ * source carried none -- `SavedJobDrawer`'s manual edit is the only thing that writes it after
+ * that, so this is a one-time save-time default, never re-applied over a user's own value.
  */
 export function savedJobInputFor(result: SearchResult): SavedJobInput {
   return {
@@ -100,6 +103,7 @@ export function savedJobInputFor(result: SearchResult): SavedJobInput {
     location: result.location ?? '',
     vacancyKey: result.key,
     salary: result.salary,
+    arrangement: result.employmentType,
     verification: result.verification.label,
     matchPercent: result.profileScore,
     // The renderer refuses to link a non-http(s) URL, so it must not persist one either.

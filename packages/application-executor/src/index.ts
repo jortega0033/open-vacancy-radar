@@ -30,7 +30,7 @@ export type { AxControlState, CdpAxNode, CdpAxValue, CdpAxProperty, CdpPartialAx
 
 export { resolveSubmitControl } from './submit-control.js';
 
-export { isNavigationAllowed, isActionAllowed } from './target-policy.js';
+export { isNavigationAllowed, isActionAllowed, isFrameFillAllowed } from './target-policy.js';
 export type { ExecutorAction, ApplicationTargetPolicy } from './target-policy.js';
 
 export { ALLOWED_CDP_METHODS, DENIED_CDP_DOMAINS, isAllowedCdpMethod, assertAllowedCdpMethod, CdpMethodNotAllowedError } from './cdp-allowlist.js';
@@ -38,7 +38,7 @@ export { ALLOWED_CDP_METHODS, DENIED_CDP_DOMAINS, isAllowedCdpMethod, assertAllo
 export { validateFieldMap } from './validate.js';
 export type { ValueProvenance, ValueTableEntry, FieldMapRefusalReason, ValidateFieldMapInput, ValidateFieldMapResult } from './validate.js';
 
-export { ApplicationExecutor, ExecutorPolicyError, SUBMISSION_OBSERVE_TIMEOUT_MS, SUBMISSION_OBSERVE_POLL_INTERVAL_MS } from './executor.js';
+export { ApplicationExecutor, ExecutorPolicyError, ExecutorTimeoutError, SUBMISSION_OBSERVE_TIMEOUT_MS, SUBMISSION_OBSERVE_POLL_INTERVAL_MS } from './executor.js';
 export type { CdpTransport, HandoffReason, HandoffResult } from './executor.js';
 
 export { extractSnapshotFields, extractSubmissionSignals, MAX_OBSERVED_PAGE_TEXT_LENGTH } from './dom-extract.js';

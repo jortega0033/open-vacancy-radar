@@ -620,7 +620,12 @@ export interface AppSettingsRecord {
   sidebarCollapsed: boolean;
   lastOpenedPage: string;
   minimizeToTrayOnClose: boolean;
+  welcomeSeen: boolean;
   autoScanEnabled: boolean;
+  /** The auto-apply kill switch (off for this MVP release). Read by main.ts at startup and handed
+   * to `application-target-policies.ts`; never writable from the renderer -- `parseSettingsPatch`
+   * does not accept it. See `schema.ts`'s comment on the column for the full reasoning. */
+  autoApplyEnabled: boolean;
   defaultLocation: string;
   defaultCvId: string | null;
   defaultLetterType: LetterType;
@@ -647,11 +652,14 @@ export interface DeleteResult {
   deleted: boolean;
 }
 
-/** Sidebar badge counts. `activeApplications` excludes archived rows, matching the nav badge. */
+/** Sidebar badge counts. `activeApplications` excludes archived rows, matching the nav badge.
+ * `cvDocuments` also doubles as the cheap "is the CV library empty" check the Welcome modal's
+ * first-launch gate needs -- an id-only count, not a fetch of every CV's full extracted text. */
 export interface WorkspaceCounts {
   savedJobs: number;
   activeApplications: number;
   letters: number;
+  cvDocuments: number;
 }
 
 /** Result of the main-process-owned destructive reset. */

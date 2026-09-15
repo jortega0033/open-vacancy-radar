@@ -125,6 +125,62 @@ describe('discoverHimalayas', () => {
       expect.objectContaining({ provider: 'himalayas', postedAt: '2026-08-31T15:09:48.000Z' }),
     ]);
   });
+
+  it('reads the description the search response already carries, converted to plain text', async () => {
+    // Real-world regression: "Prepare application" refused every live Himalayas result with "no job
+    // description was captured", even though the search API response this adapter already fetches
+    // carries a full description for every row -- this adapter just never read it.
+    const routes = new Map([
+      [
+        'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+        JSON.stringify({
+          jobs: [{
+            guid: 'himalayas-1',
+            title: 'Frontend Engineer',
+            companyName: 'Himalayas Co',
+            applicationLink: 'https://himalayas.app/jobs/himalayas-1',
+            description: '<h3>About us</h3><p>We build things.</p><p>Second paragraph.</p>',
+          }],
+          totalCount: 1,
+        }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const result = await discoverHimalayas(http, config({ himalayasQueries: [] }));
+
+    expect(result.vacancies).toEqual([
+      expect.objectContaining({
+        provider: 'himalayas',
+        // htmlToText keeps the block-boundary whitespace (see additional-discovery.ts's own
+        // regression note): "About usWe build things.Second paragraph." with no separator at all
+        // would be the bug this guards against.
+        description: 'About us\n\nWe build things.\n\nSecond paragraph.',
+      }),
+    ]);
+  });
+
+  it('leaves description null, not an empty string, when the response carries none', async () => {
+    const routes = new Map([
+      [
+        'https://himalayas.app/jobs/api/search?sort=salaryDesc&page=1',
+        JSON.stringify({
+          jobs: [{
+            guid: 'himalayas-2',
+            title: 'Backend Engineer',
+            companyName: 'Himalayas Co',
+            applicationLink: 'https://himalayas.app/jobs/himalayas-2',
+          }],
+          totalCount: 1,
+        }),
+      ],
+    ]);
+    const http = new FixtureHttpClient(routes);
+
+    const result = await discoverHimalayas(http, config({ himalayasQueries: [] }));
+
+    expect(result.vacancies).toEqual([expect.objectContaining({ description: null })]);
+  });
 });
 
 describe('discoverJobicy', () => {

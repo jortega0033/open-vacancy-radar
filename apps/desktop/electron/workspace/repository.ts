@@ -10,7 +10,7 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
 import type { WorkspaceDb } from './client.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
@@ -256,6 +256,11 @@ export function deleteSavedJob(db: WorkspaceDb, id: string): DeleteResult {
   // `applications.saved_job_id` is `on delete set null`, so any application created from this
   // saved job survives as a standalone row. The prototype's "deleting a saved job detaches
   // applications" behavior falls straight out of the schema.
+  //
+  // Note this is a detach, not a data change: `applications.role`/`company`/`location`/
+  // `verification` were already frozen snapshots taken at creation time (see the doc comment on
+  // the `applications` table in `schema.ts`), so deleting the saved job here does not touch them --
+  // it only clears the link.
   const removed = db.delete(savedJobs).where(eq(savedJobs.id, id)).returning({ id: savedJobs.id }).all();
   return { deleted: removed.length > 0 };
 }
@@ -592,19 +597,15 @@ const PREPARED_FIELD_PROVENANCES: readonly PreparedFieldProvenance[] = ['cv', 'p
 
 /**
  * Reads the `prepared_fields` JSON column back into a record, or `null` for anything this build
- * cannot interpret -- an empty column (every attempt from before #272), malformed JSON, or a
- * future shape. Fail-closed rather than partially-parsed on purpose: this is what a review renders
- * as "the answers committed for this application", and half a record read as a whole one would be
- * a claim nothing checked.
+ * cannot interpret -- `null` itself (every attempt from before #272, and every row this app has
+ * cleared since), or a future/malformed shape. Fail-closed rather than partially-parsed on
+ * purpose: this is what a review renders as "the answers committed for this application", and half
+ * a record read as a whole one would be a claim nothing checked.
+ *
+ * Drizzle's `mode: 'json'` already turns the stored text into a value here -- this function's job
+ * is validating that value against the shape this build understands, not parsing JSON itself.
  */
-function parsePreparedApplicationFields(raw: string): PreparedApplicationFields | null {
-  if (raw.trim().length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
+function parsePreparedApplicationFields(parsed: unknown): PreparedApplicationFields | null {
   if (typeof parsed !== 'object' || parsed === null) return null;
   const source = parsed as Record<string, unknown>;
   if (source.version !== 1 || source.verification !== 'applied') return null;
@@ -731,9 +732,8 @@ export interface ApplicationIdentityQuery {
 }
 
 /**
- * Decides which already-completed attempts count as the same application as `identity`, in
- * descending confidence order. Pure, so the precedence rule is readable in one place and testable
- * without a database.
+ * Decides which rows count as the same application as `identity`, in descending confidence order.
+ * Pure, so the precedence rule is readable in one place and testable without a database.
  *
  * The precedence matters more than it looks. A requisition match is an assertion by the receiving
  * ATS that these are the same opening, and it holds across sources, spreadsheets and re-listings.
@@ -750,8 +750,13 @@ export interface ApplicationIdentityQuery {
  *
  * `employerKey` never matches on its own. Two openings at one employer share it, and #275 requires
  * the second one to stay eligible.
+ *
+ * Used both by #275's completed-application lookup and, since the audit that found the concurrency
+ * guard's raw `vacancyKey`/`canonicalUrl` equality missed the same re-import case #275 fixed, by
+ * #198's in-progress concurrency guard in `createApplicationAttempt`. Both callers compare against
+ * the same normalized identity -- only the row set (which checkpoints are in scope) differs.
  */
-function completedMatches(
+function identityMatches(
   rows: readonly CompletedCandidateRow[],
   identity: CompletedLookupIdentity,
 ): { row: CompletedCandidateRow; matchedOn: CompletedApplicationMatch['matchedOn'] }[] {
@@ -804,7 +809,7 @@ export function findCompletedApplications(
     .where(inArray(applicationAttempts.checkpoint, COMPLETED_ATTEMPT_CHECKPOINTS))
     .orderBy(desc(applicationAttempts.createdAt))
     .all();
-  return completedMatches(rows, lookupIdentity(input)).map(toCompletedMatch);
+  return identityMatches(rows, lookupIdentity(input)).map(toCompletedMatch);
 }
 
 /** The newest completed application at this identity, or undefined when there is none. */
@@ -831,9 +836,14 @@ function lookupIdentity(input: ApplicationIdentityQuery): CompletedLookupIdentit
  *
  * **#198's concurrency guard.** Refuses a second *concurrent* attempt for the same vacancy while an
  * existing one is still in a non-terminal checkpoint (see `NON_TERMINAL_ATTEMPT_CHECKPOINTS`),
- * unless `input.force` is set. "Same vacancy" is `vacancyKey` when the attempt has one (the normal
- * case, a real discovery-report row); `canonicalUrl` is the fallback for a manually-entered target
- * with no report key. Unchanged by #275, and still the only thing `force` gets past.
+ * unless `input.force` is set. "Same vacancy" is the same normalized requisition identity #275's
+ * completed-application guard already compares on (`identityMatches`, above) -- originally this
+ * guard matched raw `vacancyKey`/`canonicalUrl` equality only, which let the same real requisition
+ * re-imported from a second source (a different `vacancyKey`, or the same URL with different
+ * tracking parameters -- exactly the case `application-identity.ts` was built to catch) start a
+ * second, independent attempt while the first was still mid-preparation or awaiting review. Fixed
+ * by reusing the same identity comparison here; the checkpoint scope and `force`'s bypass are
+ * otherwise unchanged by that fix. Still the only thing `force` gets past.
  *
  * **#275's completed-application guard.** Refuses an ordinary new attempt when an earlier attempt
  * at the same *requisition* already reached the employer -- `submitted`, or `submission_unknown`
@@ -851,23 +861,18 @@ export function createApplicationAttempt(db: WorkspaceDb, input: ApplicationAtte
   const identity = lookupIdentity(input);
   return db.transaction((tx) => {
     if (!input.force) {
-      const vacancyIdentity =
-        input.vacancyKey !== null && input.vacancyKey !== undefined
-          ? eq(applicationAttempts.vacancyKey, input.vacancyKey)
-          : input.canonicalUrl
-            ? eq(applicationAttempts.canonicalUrl, input.canonicalUrl)
-            : undefined;
-      if (vacancyIdentity) {
-        const existing = tx
-          .select({ id: applicationAttempts.id })
+      const inProgress = identityMatches(
+        tx
+          .select(COMPLETED_MATCH_COLUMNS)
           .from(applicationAttempts)
-          .where(and(vacancyIdentity, inArray(applicationAttempts.checkpoint, NON_TERMINAL_ATTEMPT_CHECKPOINTS)))
-          .get();
-        if (existing) throw new ApplicationAttemptDuplicateError(existing.id);
-      }
+          .where(inArray(applicationAttempts.checkpoint, NON_TERMINAL_ATTEMPT_CHECKPOINTS))
+          .all(),
+        identity,
+      );
+      if (inProgress[0]) throw new ApplicationAttemptDuplicateError(inProgress[0].row.id);
     }
 
-    const completed = completedMatches(
+    const completed = identityMatches(
       tx
         .select(COMPLETED_MATCH_COLUMNS)
         .from(applicationAttempts)
@@ -1011,12 +1016,51 @@ export function recordPreparedApplicationFields(
 ): ApplicationAttemptRecord {
   const [row] = db
     .update(applicationAttempts)
-    .set({ preparedFields: prepared === null ? '' : JSON.stringify(prepared), updatedAt: new Date() })
+    .set({ preparedFields: prepared, updatedAt: new Date() })
     .where(eq(applicationAttempts.id, id))
     .returning()
     .all();
   if (!row) throw new WorkspaceNotFoundError('application attempt', id);
   return toApplicationAttempt(row);
+}
+
+/**
+ * Records a job description fetched on demand, after the scan itself captured none, so "Prepare
+ * application" can proceed instead of refusing. Kept out of `ApplicationAttemptPatch` for the same
+ * reason `recordPreparedApplicationFields` is: only the pipeline itself -- never a renderer patch --
+ * may claim a description was genuinely read from the source, since `jdSnapshotHash` is what the
+ * pre-submit gate trusts later.
+ *
+ * Guarded on `checkpoint === 'reading_jd'`, the same way `restartApplicationTailoring` guards on
+ * `'needs_user'`: the fetch this writes for can take real seconds, and an attempt can be cancelled
+ * or reset while it is in flight. Without the guard, a slow fetch landing after that would silently
+ * repopulate `jdSnapshot` on an attempt the user believed was cancelled. Returns `null` rather than
+ * throwing when the guard trips -- this is an expected race, not a caller error -- so
+ * `runApplicationAttempt` can tell "written" apart from "the attempt moved on, don't trust this
+ * result for the rest of this run either."
+ */
+export function recordFetchedJobDescription(
+  db: WorkspaceDb,
+  id: string,
+  fields: { jdSnapshot: string; jdSnapshotHash: string; jdComplete: boolean },
+): ApplicationAttemptRecord | null {
+  return db.transaction((tx) => {
+    const current = tx
+      .select({ checkpoint: applicationAttempts.checkpoint })
+      .from(applicationAttempts)
+      .where(eq(applicationAttempts.id, id))
+      .get();
+    if (!current) throw new WorkspaceNotFoundError('application attempt', id);
+    if (current.checkpoint !== 'reading_jd') return null;
+    const [row] = tx
+      .update(applicationAttempts)
+      .set({ ...fields, updatedAt: new Date() })
+      .where(eq(applicationAttempts.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('application attempt', id);
+    return toApplicationAttempt(row);
+  });
 }
 
 /** Records the person's explicit recovery choice before a failed tailoring run is queued again.
@@ -1040,7 +1084,7 @@ export function restartApplicationTailoring(
     tx.delete(applicationArtifacts).where(eq(applicationArtifacts.attemptId, id)).run();
     const [row] = tx
       .update(applicationAttempts)
-      .set({ tailoringMode, checkpoint: 'queued', checkpointDetail: '', preparedFields: '', updatedAt: new Date() })
+      .set({ tailoringMode, checkpoint: 'queued', checkpointDetail: '', preparedFields: null, updatedAt: new Date() })
       .where(eq(applicationAttempts.id, id))
       .returning()
       .all();
@@ -1350,7 +1394,9 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     sidebarCollapsed: row.sidebarCollapsed,
     lastOpenedPage: row.lastOpenedPage,
     minimizeToTrayOnClose: row.minimizeToTrayOnClose,
+    welcomeSeen: row.welcomeSeen,
     autoScanEnabled: row.autoScanEnabled,
+    autoApplyEnabled: row.autoApplyEnabled,
     defaultLocation: row.defaultLocation,
     defaultCvId: row.defaultCvId,
     defaultLetterType: row.defaultLetterType,
@@ -1436,5 +1482,6 @@ export function getCounts(db: WorkspaceDb): WorkspaceCounts {
       .where(eq(applications.archived, false))
       .all().length,
     letters: db.select({ id: letters.id }).from(letters).all().length,
+    cvDocuments: db.select({ id: cvDocuments.id }).from(cvDocuments).all().length,
   };
 }

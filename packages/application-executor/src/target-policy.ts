@@ -37,6 +37,22 @@ export interface ApplicationTargetPolicy {
    * scheme is `file:`. Local/fixture-testing only (issue #201's own fixture policy is the only
    * real user of this today) -- a real employer target is never `file://`. */
   exactFileUrls?: readonly string[];
+  /**
+   * Sub-frame origins this policy authorizes a *field fill* into, beyond the target's own
+   * `origins`. Empty (absent) by default, and deliberately separate from `origins`: navigating the
+   * top-level view to an origin and typing an applicant's real answers into a third party's
+   * embedded widget are different grants, and the second one is the dangerous one.
+   *
+   * The case this exists for is the legitimate one -- an employer page that hosts its actual
+   * application form in an ATS vendor's iframe, where refusing every cross-origin frame outright
+   * would make the target permanently unfillable. Everything else a real careers page embeds (a
+   * chat widget, a cookie-consent banner, a job-alert signup, an ad) is a third party whose fields
+   * carry perfectly ordinary labels, and `Input.insertText` fires real DOM events that such a
+   * widget's own script reads live -- so a wrong-frame fill hands real answers to code the target
+   * site does not control. Like every other field on this shape, an entry here is a reviewed code
+   * change to a compiled policy, never configuration.
+   */
+  allowedSubFrameOrigins?: readonly string[];
   adapter: string;
   termsRegisterEntry: string;
   termsVersion: string;
@@ -65,6 +81,12 @@ export interface ApplicationTargetPolicy {
    */
   termsEligibleForAutomation: boolean;
   maxSteps: number;
+  /** The bound `executor.ts`'s `send()` races every individual CDP call against (`withTimeout`),
+   * so a target whose page stops answering (a hung navigation, a renderer wedged behind a modal
+   * CDP itself never reports) fails the in-flight step with an `ExecutorTimeoutError` rather than
+   * leaving the caller awaiting a command that may never resolve. Per-call, not per-attempt: a
+   * multi-step attempt that legitimately takes longer than this in total is not itself timed out,
+   * only a single CDP round trip that individually exceeds it. */
   timeoutMs: number;
   maximumSnapshotBytes: number;
 }
@@ -88,6 +110,44 @@ export function isNavigationAllowed(policy: ApplicationTargetPolicy, url: string
     return (policy.exactFileUrls ?? []).includes(url);
   }
   return policy.origins.includes(parsed.origin);
+}
+
+/**
+ * Whether a field living in a frame whose origin is `frameOrigin` may be written to at all, given
+ * the top document's own origin. The companion to `isNavigationAllowed` above and deliberately not
+ * the same check: that one answers "may the view go here?", this one answers "may an applicant's
+ * real answer be typed into this particular document?" -- a question nothing in this package used
+ * to ask, so the frame holding the most fields won the active-form contest on field count and
+ * geometry alone, no matter whose document it was.
+ *
+ * The four ways a frame passes, in order:
+ *
+ *  - Its origin is unknown (`undefined`). That is not a permissive guess: `dom-extract.ts` returns
+ *    `undefined` only when nothing in the read distinguished this frame's origin from its
+ *    embedder's -- an `<iframe>` with no `src`, an `<iframe srcdoc>`, a relative `src`, or a
+ *    hand-built tree carrying no URLs at all. Every one of those genuinely *is* the embedder's
+ *    origin, and refusing them would break same-origin pages to no benefit.
+ *  - It matches the top document's own origin, the ordinary same-origin frame.
+ *  - It is one of the policy's own `origins`. Those are the origins a human reviewer already
+ *    authorized this target to span, in code, in a PR -- a frame served from one of them is the
+ *    target's own content, not a third party.
+ *  - It is explicitly listed in `allowedSubFrameOrigins`, the narrow grant described on that field.
+ *
+ * An opaque origin (`"null"`, what a `data:` or sandboxed document serializes to) is refused before
+ * any of that: an opaque origin is not same-origin with anything, including another document whose
+ * origin serializes to the same four characters, so comparing it by string equality would be a bug
+ * dressed as a check.
+ */
+export function isFrameFillAllowed(
+  policy: ApplicationTargetPolicy,
+  topFrameOrigin: string | undefined,
+  frameOrigin: string | undefined,
+): boolean {
+  if (frameOrigin === undefined) return true;
+  if (frameOrigin === 'null') return false;
+  if (topFrameOrigin !== undefined && frameOrigin === topFrameOrigin) return true;
+  if (policy.origins.includes(frameOrigin)) return true;
+  return (policy.allowedSubFrameOrigins ?? []).includes(frameOrigin);
 }
 
 export function isActionAllowed(policy: ApplicationTargetPolicy, action: ExecutorAction): boolean {

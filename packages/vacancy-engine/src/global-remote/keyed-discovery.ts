@@ -310,7 +310,12 @@ async function discoverJobsPipe(
         currency: null,
         salaryPeriod: null,
         advertisedMinimum: null,
-        description: stringValue(job.seniority),
+        // `job.seniority` (a short level label, e.g. "Senior") used to be passed off as the job
+        // description -- silently corrupting CV-tailoring/cover-letter grounding with a single
+        // plausible-looking wrong word instead of the real posting text. This API has no free-text
+        // description field, so `null` (the "we don't have this" convention every other source uses
+        // when a description is genuinely absent) is the honest value here.
+        description: null,
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];

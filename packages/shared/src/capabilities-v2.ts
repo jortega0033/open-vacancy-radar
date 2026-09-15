@@ -204,14 +204,14 @@ export function parseOpaqueExtensions(raw: unknown): readonly OpaqueExtension[] 
 /**
  * The model-selection extension id, written out as a literal rather than imported.
  *
- * Its home is `packages/vacancy-agent-adapter/src/model-select.ts` (ADI-03), which owns the
- * resolver, the value schema, and the constraint builder. That package **depends on this one**, so
- * importing the constant back from it would create a cycle between the two workspace packages; the
- * literal is therefore duplicated here on purpose, and
- * `packages/vacancy-agent-adapter/test/model-select.test.ts` pins the two copies as equal. That
- * drift guard is the whole reason the duplication is acceptable: without it, the two packages could
- * silently disagree on the id string, and the daemon would answer `unsupported_capability` for the
- * one capability it actually implements.
+ * Its home is `packages/agent-runtime/src/policy/model-select.ts` (ADI-03; folded in from the
+ * former `@agent-dock/vacancy-agent-adapter` package), which owns the resolver, the value schema,
+ * and the constraint builder. `agent-runtime` **depends on this package**, so importing the constant
+ * back from it would create a cycle between the two workspace packages; the literal is therefore
+ * duplicated here on purpose, and `packages/agent-runtime/test/model-select.test.ts` pins the two
+ * copies as equal. That drift guard is the whole reason the duplication is acceptable: without it,
+ * the two packages could silently disagree on the id string, and the daemon would answer
+ * `unsupported_capability` for the one capability it actually implements.
  */
 export const MODEL_SELECT_CAPABILITY_ID = 'ext.open_vacancy_radar.model_select';
 
@@ -249,7 +249,7 @@ export function isCapabilityExtensionActive(id: string): boolean {
  * `id` is the provider-native model id/alias this repo passes straight through to a provider's own
  * CLI/RPC call, matching `ProviderStatus.availableModels`'s existing "pass through as-is" contract
  * (`provider.ts`) -- and exactly what `resolveModelSelection`
- * (`packages/vacancy-agent-adapter/src/model-select.ts`) resolves a model-select request against
+ * (`packages/agent-runtime/src/policy/model-select.ts`) resolves a model-select request against
  * once a caller maps a catalog down to `entry.id[]`. `displayName` is a human-readable label,
  * never itself passed to a provider. `isDefault` marks the model a provider would pick with no
  * explicit selection; a caller with a genuine need to know that is expected to have exactly one

@@ -179,8 +179,8 @@ type FeedFetchOutcome =
 /**
  * Fetches one feed page. A `304` means "empty, or unchanged since a conditional header we did not
  * send" per the documented contract -- treated as an empty page (zero items, no further pages)
- * rather than an error, exactly like `fetchAiDevJobDetail`'s `404` special-case in
- * `ai-dev-jobs-discovery.ts`.
+ * rather than an error, the same way a not-found status is treated as an absence rather than a
+ * failure elsewhere in this package's discovery adapters.
  */
 async function fetchFeedPage(
   http: AtsHttpClient,

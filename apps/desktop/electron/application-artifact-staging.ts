@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { BrowserWindow } from 'electron';
 import {
@@ -85,6 +85,24 @@ export class DocumentAcceptanceError extends Error {
   }
 }
 
+/**
+ * Thrown in place of a staged artifact when the caller's own `stillLive` check says the run that
+ * asked for this document no longer owns the attempt (see `application-pipeline.ts`'s "the
+ * preparation fence").
+ *
+ * A thrown error rather than a `null` return, for the same reason `DocumentAcceptanceError` is one:
+ * every staging function's contract is "a registered artifact, or an explanation", and a caller that
+ * forgot about a third possibility would otherwise carry on with a record it does not have. The
+ * pipeline catches this specific type and stops quietly; nothing else in the app produces it,
+ * because nothing else passes `stillLive`.
+ */
+export class StagingAbandonedError extends Error {
+  constructor(public readonly attemptId: string) {
+    super(`staging for attempt ${attemptId} was abandoned before its artifact was written`);
+    this.name = 'StagingAbandonedError';
+  }
+}
+
 function describeFindings(acceptance: DocumentAcceptance): string[] {
   return acceptance.findings.map((finding) => (finding.page === undefined ? finding.detail : `page ${finding.page}: ${finding.detail}`));
 }
@@ -112,6 +130,25 @@ export function documentKindForArtifact(kind: ApplicationArtifactKind): Document
   }
 }
 
+/**
+ * "Is the caller that asked for this document still the one entitled to write it?", re-asked on the
+ * trailing edge of the render rather than trusted from before it.
+ *
+ * Staging is the one path in this module with a genuinely unbounded gap between being asked for a
+ * document and producing it: `printHtmlToPdf` opens an offscreen `BrowserWindow`, loads a URL into
+ * it and waits for `printToPDF`, none of which this process can cancel or time out. A caller that
+ * checked its own fence before calling has therefore checked it minutes before anything durable
+ * happens, which is no check at all -- so the check has to come back down here, immediately before
+ * the four side effects in `writeAndRegisterArtifact` (delete a file, delete a row, write a file,
+ * insert a row), all of which replace whatever a *newer* run has already staged for the same
+ * attempt.
+ *
+ * Optional, and absent everywhere except the pipeline's fenced preparation path: the manual CV
+ * Library export and the tests that stage directly have no second run to lose a race with, and a
+ * missing check means "always live", exactly as before this existed.
+ */
+type StillLive = () => boolean;
+
 interface WriteAndRegisterOptions {
   db: WorkspaceDb;
   attemptId: string;
@@ -124,11 +161,16 @@ interface WriteAndRegisterOptions {
    * one, so that a later readiness or attachment step comparing against it is comparing against a
    * document something actually validated. */
   contentHash: string;
+  stillLive?: StillLive;
 }
 
 /** The write-to-disk-and-register half shared by every staging path below, after each one has
  * already produced and accepted the actual PDF bytes. */
 async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promise<ApplicationArtifactRecord> {
+  // Before the path is even computed, so an abandoned run leaves nothing at all behind: no file
+  // removed, no row deleted, no PDF written, no row inserted.
+  if (options.stillLive && !options.stillLive()) throw new StagingAbandonedError(options.attemptId);
+
   const storagePath = stagedArtifactPath(options.storageRoot, options.attemptId, options.contentHash, options.fileName);
   const workspaceKind = WORKSPACE_KIND[options.kind];
   const storageRoot = resolve(options.storageRoot);
@@ -148,8 +190,14 @@ async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promi
     workspace.deleteApplicationArtifact(options.db, artifact.id);
   }
 
-  await mkdir(join(options.storageRoot, options.attemptId), { recursive: true });
-  await writeFile(storagePath, options.pdf);
+  // A generated CV/letter PDF is as sensitive as anything in workspace.db itself -- it's the same
+  // CV text and contact info, just rendered. Mirror workspace.db's 0700/0600 hardening here too:
+  // `mkdir`'s `mode` applies to every directory level `recursive` creates, so this one call covers
+  // both `application-artifacts/` and its per-attempt subdirectory. POSIX-only in effect; a no-op
+  // on Windows, same posture as `workspace/client.ts`'s `secureDatabaseFiles`.
+  await mkdir(join(options.storageRoot, options.attemptId), { recursive: true, mode: 0o700 });
+  await writeFile(storagePath, options.pdf, { mode: 0o600 });
+  await chmod(storagePath, 0o600); // writeFile's own `mode` is masked by umask; this is not
 
   return workspace.createApplicationArtifact(options.db, {
     attemptId: options.attemptId,
@@ -177,6 +225,8 @@ export interface StageHtmlArtifactOptions {
    * Passed in rather than resolved here so this module stays free of an `app.getPath` import a
    * test would otherwise have to mock. */
   storageRoot: string;
+  /** Re-asked after the render, immediately before anything durable happens. See `StillLive`. */
+  stillLive?: StillLive;
 }
 
 /**
@@ -197,6 +247,7 @@ export async function stageHtmlArtifact(options: StageHtmlArtifactOptions): Prom
     storageRoot: options.storageRoot,
     pdf,
     contentHash: acceptance.contentHash,
+    ...(options.stillLive ? { stillLive: options.stillLive } : {}),
   });
 }
 
@@ -212,6 +263,8 @@ export interface StageTailoredResumeOptions {
   /** Employers the reviewed source CV attests to, so a genuine re-application to a previous
    * employer is not mistaken for a fabricated one. */
   verifiedEmployers?: readonly string[];
+  /** Re-asked after the render, immediately before anything durable happens. See `StillLive`. */
+  stillLive?: StillLive;
 }
 
 /**
@@ -228,6 +281,7 @@ export function stageTailoredResumeArtifact(options: StageTailoredResumeOptions)
     contract: resumeAcceptanceContract(options.resume, { target: options.target ?? null, verifiedEmployers: options.verifiedEmployers }),
     fileName: options.fileName ?? 'resume.pdf',
     storageRoot: options.storageRoot,
+    ...(options.stillLive ? { stillLive: options.stillLive } : {}),
   });
 }
 
@@ -242,6 +296,8 @@ export interface StageLetterOptions {
   target: DocumentTarget | null;
   storageRoot: string;
   fileName?: string;
+  /** Re-asked after the render, immediately before anything durable happens. See `StillLive`. */
+  stillLive?: StillLive;
 }
 
 /**
@@ -263,6 +319,7 @@ export function stageLetterArtifact(options: StageLetterOptions): Promise<Applic
     }),
     fileName: options.fileName ?? `${options.kind.replaceAll('_', '-')}.pdf`,
     storageRoot: options.storageRoot,
+    ...(options.stillLive ? { stillLive: options.stillLive } : {}),
   });
 }
 
@@ -281,6 +338,9 @@ export interface StageApplicationDocumentsOptions {
     title: string;
     body: string;
   }>;
+  /** Re-asked after each render, immediately before anything durable happens -- once per document,
+   * not once for the set, since every one of them is a separate unbounded render. See `StillLive`. */
+  stillLive?: StillLive;
 }
 
 export interface StageApplicationDocumentsResult {
@@ -313,6 +373,7 @@ export async function stageApplicationDocuments(options: StageApplicationDocumen
       storageRoot: options.storageRoot,
       target: options.target,
       verifiedEmployers: options.verifiedEmployers,
+      ...(options.stillLive ? { stillLive: options.stillLive } : {}),
     }),
   });
 
@@ -329,6 +390,7 @@ export async function stageApplicationDocuments(options: StageApplicationDocumen
         candidateName: options.resume.contact.name,
         target: options.target,
         storageRoot: options.storageRoot,
+        ...(options.stillLive ? { stillLive: options.stillLive } : {}),
       }),
     });
   }

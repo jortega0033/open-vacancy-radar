@@ -76,6 +76,9 @@ const GOOD_RESPONSE = JSON.stringify({
   professionalLanguage: 'English',
   strongestSkills: ['Angular', 'TypeScript'],
   additionalSkills: ['RxJS'],
+  targetRoles: ['Senior Frontend Engineer'],
+  consideredRoles: ['Frontend Architect'],
+  primaryCountry: 'Netherlands',
 });
 
 function dialog() {
@@ -115,6 +118,11 @@ describe('FillProfileFromCvDrawer', () => {
     expect(panel.getByLabelText('Strongest skills')).toHaveValue('Angular, TypeScript');
     expect(panel.getByLabelText('Location')).toHaveValue('Utrecht');
     expect(panel.getByLabelText('Additional skills')).toHaveValue('Jest');
+    // The CV library's own lightweight parse has no equivalent of these three, so they fall back to
+    // what the profile already holds rather than blanking.
+    expect(panel.getByLabelText('Target roles')).toHaveValue('Staff Engineer');
+    expect(panel.getByLabelText('Considered roles')).toHaveValue('Tech Lead');
+    expect(panel.getByLabelText('Country')).toHaveValue('Netherlands');
     expect(onApply).not.toHaveBeenCalled();
   });
 
@@ -145,7 +153,7 @@ describe('FillProfileFromCvDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Read CV' })).not.toBeInTheDocument();
   });
 
-  it('sends the CV text in the prompt and shows the six extracted fields for review', async () => {
+  it('sends the CV text in the prompt and shows the nine extracted fields for review', async () => {
     const bridges = installBridges();
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
 
@@ -155,7 +163,8 @@ describe('FillProfileFromCvDrawer', () => {
     const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0]?.prompt ?? '';
     expect(prompt).toContain('Senior Frontend Engineer at Redwood');
     expect(prompt).toContain('"strongestSkills"');
-    expect(prompt).toContain('"targetRoles"'); // named only to tell the model not to answer it
+    expect(prompt).toContain('"targetRoles"');
+    expect(prompt).toContain('"excludedRoleFamilies"'); // named only to tell the model not to answer it
 
     const panel = await waitFor(() => {
       const found = dialog();
@@ -169,6 +178,9 @@ describe('FillProfileFromCvDrawer', () => {
     expect(panel.getByLabelText('Professional language')).toHaveValue('English');
     expect(panel.getByLabelText('Strongest skills')).toHaveValue('Angular, TypeScript');
     expect(panel.getByLabelText('Additional skills')).toHaveValue('RxJS');
+    expect(panel.getByLabelText('Target roles')).toHaveValue('Senior Frontend Engineer');
+    expect(panel.getByLabelText('Considered roles')).toHaveValue('Frontend Architect');
+    expect(panel.getByLabelText('Country')).toHaveValue('Netherlands');
   });
 
   it("runs through the user's configured default provider, not a hardcoded Claude Code fallback", async () => {
@@ -199,7 +211,7 @@ describe('FillProfileFromCvDrawer', () => {
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
 
     const panel = dialog();
-    for (const label of ['Target roles', 'Considered roles', 'Excluded role families', 'Minimum monthly base (EUR)']) {
+    for (const label of ['Excluded role families', 'Minimum monthly base (EUR)']) {
       expect(panel.queryByLabelText(label)).not.toBeInTheDocument();
     }
   });
@@ -217,9 +229,12 @@ describe('FillProfileFromCvDrawer', () => {
     expect(panel.getByLabelText('Location')).toHaveValue('Utrecht');
     expect(panel.getByLabelText('Professional language')).toHaveValue('Dutch');
     expect(panel.getByLabelText('Strongest skills')).toHaveValue('React');
+    expect(panel.getByLabelText('Target roles')).toHaveValue('Staff Engineer');
+    expect(panel.getByLabelText('Considered roles')).toHaveValue('Tech Lead');
+    expect(panel.getByLabelText('Country')).toHaveValue('Netherlands');
   });
 
-  it('saves only the six reviewed fields, including edits the user made to them', async () => {
+  it('saves only the nine reviewed fields, including edits the user made to them', async () => {
     const bridges = installBridges();
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
     const onApply = vi.fn().mockResolvedValue(undefined);
@@ -239,7 +254,9 @@ describe('FillProfileFromCvDrawer', () => {
       location: 'Amsterdam, Netherlands',
       strongestSkills: ['Angular', 'TypeScript'],
       additionalSkills: ['RxJS'],
-      constraints: { professionalLanguage: 'English' },
+      targetRoles: ['Senior Frontend Engineer'],
+      consideredRoles: ['Frontend Architect'],
+      constraints: { professionalLanguage: 'English', primaryCountry: 'Netherlands' },
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -254,12 +271,9 @@ describe('FillProfileFromCvDrawer', () => {
       bridges,
       JSON.stringify({
         currentRole: 'Senior Frontend Engineer',
-        targetRoles: ['Engineering Manager'],
-        consideredRoles: ['VP Engineering'],
         excludedRoleFamilies: ['Support'],
-        primaryCountry: 'Germany',
         minimumMonthlyBaseEur: 12000,
-        constraints: { primaryCountry: 'Germany', minimumMonthlyBaseEur: 12000 },
+        constraints: { minimumMonthlyBaseEur: 12000 },
       }),
     );
     await waitFor(() => expect(dialog().getByLabelText('Current role')).toBeInTheDocument());
@@ -269,17 +283,18 @@ describe('FillProfileFromCvDrawer', () => {
     const patch = onApply.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(Object.keys(patch).sort()).toEqual([
       'additionalSkills',
+      'consideredRoles',
       'constraints',
       'currentRole',
       'experienceYears',
       'location',
       'strongestSkills',
+      'targetRoles',
     ]);
-    expect(Object.keys(patch.constraints as object)).toEqual(['professionalLanguage']);
-    // The user's own forward-looking answers were never even offered to the save.
-    expect(patch.targetRoles).toBeUndefined();
-    expect(patch.consideredRoles).toBeUndefined();
+    expect(Object.keys(patch.constraints as object).sort()).toEqual(['primaryCountry', 'professionalLanguage']);
+    // The user's own excluded-role-family and salary-floor answers were never even offered to the save.
     expect(patch.excludedRoleFamilies).toBeUndefined();
+    expect((patch.constraints as Record<string, unknown>).minimumMonthlyBaseEur).toBeUndefined();
   });
 
   it('keeps the drawer open and shows the failure inline when the save is rejected', async () => {
@@ -311,6 +326,49 @@ describe('FillProfileFromCvDrawer', () => {
 
     await waitFor(() => expect(dialog().getByRole('alert')).toHaveTextContent(/not valid JSON/));
     expect(dialog().getByRole('button', { name: 'Save to profile' })).toBeDisabled();
+  });
+
+  describe('autoStart', () => {
+    it('starts reading the auto-selected CV itself, with no "Read CV" click', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
+
+      render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} autoStart />);
+
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      expect(dialog().getByRole('button', { name: 'Read CV' })).toBeDisabled();
+
+      bridges.emit('sess-cv-1', { type: 'assistant.message', text: GOOD_RESPONSE });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+      await waitFor(() => expect(dialog().getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer'));
+    });
+
+    it('never restarts the run if the user changes the selected CV afterward', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([CV, { ...CV, id: 'cv-2', name: 'Second CV', isDefault: false }]),
+      });
+
+      render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} autoStart />);
+
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      fireEvent.change(dialog().getByLabelText('CV'), { target: { value: 'cv-2' } });
+
+      // Switching CVs does not itself start a second run -- autoStart only ever fires once, the
+      // moment a CV first becomes selected; picking a different one afterward is a manual choice
+      // the user still confirms with their own "Read CV" click, same as it would without autoStart.
+      expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing when the library is empty: no CV to auto-select, nothing to read', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]) });
+
+      render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} autoStart />);
+
+      await screen.findByText(/No CV in your library has any extracted text yet/);
+      expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -345,7 +403,7 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
     };
   }
 
-  it("sends a six-field patch, leaving the user's target roles, country and salary floor untouched", async () => {
+  it("sends a nine-field patch, leaving the user's excluded role families and salary floor untouched", async () => {
     const bridges = installBridges();
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]) });
     // The IPC merges the patch onto what is on disk (main.ts's `vacancy:save-search-profile`), so
@@ -375,17 +433,20 @@ describe('SearchProfileSection: filling from a CV merges into the profile', () =
       location: 'Amsterdam, Netherlands',
       strongestSkills: ['Angular', 'TypeScript'],
       additionalSkills: ['RxJS'],
-      constraints: { professionalLanguage: 'English' },
+      targetRoles: ['Senior Frontend Engineer'],
+      consideredRoles: ['Frontend Architect'],
+      constraints: { professionalLanguage: 'English', primaryCountry: 'Netherlands' },
     });
 
-    // The section re-renders from what the merge returned: the six bridged fields changed, and
-    // every field the user had set themselves survived.
+    // The section re-renders from what the merge returned: the nine bridged fields changed, and
+    // the two fields a CV has no signal for survived untouched.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByLabelText('Current role')).toHaveValue('Senior Frontend Engineer');
     expect(screen.getByLabelText('Strongest skills')).toHaveValue('Angular, TypeScript');
-    expect(screen.getByLabelText('Target roles')).toHaveValue('Staff Engineer');
-    expect(screen.getByLabelText('Considered roles')).toHaveValue('Tech Lead');
+    expect(screen.getByLabelText('Target roles')).toHaveValue('Senior Frontend Engineer');
+    expect(screen.getByLabelText('Considered roles')).toHaveValue('Frontend Architect');
     expect(screen.getByLabelText('Excluded role families')).toHaveValue('Sales');
+    expect(screen.getByLabelText('Country')).toHaveValue('Netherlands');
     expect(screen.getByLabelText('Name')).toHaveValue('Jane Doe');
     expect(onSaved).toHaveBeenCalled();
   });

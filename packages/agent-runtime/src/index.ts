@@ -40,3 +40,12 @@ export type {
   UnknownFrameKind,
 } from './providers/common/unknown-frames.js';
 export { PROVIDER_FRAME_BOUNDS, UnknownFrameLedger } from './providers/common/unknown-frames.js';
+
+// Folded in from the former `@agent-dock/vacancy-agent-adapter` package (issue #284's model-select
+// and stage-routing policy layer). It moved here rather than staying a standalone package because it
+// had exactly one dependency (`@agent-dock/shared`), no consumer outside the daemon-to-agent-runtime
+// path, and no subsystem of its own to front -- see the DX-audit ticket that ordered this fold for
+// the full reasoning. `src/policy/` keeps its own internal barrel (`policy/index.ts`) so its exported
+// surface is unchanged from what it was as a package; this just re-exports that surface through the
+// one barrel every other agent-runtime consumer already imports.
+export * from './policy/index.js';

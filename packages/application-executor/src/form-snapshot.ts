@@ -57,6 +57,20 @@ export interface SnapshotField {
    * only thing distinguishing them is the frame and form they live in.
    */
   frameId: number;
+  /**
+   * The security origin of the document this field was extracted from, when the read established
+   * one -- `undefined` when nothing distinguished this frame's origin from its embedder's (an
+   * `<iframe>` with no `src`, an `srcdoc`, a relative `src`), which is a genuinely same-origin
+   * shape rather than an unknown one.
+   *
+   * Carried this far up so that both halves of the write path can see it: `executor.ts` refuses a
+   * `fill`/`select`/`attach` into a frame the target policy does not authorize, and a field-mapping
+   * caller can tell a field on the employer's own page from one inside a third party's embedded
+   * widget before it proposes an answer for it. `frameId` alone cannot make that distinction -- a
+   * chat widget's "Your email" input and the application form's are the same field to a heuristic
+   * that only counts.
+   */
+  frameOrigin?: string;
   /** The `backendNodeId` of the nearest enclosing `<form>`, or `undefined` for a field that is not
    * inside one. The second half of a field's identity, alongside `frameId` -- see above. */
   formScope?: number;
@@ -104,6 +118,13 @@ export interface FormSnapshot {
   challengeDetected: boolean;
   /** The frame every `active` field was found in (#277). `0` is the top-level document. */
   activeFrameId: number;
+  /** The top document's own origin at the moment of the read, when it carried a URL to derive one
+   * from. The baseline every field's `frameOrigin` is judged against: a field whose frame origin
+   * differs from this one is in somebody else's document, and is refused a write unless the target
+   * policy names that origin explicitly. `undefined` on a read that established no baseline (a
+   * hand-built tree, a transport that reports no document URL), where the policy's own `origins`
+   * are the only authority left. */
+  topFrameOrigin?: string;
   /** The `<form>` (by `backendNodeId`) every `active` field was found in, or `undefined` when the
    * active fields are not inside a `<form>` element at all -- a real and common shape on a
    * JS-driven application page, and deliberately distinct from "no active form resolved". */
@@ -215,6 +236,10 @@ export function computePageStateFingerprint(input: PageStateFingerprintInput): s
         field.required,
         field.classification ?? null,
         field.frameId,
+        // Included for the same reason the frame id is: a frame that navigated somewhere else while
+        // keeping an identical set of inputs is a page that changed under whoever reviewed it, and
+        // it is precisely the change a freshness check must not miss.
+        field.frameOrigin ?? null,
         field.formScope ?? null,
         field.active,
         field.rendered ?? null,

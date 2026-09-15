@@ -66,7 +66,7 @@ export interface ProviderCapabilities {
    * tell them apart without writing `if (provider.id === 'claude')` somewhere outside
    * `packages/agent-runtime`.
    *
-   * Added by issue #284 so the stage router (`packages/vacancy-agent-adapter/src/stage-routing`)
+   * Added by issue #284 so the stage router (`packages/agent-runtime/src/policy/stage-routing`)
    * can refuse to *select* a provider for a stage whose contract requires this profile. It is
    * deliberately **not** what enforces that restriction at the daemon boundary:
    * `POST /sessions/application-field-map` keeps its own literal provider check, which exists

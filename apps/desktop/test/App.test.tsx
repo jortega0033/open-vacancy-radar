@@ -189,6 +189,21 @@ describe('App', () => {
     expect(screen.queryByRole('textbox', { name: /prompt/i })).not.toBeInTheDocument();
   });
 
+  it('hides AI Workspace from the sidebar: no nav entry and no route to AgentWorkspacePage', async () => {
+    // Per `.claude/ticket-drafts/draft-agent-workspace-mvp-scope.md`, the product owner decided
+    // Agent Workspace is not MVP surface and should be reachable in code but not in the UI ("flag
+    // off, don't delete"). `nav.ts`'s `SECONDARY_NAV` is where that's enforced; this asserts the
+    // shell actually reflects it, not just that the constant looks right in isolation.
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/claude code ready/i)).toBeInTheDocument());
+
+    expect(screen.queryByRole('button', { name: 'AI Workspace' })).not.toBeInTheDocument();
+    // The route itself is untouched -- `nav === 'agent-workspace'` in App.tsx still renders
+    // `AgentWorkspacePage` -- so this only fails if that conditional or the component were removed,
+    // never as a side effect of hiding the sidebar entry.
+    expect(screen.queryByRole('heading', { level: 1, name: 'AI Workspace' })).not.toBeInTheDocument();
+  });
+
   it("reflects the persisted default provider in the sidebar's runtime label", async () => {
     installBridge({
       listProviders: vi.fn().mockResolvedValue([
@@ -205,6 +220,9 @@ describe('App', () => {
         sidebarStart: 'remember_last',
         sidebarCollapsed: false,
         lastOpenedPage: 'search',
+        // This test is about the sidebar's provider label, not first launch: without it the
+        // welcome modal would open over the shell here purely because the literal omits the flag.
+        welcomeSeen: true,
         defaultLocation: '',
         defaultCvId: null,
         defaultLetterType: 'motivation_letter',
@@ -389,7 +407,7 @@ describe('App', () => {
       // No sidebar badge at all next to "Saved Jobs" -- not "0", nothing.
       expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs');
 
-      resolveCounts?.({ savedJobs: 3, activeApplications: 0, letters: 0 });
+      resolveCounts?.({ savedJobs: 3, activeApplications: 0, letters: 0, cvDocuments: 0 });
       await waitFor(() => expect(screen.getByText('3 saved')).toBeInTheDocument());
       expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs3');
     });
@@ -397,7 +415,7 @@ describe('App', () => {
     it('keeps the last successfully loaded counts, rather than resetting to zero, when a later refresh fails', async () => {
       // `mockResolvedValue` (not `Once`): both the mount fetch and the "Saved Jobs" click's own
       // re-sync (`handleNavigate` refreshes on every navigation) must see the real value.
-      const getCounts = vi.fn().mockResolvedValue({ savedJobs: 5, activeApplications: 0, letters: 0 });
+      const getCounts = vi.fn().mockResolvedValue({ savedJobs: 5, activeApplications: 0, letters: 0, cvDocuments: 0 });
       installWorkspaceBridge({ getCounts });
 
       render(<App />);
@@ -419,10 +437,10 @@ describe('App', () => {
         .fn()
         // Call 1: the initial mount fetch. Call 2: `handleNavigate`'s own re-sync fired by the
         // "Applications" click below -- both still see zero, since nothing has been created yet.
-        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0 })
-        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0 })
+        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 })
+        .mockResolvedValueOnce({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 })
         // Call 3 onward: what the create's own refresh (the fix under test) should see.
-        .mockResolvedValue({ savedJobs: 0, activeApplications: 1, letters: 0 });
+        .mockResolvedValue({ savedJobs: 0, activeApplications: 1, letters: 0, cvDocuments: 0 });
       const createApplication = vi.fn().mockResolvedValue({
         id: 'app-1',
         savedJobId: null,
@@ -528,7 +546,7 @@ describe('App', () => {
   });
 
   it('refreshes the saved jobs count after creating a saved job without navigating away', async () => {
-    const getCounts = vi.fn().mockResolvedValue({ savedJobs: 0, activeApplications: 0, letters: 0 });
+    const getCounts = vi.fn().mockResolvedValue({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
     const createSavedJob = vi.fn().mockResolvedValue({
       id: 'new-1',
       vacancyKey: null,
