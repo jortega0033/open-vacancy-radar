@@ -1,6 +1,6 @@
 {
   "name": "@agent-dock/desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Open Vacancy Radar desktop application",
   "author": "Open Vacancy Radar contributors",
   "private": true,
