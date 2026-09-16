@@ -3,6 +3,7 @@ import {
   APPLICATION_STATUS_LABEL,
   APPLICATION_STATUS_ORDER,
   APPLICATION_STATUS_SELECT_CLASS,
+  INTERVIEW_PREPARABLE_STATUSES,
 } from './application-status.js';
 
 export interface ApplicationsTableProps {
@@ -11,6 +12,10 @@ export interface ApplicationsTableProps {
   onEdit: (record: ApplicationRecord) => void;
   onToggleArchive: (record: ApplicationRecord) => void;
   onDelete: (record: ApplicationRecord) => void;
+  /** Opens the "Prepare interview" drawer (issue #358). Optional: a caller that doesn't wire this
+   * up simply doesn't get the row action, rather than every existing render site needing a new
+   * required prop. */
+  onPrepareInterview?: (record: ApplicationRecord) => void;
 }
 
 function formatAppliedDate(iso: string | null): string {
@@ -30,6 +35,7 @@ export function ApplicationsTable({
   onEdit,
   onToggleArchive,
   onDelete,
+  onPrepareInterview,
 }: ApplicationsTableProps) {
   return (
     <div
@@ -95,6 +101,15 @@ export function ApplicationsTable({
                 className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"
                 data-label="Actions"
               >
+                {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => onPrepareInterview(application)}
+                  >
+                    Prepare interview
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs"

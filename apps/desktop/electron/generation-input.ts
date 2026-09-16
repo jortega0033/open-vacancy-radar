@@ -75,6 +75,23 @@ export const GENERATION_INPUT_BUDGETS = {
   candidateInstructionChars: 1_000,
   /** One `Label: value` line. A 200 KB job title is not a job title. */
   vacancyFieldChars: 300,
+  /**
+   * The interview-prep feature's job-description snapshot clamp (issue #358). This reads
+   * `ApplicationAttemptRecord.jdSnapshot` -- a durable, already-persisted capture, not a live
+   * scrape -- so it gets its own budget rather than reusing `interactiveJdChars`, which is sized
+   * for a different prompt shape (a fresh vacancy lookup during interactive drafting). Same order
+   * of magnitude as `interactiveJdChars`, slightly more generous since this snapshot is the only
+   * record of what was actually read for this application and is worth preserving as fully as a
+   * one-shot prompt reasonably can.
+   */
+  interviewPrepJdChars: 8_000,
+  /**
+   * The interview-prep feature's linked-letter clamp (issue #358). A real generated letter is a
+   * few hundred words (see `DOCUMENT_LENGTH_WORDS` above), so this is generous headroom rather
+   * than a tight fit -- named separately from `interviewPrepJdChars` so either can be tuned later
+   * without affecting the other.
+   */
+  interviewPrepLetterChars: 6_000,
 } as const;
 
 /* -------------------------------------------------------------- document types ---------------- */

@@ -16,6 +16,7 @@ import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
+import { InterviewPrepDrawer } from './InterviewPrepDrawer.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import type { SelectedVacancy } from '../letters/types.js';
@@ -91,6 +92,7 @@ export function ApplicationsPage({
   const [letters, setLetters] = useState<readonly LetterRecord[]>([]);
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
+  const [interviewPrepTarget, setInterviewPrepTarget] = useState<ApplicationRecord | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<ApplicationRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
@@ -267,6 +269,8 @@ export function ApplicationsPage({
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
   const closeDrawer = useCallback(() => setDrawerState(null), []);
+  const openInterviewPrepDrawer = useCallback((record: ApplicationRecord) => setInterviewPrepTarget(record), []);
+  const closeInterviewPrepDrawer = useCallback(() => setInterviewPrepTarget(null), []);
 
   const handleDrawerSubmit = useCallback(
     async (input: ApplicationInput) => {
@@ -433,6 +437,7 @@ export function ApplicationsPage({
                 onEdit={openEditDrawer}
                 onToggleArchive={handleToggleArchive}
                 onDelete={requestDelete}
+                onPrepareInterview={openInterviewPrepDrawer}
               />
             </div>
           )}
@@ -477,6 +482,16 @@ export function ApplicationsPage({
       )}
 
       {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
+
+      {interviewPrepTarget && (
+        <InterviewPrepDrawer
+          application={interviewPrepTarget}
+          savedJobs={savedJobs}
+          cvDocuments={cvDocuments}
+          letters={letters}
+          onClose={closeInterviewPrepDrawer}
+        />
+      )}
 
       {reviewingAttempt && (
         <ApplicationReviewSession

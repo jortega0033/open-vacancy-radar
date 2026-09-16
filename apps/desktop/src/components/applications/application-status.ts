@@ -20,6 +20,12 @@ export const APPLICATION_STATUS_ORDER: readonly ApplicationStatus[] = [
   'withdrawn',
 ];
 
+/** The two pipeline stages "Prepare interview" (#358) targets -- shared by `ApplicationsTable.tsx`
+ * (which gates the row action on it) and `InterviewPrepDrawer.tsx` (which gates the prompt builder
+ * on the same check), so the two can never drift apart into a row action that opens a drawer that
+ * then refuses to run, or vice versa. */
+export const INTERVIEW_PREPARABLE_STATUSES = new Set<ApplicationStatus>(['recruiter_screen', 'interview']);
+
 export const APPLICATION_STATUS_LABEL: Record<ApplicationStatus, string> = {
   preparing: 'Preparing',
   applied: 'Applied',

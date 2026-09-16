@@ -17,3 +17,7 @@ export {
 export type { ApplicationsFilterTab } from './application-status.js';
 export { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 export type { ApplicationPreparedSummaryProps } from './ApplicationPreparedSummary.js';
+export { InterviewPrepDrawer } from './InterviewPrepDrawer.js';
+export type { InterviewPrepDrawerProps } from './InterviewPrepDrawer.js';
+export { buildInterviewPrepPrompt } from './interview-prep-prompt.js';
+export type { InterviewPrepContext, InterviewPrepStage } from './interview-prep-prompt.js';
