@@ -1,3 +1,19 @@
+## Status: implemented (2026-09-15/16)
+
+Everything below this line is the original ticket as drafted, describing this as a deliberately-deferred, design-only item. That framing is now stale: the product owner explicitly decided to attempt this in the same session, right after the ticket was drafted ("Attempt it now" over "keep deferred," when asked directly). It was implemented, shipped as part of PR #387 (`audit-implementation-2026-09-15` branch), and merged into the same batch as the P0 preparation-fence fix it was sequenced after.
+
+**What actually shipped:** direction (b) from the Scope section below, not (a). A new module, `apps/desktop/electron/application-attempt-transitions.ts`, holds two small, orthogonal, exhaustively-typed fact tables (`APPLICATION_ATTEMPT_CHECKPOINT_ROLES`, one row per checkpoint; `APPLICATION_QUEUE_STATE_ROLES`, one row per queue state including the `absent` case) plus the combining functions (`resolveAttemptTransition`, `resolveAttemptRecovery`, `resolveQueueDirective`) that replace `SETTLED_CHECKPOINTS`, `IN_FLIGHT_CHECKPOINTS`, `UNSCHEDULED_QUEUE_STATES`, and the hand-written body of `queueStillWantsThis` that used to live in `application-pipeline.ts`. The daemon's own queue store (`apps/daemon/src/application-queue-store.ts`) was deliberately NOT touched -- it still owns its own six-state machine independently, with no direct `workspace.db` dependency, exactly preserving the content-free boundary the daemon's own header comment documents as deliberate. Only the *relationship* between the two moved, into one reviewable, exhaustively-typed place.
+
+The module's own header comment explains why (a) was rejected: giving the daemon direct `workspace.db` access, or reducing it to a bare lease pointer read against that database, would have bought one state machine at the cost of the process-isolation the split exists for -- confirmed sound by the architecture audit's own KEEP verdict on the daemon boundary.
+
+Regression coverage: `apps/desktop/test/application-attempt-transitions.test.ts` (23 tests) pins the completeness/consistency properties the module's own doc comments claim -- every checkpoint has exactly one role, `interruptedWhenAtRest`/`awaitsScheduling` both imply `preparationMayRun` and are mutually exclusive, the three facts partition every checkpoint into exactly one bucket, `user_reported` is correctly settled (the exact gap the old four-array approach missed and never caught), and `INTERRUPTED_ATTEMPT_RESTART`'s claimed invariant -- every interrupted checkpoint restarts identically regardless of queue state -- holds across all seven queue-state pairings. This test file did not exist when the migration work was originally interrupted mid-session; it was written afterward specifically because the module's own doc comments referenced a test file that didn't yet exist, which would itself have been misleading.
+
+Independently adversarially re-reviewed (a second, fresh pass, separate from the implementer) against the exact four questions this ticket's Risk section worried about: whether stale/duplicate copies of the old logic still exist anywhere, whether every call site of the four old constant arrays was migrated, whether it interacts safely with the F-A fencing work, and whether any previously-reachable checkpoint x queue-state combination became unreachable or misrouted. No blocking findings.
+
+---
+
+*Original ticket text follows, preserved for the design discussion it documents:*
+
 ## Goal
 Give the two independently-owned state machines that together describe one application attempt a single source of truth (or, short of that, a single explicit transition table) instead of the current hand-written reconciliation, so a stuck lease and a stale checkpoint can no longer silently disagree.
 
@@ -26,3 +42,5 @@ This ticket's own "done" is a decision document, not shipped code:
 
 ## Risk
 High, which is exactly why this pass deliberately did not implement it. This is the deepest, most architecturally invasive item identified in the audit: it touches the Electron-main/daemon process boundary fundamentally, spans two persistence layers (`workspace.db` and the daemon's file-based queue store), and any bug in the migration risks the same class of silent desync it's meant to fix, but now across a half-migrated state instead of two static ones. Doing this via an automated pass without a dedicated session, careful incremental migration, and real regression testing at each step risks destabilizing the whole Search -> Apply pipeline -- which is why the audit places it after F-A has proven out, not in a first batch.
+
+*(In the event, the product owner accepted this risk explicitly and asked for it to be attempted in the same session -- see Status above.)*
