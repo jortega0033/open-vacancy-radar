@@ -1,5 +1,6 @@
-import type { KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
+import { useEscapeToClose } from '../shell/index.js';
 import { countryOptions, type SearchFilters } from './results.js';
 
 const SALARY_CURRENCIES = ['EUR', 'USD', 'GBP', 'CAD', 'AUD', 'CHF'];
@@ -47,6 +48,36 @@ export function SearchFilterBar({
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
 
+  /**
+   * The Salary popover is a native `<details>`, not a React-controlled overlay -- see below for why
+   * that means Escape and outside-click dismissal (open-vacancy-radar#386) need their own wiring
+   * rather than reusing the drawer/dialog pattern directly. `salaryOpen` mirrors the element's own
+   * `open` property (updated via the native `toggle` event) purely so the effects below know when to
+   * listen; the element's `open` property stays the actual source of truth, closed imperatively via
+   * `salaryDetailsRef` rather than through React state.
+   */
+  const salaryDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [salaryOpen, setSalaryOpen] = useState(false);
+
+  useEscapeToClose(() => {
+    if (salaryDetailsRef.current) salaryDetailsRef.current.open = false;
+  }, !salaryOpen);
+
+  // Closes on `mousedown`, not `click`: the popover used to sit on top of (and swallow clicks meant
+  // for) whatever it visually overlapped, since nothing closed it first. Acting on `mousedown` closes
+  // it before the browser resolves the subsequent `click`'s target, so a single click both dismisses
+  // the popover and reaches the control it had been covering, instead of requiring two.
+  useEffect(() => {
+    if (!salaryOpen) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (salaryDetailsRef.current && !salaryDetailsRef.current.contains(event.target as Node)) {
+        salaryDetailsRef.current.open = false;
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [salaryOpen]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter' && !hasReport) onSearch();
   }
@@ -81,7 +112,11 @@ export function SearchFilterBar({
           ))}
         </select>
 
-        <details className="relative">
+        <details
+          ref={salaryDetailsRef}
+          className="relative"
+          onToggle={(event) => setSalaryOpen(event.currentTarget.open)}
+        >
           <summary className="btn btn-outline btn-sm list-none">Salary</summary>
           <div className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[calc(100vw-3rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
             <div className="flex items-end gap-2">

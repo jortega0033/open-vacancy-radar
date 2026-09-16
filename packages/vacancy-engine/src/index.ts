@@ -54,6 +54,7 @@ export {
 export { runSponsorSync } from './pipeline/sponsors.js';
 export {
   candidateProfileSchema,
+  EMPTY_CANDIDATE_PROFILE,
   isCandidateProfileConfigured,
   loadCandidateProfile,
   type CandidateProfile,

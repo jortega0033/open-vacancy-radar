@@ -6,6 +6,7 @@ import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
 import { skillsToText, textToSkills } from '../cv-library/cv-profile.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import {
   SEARCH_PROFILE_CV_LIMITS,
   parseSearchProfileCvResponse,
@@ -127,6 +128,7 @@ export interface FillProfileFromCvDrawerProps {
 }
 
 export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }: FillProfileFromCvDrawerProps) {
+  useEscapeToClose(onClose);
   const [documents, setDocuments] = useState<CvDocumentRecord[]>();
   const [listError, setListError] = useState<string>();
   const [selectedId, setSelectedId] = useState('');

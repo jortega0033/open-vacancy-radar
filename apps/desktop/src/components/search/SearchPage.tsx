@@ -10,7 +10,7 @@ import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner } from '../shell/index.js';
+import { EmptyState, ErrorBanner, useEscapeToClose } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -240,6 +240,7 @@ export function SearchPage({
   const [scanError, setScanError] = useState<string>();
   const [scanGuard, setScanGuard] = useState<string>();
   const [confirmBrowseAll, setConfirmBrowseAll] = useState(false);
+  useEscapeToClose(() => setConfirmBrowseAll(false), !confirmBrowseAll);
   // User opt-out from the live view during an active rescan that already has a saved report loaded
   // (issue #364): reset to `false` -- i.e. default to live -- at the start of every scan, so a fresh
   // rescan always shows its own progress first, with an explicit way back to the saved report.
@@ -1169,7 +1170,17 @@ export function SearchPage({
                 }
               />
             ) : (
-              <div className="min-w-0 flex-1">
+              // `min-h-0` for the same reason `SearchResultList`'s own scroll pane needs it (see
+              // that file's comment): below `lg` this pane stacks in a column flex above/below
+              // `SearchResultList`, and without an explicit `min-h-0` a flex child's minimum height
+              // defaults to its content's, not zero. `EmptyState`'s own `min-h-64` (256px) plus its
+              // icon/title/description content and padding is real, hard-minimum content here, so
+              // without this the empty-state pane claimed that space first in the limited column
+              // height and `SearchResultList` -- the only side that already had `min-h-0` -- absorbed
+              // the shortage and collapsed to a sliver instead. `overflow-y-auto` lets this pane
+              // scroll internally if it's ever shrunk below `EmptyState`'s own minimum, the same
+              // shrink-and-scroll treatment `SearchResultList` and `VacancyDetail` both already get.
+              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
                 <EmptyState
                   illustration={emptySearchIllustration}
                   title="Select a vacancy"

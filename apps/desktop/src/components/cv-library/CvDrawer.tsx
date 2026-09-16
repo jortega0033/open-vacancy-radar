@@ -5,6 +5,7 @@ import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-sour
 import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
 import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
@@ -102,6 +103,7 @@ const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
  * fixed panel: one of the two existing drawer conventions, not a third.
  */
 export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
+  useEscapeToClose(onCancel);
   const [form, setForm] = useState<FormState>(() => toFormState(record));
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();

@@ -285,3 +285,85 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
     await rm(vacancyEngineDataRoot, { recursive: true, force: true });
   }
 });
+
+/**
+ * Regression for open-vacancy-radar#385: below `lg` (1024px), `SearchPage` stacks the vacancy
+ * list above the detail/empty-state pane in a column flex. When no vacancy is selected -- the
+ * default state whenever `visible` (the filtered result set) is empty, since the page's own
+ * auto-select effect only ever has something to select from a non-empty list -- the empty-state
+ * pane used to have no `min-h-0` of its own, so `EmptyState`'s hard `min-h-64` (256px) claimed the
+ * limited column height first and the list pane (the only side that already had `min-h-0`)
+ * absorbed the shortage, collapsing to a sliver. A report with zero vacancies is a stable, always-
+ * empty `visible` -- `worldwideReport` is still non-null (`hasReport` stays true, so this is the
+ * same "a report is loaded" rendering path the real bug was reported against, not the "no report
+ * yet" onboarding state), but there is nothing for the auto-select effect to ever select, so
+ * `selected` stays permanently `null`. That statelessness is exactly what makes this reachable for
+ * an automated assertion at all: the exact moment right after a *non-empty* report first loads is
+ * also `selected === null` for a single render, but the auto-select effect corrects it before
+ * anything can observe it, which is why this test uses a report that never gives it anything to
+ * correct into.
+ */
+test('a zero-vacancy Search report at narrow widths keeps both panes at a real, non-collapsed height', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'ovr-search-layout-empty-'));
+  const vacancyEngineDataRoot = await mkdtemp(join(tmpdir(), 'ovr-search-layout-empty-engine-'));
+  const reportPath = join(vacancyEngineDataRoot, 'reports', 'global-remote', 'latest.json');
+  try {
+    await mkdir(join(vacancyEngineDataRoot, 'reports', 'global-remote'), { recursive: true });
+    await writeFile(reportPath, JSON.stringify({ ...REPORT, discoveryAudit: [] }), 'utf8');
+
+    const electronApp = await launchApp(userDataDir, {
+      appId: `ovr-e2e-search-layout-zero-${process.pid}`,
+      vacancyEngineDataRoot,
+    });
+    try {
+      const window = await electronApp.firstWindow();
+      await window.waitForLoadState('domcontentloaded');
+      await dismissWelcomeModalIfShown(window);
+      await goto(window, 'Search');
+      await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
+
+      await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds), {
+        width: 800,
+        height: 600,
+      });
+      await window.waitForTimeout(100);
+
+      // `SearchResultList` (the list pane) shows its own "No vacancies found" `EmptyState` when
+      // the loaded report has zero rows (`SearchResultList.tsx:163`), so both stacked panes carry
+      // real, hard-minimum content (`EmptyState`'s own `min-h-64`) at once -- exactly the shape
+      // that exposes the bug: before this fix, only the list pane had `min-h-0` of its own, so it
+      // alone absorbed the deficit down to a sliver while the (unfixed) detail/empty-state pane
+      // kept its full natural height. With both panes carrying `min-h-0`, the column's shortage
+      // splits between them instead, matching `SearchResultList.tsx`'s own comment on the sibling
+      // `VacancyDetail` fix ("gives the two panes an even split of the column").
+      await expect(window.getByRole('heading', { name: 'No vacancies found' })).toBeVisible();
+      await expect(window.getByRole('heading', { name: 'Select a vacancy' })).toBeVisible();
+
+      const heights = await window.evaluate(() => {
+        const heightOf = (headingText: string) => {
+          const heading = [...document.querySelectorAll('h2')].find((el) => el.textContent === headingText);
+          return heading?.closest('.min-h-0')?.getBoundingClientRect().height ?? -1;
+        };
+        return { list: heightOf('No vacancies found'), detail: heightOf('Select a vacancy') };
+      });
+
+      // Real, measured before/after values at this exact window size (800x600, well below `lg`):
+      // pre-fix the list pane was crushed to literally 0px while the detail pane kept ~185px; with
+      // the fix both panes get a real, comfortably-nonzero share (~55-95px here -- the two
+      // EmptyStates' combined minimums genuinely exceed what an 800x600 window has left after its
+      // own header/filter-bar chrome, so neither pane reaching its full ~256px content height is
+      // expected and fine; the bug was one side getting *none* of the shortfall, not both sides
+      // being finite). The ratio check is the one that actually distinguishes "evenly shared" from
+      // "one pane crushed": pre-fix it was 0, post-fix it is close to 1.
+      expect(heights.list).toBeGreaterThan(30);
+      expect(heights.detail).toBeGreaterThan(30);
+      expect(heights.list / heights.detail).toBeGreaterThan(0.4);
+      expect(heights.list / heights.detail).toBeLessThan(2.5);
+    } finally {
+      await electronApp.close();
+    }
+  } finally {
+    await rm(userDataDir, { recursive: true, force: true });
+    await rm(vacancyEngineDataRoot, { recursive: true, force: true });
+  }
+});

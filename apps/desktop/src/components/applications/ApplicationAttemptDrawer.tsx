@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './attempt-status.js';
 
 export interface ApplicationAttemptDrawerProps {
@@ -33,6 +34,7 @@ function formatDateTime(iso: string): string {
  * `checkpoint`, never a person from this drawer.
  */
 export function ApplicationAttemptDrawer({ attempt, onClose }: ApplicationAttemptDrawerProps) {
+  useEscapeToClose(onClose);
   const [artifacts, setArtifacts] = useState<ApplicationArtifactSummary[] | null>(null);
   const [artifactsError, setArtifactsError] = useState<string>();
 

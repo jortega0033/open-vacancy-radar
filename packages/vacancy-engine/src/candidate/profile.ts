@@ -47,10 +47,52 @@ export const candidateProfileSchema = z.object({
 });
 export type CandidateProfile = z.infer<typeof candidateProfileSchema>;
 
+/**
+ * The unconfigured state itself, as a real value rather than an absence -- see
+ * `isCandidateProfileConfigured` below, which already treats "no target roles, no strongest
+ * skills" as this exact state regardless of where the rest of the profile came from. Every field
+ * is the schema's own empty/zero value, never a placeholder that could read as a real answer.
+ */
+export const EMPTY_CANDIDATE_PROFILE: CandidateProfile = {
+  profileVersion: 'unconfigured',
+  candidateName: '',
+  currentRole: '',
+  location: '',
+  experienceYears: 0,
+  strongestSkills: [],
+  additionalSkills: [],
+  targetRoles: [],
+  consideredRoles: [],
+  excludedRoleFamilies: [],
+  constraints: {
+    professionalLanguage: '',
+    dutchRequired: false,
+    primaryCountry: '',
+    allowRemoteEuSupportingNetherlands: false,
+    minimumMonthlyBaseEur: 0,
+  },
+};
+
+/**
+ * A profile file that has never been saved (a fresh install, or a workspace where Settings >
+ * Search profile has never been touched) reads as `EMPTY_CANDIDATE_PROFILE` rather than throwing.
+ * Every real caller of this function already treats a load failure as "nothing configured yet"
+ * (wrapping the call in its own try/catch to get there) -- this makes that the direct, honest
+ * result for the one case that genuinely means that, instead of every caller having to separately
+ * guess which errors mean "unconfigured" and which mean something worth surfacing. A malformed or
+ * unreadable *existing* file (bad JSON, a permissions error, a schema mismatch) still throws: only
+ * `ENOENT` -- "there is nothing here yet" -- gets this treatment.
+ */
 export async function loadCandidateProfile(
   filePath = path.resolve(process.cwd(), 'config/candidate-profile-v1.json'),
 ): Promise<CandidateProfile> {
-  const content = await readFile(filePath, 'utf8');
+  let content: string;
+  try {
+    content = await readFile(filePath, 'utf8');
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return EMPTY_CANDIDATE_PROFILE;
+    throw err;
+  }
   return candidateProfileSchema.parse(JSON.parse(content));
 }
 
