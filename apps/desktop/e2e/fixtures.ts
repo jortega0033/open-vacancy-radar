@@ -70,9 +70,42 @@ export const test = base.extend<Fixtures>({
   window: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow();
     await page.waitForLoadState('domcontentloaded');
+    await dismissWelcomeModalIfShown(page);
     await use(page);
   },
 });
+
+/**
+ * Every e2e test launches the app against a brand-new, empty user-data dir (see `electronApp`
+ * above), so `app_settings.welcome_seen` is always its schema default of `false` and
+ * `WelcomeModal` always appears -- it just does so after `App.tsx`'s own async
+ * `workspace:settings:get`/`workspace:counts:get` IPC round trip on mount, not synchronously with
+ * the window. Left undismissed, its `modal-backdrop` sits over the whole page and intercepts every
+ * click meant for anything underneath it, including `goto()`'s own sidebar navigation -- which is
+ * what actually broke here, not a real product regression: the modal is doing exactly what a modal
+ * should, the fixture just never told it to go away.
+ *
+ * Exported, not just used by the `window` fixture above: `App.tsx`'s own gate (`!welcomeSeen &&
+ * counts.cvDocuments === 0`) means every spec that launches the app itself -- rather than going
+ * through `window` -- against a fresh or CV-less user-data dir needs to call this too. A spec that
+ * seeds a real CV before launch (`manual-application-review.spec.ts`) never sees the dialog at all,
+ * per that same gate, and does not need this.
+ */
+export async function dismissWelcomeModalIfShown(window: Page): Promise<void> {
+  const dialog = window.getByRole('dialog', { name: 'Welcome to Open Vacancy Radar' });
+  try {
+    await dialog.waitFor({ state: 'visible', timeout: 5000 });
+  } catch {
+    return;
+  }
+  // Not the "Close" button: `WelcomeModal.tsx` gives that same accessible name to two elements --
+  // the header's own close button and the full-dialog backdrop button underneath it -- so `Close`
+  // alone is ambiguous here. "Skip for now" has a unique accessible name and is the dialog's own
+  // stated no-CV path (`WelcomeModalProps`' own doc comment: "skippable by design... not
+  // required"), which is exactly what a test that isn't exercising the CV-upload flow wants.
+  await dialog.getByRole('button', { name: 'Skip for now', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+}
 
 export { expect } from '@playwright/test';
 
