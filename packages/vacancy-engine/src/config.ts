@@ -25,6 +25,7 @@ const environmentSchema = z
     MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     HTTP_CACHE_DIR: z.string().min(1).default('.cache/http'),
     HTTP_CACHE_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
+    REPORT_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
     SPONSOR_BASELINE_MAX_AGE_DAYS: z.coerce.number().int().min(7).max(180).default(45),
     USER_AGENT: z
       .string()
@@ -72,6 +73,7 @@ export type AppConfig = {
   maxRetries: number;
   httpCacheDirectory: string;
   httpCacheRetentionDays: number;
+  reportRetentionDays: number;
   sponsorBaselineMaxAgeDays: number;
   userAgent: string;
   ai: {
@@ -128,6 +130,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env, project
     maxRetries: parsed.MAX_RETRIES,
     httpCacheDirectory: cacheDirectory,
     httpCacheRetentionDays: parsed.HTTP_CACHE_RETENTION_DAYS,
+    reportRetentionDays: parsed.REPORT_RETENTION_DAYS,
     sponsorBaselineMaxAgeDays: parsed.SPONSOR_BASELINE_MAX_AGE_DAYS,
     userAgent: parsed.USER_AGENT,
     ai: {

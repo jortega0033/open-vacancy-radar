@@ -50,9 +50,6 @@ importers:
       '@agent-dock/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@agent-dock/vacancy-agent-adapter':
-        specifier: workspace:*
-        version: link:../../packages/vacancy-agent-adapter
       '@modelcontextprotocol/client':
         specifier: 2.0.0
         version: 2.0.0
@@ -196,6 +193,9 @@ importers:
       '@agent-dock/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       typescript:
         specifier: ^5.7.3
@@ -232,22 +232,6 @@ importers:
 
   packages/shared:
     dependencies:
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      typescript:
-        specifier: ^5.7.3
-        version: 5.9.3
-      vitest:
-        specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.1)(jsdom@25.0.1)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.12))
-
-  packages/vacancy-agent-adapter:
-    dependencies:
-      '@agent-dock/shared':
-        specifier: workspace:*
-        version: link:../shared
       zod:
         specifier: ^3.24.1
         version: 3.25.76

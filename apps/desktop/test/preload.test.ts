@@ -1620,6 +1620,39 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
     expect(result).toEqual(SNAPSHOT_RESULT);
   });
 
+  it('openReview carries each field\'s frameOrigin and the snapshot\'s own topFrameOrigin across the bridge (draft-cross-origin-ipc-bridge-visibility)', async () => {
+    // What `dom-extract.ts`/`executor.ts` already mint on the main-process side (the September
+    // 2026 audit's cross-origin field-fill fix), rebuilt here rather than dropped: a review UI
+    // that cannot see which frame a field lives in cannot tell an employer's own control from one
+    // the executor has already refused to write into.
+    invoke.mockResolvedValue({
+      ...SNAPSHOT_RESULT,
+      snapshot: {
+        ...SNAPSHOT_RESULT.snapshot,
+        topFrameOrigin: 'https://careers.employer.invalid',
+        fields: [
+          { ...SNAPSHOT_RESULT.snapshot.fields[0], frameOrigin: 'https://careers.employer.invalid' },
+          { ...SNAPSHOT_RESULT.snapshot.fields[1], frameOrigin: 'https://chat.vendor.invalid', active: false },
+        ],
+      },
+    });
+    const api = await loadPreload('applicationExecutor');
+    const result = (await (api.openReview as (i: unknown) => Promise<unknown>)({})) as {
+      snapshot: { topFrameOrigin?: string; fields: readonly { frameOrigin?: string }[] };
+    };
+    expect(result.snapshot.topFrameOrigin).toBe('https://careers.employer.invalid');
+    expect(result.snapshot.fields[0]?.frameOrigin).toBe('https://careers.employer.invalid');
+    expect(result.snapshot.fields[1]?.frameOrigin).toBe('https://chat.vendor.invalid');
+  });
+
+  it('openReview leaves frameOrigin/topFrameOrigin out of the rebuilt snapshot for a same-origin page, exactly like before (additive only)', async () => {
+    invoke.mockResolvedValue(SNAPSHOT_RESULT);
+    const api = await loadPreload('applicationExecutor');
+    const result = (await (api.openReview as (i: unknown) => Promise<unknown>)({})) as { snapshot: Record<string, unknown> };
+    expect(result.snapshot.topFrameOrigin).toBeUndefined();
+    expect(result).toEqual(SNAPSHOT_RESULT);
+  });
+
   it('openReview throws rather than returning a fabricated snapshot when main sends an unexpected shape', async () => {
     invoke.mockResolvedValue({ nonsense: true });
     const api = await loadPreload('applicationExecutor');

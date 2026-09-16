@@ -154,8 +154,10 @@ describe('keyed discovery sources (configuration-required until a project key is
       .toMatchObject({ company: 'Jooble Co', location: 'Worldwide', decision: 'official_review_candidate', postedAt: '2026-08-01T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'reed'))
       .toMatchObject({ company: 'Reed Co', location: 'London', decision: 'location_restricted', postedAt: '2026-08-25T00:00:00.000Z' });
+    // Regression for the mislabeled-description bug: `seniority` (a level label, not prose) must
+    // never be passed off as the job description -- it should read as genuinely absent.
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobspipe'))
-      .toMatchObject({ company: 'JobsPipe Co', location: 'Worldwide', decision: 'salary_unverified' });
+      .toMatchObject({ company: 'JobsPipe Co', location: 'Worldwide', decision: 'salary_unverified', description: null });
   });
 
   it('sends the Reed API key as a Basic auth header and isolates a blocked Jooble response', async () => {

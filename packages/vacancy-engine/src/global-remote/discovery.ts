@@ -1,5 +1,6 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
 import { discoverAiDevJobs } from './ai-dev-jobs-discovery.js';
 import { runAdditionalDiscovery } from './additional-discovery.js';
 import { runAtsRosterDiscovery } from './ats-roster-discovery.js';
@@ -90,12 +91,20 @@ export async function discoverHimalayas(
           // `shell.openExternal` would be an OS-level action driven by a scraped job posting.
           const urlValue = httpUrl(job.applicationLink) ?? httpUrl(job.guid);
           if (title === null || company === null || urlValue === null) continue;
+          // The search API's own response already carries the full job description (confirmed by
+          // fetching it directly: this endpoint is not the Cloudflare-protected public job page,
+          // just the search backend, and it returns real description HTML for every row). This adapter
+          // was simply never reading it -- issue found via live "Prepare application" testing, where
+          // every real Himalayas result failed with "no job description was captured" despite the
+          // content being available in the very response already fetched for the listing itself.
+          const rawDescription = stringValue(job.description);
           vacancies.push(discoveryAudit({
             key: `himalayas:${stringValue(job.guid) ?? `${company}:${title}`}`,
             provider: 'himalayas',
             company,
             title,
             url: urlValue,
+            description: rawDescription ? htmlToText(rawDescription) : null,
             location: locations(job.locationRestrictions),
             employmentType: stringValue(job.employmentType),
             currency: stringValue(job.currency)?.toUpperCase() ?? null,

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import type { Database } from '../db/client.js';
+import { deleteDiscoveryRuns, discoveryRunsOlderThan } from './discovery-runs-repository.js';
 import type {
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
@@ -244,6 +246,46 @@ export async function writeGlobalRemoteReport(
     await Promise.all(files.map(([, temporary]) => rm(temporary, { force: true })));
   }
   return { latestHtml, latestJson, latestAudit, timestampedHtml, timestampedJson, timestampedAudit };
+}
+
+/**
+ * Deletes the timestamped `<timestamp>.json`/`.html`/`.audit.ndjson` triples `writeGlobalRemoteReport`
+ * writes on every scan, once they are older than `retentionDays` -- called opportunistically right
+ * after `writeGlobalRemoteReport` succeeds (see `runGlobalRemoteScan`, the same call site that
+ * already inserts the `discovery_runs` row for that scan), so `reports/global-remote/` does not grow
+ * without bound across months of an unattended background scan running every
+ * `BACKGROUND_SCAN_INTERVAL_MS`.
+ *
+ * Keyed off `discovery_runs` rows rather than a directory listing: a row is the actual record of
+ * which files a given scan wrote, so this can never delete something this module did not itself
+ * produce. `latest.json`/`latest.html`/`latest.audit.ndjson` are never named by a row -- only the
+ * timestamped paths are ever passed to `recordDiscoveryRun` -- so they are never a deletion
+ * candidate by construction; the `basename` check below is defense in depth against that invariant
+ * ever drifting, not something expected to trigger.
+ *
+ * Best-effort like `recordDiscoveryRun` itself: a row is only dropped once its files are gone from
+ * disk (`{ force: true }` tolerates a file already missing), so a partial failure here never leaves
+ * `discovery_runs` claiming a file exists when it doesn't -- worst case, the same row is retried on
+ * the next scan's pass.
+ */
+export async function pruneGlobalRemoteReports(
+  database: Database,
+  retentionDays: number,
+  projectRoot = process.cwd(),
+): Promise<{ deletedRunIds: string[]; deletedFiles: string[] }> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const staleRuns = await discoveryRunsOlderThan(database, cutoff);
+  const deletedFiles: string[] = [];
+  for (const run of staleRuns) {
+    const auditPath = run.reportJsonPath.replace(/\.json$/, '.audit.ndjson');
+    for (const filePath of [run.reportJsonPath, run.reportHtmlPath, auditPath]) {
+      if (path.basename(filePath).startsWith('latest.')) continue;
+      await rm(filePath, { force: true });
+      deletedFiles.push(filePath);
+    }
+  }
+  await deleteDiscoveryRuns(database, staleRuns.map((run) => run.id));
+  return { deletedRunIds: staleRuns.map((run) => run.id), deletedFiles };
 }
 
 /**

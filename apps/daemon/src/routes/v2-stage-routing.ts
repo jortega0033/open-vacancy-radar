@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { V2_SESSION_VIEW_SCHEMA_VERSION, type ProviderStatus } from '@agent-dock/shared';
-import { GENERATION_STAGES, routeStage, stageContract, type RoutingCandidate } from '@agent-dock/vacancy-agent-adapter';
-import type { ProviderRegistry } from '@agent-dock/agent-runtime';
+import { GENERATION_STAGES, routeStage, stageContract, type ProviderRegistry, type RoutingCandidate } from '@agent-dock/agent-runtime';
 
 /**
  * `GET /v2/stage-routing` (issue #284): for each generation stage, which installed providers may

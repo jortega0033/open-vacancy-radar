@@ -386,6 +386,155 @@ describe('extractSnapshotFields: submit-control scoping (never a candidate from 
   });
 });
 
+describe('extractSnapshotFields: frame origins', () => {
+  // The read is what has to carry origin: `executor.ts` cannot refuse a fill into a third party's
+  // embedded document if nothing ever told it whose document the field was in. Every case below is
+  // about the difference between a frame that genuinely *is* the embedder's origin and one that
+  // only looks that way to a heuristic counting fields.
+
+  it('carries the top document origin on a top-level field, and reports it on the snapshot', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) })],
+    });
+    const { fields, topFrameOrigin, fieldGroups } = extractSnapshotFields(root);
+    expect(topFrameOrigin).toBe('https://careers.employer.invalid');
+    expect(fields[0]!.frameOrigin).toBe('https://careers.employer.invalid');
+    expect(fieldGroups[0]!.frameOrigin).toBe('https://careers.employer.invalid');
+  });
+
+  it('gives a pierced iframe its own origin when its document reports a different one', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) }),
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'https://chat.vendor.invalid/widget' }),
+          contentDocument: node({
+            nodeName: '#document',
+            documentURL: 'https://chat.vendor.invalid/widget',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'email', name: 'email' }) })],
+          }),
+        }),
+      ],
+    });
+    const { fields } = extractSnapshotFields(root);
+    expect(fields.map((field) => field.frameOrigin)).toEqual([
+      'https://careers.employer.invalid',
+      'https://chat.vendor.invalid',
+    ]);
+  });
+
+  it('inherits the embedder origin for a frame that declares no URL of its own', () => {
+    // An `<iframe>` with no `src` (and an `<iframe srcdoc>`) is an about:blank document, which
+    // really does inherit its embedder's origin -- reporting it as unknown-and-therefore-suspect
+    // would break an ordinary same-origin page for nothing.
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          contentDocument: node({
+            nodeName: '#document',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) })],
+          }),
+        }),
+      ],
+    });
+    expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('https://careers.employer.invalid');
+  });
+
+  it('resolves a relative iframe src against the embedding document, which keeps it same-origin', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: '/embed/apply' }),
+          contentDocument: node({
+            nodeName: '#document',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) })],
+          }),
+        }),
+      ],
+    });
+    expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('https://careers.employer.invalid');
+  });
+
+  it('buckets every file: URL to one origin, so a local fixture page and its own iframe match', () => {
+    // `URL.origin` serializes each file: URL to the opaque "null", which would make a fixture page
+    // cross-origin with an iframe sitting next to it in the same directory. Scoping a file: target
+    // is `exactFileUrls`'s job, not this bucket's.
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'file:///fixtures/ashby-application-form.html',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'file:///fixtures/embedded-form.html' }),
+          contentDocument: node({
+            nodeName: '#document',
+            documentURL: 'file:///fixtures/embedded-form.html',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'text', name: 'fullName' }) })],
+          }),
+        }),
+      ],
+    });
+    const { fields, topFrameOrigin } = extractSnapshotFields(root);
+    expect(topFrameOrigin).toBe('file://');
+    expect(fields[0]!.frameOrigin).toBe('file://');
+  });
+
+  it('reports a data: frame as the opaque origin rather than inheriting the embedder', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'data:text/html,<input name=email>' }),
+          contentDocument: node({
+            nodeName: '#document',
+            documentURL: 'data:text/html,<input name=email>',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'email', name: 'email' }) })],
+          }),
+        }),
+      ],
+    });
+    expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('null');
+  });
+
+  /**
+   * `vbscript:` gets its own unique opaque origin the same way `data:` does, not the embedder's --
+   * unlike `about:`/`javascript:`, which really do inherit. Pinned as its own case (not just relying
+   * on `originOfUrl`'s fallthrough) since this exact scheme is the second one CodeQL's
+   * incomplete-URL-scheme-check query names alongside `data:`.
+   */
+  it('reports a vbscript: frame as the opaque origin rather than inheriting the embedder', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'vbscript:msgbox("hi")' }),
+          contentDocument: node({
+            nodeName: '#document',
+            documentURL: 'vbscript:msgbox("hi")',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'email', name: 'email' }) })],
+          }),
+        }),
+      ],
+    });
+    expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('null');
+  });
+});
+
 describe('extractSubmissionSignals (#271)', () => {
   function text(value: string): CdpDomNode {
     return { nodeName: '#text', nodeType: 3, nodeValue: value, backendNodeId: 0 };

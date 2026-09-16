@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LetterGenerator, MAX_INSTRUCTION_CHARS } from '../../../src/components/letters/index.js';
 import { installBridges } from '../../cv-bridges.js';
 import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
-import { LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
+import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter, makeUnreviewedCv } from './fixtures.js';
 
 /**
  * `installBridges` installs a *default* workspace bridge of its own (the CV assistant saves to the
@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('LetterGenerator', () => {
-  it('builds the prompt from the chosen CV, job and document settings, then streams the draft in', async () => {
+  it('asks the run for a fact selection, never for prose, and assembles the answer into the editor', async () => {
     const bridges = setup();
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
@@ -61,20 +61,108 @@ describe('LetterGenerator', () => {
     expect(prompt).toContain('Redwood Software');
     expect(prompt).toContain('Angular architect. Eight years of frontend work.');
     expect(prompt).toContain('Mention the referral from Marta.');
+    // The selection contract, not a request for a draft.
+    expect(prompt).toContain('{"factIds": [string]}');
+    expect(prompt).toContain('Do not return prose, a draft, a rewritten fact');
+    expect(prompt).toContain('experience-1');
     // The safety layer shared with the CV assistant travels with it.
-    expect(prompt).toContain('Do not invent a hiring manager');
+    expect(prompt).toContain('Never invent an employer, job title, date');
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Hi — I saw the frontend role.' });
-    expect(await screen.findByRole('log', { name: /letter being generated/i })).toHaveTextContent(
-      'Hi — I saw the frontend role.',
-    );
-
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    // On completion the stream hands over to an editable document.
+    // On completion the selection is assembled into an editable document, in the tone that was
+    // chosen, citing only facts the reviewed CV actually carries.
     const body = await screen.findByRole('textbox', { name: /letter body/i });
-    expect(body).toHaveValue('Hi — I saw the frontend role.');
+    const assembled = (body as HTMLTextAreaElement).value;
+    expect(assembled).toContain('Dear Redwood Software hiring team,'); // 'concise' salutation
+    expect(assembled).toContain('I am applying for the Senior Frontend Engineer role at Redwood Software.');
+    expect(assembled).toContain('My reviewed CV lists Senior Frontend Engineer at Northwind Digital (2021 - present).');
+    expect(assembled).toContain('My reviewed CV lists Angular as a skill.');
+    expect(assembled).toContain('I am available to discuss the role.'); // 'concise' closing
+    // A recruiter message carries no formal sign-off, whatever the tone.
+    expect(assembled).not.toContain('Robin Vega');
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
+  });
+
+  it('assembles a different letter for a different tone from the same facts', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.change(await screen.findByLabelText(/^tone$/i), { target: { value: 'formal' } });
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const body = await screen.findByRole('textbox', { name: /letter body/i });
+    const assembled = (body as HTMLTextAreaElement).value;
+    // The tone moved this app's own lines; the cited facts are word for word the same ones.
+    expect(assembled).toContain('Dear Redwood Software hiring team,');
+    expect(assembled).toContain('I would welcome the opportunity to discuss the role');
+    expect(assembled).toContain('Sincerely,\nRobin Vega'); // a motivation letter does sign off
+    expect(assembled).toContain('My reviewed CV lists Angular as a skill.');
+  });
+
+  it('rejects a malformed selection instead of showing it as a letter', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, I am the ideal candidate.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('returned invalid JSON');
+    // The prose the run actually produced is nowhere on screen, in a textbox or otherwise.
+    expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/I am the ideal candidate/)).not.toBeInTheDocument();
+  });
+
+  it('rejects a selection naming a fact the reviewed CV does not carry', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: '{"factIds":["certification-cissp"]}' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'unsupported source facts: certification-cissp',
+    );
+    expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
+  });
+
+  it('rejects a reply that smuggles a claim alongside a valid selection', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', {
+      type: 'assistant.message',
+      text: '{"factIds":["skill-1"],"claim":"I am CISSP certified."}',
+    });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'candidate claims outside the source-fact selection',
+    );
+    expect(screen.queryByText(/CISSP/)).not.toBeInTheDocument();
+  });
+
+  it('refuses to generate from a CV whose source has never been reviewed, and says what would fix it', async () => {
+    const bridges = setup({ listCvDocuments: vi.fn().mockResolvedValue([makeUnreviewedCv()]) });
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    await waitFor(() => expect(bridges.workspace.listCvDocuments).toHaveBeenCalled());
+    expect(await screen.findByText(/no reviewed source record yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^generate$/i })).toBeDisabled();
   });
 
   it('surfaces a failed generation without destroying the letter already open', async () => {
@@ -106,7 +194,7 @@ describe('LetterGenerator', () => {
   });
 
   it('creates a new row on the first save', async () => {
-    const created = makeLetter({ id: 'created-1', body: 'Dear hiring team, generated text.' });
+    const created = makeLetter({ id: 'created-1', body: 'Hello Redwood Software hiring team,' });
     const createLetter = vi.fn().mockResolvedValue(created);
     const updateLetter = vi.fn();
     const bridges = setup({ createLetter, updateLetter });
@@ -115,7 +203,7 @@ describe('LetterGenerator', () => {
     fireEvent.click(await waitForGenerateEnabled());
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, generated text.' });
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
     fireEvent.click(await screen.findByRole('button', { name: /save letter/i }));
@@ -123,7 +211,7 @@ describe('LetterGenerator', () => {
     await waitFor(() => expect(createLetter).toHaveBeenCalledTimes(1));
     expect(createLetter).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: 'Dear hiring team, generated text.',
+        body: expect.stringContaining('My reviewed CV lists Angular as a skill.'),
         company: 'Redwood Software',
         role: 'Senior Frontend Engineer',
         type: 'motivation_letter',

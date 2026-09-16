@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApplicationExecutor, ExecutorPolicyError, type CdpTransport } from '../src/executor.js';
+import { ApplicationExecutor, ExecutorPolicyError, ExecutorTimeoutError, type CdpTransport } from '../src/executor.js';
 import type { ApplicationTargetPolicy } from '../src/target-policy.js';
 
 function fakeTransport(responses: Record<string, unknown> = {}) {
@@ -1028,6 +1028,41 @@ describe('ApplicationExecutor: capture and handoff', () => {
     const result = executor.handoff('login_wall');
     expect(result).toEqual({ action: 'handoff', reason: 'login_wall' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('ApplicationExecutor: policy.timeoutMs', () => {
+  it('cuts off a CDP call that never resolves at the configured policy.timeoutMs', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport: CdpTransport = {
+        sendCommand() {
+          return new Promise(() => {
+            /* a target that stopped answering: this call never settles on its own */
+          });
+        },
+      };
+      const executor = new ApplicationExecutor(transport, fullPolicy({ timeoutMs: 5_000 }));
+
+      const pending = executor.openTarget('https://fixture.example.invalid/apply');
+      const assertion = expect(pending).rejects.toThrow(ExecutorTimeoutError);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never times out a call that resolves well within the budget', async () => {
+    const { transport } = fakeTransport({ 'Page.captureScreenshot': { data: 'ok' } });
+    const executor = new ApplicationExecutor(transport, fullPolicy({ timeoutMs: 30_000 }));
+    await expect(executor.capture()).resolves.toBe('ok');
+  });
+
+  it('treats a non-positive timeoutMs as unbounded rather than an instant failure', async () => {
+    const { transport } = fakeTransport({ 'Page.captureScreenshot': { data: 'ok' } });
+    const executor = new ApplicationExecutor(transport, fullPolicy({ timeoutMs: 0 }));
+    await expect(executor.capture()).resolves.toBe('ok');
   });
 });
 

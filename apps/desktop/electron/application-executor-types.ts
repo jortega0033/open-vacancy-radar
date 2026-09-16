@@ -87,12 +87,19 @@ export interface ApplyApplicationFieldMapInput {
  * `attachment_unconfirmed` means the file was sent to the control but the browser did not report it
  * back on that control afterwards -- a concrete failure, deliberately distinct from success, so an
  * attempt is never marked ready on an attachment nothing verified.
+ *
+ * `preparation_abandoned` is the only one of these that is not about the page or the field map at
+ * all: the *caller* stopped being the run entitled to prepare this attempt part-way through
+ * applying (see `application-pipeline.ts`'s "the preparation fence"), so the remaining assignments
+ * were not committed. Only ever produced when the caller passes a `stillLive` check, which the
+ * renderer bridge never does.
  */
 export type ApplyApplicationFieldMapRefusalReason =
   | FieldMapRefusalReason
   | ArtifactUploadRefusalReason
   | 'attachment_requires_manual_handoff'
-  | 'attachment_unconfirmed';
+  | 'attachment_unconfirmed'
+  | 'preparation_abandoned';
 
 /** One confirmed attachment. `attachedFileName` is what the *page* reported after the upload, read
  * back from the control itself -- not an echo of what was requested. No path, ever. */

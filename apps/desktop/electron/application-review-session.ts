@@ -143,7 +143,8 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     (url) => console.warn('[application-executor] blocked an off-policy navigation', { attemptId: input.attemptId, policyId: policy.id, url }),
   );
   const executor = new ApplicationExecutor(view.transport, policy);
-  activeReviews.set(input.attemptId, { view, executor, targetUrl: input.targetUrl, policy, input });
+  const registered: ActiveReview = { view, executor, targetUrl: input.targetUrl, policy, input };
+  activeReviews.set(input.attemptId, registered);
 
   try {
     await executor.openTarget(input.targetUrl);
@@ -152,8 +153,13 @@ export async function openApplicationReview(input: OpenApplicationReviewInput): 
     return { snapshot, screenshotBase64, readiness: await executor.evaluateReadiness(), handoffShown: false };
   } catch (err) {
     // A failed open leaves nothing for the caller to clean up -- release it here rather than
-    // requiring a matching closeReview() the caller has no way to know it needs to make.
-    activeReviews.delete(input.attemptId);
+    // requiring a matching closeReview() the caller has no way to know it needs to make. Guarded by
+    // identity, not just attemptId: since the preparation-abandonment path (application-pipeline.ts's
+    // ABANDONED branch) can now close *this* attempt's review out from under a still-running open
+    // (calling closeApplicationReview before this call ever settles), a slow-to-fail open must not
+    // delete a *replacement* review that has since registered under the same attempt id -- only ever
+    // its own entry.
+    if (activeReviews.get(input.attemptId) === registered) activeReviews.delete(input.attemptId);
     view.destroy();
     throw err;
   }
@@ -196,10 +202,26 @@ interface PlannedAttachment {
  * `db` is a parameter rather than something this module resolves for itself, the same shape
  * `submitApplicationReview` already has: it keeps this function directly callable from a test
  * against an in-memory workspace, and keeps the "who owns the database handle" answer in `main.ts`.
+ *
+ * `stillLive`, when given, is re-asked immediately before every single write this function commits
+ * to the page -- each fill, each select, each attach -- and never once at the top. The caller that
+ * passes one is `application-pipeline.ts`'s fenced preparation path, whose run can stop being the
+ * one entitled to this attempt at any moment (see "the preparation fence" there), including while
+ * a `fill` this function already issued is still out. Checking only on entry would mean an
+ * abandoned run keeps typing into the page a replacement run now owns, for as long as its
+ * assignment list lasts. It is a separate parameter rather than a field on
+ * `ApplyApplicationFieldMapInput` on purpose: that type is the renderer bridge's wire contract, and
+ * a function cannot cross IPC.
+ *
+ * What it bounds and what it does not: the write in flight when the fence moves still lands, since
+ * nothing here can cancel a CDP round trip already issued. So the guarantee is "at most one further
+ * committed field", not "none" -- and the pipeline's own durable record of what was typed
+ * (`recordPreparedApplicationFields`) is fenced separately and discarded entirely.
  */
 export async function applyApplicationFieldMap(
   db: WorkspaceDb,
   input: ApplyApplicationFieldMapInput,
+  stillLive?: () => boolean,
 ): Promise<ApplyApplicationFieldMapResult> {
   const active = activeReviews.get(input.attemptId);
   if (!active) {
@@ -209,6 +231,15 @@ export async function applyApplicationFieldMap(
   if (!snapshot) {
     throw new Error(`attempt ${input.attemptId} has no snapshot yet`);
   }
+
+  /** The refusal every abandoned commit point below returns. Shaped like every other refusal here
+   * -- returned, never thrown -- because a fenced-out run is an expected end, not an error. */
+  const abandoned = (): ApplyApplicationFieldMapResult => ({
+    ok: false,
+    reason: 'preparation_abandoned',
+    detail: `the run preparing attempt ${input.attemptId} was abandoned, so the remaining assignments were not applied`,
+  });
+  const fencedOut = (): boolean => stillLive !== undefined && !stillLive();
 
   const result = validateFieldMap({
     raw: input.fieldMap,
@@ -231,6 +262,9 @@ export async function applyApplicationFieldMap(
   const planned: PlannedAttachment[] = [];
   for (const assignment of result.fieldMap.assignments) {
     if (assignment.source.kind !== 'artifact') continue;
+    // Resolution re-reads and re-hashes the staged file, which is slow enough to be worth not doing
+    // at all once this run has been fenced out -- and nothing here has touched the page yet.
+    if (fencedOut()) return abandoned();
     const { artifactId } = assignment.source;
     const resolved = await resolveUploadArtifact(db, input.attemptId, artifactId, active.policy);
     if (!resolved.ok || !resolved.file) {
@@ -256,6 +290,9 @@ export async function applyApplicationFieldMap(
   let appliedCount = 0;
   let verifiedCount = 0;
   for (const assignment of result.fieldMap.assignments) {
+    // Re-asked per assignment, not once for the loop: each `fill`/`select` is its own round trip to
+    // a page that may have changed hands since the previous one returned.
+    if ((assignment.source.kind === 'value' || assignment.source.kind === 'option') && fencedOut()) return abandoned();
     if (assignment.source.kind === 'value') {
       const value = valueByRef.get(assignment.source.valueRef);
       if (value === undefined) throw new Error(`valueRef ${assignment.source.valueRef} vanished after validation`);
@@ -273,6 +310,9 @@ export async function applyApplicationFieldMap(
   // Phase 3: attach, then confirm off the control itself.
   const attachments: ApplicationAttachmentResult[] = [];
   for (const { fieldRef, file } of planned) {
+    // The most consequential write of the three: an abandoned run attaching here would put *its*
+    // CV on the form the replacement run is about to have a person submit.
+    if (fencedOut()) return abandoned();
     try {
       await active.executor.attach(fieldRef, file);
     } catch (err) {

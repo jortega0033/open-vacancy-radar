@@ -747,9 +747,12 @@ async function discoverJobRemotely(
           salaryPeriod: numberValue(salary?.min) === null ? null : 'annual',
           advertisedMinimum: numberValue(salary?.min),
           salaryProvenance: 'reviewed_structured',
-          description: Array.isArray(job.skillsRequired)
-            ? job.skillsRequired.filter((value): value is string => typeof value === 'string').join(' ')
-            : null,
+          // `job.skillsRequired` (a keyword list, not prose) used to be joined into this field --
+          // silently passing it off as the job description corrupts CV-tailoring/cover-letter
+          // grounding with plausible-looking wrong text. This API has no free-text description
+          // field at all, so `null` (the same "we don't have this" convention every other source
+          // uses when a description is genuinely absent) is the honest value here.
+          description: null,
           postedAt: isoPostedAt(stringValue(job.createdAt)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,

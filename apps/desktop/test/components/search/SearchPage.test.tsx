@@ -1185,6 +1185,7 @@ describe('SearchPage', () => {
       location: 'Worldwide',
       vacancyKey: 'ww-1',
       salary: 'from USD 120,000/yr',
+      arrangement: 'full_time',
       verification: 'Not available for this vacancy',
       matchPercent: 75,
       sourceUrl: 'https://example.invalid/jobs/ww-1',

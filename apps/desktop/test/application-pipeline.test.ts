@@ -42,11 +42,31 @@ import type { CdpDomNode } from '@agent-dock/application-executor';
 const { printQueue } = vi.hoisted(() => ({ printQueue: [] as Uint8Array[] }));
 const { printToPDF } = vi.hoisted(() => ({ printToPDF: vi.fn() }));
 
+/**
+ * A one-shot brake on the next PDF render, armed by `holdNextPdfRender()` below.
+ *
+ * `printToPDF` is the real step this pipeline can hang inside for minutes with nothing able to
+ * cancel it -- an offscreen `BrowserWindow` loading a URL and printing it -- so it is where a test
+ * about a *late* write has to hold a run. The hold is taken before the queued bytes are shifted, so
+ * a run parked here does not hold on to the PDF a later run needs: the run that gets there next
+ * takes the next queued render, and the held one takes whatever is still queued when it wakes up.
+ */
+const { printHold } = vi.hoisted(() => ({
+  printHold: { pending: null as Promise<void> | null, entered: null as (() => void) | null },
+}));
+
 vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = {
       printToPDF: async (): Promise<Buffer> => {
         printToPDF();
+        const held = printHold.pending;
+        if (held) {
+          printHold.pending = null;
+          printHold.entered?.();
+          printHold.entered = null;
+          await held;
+        }
         return Buffer.from(printQueue.shift() ?? new Uint8Array());
       },
     };
@@ -60,9 +80,10 @@ vi.mock('../electron/application-view.js', () => ({ createApplicationView }));
 
 const { createWorkspaceDb } = await import('../electron/workspace/client.js');
 const workspace = await import('../electron/workspace/repository.js');
-const { FIXTURE_FORM_URLS } = await import('../electron/application-target-policies.js');
+const { FIXTURE_FORM_URLS, setAutoApplyEnabled } = await import('../electron/application-target-policies.js');
 const pipeline = await import('../electron/application-pipeline.js');
 const { closeAllApplicationReviews } = await import('../electron/application-review-session.js');
+const { fetchWorkableJobDetail, workableJobReferenceFromUrl } = await import('@open-vacancy-radar/vacancy-engine');
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 import type {
   ApplicationPipelineDeps,
@@ -141,6 +162,19 @@ interface FakeView {
 
 const views: FakeView[] = [];
 
+/**
+ * A one-shot brake on the next CDP command of a given method, armed by `holdNextCdpCommand()`.
+ *
+ * The page half of what `printHold` does for renders: `Page.navigate` is where a real preparation
+ * hangs when the target site stops answering, and it is the one place a run has already registered
+ * its review but has no snapshot on it yet.
+ */
+const cdpHold: { method: string | null; pending: Promise<void> | null; entered: (() => void) | null } = {
+  method: null,
+  pending: null,
+  entered: null,
+};
+
 interface ControlState {
   kind: 'text' | 'checkbox' | 'radio' | 'select' | 'file';
   value: string;
@@ -199,6 +233,14 @@ function fakeView(tree: CdpDomNode) {
   }
 
   const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (cdpHold.method === method && cdpHold.pending) {
+      const held = cdpHold.pending;
+      cdpHold.method = null;
+      cdpHold.pending = null;
+      cdpHold.entered?.();
+      cdpHold.entered = null;
+      await held;
+    }
     const backendNodeId = typeof params?.backendNodeId === 'number' ? params.backendNodeId : undefined;
     switch (method) {
       case 'Page.navigate':
@@ -453,6 +495,24 @@ function resumePdf(): Uint8Array {
   return new Uint8Array(doc.output('arraybuffer'));
 }
 
+/** What the tailoring session answers on the happy path: the reviewed source CV, unchanged. Shared
+ * rather than inlined so a test that makes that session *hang* can release it with exactly what a
+ * real one would have returned, and the abandoned run genuinely carries on from where it was stuck
+ * instead of failing out of the hang and proving nothing. */
+function tailoredResumeResponse(): { ok: boolean; text: string } {
+  return {
+    ok: true,
+    text: JSON.stringify({
+      contact: SOURCE_CV.contact,
+      summary: SOURCE_CV.summary,
+      experience: SOURCE_CV.experience,
+      projects: [],
+      skills: ['TypeScript'],
+      education: [],
+    }),
+  };
+}
+
 function coverLetterPdf(): Uint8Array {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   doc.setProperties({ title: 'Cover Letter' });
@@ -501,24 +561,25 @@ function seedCv(database: WorkspaceDb): string {
 }
 
 beforeEach(() => {
+  // This whole suite is about the path an attempt takes once its target *is* an approved one, so it
+  // has to run with the auto-apply kill switch on -- which is what `main.ts` does for a workspace
+  // whose `autoApplyEnabled` setting is true, and is not how this release ships. With the switch in
+  // its shipped (off) position every vacancy below would resolve to no policy and settle on the
+  // manual review card, which is `application-auto-apply-flag.test.ts`'s subject, not this file's.
+  setAutoApplyEnabled(true);
   dir = mkdtempSync(join(tmpdir(), 'ovr-pipeline-test-'));
   ({ db, close: closeDb } = createWorkspaceDb(dir));
   views.length = 0;
   printQueue.length = 0;
+  printHold.pending = null;
+  printHold.entered = null;
+  cdpHold.method = null;
+  cdpHold.pending = null;
+  cdpHold.entered = null;
   printToPDF.mockClear();
   createApplicationView.mockReset().mockImplementation(() => fakeView(noUploadFormTree()));
   generateFieldMap = vi.fn(async (prompt: string) => ({ ok: true, text: deterministicFieldMapper(prompt) }));
-  generateTailoredResume = vi.fn(async () => ({
-    ok: true,
-    text: JSON.stringify({
-      contact: SOURCE_CV.contact,
-      summary: SOURCE_CV.summary,
-      experience: SOURCE_CV.experience,
-      projects: [],
-      skills: ['TypeScript'],
-      education: [],
-    }),
-  }));
+  generateTailoredResume = vi.fn(async () => tailoredResumeResponse());
   generateCoverLetter = vi.fn(async () => ({
     ok: true,
     text: '{"factIds":["summary","experience-1","skill-1"]}',
@@ -532,6 +593,9 @@ afterEach(() => {
   closeAllApplicationReviews();
   closeDb();
   rmSync(dir, { recursive: true, force: true });
+  // Back to the refusing default, so nothing this file turns on leaks into a later suite sharing
+  // the same module instance.
+  setAutoApplyEnabled(false);
 });
 
 /** Every normal run stages the attempt's tailored CV and its generated or requested letter. */
@@ -807,6 +871,9 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
   });
 
   it('re-queues an attempt the daemon never heard about, without touching a paused one', async () => {
+    // Two distinct vacancies, deliberately at two distinct fixture URLs: since #331's identity fix,
+    // the concurrency guard would (correctly) refuse the second `createApplicationAttempt` here as a
+    // duplicate of the first if both shared one canonical URL, which is not what this test is about.
     // The state a start leaves behind when the daemon was unreachable: the attempt is recorded, the
     // queue knows nothing about it, and the dedup rule would refuse a fresh start for the vacancy.
     const stranded = workspace.createApplicationAttempt(db, {
@@ -820,7 +887,7 @@ describe('acceptance 2: navigation and restarts never duplicate an attempt', () 
     });
     const paused = workspace.createApplicationAttempt(db, {
       vacancyKey: 'vac-paused',
-      canonicalUrl: FIXTURE_FORM_URLS.withoutUpload,
+      canonicalUrl: FIXTURE_FORM_URLS.withUpload,
       company: 'Northwind Freight',
       role: 'Logistics Platform Engineer',
       sourceCvContentHash: 'hash',
@@ -1032,6 +1099,203 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('no job description');
     expect(printToPDF).not.toHaveBeenCalled();
   });
+
+  it('proceeds instead of refusing when fetchMissingJobDescription recovers one on demand', async () => {
+    // Real-world regression: Himalayas and Jobgether scan results routinely carry no description at
+    // all, even though the source itself has one -- see the vacancy-engine on-demand fetch this
+    // hook exists to call. This only asserts the pipeline's own side of that contract: it must
+    // actually use what the hook returns rather than refusing anyway.
+    deps.fetchMissingJobDescription = vi.fn(async (canonicalUrl: string) => {
+      expect(canonicalUrl).toBe(VACANCY.applyUrl);
+      return { description: 'Fetched on demand: build great frontend software.', complete: true };
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-fetch-jd', description: null, descriptionComplete: false },
+    });
+    queueApplicationDocumentRenders();
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(deps.fetchMissingJobDescription).toHaveBeenCalledTimes(1);
+    expect(ticked.result?.outcome).toBe('ready');
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    expect(attempt.jdSnapshot).toBe('Fetched on demand: build great frontend software.');
+    expect(attempt.jdSnapshotHash).toBe(
+      createHash('sha256').update('Fetched on demand: build great frontend software.').digest('hex'),
+    );
+  });
+
+  it('still refuses when fetchMissingJobDescription itself finds nothing, rather than looping or crashing', async () => {
+    deps.fetchMissingJobDescription = vi.fn(async () => null);
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-fetch-jd-fails', description: null, descriptionComplete: false },
+    });
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(deps.fetchMissingJobDescription).toHaveBeenCalledTimes(1);
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('no job description');
+    expect(printToPDF).not.toHaveBeenCalled();
+  });
+
+  it('still refuses, without throwing, when fetchMissingJobDescription itself rejects', async () => {
+    deps.fetchMissingJobDescription = vi.fn(async () => {
+      throw new Error('network unreachable');
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-fetch-jd-throws', description: null, descriptionComplete: false },
+    });
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('no job description');
+  });
+
+  it('still refuses as incomplete when fetchMissingJobDescription itself reports the description is not complete', async () => {
+    deps.fetchMissingJobDescription = vi.fn(async () => ({ description: 'A partial teaser only.', complete: false }));
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-fetch-jd-incomplete', description: null, descriptionComplete: false },
+    });
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    // Persisted (so a later retry doesn't refetch it) but still correctly refused as incomplete.
+    expect(attempt.jdSnapshot).toBe('A partial teaser only.');
+    expect(attempt.checkpointDetail).toContain('incomplete');
+  });
+
+  // --------------------------------------------------- the real workable_global on-demand fetch
+  //
+  // The tests above stand the hook itself in for; these three run the *real* vacancy-engine fetch
+  // `main.ts` wires into it, over fixture HTTP responses shaped like the ones Workable's live
+  // endpoints actually returned when this was built. `workable_global` is the highest-volume
+  // discovery source in the app and its feed carries no description at all, so what matters is not
+  // only that a recovered description is used, but that a failed recovery still lands on the same
+  // honest refusal rather than anything invented.
+
+  const WORKABLE_SHORT_URL = 'https://apply.workable.com/j/F587C0434B';
+  const WORKABLE_CANONICAL_URL = 'https://apply.workable.com/heartstrings/j/F587C0434B';
+  const WORKABLE_DETAIL_URL = 'https://apply.workable.com/api/v2/accounts/heartstrings/jobs/F587C0434B';
+
+  /** The same two-step resolve-then-fetch `main.ts` performs, over canned responses instead of the
+   * network: the short feed URL 301s to a canonical one naming the account, and only then is the
+   * per-job detail endpoint reachable. */
+  function workableJdFetcher(detail: { status: number; body: string }) {
+    const http = {
+      async get(url: string) {
+        if (url === WORKABLE_SHORT_URL) {
+          return { status: 200, finalUrl: WORKABLE_CANONICAL_URL, headers: {}, body: '<!doctype html>' };
+        }
+        if (url === WORKABLE_DETAIL_URL) {
+          return { status: detail.status, finalUrl: url, headers: {}, body: detail.body };
+        }
+        throw new Error(`unexpected request: ${url}`);
+      },
+      async postJson() {
+        throw new Error('the on-demand description fetch never POSTs');
+      },
+    };
+    return vi.fn(async (canonicalUrl: string) => {
+      const reference = workableJobReferenceFromUrl(canonicalUrl);
+      if (reference === null) return null;
+      const fetched = await fetchWorkableJobDetail(http, reference);
+      return fetched.description === null ? null : { description: fetched.description, complete: true };
+    });
+  }
+
+  it('recovers a workable_global description from the real per-job endpoint and tailors from it', async () => {
+    deps.fetchMissingJobDescription = workableJdFetcher({
+      status: 200,
+      body: JSON.stringify({
+        shortcode: 'F587C0434B',
+        title: 'Logistics Platform Engineer',
+        description: '<h3>About us</h3><p>Northwind Freight runs a routing platform.</p>',
+        requirements: '<h3>Requirements</h3><ul><li>Five years of TypeScript</li></ul>',
+        benefits: '<h3>Benefits</h3><ul><li>Paid time off</li></ul>',
+      }),
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-workable-jd', applyUrl: WORKABLE_SHORT_URL, description: null, descriptionComplete: false },
+    });
+    queueApplicationDocumentRenders();
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(deps.fetchMissingJobDescription).toHaveBeenCalledWith(WORKABLE_SHORT_URL);
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    // Requirements are joined in, not dropped: on a real Workable posting that is where the role's
+    // must-haves live, and tailoring against the blurb alone would miss them.
+    expect(attempt.jdSnapshot).toContain('Northwind Freight runs a routing platform.');
+    expect(attempt.jdSnapshot).toContain('Five years of TypeScript');
+    expect(attempt.jdSnapshotHash).toBe(createHash('sha256').update(attempt.jdSnapshot).digest('hex'));
+    // It got all the way past the JD guard to the handoff every unsupported destination gets --
+    // apply.workable.com is a real employer site, so it never inherits the fixture's trust.
+    expect(ticked.result?.outcome).toBe('needs_user');
+    expect(attempt.checkpointDetail).toContain('apply on the site yourself');
+    expect(attempt.checkpointDetail).not.toContain('no job description');
+  });
+
+  it('falls back to the honest refusal when the listing is gone and the endpoint 404s', async () => {
+    deps.fetchMissingJobDescription = workableJdFetcher({ status: 404, body: 'Job not found' });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-workable-404', applyUrl: WORKABLE_SHORT_URL, description: null, descriptionComplete: false },
+    });
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    expect(attempt.checkpointDetail).toContain('no job description');
+    expect(attempt.jdSnapshot.trim()).toBe('');
+    expect(printToPDF).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the honest refusal when the endpoint answers with something unparseable', async () => {
+    // The fetch throws here rather than returning null -- a changed response shape must never be
+    // read as "this listing has no description", and the pipeline must survive the throw either way.
+    deps.fetchMissingJobDescription = workableJdFetcher({ status: 200, body: '<!doctype html><html>nope</html>' });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-workable-malformed', applyUrl: WORKABLE_SHORT_URL, description: null, descriptionComplete: false },
+    });
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(ticked.result?.outcome).toBe('needs_user');
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    expect(attempt.checkpointDetail).toContain('no job description');
+    expect(attempt.jdSnapshot.trim()).toBe('');
+    expect(printToPDF).not.toHaveBeenCalled();
+  });
+
+  it('discards a description fetched on demand if the attempt moved on while the fetch was in flight, rather than clobbering it', async () => {
+    // Simulates the exact race the guard in `recordFetchedJobDescription` exists for: something else
+    // (a cancel, a reset) changes this attempt's checkpoint away from 'reading_jd' between the fetch
+    // starting and resolving. The fetch itself still "succeeds" from the caller's point of view, but
+    // its result must never be written back onto a row that has since moved on.
+    let attemptId = '';
+    deps.fetchMissingJobDescription = vi.fn(async () => {
+      workspace.updateApplicationAttempt(db, attemptId, { checkpoint: 'queued', checkpointDetail: 'raced' });
+      return { description: 'Fetched too late to matter.', complete: true };
+    });
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-fetch-jd-raced', description: null, descriptionComplete: false },
+    });
+    attemptId = started.attemptId!;
+
+    const ticked = await pipeline.runNextApplicationAttempt(deps);
+
+    expect(deps.fetchMissingJobDescription).toHaveBeenCalledTimes(1);
+    expect(ticked.result?.outcome).toBe('needs_user');
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    expect(attempt.checkpointDetail).toContain('no job description');
+    // The fetched text was discarded, not silently persisted onto a row that moved on mid-fetch.
+    expect(attempt.jdSnapshot.trim()).toBe('');
+    expect(printToPDF).not.toHaveBeenCalled();
+  });
 });
 
 describe('acceptance 5: verified uploads and live readiness decide whether the attempt is ready', () => {
@@ -1145,6 +1409,288 @@ describe('acceptance 5: verified uploads and live readiness decide whether the a
     expect(ticked.result?.outcome).toBe('needs_user');
     expect(workspace.getApplicationAttempt(db, started.attemptId!).checkpointDetail).toContain('could not be produced');
     expect(createApplicationView).not.toHaveBeenCalled();
+  });
+});
+
+// ------------------------------------------------------- a preparation that stops making progress
+
+/**
+ * Makes the tailoring session hang until the test releases it, and then answer normally.
+ *
+ * The generation session is the honest place to simulate this: it is one of the two steps in a real
+ * preparation with no timeout of its own (the other is the CDP page work), and it is what was
+ * actually stuck in the incident this fence exists for. It is also mid-run -- after two checkpoint
+ * writes, before any document is staged -- so a run held here has plenty left to write with when it
+ * finally wakes up, which is exactly what has to be proven harmless.
+ */
+function holdTailoringSession(): { release: () => void } {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  generateTailoredResume.mockImplementationOnce(async () => {
+    await held;
+    return tailoredResumeResponse();
+  });
+  return { release };
+}
+
+/**
+ * Makes the *next* PDF render hang until the test releases it.
+ *
+ * Deliberately a later step than `holdTailoringSession`: a run parked in the tailoring session stops
+ * at the explicit `isLivePreparation` checkpoint on its way out and never reaches a write at all,
+ * which proves the checkpoint and nothing else. A run parked inside `printToPDF` is already *inside*
+ * `stageApplicationDocuments` -- the fence for its staging write was checked and passed before the
+ * render began -- so when it wakes up it is holding finished, contract-passing PDF bytes and is one
+ * statement away from deleting the replacement run's artifact row, removing its file from disk, and
+ * registering its own in their place. That is the write this suite has to prove cannot land.
+ */
+function holdNextPdfRender(): { entered: Promise<void>; release: () => void } {
+  let release!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
+  printHold.pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  printHold.entered = markEntered;
+  return { entered, release };
+}
+
+/** The same brake, one step further on: parks a run inside a single CDP command. */
+function holdNextCdpCommand(method: string): { entered: Promise<void>; release: () => void } {
+  let release!: () => void;
+  let markEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
+  cdpHold.method = method;
+  cdpHold.pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  cdpHold.entered = markEntered;
+  return { entered, release };
+}
+
+/**
+ * Resolves once a fenced-out run has actually stopped, so no test has to guess how many turns of the
+ * event loop that takes or sleep for a made-up number of milliseconds. `runApplicationAttempt` logs
+ * exactly once on that path, which is the only signal an abandoned run gives anyone -- by design,
+ * since nothing is waiting on its result any more.
+ */
+function watchForAbandonedRun(): { log: (message: string) => void; stopped: Promise<void> } {
+  let stop!: () => void;
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  return {
+    log: (message: string) => {
+      if (message.includes('its remaining writes were discarded')) stop();
+    },
+    stopped,
+  };
+}
+
+/**
+ * Waits for a released run to stop -- but never forever. A fenced-out run stops on its next
+ * statement, so in the passing case this returns immediately. A run that was *not* fenced would
+ * instead carry on writing, and these tests have to fail on what it wrote rather than by timing out
+ * on a signal a broken fence would never send.
+ */
+async function abandonedRunSettled(stopped: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    stopped,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 500);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
+/**
+ * The lease-fencing half of the hard-timeout work: a preparation that stops making progress must
+ * give the daemon's one global lease back (or the queue stays stopped until the app is restarted),
+ * and the abandoned run must then be incapable of writing over the run that replaces it.
+ *
+ * Every other test in this file runs with no ceiling configured at all, which is the golden path's
+ * own regression check: nothing here changes what a normal run does.
+ */
+describe('acceptance 6: an abandoned preparation frees the lease and cannot write afterwards', () => {
+  it('gives the lease back at the ceiling and discards every write the abandoned run still tries', async () => {
+    const { log, stopped } = watchForAbandonedRun();
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const attemptId = started.attemptId!;
+    const stuck = holdTailoringSession();
+    // Real PDFs are waiting for it: if the fence did not hold, this run would stage them
+    // successfully rather than failing for some unrelated reason.
+    queueApplicationDocumentRenders();
+
+    const ticked = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 20, log });
+
+    expect(ticked.abandoned).toBe(true);
+    expect(ticked.result).toBeNull();
+
+    // The lease is back, the entry is schedulable again, and the next tick really can take it --
+    // which is the whole point of noticing the hang.
+    expect(queue.lease).toBeNull();
+    expect(queue.entries.get(attemptId)).toBe('queued');
+    const reacquired = await queue.port.acquireLease();
+    expect(reacquired).toMatchObject({ attemptId });
+    await queue.port.release(reacquired!.leaseId, 'requeue');
+
+    // Now let the abandoned run carry on from where it was stuck. It writes nothing.
+    const frozen = workspace.getApplicationAttempt(db, attemptId);
+    stuck.release();
+    await abandonedRunSettled(stopped);
+
+    expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(frozen);
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+    expect(printToPDF).not.toHaveBeenCalled();
+    expect(createApplicationView).not.toHaveBeenCalled();
+  });
+
+  it('leaves a slow but healthy preparation alone: one generation, ordinary writes', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const slow = holdTailoringSession();
+    queueApplicationDocumentRenders();
+
+    // Slow, not stuck: the session takes its time and then answers, well inside the ceiling. Getting
+    // this wrong in the other direction -- discarding a run that was only being slow -- would throw
+    // away a real application's documents, so it is asserted as explicitly as the hang is.
+    setTimeout(slow.release, 30);
+    const ticked = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 30_000 });
+
+    expect(ticked.abandoned).toBeUndefined();
+    expect(ticked.result?.outcome).toBe('ready');
+    const attempt = workspace.getApplicationAttempt(db, started.attemptId!);
+    expect(attempt.checkpoint).toBe('ready');
+    expect(attempt.preparedFields?.fields.find((field) => field.label === 'fullName')?.value).toBe('Jamie Rivera');
+    expect(workspace.listApplicationArtifacts(db, attempt.id).map((artifact) => artifact.kind))
+      .toEqual(['cv_pdf', 'cover_letter_pdf']);
+    expect(queue.entries.get(attempt.id)).toBe('done');
+  });
+
+  it('ends two lease cycles for one attempt in the fresh run\'s state, never a mix of both', async () => {
+    const { log, stopped } = watchForAbandonedRun();
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const attemptId = started.attemptId!;
+
+    // Cycle 1 hangs and is abandoned at the ceiling.
+    const stuck = holdTailoringSession();
+    queueApplicationDocumentRenders();
+    const first = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 20, log });
+    expect(first.abandoned).toBe(true);
+
+    // Cycle 2 takes the freed lease and genuinely finishes, while cycle 1 is still out there
+    // holding a resume it is about to want to write.
+    queueApplicationDocumentRenders();
+    const second = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 30_000 });
+    expect(second.result?.outcome).toBe('ready');
+    const afterFreshRun = workspace.getApplicationAttempt(db, attemptId);
+    const freshArtifacts = workspace.listApplicationArtifacts(db, attemptId);
+
+    stuck.release();
+    await abandonedRunSettled(stopped);
+
+    // Both runs really did generate a CV, and exactly one of them left a trace.
+    expect(generateTailoredResume).toHaveBeenCalledTimes(2);
+    expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(afterFreshRun);
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(freshArtifacts);
+    expect(views).toHaveLength(1);
+  });
+
+  it('never lets a PDF render that was already in flight overwrite the replacement run\'s documents', async () => {
+    // The three tests above all park their run in the tailoring session, which is *before* the
+    // explicit checkpoint on the way into staging -- so a fenced-out run there stops at a hand-placed
+    // gate and never starts a durable write at all. This one parks it a step later, inside the CV's
+    // own `printToPDF`, which is the case the leading-edge fence could not see: the fence for that
+    // staging write was checked and passed before the render began, and every side effect it ends in
+    // (writing the PDF, dropping the superseded row and its file, inserting the new row) happens
+    // after it. Nothing about that write is benign -- it replaces the artifact row and the file the
+    // *live* attempt's pre-submit gate reads, while the form still holds the other run's CV.
+    //
+    // What stops it here is `writeAndRegisterArtifact`'s trailing check, which by the time this run
+    // wakes up has long since moved. The narrower case, where the fence moves *during* that
+    // function's own writes, is `application-artifact-staging-fence.test.ts`'s.
+    const { log, stopped } = watchForAbandonedRun();
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const attemptId = started.attemptId!;
+
+    // Cycle 1 reaches staging and hangs inside the render of its tailored CV.
+    const stuck = holdNextPdfRender();
+    queueApplicationDocumentRenders();
+    const first = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 50, log });
+    expect(first.abandoned).toBe(true);
+    // Not an assumption: the abandoned run really is inside the render, past its own fence check,
+    // and therefore really will try to write when it wakes up.
+    await stuck.entered;
+    expect(printToPDF).toHaveBeenCalledTimes(1);
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual([]);
+
+    // Cycle 2 takes the freed lease and prepares the attempt properly, start to finish.
+    queueApplicationDocumentRenders();
+    const second = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 30_000 });
+    expect(second.result?.outcome).toBe('ready');
+
+    const afterFreshRun = workspace.getApplicationAttempt(db, attemptId);
+    const freshArtifacts = workspace.listApplicationArtifacts(db, attemptId);
+    expect(freshArtifacts.map((artifact) => artifact.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
+    const freshFiles = readdirSync(join(deps.storageRoot, attemptId)).sort();
+
+    // Now the abandoned render finally returns. Its bytes are real and pass the real acceptance
+    // contract, so nothing but the fence stands between them and the database.
+    stuck.release();
+    await abandonedRunSettled(stopped);
+
+    expect(printToPDF).toHaveBeenCalledTimes(3); // cycle 1's CV, cycle 2's CV and letter
+    // The fresh run's rows are the rows, byte for byte: no id was replaced, no hash moved.
+    expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(freshArtifacts);
+    expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(afterFreshRun);
+    // And its files are still on disk: the abandoned run never reached the point of dropping the
+    // superseded CV, so the document the pre-submit gate reads is still the one the form was filled
+    // from.
+    expect(readdirSync(join(deps.storageRoot, attemptId)).sort()).toEqual(freshFiles);
+    expect(views).toHaveLength(1);
+  });
+
+  it('closes the abandoned run\'s review, so a run that hung on the page does not lock out every replacement', async () => {
+    // Giving the lease back is only half of letting go. `openApplicationReview` registers an
+    // attempt *before* it awaits the navigation, so a run abandoned while still opening the page
+    // leaves behind a registration with no snapshot on it -- and the abandoned run must not tear
+    // that down itself, because by the time it notices, the view could already belong to the run
+    // that replaced it. Left alone, the next run reopens, finds the snapshot-less registration and
+    // throws, and the attempt durably lands on `needs_user` about a review that is nobody's.
+    const { log, stopped } = watchForAbandonedRun();
+    const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
+    const attemptId = started.attemptId!;
+
+    const stuckNavigation = holdNextCdpCommand('Page.navigate');
+    queueApplicationDocumentRenders();
+    const first = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 1_000, log });
+
+    expect(first.abandoned).toBe(true);
+    // The run really did get as far as opening a page, which is what makes this the right case.
+    expect(createApplicationView).toHaveBeenCalledTimes(1);
+    await stuckNavigation.entered;
+    expect(views[0]!.destroy).toHaveBeenCalledTimes(1);
+
+    // The replacement run builds its own view and finishes normally.
+    queueApplicationDocumentRenders();
+    const second = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 30_000 });
+
+    expect(second.result?.outcome).toBe('ready');
+    expect(createApplicationView).toHaveBeenCalledTimes(2);
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    expect(attempt.checkpoint).toBe('ready');
+    expect(attempt.checkpointDetail).not.toContain('no snapshot yet');
+
+    // And the run that was stuck on the navigation still writes nothing when it wakes up.
+    stuckNavigation.release();
+    await abandonedRunSettled(stopped);
+    expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(attempt);
   });
 });
 

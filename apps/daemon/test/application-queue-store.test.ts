@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -174,7 +174,17 @@ describe('pause / resume / skip / cancel', () => {
 });
 
 describe('crash / restart recovery', () => {
-  it('reclaims the lease and keeps the checkpoint intact across a simulated restart', () => {
+  /**
+   * Regression for the architecture audit's F-A: a daemon has exactly one spawn point today
+   * (`spawnDaemon()`, called once at app startup, no restart-while-the-app-stays-up path yet), so a
+   * fresh daemon process means Electron main restarted fresh too -- whatever `runApplicationAttempt`
+   * call held the old lease died with that process tree. This test used to assert the opposite (a
+   * restart *reclaims* the lease verbatim), which is exactly the bug: `acquireNextLease()` then
+   * returned `null` forever, indistinguishable from "queue empty," permanently and silently blocking
+   * every future preparation attempt with nothing left in the whole process tree that could ever
+   * call `release()` to free it.
+   */
+  it('clears a lease left over from a previous process life, returning that entry to queued', () => {
     const first = new ApplicationQueueStore({ stateRoot });
     first.enqueue('attempt-1');
     const lease = first.acquireNextLease()!;
@@ -183,8 +193,33 @@ describe('crash / restart recovery', () => {
     // graceful shutdown call on `first`.
     const second = new ApplicationQueueStore({ stateRoot });
 
-    expect(second.currentLease()).toEqual(lease);
-    expect(second.get('attempt-1')!.state).toBe('active');
+    expect(second.currentLease()).toBeNull();
+    expect(second.get('attempt-1')!.state).toBe('queued');
+
+    // Free to be leased again, not permanently wedged behind the stale lease.
+    const reacquired = second.acquireNextLease();
+    expect(reacquired?.attemptId).toBe('attempt-1');
+    expect(reacquired?.leaseId).not.toBe(lease.leaseId);
+  });
+
+  it('does not touch an entry that reached a terminal state before the crash, even if a stale lease still named it', () => {
+    const first = new ApplicationQueueStore({ stateRoot });
+    first.enqueue('attempt-1');
+    first.acquireNextLease();
+    // A snapshot write can legitimately race a process death in between "mark the entry done" and
+    // "clear the lease" -- both happen inside one #persist() call in `release()`, but simulate the
+    // narrower case directly: an entry already terminal by the time startup reconciliation runs.
+    const snapshotPath = join(stateRoot, 'application-queue-v1', 'queue.json');
+    const raw = JSON.parse(readFileSync(snapshotPath, 'utf8')) as {
+      entries: Array<{ attemptId: string; state: string }>;
+      lease: unknown;
+    };
+    raw.entries = raw.entries.map((entry) => (entry.attemptId === 'attempt-1' ? { ...entry, state: 'done' } : entry));
+    writeFileSync(snapshotPath, JSON.stringify(raw));
+
+    const second = new ApplicationQueueStore({ stateRoot });
+    expect(second.currentLease()).toBeNull();
+    expect(second.get('attempt-1')!.state).toBe('done');
   });
 
   it('is a no-op to construct repeatedly: no duplicate entries, no drift', () => {

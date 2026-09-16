@@ -5,7 +5,7 @@ is the map of how the pieces fit together; this file is the walkthrough for maki
 
 ## Prerequisites
 
-- Node 20+ and pnpm (see the `packageManager` field in the root [package.json](package.json) for
+- Node >=22 <23 and pnpm (see the `packageManager` field in the root [package.json](package.json) for
   the exact version this repo was built against).
 - Optionally, a real, authenticated `claude` and/or `codex` CLI install if you want to exercise a
   provider adapter against the real thing, see
@@ -52,6 +52,7 @@ for the full picture and a "what belongs where" table.
 | Change `@agent-dock/client`'s public API | `packages/client/src/index.ts` and `client.ts`: anything not exported from `index.ts` isn't public, see [docs/client-sdk.md](docs/client-sdk.md) |
 | Change packaging (electron-builder config, `resolveDaemonEntry`) | See [docs/packaging.md](docs/packaging.md) first: three real bugs were already found here, each only by actually running `pnpm package:win` |
 | Change the daemon's auth/origin/CORS behavior | `apps/daemon/src/server.ts` and `auth-token.ts`: read [SECURITY.md](SECURITY.md) fully before touching this; it's the load-bearing part of the whole project |
+| Change the Search->Apply application pipeline or its state machine | `apps/desktop/electron/application-pipeline.ts` (checkpoint state machine) and `apps/daemon/src/application-queue-store.ts` (queue state) -- these are two different state machines, not one, so check which side of the pipeline you're actually changing before editing |
 
 ## Normal development workflow
 
@@ -63,6 +64,24 @@ pnpm daemon        # daemon only, no watch (matches how a packaged app would run
 
 Before opening a PR, see [CONTRIBUTING.md](CONTRIBUTING.md#before-opening-a-pr) for the exact
 verification commands expected to pass.
+
+## Running vacancy-engine's CLI standalone
+
+`packages/vacancy-engine/src/cli.ts` runs the discovery pipeline directly, without the desktop app
+or daemon involved -- useful when you're iterating on the engine itself. Copy
+`packages/vacancy-engine/config/.env.example` to `.env` in that same directory (or wherever your
+shell's cwd resolves `dotenv/config` to when you run the script) and fill in the keys you need; every
+key has a working default, so an empty `.env` still runs.
+
+```bash
+pnpm scan            # global-remote:scan -- runs the full worldwide/remote discovery pipeline
+pnpm roster-import    # ats-roster:import -- imports the tracked ATS roster
+pnpm sponsor-sync     # sponsors:sync -- refreshes the IND sponsor baseline
+```
+
+These map to `cli.ts`'s `global-remote:scan`, `ats-roster:import`, and `sponsors:sync` commands
+respectively; `cli.ts` also has `db:migrate` and `ats-sources:import <file>`, run directly with
+`pnpm --filter @open-vacancy-radar/vacancy-engine exec tsx src/cli.ts <command>` if you need them.
 
 ## Testing without paid providers
 

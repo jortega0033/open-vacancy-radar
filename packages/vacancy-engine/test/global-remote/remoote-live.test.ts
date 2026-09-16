@@ -7,7 +7,6 @@ import { SafeHttpClient } from '../../src/crawler/http-client.js';
 import { globalRemoteConfigSchema } from '../../src/global-remote/models.js';
 import {
   discoverRemoote,
-  fetchRemooteJobDetail,
   REMOOTE_PUBLIC_LIMIT,
 } from '../../src/global-remote/remoote-discovery.js';
 import { createAtsHttpClient } from '../../src/pipeline/ats-http-client.js';
@@ -30,7 +29,7 @@ type RemooteTools = {
   };
 };
 
-liveIt('matches the anonymous Remoote tools, search, and detail contracts', async () => {
+liveIt('matches the anonymous Remoote tools and search contracts', async () => {
   const safeHttp = new SafeHttpClient({
     globalConcurrency: 1,
     perDomainConcurrency: 1,
@@ -88,14 +87,4 @@ liveIt('matches the anonymous Remoote tools, search, and detail contracts', asyn
   expect(vacancy.url).toMatch(/^https:\/\/remoote\.app\/jobs\//u);
   expect(vacancy.location.length).toBeGreaterThan(0);
   expect(vacancy.advertisedMinimum === null || vacancy.advertisedMinimum > 0).toBe(true);
-
-  const jobId = Number(vacancy.key.slice('remoote:'.length));
-  const detail = await fetchRemooteJobDetail(atsHttp, jobId);
-  expect(detail.status).toBe('active');
-  if (detail.status !== 'active') throw new Error('Remoote live detail became inactive');
-  expect(detail.job.id).toBe(jobId);
-  expect(detail.job.url).toMatch(new RegExp(`^https://remoote\\.app/jobs/${jobId}(?:-|/?$)`, 'u'));
-  expect(detail.job.location === null || detail.job.location.length > 0).toBe(true);
-  expect(detail.job.advertisedMinimum === null || detail.job.advertisedMinimum > 0).toBe(true);
-  expect(JSON.stringify(detail)).not.toMatch(/employer_apply_url/iu);
 });

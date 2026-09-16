@@ -133,9 +133,40 @@ export function buildApplicationValueTable(input: BuildApplicationValueTableInpu
   return entries;
 }
 
-function describeField(field: SnapshotField): string {
+/**
+ * Describes one field for the generation session, including which frame it lives in whenever that
+ * frame's origin differs from the page's own (`topFrameOrigin`) -- the same comparison the write
+ * path makes in `isFrameFillAllowed`, and deliberately not qualified by `field.active`.
+ *
+ * `!active` was the original qualifier and it missed the page shape that matters most: when
+ * `resolveActiveGroup` finds no group the policy authorizes a write into, it keeps the count-based
+ * dominant group, so a page whose only form is inside a disallowed embed hands these fields over
+ * with `active: true`. Annotating only inactive fields meant the session was told nothing, mapped
+ * values onto them, and the refusal surfaced as an error thrown out of `fill()` part-way through
+ * applying the map instead of an assignment that was never proposed. `active` selects which note
+ * the field gets, never whether it gets one.
+ *
+ * Told here for the same reason `excluded` is: so the session can steer around an assignment
+ * Domain B will refuse anyway. This never changes what the session is *permitted* to propose --
+ * `validateFieldMap`'s `inactive_form_field` rule and the executor's own `requireFillableFrame`
+ * are what actually enforce it, and both still run regardless of what the session answers.
+ *
+ * Limit worth naming: neither a policy's `origins` allowlist nor its `allowedSubFrameOrigins` is an
+ * input here, so a cross-origin field that is part of the active form is described as unfillable.
+ * That is exact for every policy this app ships today (the one real fixture policy allowlists
+ * nothing), and the first policy that authorizes a sub-origin through either mechanism must pass
+ * its allowed origins in rather than let this keep inferring from the origins alone.
+ */
+function describeField(field: SnapshotField, topFrameOrigin: string | undefined): string {
   const parts = [`ref: ${field.fieldRef}`, `label: ${JSON.stringify(field.label)}`, `type: ${field.controlType}`, `required: ${field.required}`];
   if (field.classification) parts.push(`excluded: ${field.classification}`);
+  if (field.frameOrigin !== undefined && topFrameOrigin !== undefined && field.frameOrigin !== topFrameOrigin) {
+    parts.push(
+      field.active
+        ? `frame origin: ${field.frameOrigin} (not this page's own origin: the form found here is inside a third-party embed)`
+        : `frame origin: ${field.frameOrigin} (not this page's own origin, and not part of the active form)`,
+    );
+  }
   if (field.options && field.options.length > 0) {
     parts.push(`options: ${field.options.map((option) => `${option.optionRef}=${JSON.stringify(option.label)}`).join(', ')}`);
   }
@@ -157,7 +188,7 @@ export interface FieldMapGenerationPromptInput {
  * that ignores every line of this prompt cannot produce an assignment that reaches the page.
  */
 export function buildFieldMapGenerationPrompt(input: FieldMapGenerationPromptInput): string {
-  const fields = input.snapshot.fields.map(describeField).join('\n');
+  const fields = input.snapshot.fields.map((field) => describeField(field, input.snapshot.topFrameOrigin)).join('\n');
   const values = input.valueTable.map((entry) => `- ${entry.valueRef}: ${entry.label}`).join('\n');
 
   return [
@@ -175,6 +206,7 @@ export function buildFieldMapGenerationPrompt(input: FieldMapGenerationPromptInp
     '2. Never invent a value, a fieldRef, a valueRef or an optionRef. Only the identifiers above exist.',
     '3. Never assign anything to a field marked excluded. List it under "unmapped" instead.',
     '4. A field you cannot match goes under "unmapped", never under a guess.',
+    '5. Never assign anything to a field carrying a "frame origin" note: it was found in a document embedded from a third party (a chat widget, an ad slot, a vendor script, or an embedded form the page itself does not own), and any assignment to it will be refused before it reaches the page. List it under "unmapped" instead.',
     '',
     'RESPONSE SHAPE:',
     JSON.stringify(

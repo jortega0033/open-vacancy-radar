@@ -67,28 +67,27 @@ describe('AppSidebar', () => {
     onNavigate: NOOP,
     collapsed: false,
     onToggleCollapsed: NOOP,
-    counts: { savedJobs: 3, activeApplications: 2, letters: 5 },
+    counts: { savedJobs: 3, activeApplications: 2, letters: 5, cvDocuments: 0 },
     runtimeLabel: 'Claude Code',
     runtimeState: 'ready' as const,
   };
 
-  it('renders all eight destinations as buttons', () => {
-    // ADI-07 added "AI Workspace" as the eighth. The list is spelled out rather than derived from
-    // PRIMARY_NAV/SECONDARY_NAV on purpose: a check that reads the nav table and compares it to
-    // itself could not fail, and this is the record of what the shell actually offers.
+  it('renders all seven destinations as buttons', () => {
+    // ADI-07 added "AI Workspace" as an eighth destination, but per the product decision in
+    // `.claude/ticket-drafts/draft-agent-workspace-mvp-scope.md` it is hidden from the sidebar
+    // (see `nav.ts`'s `SECONDARY_NAV` comment) -- so it is deliberately absent from this list. The
+    // list is spelled out rather than derived from PRIMARY_NAV/SECONDARY_NAV on purpose: a check
+    // that reads the nav table and compares it to itself could not fail, and this is the record of
+    // what the shell actually offers.
     render(<AppSidebar {...BASE} />);
-    for (const label of [
-      'Search',
-      'Saved Jobs',
-      'Applications',
-      'CV',
-      'Letters',
-      'AI Workspace',
-      'AI Runtime',
-      'Settings',
-    ]) {
+    for (const label of ['Search', 'Saved Jobs', 'Applications', 'CV', 'Letters', 'AI Runtime', 'Settings']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
+  });
+
+  it('never renders an "AI Workspace" entry: the route stays, the sidebar link does not', () => {
+    render(<AppSidebar {...BASE} />);
+    expect(screen.queryByRole('button', { name: 'AI Workspace' })).not.toBeInTheDocument();
   });
 
   it('shows badge counts next to Saved Jobs, Applications and Letters, and only those', () => {
@@ -180,14 +179,14 @@ describe('WorkspaceHeader', () => {
 describe('headerCopy', () => {
   it('has copy for every destination', () => {
     for (const page of NAV_PAGES) {
-      const copy = headerCopy(page, { savedJobs: 0, activeApplications: 0, letters: 0 });
+      const copy = headerCopy(page, { savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
       expect(copy.title.length).toBeGreaterThan(0);
       expect(copy.subtitle.length).toBeGreaterThan(0);
     }
   });
 
   it('folds live counts into the subtitle', () => {
-    const counts = { savedJobs: 7, activeApplications: 4, letters: 2 };
+    const counts = { savedJobs: 7, activeApplications: 4, letters: 2, cvDocuments: 0 };
     expect(headerCopy('saved', counts).subtitle).toBe('7 saved');
     expect(headerCopy('applications', counts).subtitle).toBe('4 active');
     expect(headerCopy('letters', counts).subtitle).toBe('2 documents');
@@ -197,7 +196,7 @@ describe('headerCopy', () => {
     // The prototype invented seven countries; this app has two real pipelines. Header copy is the
     // most visible surface, so it is the one asserted against that regression.
     const joined = NAV_PAGES.map((page) => {
-      const copy = headerCopy(page, { savedJobs: 0, activeApplications: 0, letters: 0 });
+      const copy = headerCopy(page, { savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
       return `${copy.title} ${copy.subtitle}`;
     })
       .join(' ')
@@ -339,7 +338,7 @@ describe('App shell routing', () => {
 
   it('shows live badge counts from the workspace database', async () => {
     installWorkspaceBridge({
-      getCounts: vi.fn().mockResolvedValue({ savedJobs: 12, activeApplications: 4, letters: 9 }),
+      getCounts: vi.fn().mockResolvedValue({ savedJobs: 12, activeApplications: 4, letters: 9, cvDocuments: 0 }),
     });
 
     render(<App />);

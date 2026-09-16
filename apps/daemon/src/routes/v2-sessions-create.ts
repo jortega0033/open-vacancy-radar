@@ -11,8 +11,7 @@ import {
   type OpaqueExtension,
   type ProviderStatus,
 } from '@agent-dock/shared';
-import { resolveModelSelection } from '@agent-dock/vacancy-agent-adapter';
-import type { AgentProvider, ProviderRegistry } from '@agent-dock/agent-runtime';
+import { resolveModelSelection, type AgentProvider, type ProviderRegistry } from '@agent-dock/agent-runtime';
 import type { AuditStore } from '../audit-store.js';
 import { ActiveSessionLimitError } from '../active-session-limiter.js';
 import {

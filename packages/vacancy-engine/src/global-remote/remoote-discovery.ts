@@ -39,20 +39,6 @@ export type RemooteDiscoveryOptions = {
   now?: () => number;
 };
 
-export type RemooteJobDetail =
-  | { status: 'inactive'; job: null }
-  | {
-      status: 'active';
-      job: {
-        id: number;
-        url: string;
-        location: string | null;
-        advertisedMinimum: number | null;
-        currency: string | null;
-        salaryPeriod: string | null;
-      };
-    };
-
 const defaultSearchCache: RemooteSearchCache = new Map();
 
 export function createRemooteSearchCache(): RemooteSearchCache {
@@ -288,63 +274,6 @@ function successfulDiscovery(
     ],
     vacancies: parsed.vacancies,
   };
-}
-
-function parseRemooteDetail(
-  response: Awaited<ReturnType<AtsHttpClient['get']>>,
-  expectedId: number,
-): RemooteJobDetail {
-  const root = parsedRoot(response, 'remoote');
-  const status = stringValue(root.status);
-  if (status === 'not_found' && root.data === null) return { status: 'inactive', job: null };
-  if (status !== 'ok') {
-    throw new AtsResponseError('remoote', 'detail response status is invalid', response.status);
-  }
-
-  const data = record(root.data);
-  const job = record(data?.job);
-  const id = positiveNumber(job?.id);
-  const url = canonicalRemooteJobUrl(job?.remoote_url, expectedId);
-  const applyAction = record(job?.apply_action);
-  const applyUrl = canonicalRemooteJobUrl(applyAction?.url, expectedId);
-  if (id !== expectedId || url === null || applyUrl !== url) {
-    throw new AtsResponseError('remoote', 'detail job contract is invalid', response.status);
-  }
-
-  const salary = record(job?.salary);
-  const location = record(job?.location);
-  return {
-    status: 'active',
-    job: {
-      id,
-      url,
-      location: stringValue(location?.geo_raw),
-      advertisedMinimum: positiveNumber(salary?.min),
-      currency: stringValue(salary?.currency),
-      salaryPeriod: stringValue(salary?.period),
-    },
-  };
-}
-
-export function remooteJobDetailUrl(jobId: number): string {
-  if (!Number.isSafeInteger(jobId) || jobId <= 0) {
-    throw new RangeError('Remoote job ID must be a positive safe integer');
-  }
-  return `${REMOOTE_API_ORIGIN}/remoote/agents/jobs/${jobId}`;
-}
-
-export async function fetchRemooteJobDetail(
-  http: AtsHttpClient,
-  jobId: number,
-): Promise<RemooteJobDetail> {
-  return parseRemooteDetail(
-    await http.get(remooteJobDetailUrl(jobId), {
-      allowedOrigins: [REMOOTE_API_ORIGIN],
-      headers: { Accept: 'application/json' },
-      cache: 'no-store',
-    }),
-    jobId,
-  );
 }
 
 export async function discoverRemoote(

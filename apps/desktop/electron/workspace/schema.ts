@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
+import type { PreparedApplicationFields } from './types.js';
 
 /**
  * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
@@ -105,6 +106,20 @@ export const letters = sqliteTable('letters', {
 export const applications = sqliteTable('applications', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   savedJobId: text('saved_job_id').references(() => savedJobs.id, { onDelete: 'set null' }),
+  /**
+   * `role`, `company`, `location` and `verification` are a frozen snapshot of the vacancy as it
+   * stood when this application was created, copied once from the source `saved_jobs` row and
+   * deliberately never re-read from it afterward -- a later edit in `SavedJobDrawer` does not
+   * propagate here. This is the same "record of what was applied to" semantic `applicationAttempts`
+   * already commits to for `sourceCvContentHash`/`jdSnapshotHash` below: an application is evidence
+   * of what someone actually applied to, not a live view of the saved job.
+   *
+   * The alternative -- re-deriving these from `saved_jobs` whenever `savedJobId` is set -- was
+   * considered and rejected: a saved job's role/company/location/verification can legitimately be
+   * corrected later (a typo fix, a location update) without that correction needing to rewrite
+   * history for an application already created from it. See `deleteSavedJob` in `repository.ts` for
+   * the matching note on the delete side of this relationship.
+   */
   role: text('role').notNull(),
   company: text('company').notNull(),
   location: text('location').notNull().default(''),
@@ -290,7 +305,7 @@ export const applicationAttempts = sqliteTable('application_attempts', {
    * is #277 (R06)'s work, which is why each entry carries its own `verification` field rather than
    * this column implying a read-back that has not happened.
    */
-  preparedFields: text('prepared_fields').notNull().default(''),
+  preparedFields: text('prepared_fields', { mode: 'json' }).$type<PreparedApplicationFields | null>(),
 });
 
 /**
@@ -411,10 +426,28 @@ export const appSettings = sqliteTable('app_settings', {
    * without explicit opt-in would be a surprising, dark-pattern-adjacent change for a local-first
    * tool. */
   minimizeToTrayOnClose: integer('minimize_to_tray_on_close', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the user has been shown the Welcome modal. False by default so a truly fresh
+   * app_settings row (a brand-new install) is not skipped by default; the separate "don't
+   * re-show for an upgrading existing user who already has a CV" logic lives in the renderer. */
+  welcomeSeen: integer('welcome_seen', { mode: 'boolean' }).notNull().default(false),
   /** Whether the app periodically re-scans for vacancies on its own while minimized to the tray
    * (#195). Off by default -- and a no-op in practice unless `minimizeToTrayOnClose` is also on,
    * since nothing else keeps the process alive to run the timer. */
   autoScanEnabled: integer('auto_scan_enabled', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * Whether this app is allowed to treat any site as automated-submission eligible at all -- the
+   * MVP kill switch over #193's auto-apply track. Off by default, and off in every shipped build of
+   * this release: `parseSettingsPatch` deliberately does not accept it, so the renderer cannot turn
+   * it on, and no settings control writes it.
+   *
+   * main.ts reads it alongside the other settings mirrors and hands it to
+   * `application-target-policies.ts`, where it gates `resolvePolicyIdForCanonicalUrl` -- the one
+   * function every caller holding a URL goes through. With it off, no URL resolves to a compiled
+   * policy, so every attempt lands on the manual review card regardless of what the policy table
+   * contains. See that file's own comment for why the switch sits on the resolver rather than on
+   * the table being empty.
+   */
+  autoApplyEnabled: integer('auto_apply_enabled', { mode: 'boolean' }).notNull().default(false),
   defaultLocation: text('default_location').notNull().default(''),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {

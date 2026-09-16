@@ -243,8 +243,10 @@ describe('credential-free JSON and RSS discovery feeds', () => {
     expect(wwrDescription).toContain('Two Microsoft certifications.');
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_first_jobs'))
       .toMatchObject({ postedAt: '2026-08-24T09:00:00.000Z' });
+    // Regression for the mislabeled-description bug: `skillsRequired` (a keyword list, not prose)
+    // must never be passed off as the job description -- it should read as genuinely absent.
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'job_remotely'))
-      .toMatchObject({ company: 'Unspecified employer (JobRemotely)', postedAt: '2026-08-25T09:00:00.000Z' });
+      .toMatchObject({ company: 'Unspecified employer (JobRemotely)', postedAt: '2026-08-25T09:00:00.000Z', description: null });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'remote_ok'))
       .toMatchObject({ postedAt: '2026-08-26T09:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'arbeitnow'))

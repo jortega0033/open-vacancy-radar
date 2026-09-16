@@ -119,6 +119,94 @@ describe('buildFieldMapGenerationPrompt', () => {
     const second = buildFieldMapGenerationPrompt({ attemptId: 'attempt-1', snapshot, valueTable: entries });
     expect(first).toBe(second);
   });
+
+  it('tells the session which fields live in a different frame, so it can avoid an assignment Domain B will refuse anyway (draft-cross-origin-ipc-bridge-visibility)', () => {
+    // Reuses the shape from `application-executor`'s `cross-origin-frame-fill.test.ts`: a
+    // same-origin required field on the real form, plus an inactive field the executor found in
+    // a third-party widget's frame and would refuse to write into.
+    const crossOriginSnapshot: FormSnapshot = {
+      ...snapshot,
+      topFrameOrigin: 'https://careers.employer.invalid',
+      fields: [
+        ...snapshot.fields,
+        field({
+          fieldRef: 'f3333333333333333',
+          label: 'visitorEmail',
+          controlType: 'text',
+          required: false,
+          active: false,
+          frameId: 1,
+          frameOrigin: 'https://chat.vendor.invalid',
+        }),
+      ],
+    };
+    const entries = buildApplicationValueTable({ cvContact: CV_CONTACT, profile: null });
+    const prompt = buildFieldMapGenerationPrompt({ attemptId: 'attempt-1', snapshot: crossOriginSnapshot, valueTable: entries });
+
+    expect(prompt).toContain(
+      'ref: f3333333333333333, label: "visitorEmail", type: text, required: false, frame origin: https://chat.vendor.invalid (not this page\'s own origin, and not part of the active form)',
+    );
+    expect(prompt).toContain('Never assign anything to a field carrying a "frame origin" note');
+    // The employer's own field carries no such annotation: only a field whose `frameOrigin`
+    // actually differs from `topFrameOrigin` gets one, active or not.
+    expect(prompt).toContain('ref: f1111111111111111, label: "fullName", type: text, required: true');
+    expect(prompt).not.toContain('ref: f1111111111111111, label: "fullName", type: text, required: true, frame origin');
+  });
+
+  it('flags the whole form when the only fields on the page are in one disallowed embed, even though every one of them is active', () => {
+    // The zero-eligible-group page, and the exact state the real executor produces for it:
+    // `resolveActiveGroup` filters the page's field groups through `isFrameFillAllowed`, finds
+    // none eligible, and falls back to the count-based dominant group anyway
+    // (`executor.ts`: `if (eligible.length === 0) return fallback;`), so `readPageState` marks
+    // the vendor's fields `active: true` with the vendor's own `frameOrigin`. Nothing here is
+    // same-origin: the top document holds no form of its own.
+    //
+    // Keying the annotation on `!field.active` made this page silently unannotated, which is
+    // worse here than anywhere else: the session would map values onto every one of these
+    // fields and `fill()` would refuse the first of them at `requireFillableFrame`, part-way
+    // through applying the map.
+    const embeddedOnlySnapshot: FormSnapshot = {
+      ...snapshot,
+      topFrameOrigin: 'https://careers.employer.invalid',
+      activeFrameId: 1,
+      fields: [
+        field({ fieldRef: 'f4444444444444444', label: 'fullName', controlType: 'text', required: true, active: true, frameId: 1, frameOrigin: 'https://boards.ats-vendor.invalid' }),
+        field({ fieldRef: 'f5555555555555555', label: 'email', controlType: 'text', required: true, active: true, frameId: 1, frameOrigin: 'https://boards.ats-vendor.invalid' }),
+      ],
+    };
+    const entries = buildApplicationValueTable({ cvContact: CV_CONTACT, profile: null });
+    const prompt = buildFieldMapGenerationPrompt({ attemptId: 'attempt-1', snapshot: embeddedOnlySnapshot, valueTable: entries });
+
+    for (const ref of ['f4444444444444444', 'f5555555555555555']) {
+      expect(prompt).toContain(
+        `ref: ${ref}, label: ${ref === 'f4444444444444444' ? '"fullName"' : '"email"'}, type: text, required: true, frame origin: https://boards.ats-vendor.invalid (not this page's own origin: the form found here is inside a third-party embed)`,
+      );
+    }
+    expect(prompt).toContain('Never assign anything to a field carrying a "frame origin" note');
+    // The wording for an active field says the form itself is embedded, not that the field is
+    // "not part of the active form" -- it is the active form, and saying otherwise would be a
+    // plainly false statement about the page.
+    expect(prompt).not.toContain('not part of the active form');
+  });
+
+  it('never annotates a field with a frame origin when the snapshot never carries a topFrameOrigin to judge it against', () => {
+    // `topFrameOrigin` is itself optional (a read that established no baseline) -- absent one, a
+    // field's own `frameOrigin` cannot be judged against anything, so nothing is flagged even for
+    // an inactive field that does carry one.
+    const entries = buildApplicationValueTable({ cvContact: CV_CONTACT, profile: null });
+    const prompt = buildFieldMapGenerationPrompt({
+      attemptId: 'attempt-1',
+      snapshot: {
+        ...snapshot,
+        fields: [
+          ...snapshot.fields,
+          field({ fieldRef: 'f3333333333333333', label: 'x', controlType: 'text', required: false, active: false, frameOrigin: 'https://chat.vendor.invalid' }),
+        ],
+      },
+      valueTable: entries,
+    });
+    expect(prompt).not.toContain(', frame origin:');
+  });
 });
 
 describe('sanitiseGeneratedFieldMap', () => {

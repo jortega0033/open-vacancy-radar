@@ -308,16 +308,23 @@ describe('#281 check 4: each document type respects its target’s required prom
     expect(cover).not.toContain('opens by naming the role and the company and stating, in one specific sentence');
   });
 
-  it('gives short-form answers a form-shaped requirement and a far shorter word range', () => {
+  it('gives short-form answers a form-shaped requirement and a far smaller fact budget', () => {
+    // F-J: length is now a number of facts rather than a word range, because template assembly is
+    // the only thing that decides how long the finished document is. The document's own shape is
+    // still stated, so the selection knows what it is choosing for.
     const short = buildBundledDocumentPrompt(bundleFor('short_application_message'));
     expect(short).toContain('no salutation, no sign-off, no letterhead');
-    expect(short).toContain('70-110 words');
-    expect(buildBundledDocumentPrompt(bundleFor('cover_letter'))).toContain('250-350 words');
+    expect(short).toContain('Choose between 2 and 2 ids');
+    expect(buildBundledDocumentPrompt(bundleFor('cover_letter'))).toContain('Choose between 3 and 4 ids');
   });
 
   it('respects the length the caller asked for, per document type', () => {
-    expect(buildBundledDocumentPrompt(bundleFor('recruiter_message', { length: 'short' }))).toContain('60-90 words');
-    expect(buildBundledDocumentPrompt(bundleFor('recruiter_message', { length: 'detailed' }))).toContain('140-200 words');
+    expect(buildBundledDocumentPrompt(bundleFor('recruiter_message', { length: 'short' }))).toContain(
+      'Choose between 2 and 3 ids',
+    );
+    expect(buildBundledDocumentPrompt(bundleFor('motivation_letter', { length: 'detailed' }))).toContain(
+      'Choose between 4 and 6 ids',
+    );
   });
 
   it('carries the target’s own question and its hard character limit into the document', () => {
@@ -326,7 +333,7 @@ describe('#281 check 4: each document type respects its target’s required prom
     expect(bundle.constraints.maxChars).toBe(600);
     expect(prompt).toContain('Why do you want to work at Redwood Software?');
     expect(prompt).toContain('fits inside 600 characters');
-    expect(prompt).toContain('say less rather than claiming more');
+    expect(prompt).toContain('prefer fewer and shorter facts');
   });
 
   it('gives the CV no word range at all, because a CV’s length is the candidate’s real history', () => {
@@ -371,7 +378,7 @@ function evidenceWith(overrides: Partial<WorkEligibilityEvidence>): WorkEligibil
   };
 }
 
-describe('#281 check 5: EOR and relocation language follows preferences and evidence, and language stays configurable', () => {
+describe('#281 check 5: EOR and relocation language follows preferences and evidence, and no language is shipped', () => {
   const eorOffered: EligibilityEvidence = {
     answer: 'yes',
     source: 'vacancy_text',
@@ -426,16 +433,24 @@ describe('#281 check 5: EOR and relocation language follows preferences and evid
     expect(prompt).not.toContain('Employer of Record, for this vacancy');
   });
 
-  it('ships no language default: with nothing configured it follows the vacancy’s own language', () => {
+  it('still ships no language of its own: the letter prompt names no language at all', () => {
+    // F-J replaced free-prose letters with template assembly, so a letter's connecting lines are
+    // this app's own English and its substance is the candidate's own words. There is no longer a
+    // language for the prompt to instruct, and in particular there is still no shipped English
+    // default steering a model that could have followed the vacancy instead.
     const prompt = buildBundledDocumentPrompt(bundleFor('cover_letter'));
-    expect(prompt).toContain('in the same language the vacancy itself is written in');
+    expect(prompt).toContain('You do not write this document.');
     expect(prompt).not.toContain('conversational English');
+    expect(prompt).not.toContain('in the same language the vacancy itself is written in');
   });
 
-  it('writes in the configured language when the candidate set one', () => {
+  it('keeps the configured document language on the bundle, where it still invalidates artifacts', () => {
     const preferences: GenerationPreferences = { ...UNCONFIGURED_GENERATION_PREFERENCES, documentLanguage: 'Dutch' };
-    const prompt = buildBundledDocumentPrompt(bundleFor('cover_letter', { preferences }));
-    expect(prompt).toContain('Write in natural, conversational Dutch.');
+    const bundle = bundleFor('cover_letter', { preferences });
+    expect(bundle.preferences.documentLanguage).toBe('Dutch');
+    expect(buildBundledDocumentPrompt(bundle)).not.toContain('Write in natural, conversational Dutch');
+    // The preference is not inert: a letter assembled before it was set is no longer current.
+    expect(generationInputFingerprint(bundle)).not.toBe(generationInputFingerprint(bundleFor('cover_letter')));
   });
 
   it('derives preferences from the candidate profile without inventing a language or an EOR answer', () => {

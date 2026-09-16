@@ -22,6 +22,7 @@ interface Draft {
   consideredRoles: string;
   excludedRoleFamilies: string;
   professionalLanguage: string;
+  primaryCountry: string;
 }
 
 function toDraft(profile: CandidateProfile): Draft {
@@ -36,6 +37,7 @@ function toDraft(profile: CandidateProfile): Draft {
     consideredRoles: skillsToText(profile.consideredRoles),
     excludedRoleFamilies: skillsToText(profile.excludedRoleFamilies),
     professionalLanguage: profile.constraints.professionalLanguage,
+    primaryCountry: profile.constraints.primaryCountry,
   };
 }
 
@@ -129,9 +131,10 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
 
   /**
    * The "Fill from CV" drawer's save. Same IPC, same allow-list, same merge-onto-disk semantics as
-   * every other field on this form: `vacancy:save-search-profile` takes a *patch*, so the six
-   * fields that drawer sends are the only six that change and everything else in the profile
-   * (target roles, primary country, salary floor) survives untouched.
+   * every other field on this form: `vacancy:save-search-profile` takes a *patch*, so the nine
+   * fields that drawer sends (including target roles, considered roles and country) are the only
+   * ones that change; excluded role families and the salary floor survive untouched, since a CV has
+   * no signal for either.
    *
    * Awaited rather than fire-and-forget like `commit` above, because the drawer needs the outcome:
    * it stays open and shows the failure inline instead of closing on a save that did not land. The
@@ -197,7 +200,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
     if (next === current) return;
     if (key === 'strongestSkills' || key === 'additionalSkills' || key === 'targetRoles' || key === 'consideredRoles' || key === 'excludedRoleFamilies') {
       commit({ [key]: textToSkills(next) });
-    } else if (key === 'professionalLanguage') {
+    } else if (key === 'professionalLanguage' || key === 'primaryCountry') {
       commit({ constraints: { [key]: next } });
     } else {
       commit({ [key]: next });
@@ -239,7 +242,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
       <SettingsSubheading>Identity</SettingsSubheading>
       <SettingsRow
         label="Fill from CV"
-        description="Reads a CV from your library and prefills current role, years, location, professional language and skills for you to review. Target roles, considered roles, excluded role families and country are never filled in from a CV."
+        description="Reads a CV from your library and prefills current role, years, location, professional language, skills, target roles, considered roles and country for you to review. Excluded role families and minimum salary are never filled in from a CV: a CV has no signal for either."
       >
         <FillProfileFromCv profile={profile} disabled={disabled} onApply={applyFromCv} />
       </SettingsRow>
@@ -287,6 +290,19 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
           className="input input-sm w-64"
           {...field('professionalLanguage')}
           onBlur={() => commitText('professionalLanguage', profile.constraints.professionalLanguage)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="Country"
+        description="Where you are based now. Used for the work-eligibility check, not scoring."
+        htmlFor="profile-primary-country"
+      >
+        <input
+          id="profile-primary-country"
+          type="text"
+          className="input input-sm w-64"
+          {...field('primaryCountry')}
+          onBlur={() => commitText('primaryCountry', profile.constraints.primaryCountry)}
         />
       </SettingsRow>
       <SettingsSubheading>Role matching</SettingsSubheading>

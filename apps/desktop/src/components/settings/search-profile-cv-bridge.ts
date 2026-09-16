@@ -3,41 +3,40 @@ import { extractAiJsonPayload } from '../cv-library/cv-ai-parse.js';
 import type { SearchProfileCvField } from '../cv/profile-bridge-prompts.js';
 
 /**
- * Response parsing and patch construction for "Fill from CV" (issue #137).
+ * Response parsing and patch construction for "Fill from CV" (issue #137, widened at the user's
+ * explicit request to also cover target roles, considered roles and country).
  *
  * This module is the ticket's whole risk mitigation, so it is worth being explicit about where the
  * guarantee actually lives.
  *
- * The claim is: no matter what the model says, this feature can only ever write `currentRole`,
- * `experienceYears`, `location`, `strongestSkills`, `additionalSkills` and
- * `constraints.professionalLanguage`. It can never write `targetRoles`, `consideredRoles`,
- * `excludedRoleFamilies`, `constraints.primaryCountry` or `constraints.minimumMonthlyBaseEur`,
- * which are forward-looking preferences a CV cannot honestly state (see the header of
- * `components/cv/profile-bridge-prompts.ts`, and issues #56/#64).
+ * The claim is: no matter what the model says, this feature can only ever write the fields named in
+ * `SearchProfileCvFields` below. It can never write `excludedRoleFamilies` or
+ * `constraints.minimumMonthlyBaseEur`, because a CV carries no signal for either (see the header of
+ * `components/cv/profile-bridge-prompts.ts`, and issues #56/#64 for why a *guessed* value is treated
+ * the same as a shipped-default bias would be).
  *
  * That claim rests on two structural properties, not on the prompt's wording:
  *
- * 1. `toPartialSearchProfileCvFields` never spreads the model's object. It reads six named keys off
- *    it and builds its own result. An unexpected key in the response is not rejected, logged or
- *    sanitized: it is simply never read, so there is no code path along which it exists.
- * 2. `toSearchProfilePatch` builds the IPC payload as one object literal with six literal keys,
- *    from a fully-typed `SearchProfileCvFields` value that has no room for anything else. It takes
- *    the *reviewed* fields (what the user confirmed in the drawer), not the raw response, so even a
- *    parser bug could not route an unreviewed value into it.
+ * 1. `toPartialSearchProfileCvFields` never spreads the model's object. It reads each allowed key by
+ *    name off it and builds its own result. An unexpected key in the response is not rejected,
+ *    logged or sanitized: it is simply never read, so there is no code path along which it exists.
+ * 2. `toSearchProfilePatch` builds the IPC payload as one object literal with the allowed keys
+ *    written out literally, from a fully-typed `SearchProfileCvFields` value that has no room for
+ *    anything else. It takes the *reviewed* fields (what the user confirmed in the drawer), not the
+ *    raw response, so even a parser bug could not route an unreviewed value into it.
  *
  * `electron/vacancy-profile-validate.ts` allow-lists the payload again in main, and `main.ts`'s
  * handler merges the patch onto the profile on disk rather than replacing it, so every field this
  * feature does not name survives a save untouched -- but be precise about what that second layer
  * actually buys here: `vacancy:save-search-profile` is the same channel `SearchProfileSection`'s
- * manual "Target roles"/"Considered roles"/country/salary-floor inputs already save through, so
- * `parseCandidateProfilePatch` legitimately ALLOWS `targetRoles`, `consideredRoles`,
- * `excludedRoleFamilies`, `constraints.primaryCountry` and `constraints.minimumMonthlyBaseEur` --
- * those are real, expected fields on that channel for the manual path. It cannot reject them for a
- * CV-sourced patch specifically without a way to tell the two callers apart, which does not exist
- * today. So the exclusion guarantee this ticket exists for rests entirely on the two properties
- * above, in this one file, not on a second independent backstop. See
- * `search-profile-cv-bridge.test.ts`'s "main-process allow-list does not itself reject an excluded
- * field" test, which documents this precisely rather than assuming it.
+ * manual "Excluded role families"/salary-floor inputs already save through, so
+ * `parseCandidateProfilePatch` legitimately ALLOWS `excludedRoleFamilies` and
+ * `constraints.minimumMonthlyBaseEur` -- those are real, expected fields on that channel for the
+ * manual path. It cannot reject them for a CV-sourced patch specifically without a way to tell the
+ * two callers apart, which does not exist today. So the exclusion guarantee for those two fields
+ * rests entirely on the two properties above, in this one file, not on a second independent
+ * backstop. See `search-profile-cv-bridge.test.ts`'s "main-process allow-list does not itself reject
+ * an excluded field" test, which documents this precisely rather than assuming it.
  *
  * A hand-built allow-list rather than a Zod `.strict()` object because that is this codebase's
  * established idiom for exactly this job on both sides of the IPC boundary (see
@@ -56,16 +55,21 @@ import type { SearchProfileCvField } from '../cv/profile-bridge-prompts.js';
  * numbers against the real ones so the two cannot drift apart silently.
  */
 export const SEARCH_PROFILE_CV_LIMITS = {
-  /** currentRole / location / professionalLanguage / one skill entry */
+  /** currentRole / location / professionalLanguage / primaryCountry / one skill or role entry */
   shortField: 200,
-  /** strongestSkills / additionalSkills */
+  /** strongestSkills / additionalSkills / targetRoles / consideredRoles. The prompt only asks the
+   * model for up to 5 of each role list, well under this cap; it is reused rather than given a
+   * tighter one of its own because a model ignoring the "up to 5" guidance is exactly the kind of
+   * over-eager answer the review step exists to catch, not something worth a second limit to guard
+   * against. */
   listEntries: 50,
   experienceYearsMax: 80,
 } as const;
 
-/** Exactly the six fields this feature is allowed to touch, in the profile's own vocabulary.
- * `professionalLanguage` is flat here and nested under `constraints` in the patch: the model is
- * asked for a flat object, and `toSearchProfilePatch` does the one bit of reshaping. */
+/** Exactly the fields this feature is allowed to touch, in the profile's own vocabulary.
+ * `professionalLanguage` and `primaryCountry` are flat here and nested under `constraints` in the
+ * patch: the model is asked for a flat object, and `toSearchProfilePatch` does the one bit of
+ * reshaping. */
 export interface SearchProfileCvFields {
   currentRole: string;
   experienceYears: number;
@@ -73,17 +77,15 @@ export interface SearchProfileCvFields {
   professionalLanguage: string;
   strongestSkills: string[];
   additionalSkills: string[];
+  targetRoles: string[];
+  consideredRoles: string[];
+  primaryCountry: string;
 }
 
-/** The five profile fields this path must never write. Exported for the tests that assert it, and
- * so the claim is stated once as data rather than only in prose. */
-export const SEARCH_PROFILE_CV_FORBIDDEN_FIELDS = [
-  'targetRoles',
-  'consideredRoles',
-  'excludedRoleFamilies',
-  'primaryCountry',
-  'minimumMonthlyBaseEur',
-] as const;
+/** The two profile fields this path must never write, because a CV has no signal for either.
+ * Exported for the tests that assert it, and so the claim is stated once as data rather than only
+ * in prose. */
+export const SEARCH_PROFILE_CV_FORBIDDEN_FIELDS = ['excludedRoleFamilies', 'minimumMonthlyBaseEur'] as const;
 
 /** Single-line profile fields: whitespace is collapsed the same way `prompts.ts` flattens untrusted
  * single-line vacancy fields, so a model answer containing newlines cannot turn one profile field
@@ -140,17 +142,21 @@ const READERS: { [K in SearchProfileCvField]: (value: unknown) => SearchProfileC
   professionalLanguage: shortString,
   strongestSkills: skillList,
   additionalSkills: skillList,
+  targetRoles: skillList,
+  consideredRoles: skillList,
+  primaryCountry: shortString,
 };
 
 /**
- * Coerces the model's parsed JSON into whichever of the six fields came back usable, dropping
+ * Coerces the model's parsed JSON into whichever of the allowed fields came back usable, dropping
  * everything else rather than throwing: a wrong type on one field should not cost the user the
- * other five, since the result only ever prefills a form they review before saving.
+ * rest, since the result only ever prefills a form they review before saving.
  *
  * Note what this cannot do. Each field is read by name from the response; the response's own key
  * set is never enumerated, spread, or copied. A response of
- * `{"currentRole": "...", "targetRoles": ["CEO"], "constraints": {"primaryCountry": "NL"}}` yields
- * `{currentRole: "..."}` and nothing else. `targetRoles` is not stripped; it is never looked at.
+ * `{"currentRole": "...", "excludedRoleFamilies": ["Sales"], "constraints": {"minimumMonthlyBaseEur": 9000}}`
+ * yields `{currentRole: "..."}` and nothing else. `excludedRoleFamilies` is not stripped; it is
+ * never looked at.
  */
 export function toPartialSearchProfileCvFields(value: unknown): Partial<SearchProfileCvFields> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
@@ -169,6 +175,12 @@ export function toPartialSearchProfileCvFields(value: unknown): Partial<SearchPr
   if (strongestSkills !== undefined) fields.strongestSkills = strongestSkills;
   const additionalSkills = READERS.additionalSkills(record.additionalSkills);
   if (additionalSkills !== undefined) fields.additionalSkills = additionalSkills;
+  const targetRoles = READERS.targetRoles(record.targetRoles);
+  if (targetRoles !== undefined) fields.targetRoles = targetRoles;
+  const consideredRoles = READERS.consideredRoles(record.consideredRoles);
+  if (consideredRoles !== undefined) fields.consideredRoles = consideredRoles;
+  const primaryCountry = READERS.primaryCountry(record.primaryCountry);
+  if (primaryCountry !== undefined) fields.primaryCountry = primaryCountry;
 
   return fields;
 }
@@ -192,10 +204,10 @@ export function parseSearchProfileCvResponse(raw: string): Partial<SearchProfile
  * Builds the `vacancy:save-search-profile` payload from the fields the user reviewed.
  *
  * Every key is written out literally. This function is the reason the feature cannot touch an
- * excluded field: there is no spread, no computed key, and no path by which `targetRoles` or
- * `constraints.primaryCountry` could appear in the returned object. `constraints` carries
- * `professionalLanguage` and nothing else, and main merges it onto the profile's existing
- * constraints, so `primaryCountry`, `dutchRequired`, `minimumMonthlyBaseEur` and
+ * excluded field: there is no spread, no computed key, and no path by which `excludedRoleFamilies`
+ * or `constraints.minimumMonthlyBaseEur` could appear in the returned object. `constraints` carries
+ * `professionalLanguage` and `primaryCountry` and nothing else, and main merges it onto the
+ * profile's existing constraints, so `dutchRequired`, `minimumMonthlyBaseEur` and
  * `allowRemoteEuSupportingNetherlands` all survive the save unchanged.
  */
 export function toSearchProfilePatch(fields: SearchProfileCvFields): CandidateProfilePatch {
@@ -205,6 +217,8 @@ export function toSearchProfilePatch(fields: SearchProfileCvFields): CandidatePr
     location: fields.location,
     strongestSkills: fields.strongestSkills,
     additionalSkills: fields.additionalSkills,
-    constraints: { professionalLanguage: fields.professionalLanguage },
+    targetRoles: fields.targetRoles,
+    consideredRoles: fields.consideredRoles,
+    constraints: { professionalLanguage: fields.professionalLanguage, primaryCountry: fields.primaryCountry },
   };
 }

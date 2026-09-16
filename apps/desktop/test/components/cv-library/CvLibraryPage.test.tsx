@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@agent-dock/shared';
 import type { AgentDockBridge } from '../../../src/window.js';
+import { EMPTY_CV_SOURCE, type CvSourceDocument } from '../../../electron/workspace/cv-source-schema.js';
 import { CvLibraryPage } from '../../../src/components/cv-library/index.js';
 import type { CvBridge, CvDocumentRecord } from '../../../src/window.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
@@ -20,6 +21,37 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
     isDefault: false,
     uploadedAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/**
+ * A source CV that has been read into records and reviewed, which is what lets the drawer fill the
+ * summary fields deterministically instead of running a second extraction. All content is
+ * synthetic; the derivation itself is covered in `test/cv-profile-from-source.test.ts`.
+ */
+function makeSource(overrides: Partial<CvSourceDocument> = {}): CvSourceDocument {
+  return {
+    ...EMPTY_CV_SOURCE,
+    contact: {
+      name: 'Jamie Rivera',
+      title: 'Frontend Engineer',
+      location: 'Amsterdam, Netherlands',
+      email: 'jamie@example.invalid',
+      phone: '',
+      links: [],
+    },
+    experience: [
+      {
+        company: 'Redwood Software',
+        title: 'Lead Frontend Engineer',
+        dates: 'Jan 2019 - Dec 2023',
+        engagement: 'employment',
+        client: '',
+        bullets: [],
+      },
+    ],
+    reviewedAt: '2026-08-20T10:00:00.000Z',
     ...overrides,
   };
 }
@@ -233,6 +265,102 @@ describe('CvLibraryPage', () => {
     expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
     expect(within(dialog).getByLabelText(/location/i)).toHaveValue('Amsterdam');
     expect(within(dialog).getByLabelText(/skills/i)).toHaveValue('React, TypeScript');
+  });
+
+  it('fills the summary fields from the reviewed source CV instead of firing a second AI run', async () => {
+    // The two extractions read the same document: once the source CV records exist, the title, the
+    // years and the location are arithmetic over data the candidate has already reviewed, so asking
+    // a model for them again costs a wait and a second chance to come back unparseable for nothing.
+    // The date range is closed on both ends so the expected years figure cannot drift with the
+    // calendar; the open-ended arithmetic is covered in `cv-profile-from-source.test.ts`.
+    const record = makeCv({
+      id: 'derive-1',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Amsterdam.',
+      source: makeSource(),
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    expect(await within(dialog).findByText(/no ai run needed/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/title/i)).toHaveValue('Lead Frontend Engineer');
+    expect(within(dialog).getByLabelText(/years of experience/i)).toHaveValue('5 years');
+    // The source-CV review panel sitting above the form has a "Location" input of its own, so the
+    // profile field is the second of the two.
+    const [, profileLocation] = within(dialog).getAllByLabelText(/^location$/i);
+    expect(profileLocation).toHaveValue('Amsterdam, Netherlands');
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    expect(bridge.createSession).not.toHaveBeenCalled();
+  });
+
+  it('still runs the AI parse for a CV that has no source records yet', async () => {
+    const record = makeCv({
+      id: 'derive-2',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Amsterdam.',
+      source: null,
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
+    expect(within(dialog).queryByText(/no ai run needed/i)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the AI parse when the source CV has dates the app cannot read', async () => {
+    // The deterministic path is deliberately all-or-nothing: an unreadable date range must put the
+    // user back on the behaviour they already have, not leave the years field blank.
+    const record = makeCv({
+      id: 'derive-3',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Amsterdam.',
+      source: makeSource({
+        experience: [
+          {
+            company: 'Redwood Software',
+            title: 'Lead Frontend Engineer',
+            dates: 'sinds de zomer van 2019',
+            engagement: 'employment',
+            client: '',
+            bullets: [],
+          },
+        ],
+      }),
+    });
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([record]) });
+    installCvBridge();
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() => expect(bridge.createSession).toHaveBeenCalledTimes(1));
   });
 
   it("runs 'Parse with AI' through the user's configured default provider, not a hardcoded Claude Code fallback", async () => {

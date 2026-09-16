@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
-import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
+import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 
@@ -52,6 +52,61 @@ function describeBlocker(blocker: FormReadiness['blockers'][number]): string {
 }
 
 /**
+ * Every field the executor found in a document whose origin is not the page's own: a support-chat
+ * widget, an ad slot, a vendor script, and equally the shape where the entire application form is
+ * served by an applicant-tracking vendor inside an `<iframe>` (#277's follow-up). Keyed on
+ * `frameOrigin !== topFrameOrigin`, the same comparison the write path itself makes
+ * (`isFrameFillAllowed` in `application-executor`), and deliberately *not* on `!field.active`.
+ *
+ * Keying on `!active` is what the first version of this did, and it was blind in exactly the case
+ * the notice exists for. `resolveActiveGroup` drops every group the policy will not authorize a
+ * write into, but when that leaves no eligible group at all it keeps the count-based dominant group
+ * anyway -- so a page whose only form lives inside a disallowed embed reports those fields with
+ * `active: true`. The write is still refused at `fill()`, loudly; it was only this notice that
+ * vanished, on the one page shape most in need of it. `active` therefore chooses the wording here,
+ * never the filter: see `describeCrossOriginField`.
+ *
+ * Deliberately not a `FormReadiness` blocker: `form-readiness.ts` only ever looks at `active`
+ * fields, so an excluded field contributes nothing to `blockers` at all, and a reviewer would see
+ * no sign it existed. Computed here from `snapshot.fields`/`topFrameOrigin` rather than inside the
+ * executor package -- purely additive visibility over data the snapshot already carries, not a new
+ * refusal decision.
+ */
+function crossOriginFields(snapshot: FormSnapshot): SnapshotField[] {
+  const { topFrameOrigin } = snapshot;
+  if (!topFrameOrigin) return [];
+  return snapshot.fields.filter((field) => field.frameOrigin !== undefined && field.frameOrigin !== topFrameOrigin);
+}
+
+/**
+ * Plain-language text for one field `crossOriginFields` found, distinct from every
+ * `describeBlocker` case above: this is not a form check that failed.
+ *
+ * Two genuinely different situations, told apart by `active`, because saying the wrong one is
+ * worse than saying nothing:
+ *  - `active: true` -- the form under review is itself inside the embed. Today the only way a
+ *    snapshot reaches that state is the no-eligible-group fallback described on
+ *    `crossOriginFields`, which means the policy refused every group, so nothing was typed here.
+ *  - `active: false` -- the field is somewhere else on the page and is not part of the form under
+ *    review. That covers an ordinary third-party widget and equally a vendor embed the policy
+ *    *does* allowlist but which is not the winning group, so this wording says "not the form"
+ *    rather than claiming a policy refusal the snapshot alone cannot establish.
+ *
+ * What this cannot see: neither a policy's `origins` allowlist nor its `allowedSubFrameOrigins`
+ * crosses the IPC bridge, so "active plus a foreign origin" is read as not fillable. That is exact
+ * for every policy this app ships today (`FIXTURE_REVIEW_POLICY` has `origins: []` and no
+ * `allowedSubFrameOrigins`), and the day a real policy authorizes a sub-origin through either
+ * mechanism, this needs that policy's allowed origins passed in rather than inferred.
+ */
+function describeCrossOriginField(field: SnapshotField, topFrameOrigin: string): string {
+  const label = field.label || 'Unlabelled field';
+  if (field.active) {
+    return `"${label}" is part of a form embedded from ${field.frameOrigin}, which is not this page's own address (${topFrameOrigin}). This app does not type into a third-party embed, so nothing was entered here.`;
+  }
+  return `"${label}" was found in a different frame (${field.frameOrigin}) than this page (${topFrameOrigin}) and is not part of the form under review, so it was left untouched.`;
+}
+
+/**
  * The one-attempt-at-a-time review card issue #202 needed a genuinely fast confirmation step for:
  * a real screenshot of the application page as it currently stands (see the image's own comment
  * below for what that screenshot does and doesn't prove) plus what the form actually holds, decided
@@ -93,6 +148,19 @@ export function ApplicationReviewSwipeCard({
 
   const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
   const canSubmit = readiness.ready && !busy;
+  const otherFrameFields = crossOriginFields(snapshot);
+  // True on the page shape the whole notice exists for: the form under review is itself inside an
+  // embed from somewhere else. The heading has to say that outright, because "also found in a
+  // different frame" would read as an aside about something unimportant on exactly the page where
+  // it is the form.
+  const formIsEmbedded = otherFrameFields.some((field) => field.active);
+  // The one field whose sentence the heading and the collapsed summary both speak about. Prefers an
+  // active field over an inactive one -- not just "the first field in snapshot order" -- so a
+  // page mixing an ordinary inactive widget (a chat box, say) with the actual embedded form never
+  // shows the "third-party embed" heading next to a sentence that's really about the chat box.
+  // Picked once and reused by identity (not by array index) everywhere below, so the field promoted
+  // into the one-sentence summary is never also duplicated in the expanded list.
+  const summarizedFrameField = otherFrameFields.find((field) => field.active) ?? otherFrameFields[0];
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (busy) return;
@@ -214,6 +282,20 @@ export function ApplicationReviewSwipeCard({
           )}
         </div>
 
+        {otherFrameFields.length > 0 ? (
+          <div className="border-t border-base-300 bg-info/10 px-4 py-3">
+            <p className="text-xs font-semibold">
+              {formIsEmbedded ? 'This form is inside a third-party embed' : 'Also found in a different frame, not filled automatically'}
+            </p>
+            <p className="mt-1 text-xs text-base-content/70">
+              {describeCrossOriginField(summarizedFrameField!, snapshot.topFrameOrigin!)}
+            </p>
+            {otherFrameFields.length > 1 ? (
+              <p className="mt-1 text-xs font-medium">+{otherFrameFields.length - 1} more in another frame</p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-[1fr_auto_1fr] items-center border-t border-base-300 bg-base-100 px-4 py-2 text-xs font-semibold">
           <span className="flex items-center gap-1 text-base-content/60"><ArrowLeft size={15} weight="bold" aria-hidden="true" />Skip</span>
           <ArrowsLeftRight size={20} weight="bold" className="text-base-content/45" aria-hidden="true" />
@@ -239,6 +321,7 @@ export function ApplicationReviewSwipeCard({
       <details className="rounded-lg border border-base-300 bg-base-100">
         <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">
           Form checks ({blockers.length}) and fields ({activeFields.length})
+          {otherFrameFields.length > 0 ? `, ${otherFrameFields.length} in another frame` : ''}
         </summary>
         <div className="border-t border-base-300 px-4 py-3">
           {blockers.length > 1 ? (
@@ -252,6 +335,20 @@ export function ApplicationReviewSwipeCard({
               {blockers.length === 1 ? 'The remaining check is shown on the card.' : 'No remaining form blockers.'}
             </p>
           )}
+          {otherFrameFields.length > 1 ? (
+            // `summarizedFrameField` is already shown on the card itself (above); listed here is
+            // only what that summary omitted. Excluded by identity, not by array position: the
+            // summarized field is not always index 0 (it prefers an active field over whichever
+            // field happens to come first in snapshot order), so slicing off the front would risk
+            // showing it twice, or dropping whichever field actually was first instead.
+            <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/70">
+              {otherFrameFields
+                .filter((field) => field.fieldRef !== summarizedFrameField!.fieldRef)
+                .map((field) => (
+                  <li key={field.fieldRef}>{describeCrossOriginField(field, snapshot.topFrameOrigin!)}</li>
+                ))}
+            </ul>
+          ) : null}
           <ul className="mt-3 list-disc space-y-1 border-t border-base-300 pt-3 pl-4 text-xs text-base-content/60">
             {activeFields.map((field) => (
               <li key={field.fieldRef}>

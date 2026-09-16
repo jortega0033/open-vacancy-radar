@@ -10,7 +10,7 @@ import {
   createSessionV2RequestSchema,
   type AgentEventEnvelope,
 } from '@agent-dock/shared';
-import { buildModelSelectConstraints } from '@agent-dock/vacancy-agent-adapter';
+import { buildModelSelectConstraints } from '@agent-dock/agent-runtime';
 import {
   INTERRUPTED_SESSION_V1_ERROR,
   MAX_MODEL_ID_BYTES,

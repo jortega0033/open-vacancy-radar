@@ -54,12 +54,20 @@ vi.mock('../electron/workspace/repository.js', () => ({
   listApplicationArtifacts,
 }));
 
-const { mkdir, rm, writeFile } = vi.hoisted(() => ({
+const { mkdir, rm, writeFile, chmod } = vi.hoisted(() => ({
   mkdir: vi.fn(async () => undefined),
   rm: vi.fn(async () => undefined),
   writeFile: vi.fn(async () => undefined),
+  chmod: vi.fn(async () => undefined),
 }));
-vi.mock('node:fs/promises', () => ({ mkdir, rm, writeFile, readFile: vi.fn(), default: { mkdir, rm, writeFile, readFile: vi.fn() } }));
+vi.mock('node:fs/promises', () => ({
+  mkdir,
+  rm,
+  writeFile,
+  chmod,
+  readFile: vi.fn(),
+  default: { mkdir, rm, writeFile, chmod, readFile: vi.fn() },
+}));
 
 function pdfContaining(lines: string[], title: string): Uint8Array {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });

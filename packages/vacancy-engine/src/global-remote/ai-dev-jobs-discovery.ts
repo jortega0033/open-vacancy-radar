@@ -1,5 +1,5 @@
 import type { AtsHttpClient } from '../ats/http.js';
-import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { AtsResponseError } from '../ats/http.js';
 import {
   attributeNetworkRequests,
   networkAttemptFields,
@@ -232,48 +232,3 @@ export async function discoverAiDevJobs(
   };
 }
 
-export type AiDevJobDetail =
-  | { status: 'not_found'; job: null }
-  | { status: 'inactive'; job: null }
-  | { status: 'active'; job: DiscoveryVacancyAudit };
-
-export function aiDevJobDetailUrl(idOrSlug: string): string {
-  if (idOrSlug.trim().length === 0) {
-    throw new RangeError('AI Dev Jobs job id/slug must be a non-empty string');
-  }
-  return `${AI_DEV_JOBS_JOBS_URL}/${encodeURIComponent(idOrSlug)}`;
-}
-
-/**
- * On-demand single-listing lookup ("fetch details only when needed" per the ticket), kept separate
- * from the bulk list scan above -- nothing in this package calls it automatically today, matching
- * how `fetchRemooteJobDetail` (remoote-discovery.ts) is also a standalone helper.
- */
-export async function fetchAiDevJobDetail(
-  http: AtsHttpClient,
-  idOrSlug: string,
-  minimumAnnualBaseUsd: number | null,
-): Promise<AiDevJobDetail> {
-  const response = await http.get(aiDevJobDetailUrl(idOrSlug), {
-    allowedOrigins: [AI_DEV_JOBS_API_ORIGIN],
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  });
-  if (response.status === 404) return { status: 'not_found', job: null };
-  requireSuccessfulResponse('ai_dev_jobs', response);
-  let root: unknown;
-  try {
-    root = JSON.parse(response.body) as unknown;
-  } catch (error) {
-    throw new AtsResponseError('ai_dev_jobs', 'invalid detail JSON', response.status, { cause: error });
-  }
-  const job = record(root);
-  if (job === null) throw new AtsResponseError('ai_dev_jobs', 'detail response is not an object', response.status);
-  const status = stringValue(job.status);
-  if (status !== null && status !== 'active') return { status: 'inactive', job: null };
-  const vacancy = normalizeAiDevJob(job, minimumAnnualBaseUsd);
-  if (vacancy === null) {
-    throw new AtsResponseError('ai_dev_jobs', 'detail job contract is invalid', response.status);
-  }
-  return { status: 'active', job: vacancy };
-}

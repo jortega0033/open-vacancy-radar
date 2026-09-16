@@ -1230,6 +1230,10 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
   const activeFrameId = snapshotSource?.activeFrameId;
   const pageStateFingerprint = snapshotSource ? optionalString(snapshotSource, 'pageStateFingerprint') : undefined;
   const activeFormScope = snapshotSource?.activeFormScope;
+  // The baseline every field's `frameOrigin` below is judged against (`form-snapshot.ts`'s own
+  // doc comment on `topFrameOrigin`). Optional for the same reason it is on the executor side: a
+  // read that established no origin at all still produces a usable snapshot.
+  const topFrameOrigin = snapshotSource ? optionalString(snapshotSource, 'topFrameOrigin') : undefined;
   const handoffShown = source?.handoffShown;
   if (
     typeof generation !== 'number' ||
@@ -1299,6 +1303,12 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
     // Untrusted third-party page text, carried across verbatim as a plain string for a person to
     // read. Nothing on either side of this bridge interprets it.
     const validationMessage = fieldSource ? optionalString(fieldSource, 'validationMessage') : undefined;
+    // The security origin of the frame this field was extracted from, when the read established
+    // one (see `form-snapshot.ts`'s `SnapshotField.frameOrigin`). Carried across the bridge for
+    // the same reason `frameId` already was: a review UI or a field-map generation session that
+    // cannot see which document a field lives in cannot tell an employer's own control from one
+    // inside a third-party embed the executor has already refused to write into.
+    const frameOrigin = fieldSource ? optionalString(fieldSource, 'frameOrigin') : undefined;
     return {
       fieldRef,
       label,
@@ -1311,6 +1321,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
       ...(typeof rendered === 'boolean' ? { rendered } : {}),
       ...(typeof invalid === 'boolean' ? { invalid } : {}),
       ...(validationMessage ? { validationMessage } : {}),
+      ...(frameOrigin ? { frameOrigin } : {}),
       ...(options ? { options } : {}),
       ...(classification ? { classification: classification as 'credential_field' | 'consent_field' } : {}),
     };
@@ -1326,6 +1337,7 @@ function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewRes
       activeFrameId,
       pageStateFingerprint,
       ...(typeof activeFormScope === 'number' ? { activeFormScope } : {}),
+      ...(topFrameOrigin ? { topFrameOrigin } : {}),
     },
     screenshotBase64,
     readiness: toFormReadiness(source?.readiness),

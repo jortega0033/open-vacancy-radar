@@ -9,6 +9,14 @@ export type AtsHttpRequestOptions = {
   allowedOrigins?: readonly string[];
   headers?: HeadersInit;
   cache?: 'default' | 'no-store';
+  /**
+   * May only reduce the client's configured retry policy, never raise it. Adapters normally have no
+   * business overriding it -- a scan runs unattended, so grinding through the full retry ladder is
+   * exactly right there. This exists for the opposite case: an on-demand fetch made while a person
+   * is sitting in front of a click path waiting for it, where a fast, honest failure beats a long
+   * ladder of retries nobody is watching.
+   */
+  maxRetries?: number;
 };
 
 /**

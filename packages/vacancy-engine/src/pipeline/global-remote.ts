@@ -52,7 +52,8 @@ import {
   WORKABLE_GLOBAL_MAX_RESPONSE_BYTES,
   WORKABLE_GLOBAL_TIMEOUT_MS,
 } from '../global-remote/workable-global-discovery.js';
-import { writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
+import { pruneGlobalRemoteReports, writeGlobalRemoteReport, type GlobalRemoteReportFiles } from '../global-remote/report.js';
+import { recordDiscoveryRun } from '../global-remote/discovery-runs-repository.js';
 import { createDatabaseBackedHttpClients } from './ats-http-client.js';
 
 const MANUAL_DECISIONS = new Set<GlobalRemoteDecision>([
@@ -1166,5 +1167,30 @@ export async function runGlobalRemoteScan(
       .map((source) => ({ name: source.name, url: source.url })),
   };
   const files = await writeGlobalRemoteReport(report, projectRoot);
+  // Indexes the files just written -- never inserted first, so a scan that fails before this point
+  // (including inside `writeGlobalRemoteReport` itself) leaves no row rather than one pointing at
+  // files that were never finished. A failure here is logged, not thrown: the report itself is
+  // already safely on disk, and this table is additive metadata over it (see
+  // `discovery-runs-repository.ts`), not something the scan's own success should depend on.
+  try {
+    await recordDiscoveryRun(database, {
+      generatedAt: new Date(report.generatedAt),
+      vacancyCount: report.discoveryAudit.length,
+      reportJsonPath: files.timestampedJson,
+      reportHtmlPath: files.timestampedHtml,
+    });
+  } catch (error) {
+    logger.warn({ error }, 'Recording discovery_runs metadata failed');
+  }
+  // Opportunistic retention pass, run right after the write above rather than on a separate
+  // schedule -- every completed scan is a natural point to also clear out ones old enough to fall
+  // outside `reportRetentionDays`. Best-effort for the same reason as `recordDiscoveryRun` above:
+  // the report this scan produced is already safely on disk, so a cleanup failure must never fail
+  // the scan itself.
+  try {
+    await pruneGlobalRemoteReports(database, appConfig.reportRetentionDays, projectRoot);
+  } catch (error) {
+    logger.warn({ error }, 'Pruning old global-remote reports failed');
+  }
   return { report, files };
 }
