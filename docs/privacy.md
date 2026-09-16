@@ -181,12 +181,22 @@ desktop app's local data.
   this project's. This app has no visibility into what that provider does with the prompt after the
   CLI sends it, and no control over it. See [What this is not](../README.md#what-this-is-not) for
   why this project itself never makes a direct API call or holds an API key.
-- **Optional MCP job-source providers**: if you connect one, search queries and your MCP credential
-  for that provider go to that specific provider only (see
-  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one)).
-  No MCP provider is contacted unless you've explicitly connected it. No provider is registered in
-  this build, so there is currently nothing to connect — this describes the mechanism's behavior
-  once a provider is enabled in a future release.
+- **MCP job-source providers**: the daemon ships one reviewed MCP provider today, InfoSec Job
+  Board — a public, no-auth vacancy-search server. It is not part of the automatic Search scan and
+  has no screen in the app today. Of the daemon's two routes for it, only search is wired to
+  Electron's typed bridge; a search sends that provider only the search query text and a bounded
+  result limit. The daemon also exposes a single-job detail route (taking only an external job id),
+  but nothing in the app — no bridge method, no code in Electron's main process — calls it today, so
+  no detail lookup can currently happen from the app at all. No CV, letter, application answer, or
+  Claude/Codex CLI credential is ever part of either request path, and InfoSec Job Board needs no
+  credential from you at all — see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one).
+  Results this app receives back are cached for at most five minutes before being discarded; that is
+  this app's own retention bound on its side, not a guarantee about what the InfoSec Job Board
+  service itself retains. Generic credential-bearing/OAuth MCP providers remain a future,
+  separately reviewed integration: if one is ever added, your credential for it would go to that
+  specific provider only, stored through the OS credential store described in SECURITY.md, and no
+  provider is contacted unless you've explicitly connected it.
 - **Everything else** — navigation, saved jobs, applications, settings — never leaves your machine.
   There is no account, no cloud sync, and no analytics endpoint this app talks to.
 
