@@ -1,5 +1,6 @@
 import type { FieldMapRefusalReason, FormReadiness, FormSnapshot, HandoffReason, ValueProvenance } from '@agent-dock/application-executor';
 import type { ArtifactUploadRefusalReason } from './application-artifact-upload.js';
+import type { PreparedApplicationFields } from './workspace/types.js';
 import type {
   AutomaticSubmissionRefusalReason,
   RecordUserReportedSubmissionResult,
@@ -144,6 +145,60 @@ export interface SubmitApplicationReviewResult {
   detail?: string;
 }
 
+/**
+ * Confirming one reusable saved answer (#372), or a freshly-typed one, into exactly one live field
+ * of an already-open review. Deliberately its own bridge call rather than a one-assignment
+ * `applyFieldMap` built by the renderer: `fieldMap`'s `valueRef`/`snapshotGeneration` are meant to
+ * come from a real generation-session field map, and a one-assignment map is refused outright by
+ * that shared validator's completeness rule (every other active required field on the page would
+ * need to be listed too) -- see `application-review-session.ts`'s `confirmApplicationAnswer` for
+ * why this call replicates only the subset of that validator's rules that actually apply to
+ * confirming one already-decided field, rather than routing through it.
+ */
+export interface ConfirmApplicationAnswerInput {
+  attemptId: string;
+  /** From the live snapshot `openReview`/`applyFieldMap` already returned -- never renderer-typed. */
+  fieldRef: string;
+  /** The answer text to commit: either a saved answer the person clicked "Use this answer" on, or
+   * one they just typed for this application. Bounded the same way every other answer-shaped value
+   * this app accepts is (see `workspace/validate.ts`'s `LIMITS.applicationAnswer`). */
+  value: string;
+  /** This field's own position within `attempt.preparedFields.fields`, as the caller last read it.
+   * Two distinct fields can share an identical label and control type, so this -- not label+type --
+   * is what lets the main process update exactly the one field that was actually confirmed, never a
+   * different entry that merely looks the same. */
+  fieldIndex: number;
+}
+
+/**
+ * `no_open_review`/`stale_field`/`excluded_field_targeted`/`type_mismatch` are refused before the
+ * live page is ever touched. `not_verified` is the one outcome specific to actually attempting the
+ * fill: it was issued and did not error, but the live control did not read back the value
+ * afterwards -- the same "issued is not the same as committed" distinction
+ * `ApplyApplicationFieldMapResult.verifiedCount` draws elsewhere in this file, collapsed here to a
+ * single field's pass/fail since there is only ever one.
+ */
+export type ConfirmApplicationAnswerRefusalReason =
+  | 'no_open_review'
+  | 'stale_field'
+  | 'excluded_field_targeted'
+  | 'type_mismatch'
+  | 'not_verified';
+
+export interface ConfirmApplicationAnswerResult {
+  ok: boolean;
+  reason?: ConfirmApplicationAnswerRefusalReason;
+  detail?: string;
+  /** A fresh readiness reading, taken immediately after the fill (present only when `ok` is true).
+   * Lets the caller update what it shows for "N required fields remaining" without a second round
+   * trip through `openReview` just to re-read it. */
+  readiness?: FormReadiness;
+  /** The attempt's own updated `preparedFields`, present whenever this call actually wrote one
+   * (`ok` true and a durable record existed to reconcile into). Handed back directly rather than
+   * making the caller re-fetch the attempt just to see the one field it already knows changed. */
+  preparedFields?: PreparedApplicationFields;
+}
+
 export interface RequestAutomationGrantInput {
   policyId: string;
   /** Milliseconds, capped by `automatic-submission-grant.ts`'s own `MAX_AUTOMATION_GRANT_DURATION_MS`. */
@@ -204,6 +259,21 @@ export interface ApplicationExecutorBridge {
    * write being issued has never been the same thing as a value being committed.
    */
   applyFieldMap(input: ApplyApplicationFieldMapInput): Promise<ApplyApplicationFieldMapResult>;
+  /**
+   * Commits one confirmed answer (#372) -- a reused saved answer or a freshly-typed one -- into one
+   * live `text`/`textarea` field. Fills and reads the value back off the control itself, the same
+   * "issued is not the same as committed" bar `applyFieldMap` holds every write to, but does not
+   * route through that function or its `validateFieldMap` completeness rule (a one-field commit
+   * cannot satisfy "every other active required field is assigned or explicitly unmapped" without
+   * inventing a reason for fields it was never asked about) -- see
+   * `application-review-session.ts`'s `confirmApplicationAnswer` for exactly which of that
+   * validator's other rules this replicates directly instead. On success, also updates this
+   * attempt's durable `preparedFields` record for that one field to `status: 'committed'`,
+   * `provenance: 'user_answer'`. Never called for a field the generation session already committed,
+   * and never auto-invoked: the renderer only calls this from an explicit "Use this answer" /
+   * "Fill this field" click.
+   */
+  confirmApplicationAnswer(input: ConfirmApplicationAnswerInput): Promise<ConfirmApplicationAnswerResult>;
   /**
    * The one real, irreversible action in this bridge (#202): runs the pre-submit validation gate
    * against freshly re-read state, resolves the one real submit control on the page, and clicks it

@@ -52,6 +52,15 @@ Everything the app stores lives in Electron's per-user application-data director
   hand. The excerpt is bounded in size and is third-party page text: the app displays it and never
   acts on it. Rows are added, never rewritten, so a later reconciliation is visible as a second
   record rather than as a silently changed first one.
+- **Saved application answers** (`workspace.db`, `application_answers` table — #372): a small,
+  optional library of answers you explicitly choose to save for reuse on recurring application-form
+  questions. A row is created only when you click a "Save for future applications" action after
+  typing an answer, or explicitly edit one later — never from your CV, your search profile, model
+  output, or a value the app merely observed on a page. Each row holds the question's own label and
+  control type, the answer text you wrote, and which employer/role you first saved it from (for
+  context only). Reusing a saved answer on a later application is always a separate, explicit "Use
+  this answer" action; nothing here is ever filled into a form without you clicking it. See
+  "Retention and deletion" below for what deleting one of these does and does not affect.
 - **`application-artifacts/`** (#199): the actual generated PDF files the record above tracks —
   a tailored CV and/or cover letter, rendered locally through the app's own default template.
   Rendering never opens a Save dialog for this unattended path (the existing manual "Copy to
@@ -229,6 +238,15 @@ renderer code. If that ever changes, it will be opt-in and disclosed here first.
   runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they
   are bounded per attempt by a fixed count quota, are never pruned on their own, and are deleted
   with the attempt (`on delete cascade`).
+- **Saved application answers**: retained until you edit or delete them from Settings > Workspace >
+  Saved application answers, or delete `workspace.db` directly; Settings > Advanced > Reset
+  application data removes them too, alongside the other application-related tables listed above.
+  Deleting a saved answer only stops it being suggested on a future application — it is a library
+  entry, not a record of what happened. It does **not** reach into any application attempt that
+  already used that answer: an attempt's own `preparedFields` record (see "Application attempts and
+  artifacts" above) keeps its own independent copy of whatever value was actually committed to that
+  attempt's form, exactly as it does for any other value this app ever filled in, regardless of
+  whether the saved answer it came from still exists.
 - **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
   `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
   re-populate on the next scan.

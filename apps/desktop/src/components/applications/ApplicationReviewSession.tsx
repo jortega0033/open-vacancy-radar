@@ -56,6 +56,19 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
    * main-process side, by design). */
   const policyIdRef = useRef<string | null>(null);
 
+  /**
+   * `attempt` is a plain prop, not something this page re-polls while a review is open (#372):
+   * `ApplicationsPage.tsx`'s attempt-list poll drives the review *queue*, not the one attempt
+   * already open here. So after `confirmApplicationAnswer` commits a field, the durable
+   * `preparedFields` record it just wrote would never reach `ApplicationPreparedSummary` through
+   * `attempt` itself -- this local copy is what actually picks that up, re-read once right after a
+   * successful confirm. It otherwise always mirrors `attempt`: the effect below resyncs it whenever
+   * the prop changes (a fresh review opening, or the parent's own future refresh), so this is never
+   * a second, independently-stale source of truth.
+   */
+  const [liveAttempt, setLiveAttempt] = useState(attempt);
+  useEffect(() => setLiveAttempt(attempt), [attempt]);
+
   useEffect(() => {
     let cancelled = false;
     openedRef.current = false;
@@ -168,6 +181,32 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       setState({ phase: 'error', message: describeError(err, 'could not re-read the page after the live view closed') });
     }
   }, [attempt.id, attempt.canonicalUrl, state]);
+
+  /**
+   * Commits one confirmed answer -- a reused saved answer or a freshly-typed one -- into one live
+   * field (#372). Returns the bridge's own result so the caller (the awaiting-you row that offered
+   * this action) can show its own inline failure rather than this whole session going to its
+   * generic error phase: a single field not taking a fill is not the same severity as the review
+   * itself failing to open.
+   */
+  const handleConfirmAnswer = useCallback(
+    async (fieldIndex: number, fieldRef: string, value: string) => {
+      const result = await window.applicationExecutor.confirmApplicationAnswer({ attemptId: attempt.id, fieldIndex, fieldRef, value });
+      if (result.ok) {
+        // `result.preparedFields` is main's own updated record, already written -- no second round
+        // trip through `getApplicationAttempt` needed just to read back what this same call already
+        // returned.
+        if (result.preparedFields) setLiveAttempt((current) => ({ ...current, preparedFields: result.preparedFields! }));
+        setState((current) =>
+          (current.phase === 'ready' || current.phase === 'deciding') && result.readiness
+            ? { ...current, review: { ...current.review, readiness: result.readiness } }
+            : current,
+        );
+      }
+      return result;
+    },
+    [attempt.id],
+  );
 
   const handleApprove = useCallback(async () => {
     if (state.phase !== 'ready') return;
@@ -431,7 +470,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {(state.phase === 'ready' || state.phase === 'deciding') && (
           <ApplicationReviewSwipeCard
-            attempt={attempt}
+            attempt={liveAttempt}
             snapshot={state.review.snapshot}
             screenshotBase64={state.review.screenshotBase64}
             documents={documents}
@@ -441,6 +480,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             onSkip={handleSkip}
             onOpenArtifact={(artifactId) => void handleOpenArtifact(artifactId)}
             onOpenLiveView={() => void handleOpenLiveView()}
+            onConfirmAnswer={handleConfirmAnswer}
           />
         )}
       </div>

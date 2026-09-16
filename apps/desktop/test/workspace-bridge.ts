@@ -86,6 +86,7 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
         applicationArtifacts: 0,
         submissionReceipts: 0,
         automationGrants: 0,
+        applicationAnswers: 0,
       },
     }),
 
@@ -118,6 +119,12 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     listApplicationArtifacts: vi.fn().mockResolvedValue([]),
     listAutomationGrants: vi.fn().mockResolvedValue([]),
     revokeAutomationGrant: vi.fn(),
+
+    listApplicationAnswers: vi.fn().mockResolvedValue([]),
+    saveApplicationAnswer: vi.fn(),
+    updateApplicationAnswer: vi.fn(),
+    recordApplicationAnswerUsed: vi.fn(),
+    deleteApplicationAnswer: vi.fn().mockResolvedValue({ deleted: true }),
     ...overrides,
   };
   (window as unknown as { workspace: WorkspaceBridge }).workspace = bridge;

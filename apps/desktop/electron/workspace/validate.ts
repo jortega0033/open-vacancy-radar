@@ -27,6 +27,8 @@ import type {
   CvSourceProjectEntry,
 } from './cv-source-schema.js';
 import type {
+  ApplicationAnswerInput,
+  ApplicationAnswerPatch,
   ApplicationArtifactInput,
   ApplicationArtifactKind,
   ApplicationAttemptCheckpoint,
@@ -81,6 +83,10 @@ export const LIMITS = {
   jdSnapshot: 200_000,
   /** A short free-text checkpoint detail (#198): "waiting on a CAPTCHA", not a document. */
   checkpointDetail: 2_000,
+  /** One saved application-form answer (#372): generous enough for a genuine paragraph answer to
+   * a "why do you want to work here?"-style question, finite against a hostile or mistaken paste
+   * of an entire cover letter or CV into a single answer field. */
+  applicationAnswer: 5_000,
 } as const;
 
 /** A lowercase SHA-256 hex digest: exactly what `contentHash`/`jdSnapshotHash`/
@@ -547,6 +553,32 @@ export function parseLetterPatch(value: unknown): LetterPatch {
   patch(input, out, 'vacancyKey', (v) => nullableStr(v, 'vacancyKey', LIMITS.short));
   patch(input, out, 'cvId', (v) => nullableStr(v, 'cvId', LIMITS.short));
   patch(input, out, 'body', (v) => str(v, 'body', LIMITS.letterBody));
+  return out;
+}
+
+// ------------------------------------------------------------- application answers (#372)
+
+export const APPLICATION_ANSWER_CONTROL_TYPES = ['text', 'textarea'] as const;
+
+export function parseApplicationAnswerInput(value: unknown): ApplicationAnswerInput {
+  const input = asRecord(value, 'application answer');
+  return {
+    label: requiredNonEmpty(input.label, 'label', LIMITS.short),
+    controlType: oneOf(input.controlType, 'controlType', APPLICATION_ANSWER_CONTROL_TYPES),
+    // Trimmed and required non-empty: #372 asks for empty/oversized answers to be refused with an
+    // actionable message, not silently truncated or stored as a blank row nobody meant to save.
+    answer: requiredNonEmpty(input.answer, 'answer', LIMITS.applicationAnswer),
+    originCompany: input.originCompany === undefined ? '' : str(input.originCompany, 'originCompany', LIMITS.short),
+    originRole: input.originRole === undefined ? '' : str(input.originRole, 'originRole', LIMITS.short),
+  };
+}
+
+/** Only `answer` is patchable -- see `ApplicationAnswerPatch`'s own comment in `types.ts` for why
+ * `label`/`controlType`/origin are fixed at creation rather than editable here. */
+export function parseApplicationAnswerPatch(value: unknown): ApplicationAnswerPatch {
+  const input = asRecord(value, '"patch"');
+  const out: ApplicationAnswerPatch = {};
+  patch(input, out, 'answer', (v) => requiredNonEmpty(v, 'answer', LIMITS.applicationAnswer));
   return out;
 }
 

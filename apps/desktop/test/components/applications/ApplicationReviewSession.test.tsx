@@ -71,6 +71,9 @@ function installBridges() {
   (window as unknown as { workspace: unknown }).workspace = {
     listApplicationArtifacts: vi.fn().mockResolvedValue([]),
     updateApplicationAttempt: vi.fn().mockResolvedValue(undefined),
+    getApplicationAttempt: vi.fn().mockResolvedValue(ATTEMPT),
+    listApplicationAnswers: vi.fn().mockResolvedValue([]),
+    saveApplicationAnswer: vi.fn(),
   };
   return { openReview };
 }

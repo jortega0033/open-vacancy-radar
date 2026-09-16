@@ -30,6 +30,7 @@ const workspaceMock = vi.hoisted(() => ({
   findActiveAutomationGrant: vi.fn(() => undefined as unknown),
   createApplicationSubmissionReceipt: vi.fn((_db: unknown, input: Record<string, unknown>) => ({ id: 'receipt-1', ...input })),
   listApplicationSubmissionReceipts: vi.fn(() => [] as unknown[]),
+  recordPreparedApplicationFields: vi.fn(),
   // Mirrors the real class's constructor: application-review-session.ts imports this from the
   // same mocked module and does `err instanceof WorkspaceNotFoundError`, which only works if both
   // sides resolve to the identical class reference.
@@ -438,6 +439,7 @@ beforeEach(() => {
   workspaceMock.findActiveAutomationGrant.mockReset().mockReturnValue(undefined);
   workspaceMock.createApplicationSubmissionReceipt.mockReset().mockImplementation((_db: unknown, input: Record<string, unknown>) => ({ id: 'receipt-1', ...input }));
   workspaceMock.listApplicationSubmissionReceipts.mockReset().mockReturnValue([]);
+  workspaceMock.recordPreparedApplicationFields.mockReset();
   notifyAutomaticSubmission.mockReset();
   extractPdfText.mockReset().mockResolvedValue('');
   dialog.showOpenDialog.mockReset();
@@ -715,6 +717,231 @@ describe('application-review-session', () => {
     await expect(
       applyApplicationFieldMap(FAKE_DB, { attemptId: '22222222-2222-4222-8222-222222222222', valueTable: [], fieldMap: { attemptId: '22222222-2222-4222-8222-222222222222', snapshotGeneration: 1, assignments: [], unmapped: [] } }),
     ).rejects.toThrow(/no open review/);
+  });
+
+  describe('confirmApplicationAnswer (#372)', () => {
+    it('fills and verifies one live field, and commits it into preparedFields as user_answer', async () => {
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
+      workspaceMock.getApplicationAttempt.mockReturnValue(
+        fakeAttempt({
+          preparedFields: {
+            version: 1,
+            preparedAt: '2026-01-01T00:00:00.000Z',
+            company: 'Acme Corp',
+            role: 'Senior Engineer',
+            verification: 'applied',
+            fields: [
+              { label: 'fullName', controlType: 'text', required: true, status: 'awaiting_you', detail: 'none of your saved details answers this, so this app left it for you' },
+              { label: 'workAuthorization', controlType: 'select', required: false, status: 'left_blank', detail: 'optional, and none of your saved details answers it' },
+            ],
+          },
+        }),
+      );
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 0, fieldRef: nameField.fieldRef, value: 'Ada Lovelace' });
+
+      expect(result.ok).toBe(true);
+      // A fresh readiness reading comes back on success, so the caller can update its own "N
+      // required fields remaining" display without a second round trip.
+      expect(result.readiness?.verifiedFilledCount).toBe(1);
+      // The updated `preparedFields` comes back directly too, so the caller never has to re-fetch
+      // the attempt just to see the one field it already knows changed.
+      expect(result.preparedFields?.fields[0]).toEqual({ label: 'fullName', controlType: 'text', required: true, status: 'committed', value: 'Ada Lovelace', provenance: 'user_answer' });
+      // The one changed field is committed with the right provenance; the untouched field (a
+      // different control entirely, never targeted) is passed through unchanged.
+      expect(workspaceMock.recordPreparedApplicationFields).toHaveBeenCalledWith(
+        FAKE_DB,
+        ATTEMPT_ID,
+        expect.objectContaining({
+          fields: [
+            { label: 'fullName', controlType: 'text', required: true, status: 'committed', value: 'Ada Lovelace', provenance: 'user_answer' },
+            { label: 'workAuthorization', controlType: 'select', required: false, status: 'left_blank', detail: 'optional, and none of your saved details answers it' },
+          ],
+        }),
+      );
+    });
+
+    it('refuses for an attempt with no open review, without ever touching preparedFields', async () => {
+      const { confirmApplicationAnswer } = await importSession();
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: '22222222-2222-4222-8222-222222222222', fieldIndex: 0, fieldRef: 'f0000000000000001', value: 'anything' });
+      expect(result).toEqual({ ok: false, reason: 'no_open_review', detail: expect.any(String) });
+      expect(workspaceMock.recordPreparedApplicationFields).not.toHaveBeenCalled();
+    });
+
+    it('refuses a fieldRef that is not part of the current snapshot, without touching the page', async () => {
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const view = fakeView();
+      createApplicationView.mockImplementation(() => view);
+      await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      // Rule 3 (unknown fieldRef) is one of `validateFieldMap`'s own checks, but this function
+      // refuses before ever building a field map or calling it -- clearing the transport mock here
+      // and asserting it stays uncalled below proves no CDP round trip was attempted for this field.
+      view.transport.sendCommand.mockClear();
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 0, fieldRef: 'f0000000000000099', value: 'anything' });
+
+      expect(result).toEqual({ ok: false, reason: 'stale_field', detail: expect.any(String) });
+      expect(view.transport.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it('does not update preparedFields when the field is not required/awaiting_you (nothing to reconcile)', async () => {
+      // Confirming a value the page did not verify is covered by the fenced-live-review harness
+      // below (the same "issued is not verified" distinction applyApplicationFieldMap itself draws)
+      // -- this test instead covers the case preparedFields has no record of this label/controlType
+      // at all (e.g. a stale/absent prepared-fields record): the confirm still succeeds against the
+      // live page, it just has nothing local to reconcile.
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const nameField = opened.snapshot.fields.find((f) => f.label === 'fullName')!;
+      workspaceMock.getApplicationAttempt.mockReturnValue(fakeAttempt({ preparedFields: null }));
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 0, fieldRef: nameField.fieldRef, value: 'Ada Lovelace' });
+
+      expect(result.ok).toBe(true);
+      expect(workspaceMock.recordPreparedApplicationFields).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Regression: an earlier version of this function built a one-assignment field map and routed
+     * it through `applyApplicationFieldMap`/`validateFieldMap`, whose completeness rule refuses any
+     * field map that leaves an active required field neither assigned nor explicitly listed as
+     * `unmapped`. That refused this exact call -- confirming one `awaiting_you` field on a form that
+     * has *any other* required field, filled or not -- on essentially every real form, since a
+     * one-assignment map by construction never covers a second required field. `fullName` here is
+     * required and already holds a value (TREE's own default), separate from the `whyThisRole`
+     * field being confirmed, so this only passes if the current implementation genuinely does not
+     * route through that completeness check.
+     */
+    it('confirms an awaiting_you field even when a different required field also exists on the page', async () => {
+      const treeWithSecondRequiredField: CdpDomNode = {
+        ...TREE,
+        children: [
+          ...TREE.children!,
+          { nodeName: 'TEXTAREA', nodeType: 1, backendNodeId: 40, attributes: ['name', 'whyThisRole', 'required', ''] },
+        ],
+      };
+      const view = fakeView(treeWithSecondRequiredField);
+      createApplicationView.mockImplementation(() => view);
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const whyField = opened.snapshot.fields.find((f) => f.label === 'whyThisRole')!;
+      expect(whyField.controlType).toBe('textarea');
+      workspaceMock.getApplicationAttempt.mockReturnValue(
+        fakeAttempt({
+          preparedFields: {
+            version: 1,
+            preparedAt: '2026-01-01T00:00:00.000Z',
+            company: 'Acme Corp',
+            role: 'Senior Engineer',
+            verification: 'applied',
+            fields: [
+              { label: 'fullName', controlType: 'text', required: true, status: 'committed', value: 'Ada Lovelace', provenance: 'cv' },
+              { label: 'whyThisRole', controlType: 'textarea', required: true, status: 'awaiting_you', detail: 'none of your saved details answers this, so this app left it for you' },
+            ],
+          },
+        }),
+      );
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 1, fieldRef: whyField.fieldRef, value: 'I care about reliable delivery.' });
+
+      expect(result.ok).toBe(true);
+      expect(result.preparedFields?.fields[1]).toEqual({
+        label: 'whyThisRole',
+        controlType: 'textarea',
+        required: true,
+        status: 'committed',
+        value: 'I care about reliable delivery.',
+        provenance: 'user_answer',
+      });
+      // The other required field's own entry is untouched.
+      expect(result.preparedFields?.fields[0]).toEqual({ label: 'fullName', controlType: 'text', required: true, status: 'committed', value: 'Ada Lovelace', provenance: 'cv' });
+    });
+
+    /**
+     * Regression: reconciling by `label + controlType` alone (rather than by the field's own
+     * position in `preparedFields.fields`) would flip *every* entry sharing a label and control
+     * type, and the renderer-side lookup that resolves a `fieldRef` for one of two same-labelled
+     * rows would always resolve to the *first* live field -- so confirming the second row would
+     * silently fill the first live control. This proves the current index-based design avoids both:
+     * confirming the field at index 1 updates only index 1's record, using the second live field's
+     * own `fieldRef`, not the first one's.
+     */
+    it('does not conflate two awaiting_you fields that share an identical label and control type', async () => {
+      const treeWithDuplicateLabels: CdpDomNode = {
+        ...TREE,
+        children: [
+          ...TREE.children!,
+          { nodeName: 'TEXTAREA', nodeType: 1, backendNodeId: 41, attributes: ['name', 'comments'] },
+          { nodeName: 'TEXTAREA', nodeType: 1, backendNodeId: 42, attributes: ['name', 'comments'] },
+        ],
+      };
+      const view = fakeView(treeWithDuplicateLabels);
+      createApplicationView.mockImplementation(() => view);
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      // Both textareas resolve to the label `dom-extract.ts` falls back to when nothing labels the
+      // control -- the exact "identical label" collision this test targets.
+      const duplicateLabelFields = opened.snapshot.fields.filter((f) => f.controlType === 'textarea');
+      expect(duplicateLabelFields).toHaveLength(2);
+      expect(duplicateLabelFields[0]!.label).toBe(duplicateLabelFields[1]!.label);
+      const [first, second] = duplicateLabelFields;
+      workspaceMock.getApplicationAttempt.mockReturnValue(
+        fakeAttempt({
+          preparedFields: {
+            version: 1,
+            preparedAt: '2026-01-01T00:00:00.000Z',
+            company: 'Acme Corp',
+            role: 'Senior Engineer',
+            verification: 'applied',
+            fields: [
+              { label: first!.label, controlType: 'textarea', required: false, status: 'awaiting_you', detail: 'optional, and none of your saved details answers it' },
+              { label: second!.label, controlType: 'textarea', required: false, status: 'awaiting_you', detail: 'optional, and none of your saved details answers it' },
+            ],
+          },
+        }),
+      );
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 1, fieldRef: second!.fieldRef, value: 'Second box only.' });
+
+      expect(result.ok).toBe(true);
+      // Only index 1 (the field actually confirmed) is committed; index 0 stays awaiting_you.
+      expect(result.preparedFields?.fields[0]?.status).toBe('awaiting_you');
+      expect(result.preparedFields?.fields[1]).toMatchObject({ status: 'committed', value: 'Second box only.' });
+      // And on the live page, only the second control actually received the value.
+      expect(view.controls.get(42)?.value).toBe('Second box only.');
+      expect(view.controls.get(41)?.value).toBe('');
+    });
+
+    it('refuses a credential field (password input) even if a caller somehow names its fieldRef', async () => {
+      const treeWithPasswordField: CdpDomNode = {
+        ...TREE,
+        children: [...TREE.children!, { nodeName: 'INPUT', nodeType: 1, backendNodeId: 43, attributes: ['type', 'password', 'name', 'currentPassword'] }],
+      };
+      const view = fakeView(treeWithPasswordField);
+      createApplicationView.mockImplementation(() => view);
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const passwordField = opened.snapshot.fields.find((f) => f.label === 'currentPassword')!;
+      expect(passwordField.classification).toBe('credential_field');
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 0, fieldRef: passwordField.fieldRef, value: 'anything' });
+
+      expect(result).toEqual({ ok: false, reason: 'excluded_field_targeted', detail: expect.any(String) });
+      expect(view.controls.get(43)?.value).toBe('');
+    });
+
+    it('refuses a non-text/textarea control (a select), even though the shared validator would allow it', async () => {
+      const { openApplicationReview, confirmApplicationAnswer } = await importSession();
+      const opened = await openApplicationReview({ attemptId: ATTEMPT_ID, policyId: 'ashby-fixture-test-only', targetUrl: FIXTURE_URL });
+      const selectField = opened.snapshot.fields.find((f) => f.label === 'workAuthorization')!;
+      expect(selectField.controlType).toBe('select');
+
+      const result = await confirmApplicationAnswer(FAKE_DB, { attemptId: ATTEMPT_ID, fieldIndex: 0, fieldRef: selectField.fieldRef, value: 'yes' });
+
+      expect(result).toEqual({ ok: false, reason: 'type_mismatch', detail: expect.any(String) });
+    });
   });
 
   /**

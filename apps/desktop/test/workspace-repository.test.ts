@@ -122,6 +122,7 @@ describe('settings', () => {
       applicationArtifacts: 1,
       submissionReceipts: 1,
       automationGrants: 1,
+      applicationAnswers: 0,
     });
     expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null });
     expect(workspace.listSavedJobs(db)).toEqual([]);

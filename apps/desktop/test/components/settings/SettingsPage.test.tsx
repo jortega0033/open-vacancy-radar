@@ -98,7 +98,7 @@ describe('SettingsPage', () => {
     );
 
     openTab('Workspace');
-    expect(headingsNow()).toEqual(['Documents', 'Applications']);
+    expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
 
     openTab('Advanced');
     expect(headingsNow()).toEqual(['AI runtime', 'Data management', 'About']);

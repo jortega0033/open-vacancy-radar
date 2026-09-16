@@ -329,6 +329,11 @@ describe('electron/preload.ts: workspace bridge', () => {
     'listApplicationArtifacts',
     'listAutomationGrants',
     'revokeAutomationGrant',
+    'listApplicationAnswers',
+    'saveApplicationAnswer',
+    'updateApplicationAnswer',
+    'recordApplicationAnswerUsed',
+    'deleteApplicationAnswer',
   ];
 
   it('exposes exactly the documented capability functions and nothing else', async () => {
@@ -656,6 +661,14 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     // WorkspaceBridge's own comment on why that needs a native dialog instead).
     'listAutomationGrants',
     'revokeAutomationGrant',
+    // Added by issue #372, same reasoning: a small candidate-authored answer library legitimately
+    // belongs on this namespace, next to the other list/create-or-save/update/delete workspace
+    // record types it matches in shape.
+    'listApplicationAnswers',
+    'saveApplicationAnswer',
+    'updateApplicationAnswer',
+    'recordApplicationAnswerUsed',
+    'deleteApplicationAnswer',
   ],
   cv: ['getWorkspaceDir', 'selectAndRead'],
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
@@ -1584,6 +1597,7 @@ describe('electron/preload.ts: applicationExecutor bridge (#201)', () => {
       [
         'openReview',
         'applyFieldMap',
+        'confirmApplicationAnswer',
         'submitReview',
         'closeReview',
         'resolveTargetPolicyId',

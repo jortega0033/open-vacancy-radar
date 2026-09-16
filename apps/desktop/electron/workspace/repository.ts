@@ -13,9 +13,11 @@
 import { asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
 import type { WorkspaceDb } from './client.js';
+import { applicationAnswerKey } from './application-answer-key.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
 import {
   appSettings,
+  applicationAnswers,
   applicationArtifacts,
   applicationAttempts,
   applicationSubmissionReceipts,
@@ -28,6 +30,9 @@ import {
 import {
   COMPLETED_ATTEMPT_CHECKPOINTS,
   NON_TERMINAL_ATTEMPT_CHECKPOINTS,
+  type ApplicationAnswerInput,
+  type ApplicationAnswerPatch,
+  type ApplicationAnswerRecord,
   type ApplicationArtifactInput,
   type ApplicationArtifactRecord,
   type ApplicationDataResetResult,
@@ -1003,7 +1008,9 @@ export function updateApplicationAttempt(
  * A function of its own rather than a field on `ApplicationAttemptPatch`, deliberately: the patch
  * type is what the renderer can send over `workspace:application-attempts:update`, and a renderer
  * able to write this could claim an application was filled with answers nothing ever applied. Only
- * main-process pipeline code calls this.
+ * main-process code calls this: the preparation pipeline's own initial fill, and (#372)
+ * `application-review-session.ts`'s `confirmApplicationAnswer`, which reconciles exactly the one
+ * field it just filled and verified into an existing record -- never a renderer-supplied patch.
  *
  * Passing `null` clears the record, which is what a fresh run does before it starts filling: an
  * attempt being re-prepared must never show the previous run's answers while the new fill is still
@@ -1380,6 +1387,133 @@ export function findActiveAutomationGrant(db: WorkspaceDb, policyId: string): Au
   return rows.find((grant) => grant.revokedAt === null && Date.parse(grant.expiresAt) > now);
 }
 
+// ------------------------------------------------------------ application answers (#372)
+
+type ApplicationAnswerRow = typeof applicationAnswers.$inferSelect;
+
+function toApplicationAnswer(row: ApplicationAnswerRow): ApplicationAnswerRecord {
+  return {
+    id: row.id,
+    normalizedKey: row.normalizedKey,
+    label: row.label,
+    controlType: row.controlType,
+    answer: row.answer,
+    originCompany: row.originCompany,
+    originRole: row.originRole,
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+    lastConfirmedAt: iso(row.lastConfirmedAt),
+  };
+}
+
+/** Ordered most-recently-touched first -- the useful order for a management list, and matches
+ * `updatedAt` bumping on every save/edit. */
+export function listApplicationAnswers(db: WorkspaceDb): ApplicationAnswerRecord[] {
+  return db.select().from(applicationAnswers).orderBy(desc(applicationAnswers.updatedAt)).all().map(toApplicationAnswer);
+}
+
+/** The exact-key lookup the (separately implemented) review-flow suggestion code calls. No fuzzy
+ * matching here -- see `application-answer-key.ts`'s own comment for why. */
+export function findApplicationAnswerByKey(db: WorkspaceDb, normalizedKey: string): ApplicationAnswerRecord | null {
+  const row = db.select().from(applicationAnswers).where(eq(applicationAnswers.normalizedKey, normalizedKey)).all()[0];
+  return row ? toApplicationAnswer(row) : null;
+}
+
+/**
+ * Saves an answer under its normalized label+controlType key (#372): updates the existing row in
+ * place when one already exists for that key, otherwise inserts a new one. This is the only write
+ * path for this table other than `updateApplicationAnswer`'s answer-body-only edit, and it is how
+ * "one answer per key" is enforced -- app-level, via read-then-write in a transaction, since the
+ * schema itself has no unique constraint on `normalizedKey` (see `schema.ts`'s comment on the
+ * column). Read-then-write, so it follows `createCvDocument`'s transaction style.
+ */
+export function saveApplicationAnswer(db: WorkspaceDb, input: ApplicationAnswerInput): ApplicationAnswerRecord {
+  const normalizedKey = applicationAnswerKey(input.label, input.controlType);
+  return db.transaction((tx) => {
+    const existing = tx.select().from(applicationAnswers).where(eq(applicationAnswers.normalizedKey, normalizedKey)).get();
+    const now = new Date();
+    if (existing) {
+      const [row] = tx
+        .update(applicationAnswers)
+        .set({
+          answer: input.answer,
+          originCompany: input.originCompany,
+          originRole: input.originRole,
+          updatedAt: now,
+          lastConfirmedAt: now,
+        })
+        .where(eq(applicationAnswers.id, existing.id))
+        .returning()
+        .all();
+      if (!row) throw new Error('failed to update application answer');
+      return toApplicationAnswer(row);
+    }
+    const [row] = tx
+      .insert(applicationAnswers)
+      .values({
+        normalizedKey,
+        label: input.label,
+        controlType: input.controlType,
+        answer: input.answer,
+        originCompany: input.originCompany,
+        originRole: input.originRole,
+        createdAt: now,
+        updatedAt: now,
+        lastConfirmedAt: now,
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert application answer');
+    return toApplicationAnswer(row);
+  });
+}
+
+/** Edits the answer body only -- see `ApplicationAnswerPatch`'s own comment in `types.ts` for why
+ * `label`/`controlType`/origin are not patchable here. Follows `updateSavedJob`'s exact pattern:
+ * an empty patch is a no-op read rather than an invalid empty `set`, and a missing id throws. */
+export function updateApplicationAnswer(db: WorkspaceDb, id: string, values: ApplicationAnswerPatch): ApplicationAnswerRecord {
+  if (Object.keys(values).length === 0) {
+    const existing = db.select().from(applicationAnswers).where(eq(applicationAnswers.id, id)).get();
+    if (!existing) throw new WorkspaceNotFoundError('application answer', id);
+    return toApplicationAnswer(existing);
+  }
+  const [row] = db
+    .update(applicationAnswers)
+    .set({ ...values, updatedAt: new Date() })
+    .where(eq(applicationAnswers.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('application answer', id);
+  return toApplicationAnswer(row);
+}
+
+/**
+ * Bumps only `lastConfirmedAt` (#372), for the one moment that genuinely means "this saved answer
+ * was used": a person clicking "Use this answer" on a live form field, not an edit to the answer's
+ * own text. Deliberately its own function rather than routed through `updateApplicationAnswer`:
+ * that function's patch shape (`ApplicationAnswerPatch`) only ever carries `answer`, and widening it
+ * to also carry a use-confirmation flag would let a renderer bug silently smuggle a real edit
+ * through what should be a pure "I used this" signal. `answer`/`originCompany`/`originRole`/
+ * `updatedAt` are untouched -- only `saveApplicationAnswer`'s own upsert (an explicit edit or a
+ * fresh save) ever changes those.
+ */
+export function recordApplicationAnswerUsed(db: WorkspaceDb, id: string): ApplicationAnswerRecord {
+  const [row] = db
+    .update(applicationAnswers)
+    .set({ lastConfirmedAt: new Date() })
+    .where(eq(applicationAnswers.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('application answer', id);
+  return toApplicationAnswer(row);
+}
+
+/** Follows `deleteSavedJob`'s exact pattern: never throws on a missing id. */
+export function deleteApplicationAnswer(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db.delete(applicationAnswers).where(eq(applicationAnswers.id, id)).returning({ id: applicationAnswers.id }).all();
+  return { deleted: removed.length > 0 };
+}
+
 // ------------------------------------------------------------------------------ settings
 
 type AppSettingsRow = typeof appSettings.$inferSelect;
@@ -1456,6 +1590,7 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
         .from(applicationSubmissionReceipts)
         .all().length,
       automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
+      applicationAnswers: tx.select({ id: applicationAnswers.id }).from(applicationAnswers).all().length,
     };
 
     tx.delete(applicationAttempts).run();
@@ -1465,6 +1600,7 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
     tx.delete(appSettings).run();
     tx.delete(cvDocuments).run();
     tx.delete(automationGrants).run();
+    tx.delete(applicationAnswers).run();
 
     const [settings] = tx.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
     if (!settings) throw new Error('failed to restore default app settings');

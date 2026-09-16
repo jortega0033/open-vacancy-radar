@@ -11,6 +11,7 @@ import { AboutSection } from './AboutSection.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
+import { SavedAnswersSection } from './SavedAnswersSection.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
 
@@ -585,6 +586,8 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
               />
             </SettingsRow>
           </SettingsSection>
+
+          <SavedAnswersSection />
         </>
       )}
 
