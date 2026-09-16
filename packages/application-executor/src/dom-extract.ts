@@ -66,16 +66,20 @@ function parseUrl(url: string | undefined, base: string | undefined): URL | unde
  *    cannot scope a `file:` target at all (`exactFileUrls` is what does), so this bucket is honest
  *    about carrying no authority of its own; it exists so local fixture pages behave, not so a
  *    `file:` frame earns trust.
- *  - Only `http:`/`https:` ever return a real origin. Every other scheme -- `data:`, `vbscript:`,
- *    `blob:`, or anything not enumerated above -- gets WHATWG's opaque `"null"` explicitly, refused
- *    downstream by `isFrameFillAllowed`'s own `=== 'null'` check, since an opaque origin is
- *    same-origin with nothing at all. This must never be the `about:`/`javascript:` branch above: a
- *    `data:`/`vbscript:` navigation gets its own unique opaque origin, it does not inherit its
- *    embedder's -- treating it as inheriting would let a `data:` iframe borrow its embedder's trust.
+ *  - `data:` and `vbscript:` are named here explicitly, not left to the generic fallback below,
+ *    because they are the one easy mistake this function must never make: both get their own
+ *    unique opaque origin on navigation, unlike `about:`/`javascript:` above, so they must answer
+ *    the opaque `"null"` and NOT `undefined` -- treating either as inheriting its embedder would let
+ *    an attacker-controlled `data:`/`vbscript:` iframe borrow its embedder's trust.
+ *  - Only `http:`/`https:` ever return a real origin. Every other scheme -- `blob:`, or anything not
+ *    enumerated above -- also gets WHATWG's opaque `"null"`, refused downstream by
+ *    `isFrameFillAllowed`'s own `=== 'null'` check, since an opaque origin is same-origin with
+ *    nothing at all.
  */
 function originOfUrl(parsed: URL | undefined): string | undefined {
   if (!parsed) return undefined;
   if (parsed.protocol === 'about:' || parsed.protocol === 'javascript:') return undefined;
+  if (parsed.protocol === 'data:' || parsed.protocol === 'vbscript:') return 'null';
   if (parsed.protocol === 'file:') return 'file://';
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'null';
   return parsed.origin;
