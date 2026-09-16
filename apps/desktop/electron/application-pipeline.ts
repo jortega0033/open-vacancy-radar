@@ -445,17 +445,24 @@ function fencedWrite<T>(run: PipelineRun, write: () => T): T | undefined {
  * every synchronous `workspace.*` call it wraps: nothing can move the fence between the check and
  * the row landing, because nothing else runs. It is not the same thing for a step whose durable part
  * happens inside an already-started async call -- staging (an offscreen `printToPDF` that can hang
- * for minutes, and only then a file delete, a row delete, a file write and a row insert) and form
- * filling (a CDP round trip per field, into a page a replacement run may own by the time the next
- * one goes out). For those, "checked when the promise was created" is a check made long before
- * anything happened, and the fenced-out run's own `if (!staged) return` afterwards cannot help: it
- * gets a perfectly good result object back, because the work really did run.
+ * for minutes, and only then a file write and the row swap that makes it the attempt's current
+ * document) and form filling (a CDP round trip per field, into a page a replacement run may own by
+ * the time the next one goes out). For those, "checked when the promise was created" is a check made
+ * long before anything happened, and the fenced-out run's own `if (!staged) return` afterwards
+ * cannot help: it gets a perfectly good result object back, because the work really did run.
  *
  * So both of those steps take this callback and re-ask it on their own trailing edge, immediately
  * before each durable effect: `stageApplicationDocuments`/`stageLetterArtifact` bail inside
  * `writeAndRegisterArtifact` (throwing `StagingAbandonedError`, caught below), and
- * `applyApplicationFieldMap` bails before each fill/select/attach. The gap that remains in the
- * second case is one write already in flight, which nothing in this process can cancel.
+ * `applyApplicationFieldMap` bails before each fill/select/attach.
+ *
+ * What each of those two can still promise differs, and the difference is worth knowing. Staging
+ * owns both ends of its own writes, so it orders them to put every irreversible one -- the row swap
+ * that takes the live run's document away -- after its trailing check, and compensates the one that
+ * cannot wait (see `writeAndRegisterArtifact`'s own comment): an abandoned staging run leaves no row
+ * behind at all. Form filling does not own the far end -- a keystroke that has reached the page is
+ * in someone else's document -- so the gap that remains there is one fill already in flight, which
+ * nothing in this process can cancel and nothing can undo either.
  */
 function stillLiveCheck(run: PipelineRun): () => boolean {
   return () => isLivePreparation(run);
@@ -704,9 +711,9 @@ export async function runApplicationAttempt(
     if (!staged) return abandoned(run, attemptId);
     stagedRecords = staged.records;
   } catch (err) {
-    // Not a failed document: a document this run was no longer entitled to write. Nothing was
-    // removed, written or registered, and the attempt belongs to a newer run -- so this stops
-    // quietly rather than settling `needs_user` about an application that is in fact fine.
+    // Not a failed document: a document this run was no longer entitled to write. No artifact row
+    // was registered and none was taken away, and the attempt belongs to a newer run -- so this
+    // stops quietly rather than settling `needs_user` about an application that is in fact fine.
     if (err instanceof StagingAbandonedError) return abandoned(run, attemptId);
     return settle(run, attemptId, 'needs_user', `the tailored CV could not be produced: ${describeError(err)}`, 'needs_user');
   }

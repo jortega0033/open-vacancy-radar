@@ -1607,10 +1607,14 @@ describe('acceptance 6: an abandoned preparation frees the lease and cannot writ
     // explicit checkpoint on the way into staging -- so a fenced-out run there stops at a hand-placed
     // gate and never starts a durable write at all. This one parks it a step later, inside the CV's
     // own `printToPDF`, which is the case the leading-edge fence could not see: the fence for that
-    // staging write was checked and passed before the render began, and the four side effects it
-    // ends in (rm the superseded file, delete the superseded row, write the PDF, insert the row) all
-    // happen after it. Nothing about that write is benign -- it replaces the artifact row and the
-    // file the *live* attempt's pre-submit gate reads, while the form still holds the other run's CV.
+    // staging write was checked and passed before the render began, and every side effect it ends in
+    // (writing the PDF, dropping the superseded row and its file, inserting the new row) happens
+    // after it. Nothing about that write is benign -- it replaces the artifact row and the file the
+    // *live* attempt's pre-submit gate reads, while the form still holds the other run's CV.
+    //
+    // What stops it here is `writeAndRegisterArtifact`'s trailing check, which by the time this run
+    // wakes up has long since moved. The narrower case, where the fence moves *during* that
+    // function's own writes, is `application-artifact-staging-fence.test.ts`'s.
     const { log, stopped } = watchForAbandonedRun();
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
     const attemptId = started.attemptId!;
@@ -1645,8 +1649,9 @@ describe('acceptance 6: an abandoned preparation frees the lease and cannot writ
     // The fresh run's rows are the rows, byte for byte: no id was replaced, no hash moved.
     expect(workspace.listApplicationArtifacts(db, attemptId)).toEqual(freshArtifacts);
     expect(workspace.getApplicationAttempt(db, attemptId)).toEqual(afterFreshRun);
-    // And its files are still on disk: the abandoned run's `rm` of the superseded CV never ran, so
-    // the document the pre-submit gate reads is still the one the form was filled from.
+    // And its files are still on disk: the abandoned run never reached the point of dropping the
+    // superseded CV, so the document the pre-submit gate reads is still the one the form was filled
+    // from.
     expect(readdirSync(join(deps.storageRoot, attemptId)).sort()).toEqual(freshFiles);
     expect(views).toHaveLength(1);
   });

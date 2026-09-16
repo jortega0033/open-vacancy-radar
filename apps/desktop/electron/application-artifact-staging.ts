@@ -95,10 +95,15 @@ export class DocumentAcceptanceError extends Error {
  * forgot about a third possibility would otherwise carry on with a record it does not have. The
  * pipeline catches this specific type and stops quietly; nothing else in the app produces it,
  * because nothing else passes `stillLive`.
+ *
+ * "Registered", not "written": one of the two checks that raises this sits after the PDF is already
+ * on disk, and answers by removing that file again rather than by having prevented it. What the
+ * error promises the caller is that no artifact row was left behind, which is the claim anything
+ * downstream actually depends on.
  */
 export class StagingAbandonedError extends Error {
   constructor(public readonly attemptId: string) {
-    super(`staging for attempt ${attemptId} was abandoned before its artifact was written`);
+    super(`staging for attempt ${attemptId} was abandoned before its artifact was registered`);
     this.name = 'StagingAbandonedError';
   }
 }
@@ -138,10 +143,16 @@ export function documentKindForArtifact(kind: ApplicationArtifactKind): Document
  * document and producing it: `printHtmlToPdf` opens an offscreen `BrowserWindow`, loads a URL into
  * it and waits for `printToPDF`, none of which this process can cancel or time out. A caller that
  * checked its own fence before calling has therefore checked it minutes before anything durable
- * happens, which is no check at all -- so the check has to come back down here, immediately before
- * the four side effects in `writeAndRegisterArtifact` (delete a file, delete a row, write a file,
- * insert a row), all of which replace whatever a *newer* run has already staged for the same
- * attempt.
+ * happens, which is no check at all -- so the check has to come back down here, into
+ * `writeAndRegisterArtifact`, whose side effects replace whatever a *newer* run has already staged
+ * for the same attempt.
+ *
+ * Asked twice there, not once, and that is the whole point of the second one: on entry, so an
+ * already-abandoned run does no work at all, and again once the PDF is written, immediately before
+ * the rows that make it this attempt's current document. Only the second check can see an
+ * abandonment that happened *during* the write, which is the case a leading check structurally
+ * cannot cover. So it must be cheap and side-effect-free enough to call repeatedly, and it must
+ * answer about right now rather than caching an earlier answer.
  *
  * Optional, and absent everywhere except the pipeline's fenced preparation path: the manual CV
  * Library export and the tests that stage directly have no second run to lose a race with, and a
@@ -164,11 +175,38 @@ interface WriteAndRegisterOptions {
   stillLive?: StillLive;
 }
 
-/** The write-to-disk-and-register half shared by every staging path below, after each one has
- * already produced and accepted the actual PDF bytes. */
+/**
+ * The write-to-disk-and-register half shared by every staging path below, after each one has
+ * already produced and accepted the actual PDF bytes.
+ *
+ * Ordered the way it is because of the fence, not for readability. A leading `stillLive` check alone
+ * only says this run was entitled to write when the function was *entered*; every `await` after it
+ * is a point where the run can be abandoned and replaced, and nothing in this process can recall a
+ * filesystem call already issued. So the destructive half -- dropping the rows a previous run
+ * registered for this same logical document, and with them the files those rows point at -- is
+ * deliberately deferred until *after* the new PDF is on disk, where it sits behind a second
+ * `stillLive` check with no `await` between that check and the row writes it guards. That makes the
+ * replacement of an attempt's current artifact atomic with respect to the fence: an abandoned run
+ * that loses the race is refused there and deletes nothing, instead of taking the live run's
+ * documents down with it on its way out.
+ *
+ * What is genuinely irreducible, and accepted: the new PDF's own `mkdir`/`writeFile`/`chmod` can
+ * still land after the fence has moved, because they are already in flight by the time anyone could
+ * notice. They are compensated rather than prevented -- the trailing check removes the file it just
+ * wrote before throwing -- and that compensation is best-effort in both directions. It declines to
+ * delete a path some live artifact row already claims (file names are content hashes, so a
+ * replacement run that produced identical bytes is registered at the very same path), and if the
+ * `rm` fails it gives up rather than failing the run. Either way what can be left behind is an
+ * unreferenced file under this attempt's directory, which nothing reads and which the application
+ * data reset removes wholesale with the rest of `storageRoot`. No artifact row ever points at it,
+ * which is the property that actually matters: a document nothing registered cannot be attached to
+ * an application. Closing the window itself, rather than compensating for it, would need an
+ * `AbortSignal` threaded through every filesystem call in the app -- a separate hardening effort the
+ * fencing work deliberately left out of its own scope.
+ */
 async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promise<ApplicationArtifactRecord> {
-  // Before the path is even computed, so an abandoned run leaves nothing at all behind: no file
-  // removed, no row deleted, no PDF written, no row inserted.
+  // Before the path is even computed, so a run that was already fenced out when it arrived here
+  // leaves nothing at all behind: no directory created, no PDF written, no row touched.
   if (options.stillLive && !options.stillLive()) throw new StagingAbandonedError(options.attemptId);
 
   const storagePath = stagedArtifactPath(options.storageRoot, options.attemptId, options.contentHash, options.fileName);
@@ -176,19 +214,6 @@ async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promi
   const storageRoot = resolve(options.storageRoot);
   const attemptStorage = resolve(storageRoot, options.attemptId);
   if (dirname(attemptStorage) !== storageRoot) throw new Error('invalid application artifact attempt directory');
-
-  // An interrupted run may have registered this logical document before the attempt was requeued.
-  // Replace that registration only after the new PDF has passed acceptance, and remove its old
-  // attempt-owned file, so retries expose one current artifact instead of an accumulating history.
-  const superseded = workspace
-    .listApplicationArtifacts(options.db, options.attemptId)
-    .filter((artifact) => artifact.kind === workspaceKind && artifact.fileName === options.fileName);
-  for (const artifact of superseded) {
-    if (artifact.storagePath && dirname(resolve(artifact.storagePath)) === attemptStorage) {
-      await rm(artifact.storagePath, { force: true });
-    }
-    workspace.deleteApplicationArtifact(options.db, artifact.id);
-  }
 
   // A generated CV/letter PDF is as sensitive as anything in workspace.db itself -- it's the same
   // CV text and contact info, just rendered. Mirror workspace.db's 0700/0600 hardening here too:
@@ -199,7 +224,43 @@ async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promi
   await writeFile(storagePath, options.pdf, { mode: 0o600 });
   await chmod(storagePath, 0o600); // writeFile's own `mode` is masked by umask; this is not
 
-  return workspace.createApplicationArtifact(options.db, {
+  // The trailing edge: the last moment before this run changes anything another run can read. A
+  // file written here and then orphaned is inert; a row registered here is not, so the answer to
+  // "am I still the live run?" has to be the one from *now*, not the one from before the write.
+  if (options.stillLive && !options.stillLive()) {
+    // Not unconditionally: file names are content hashes, so a replacement run that produced
+    // byte-identical output -- the same CV tailored from the same source against the same vacancy,
+    // which is the *likely* case for a re-run, not an exotic one -- registered that document at
+    // exactly this path. Deleting "the file this run wrote" would then delete the live attempt's
+    // own current CV, turning a compensation into precisely the damage the fence exists to prevent.
+    // Identical hash means identical bytes, so leaving the file alone costs nothing.
+    const claimed = workspace
+      .listApplicationArtifacts(options.db, options.attemptId)
+      .some((artifact) => artifact.storagePath && resolve(artifact.storagePath) === resolve(storagePath));
+    if (!claimed) {
+      try {
+        await rm(storagePath, { force: true });
+      } catch {
+        // Best effort by design -- see this function's own doc comment. Leaving the bytes behind is
+        // strictly better than letting the throw below turn into a staging *failure* the caller
+        // would report to a person, about an attempt a replacement run is preparing perfectly well.
+      }
+    }
+    throw new StagingAbandonedError(options.attemptId);
+  }
+
+  // Nothing between the check above and the `createApplicationArtifact` below awaits, so the fence
+  // cannot move while this is happening: the old rows going and the new row arriving are one
+  // indivisible step as far as any other run is concerned. An interrupted run may have registered
+  // this same logical document before the attempt was requeued, and replacing that registration is
+  // what keeps a retried attempt showing one current artifact instead of an accumulating history.
+  const superseded = workspace
+    .listApplicationArtifacts(options.db, options.attemptId)
+    .filter((artifact) => artifact.kind === workspaceKind && artifact.fileName === options.fileName);
+  for (const artifact of superseded) {
+    workspace.deleteApplicationArtifact(options.db, artifact.id);
+  }
+  const record = workspace.createApplicationArtifact(options.db, {
     attemptId: options.attemptId,
     kind: workspaceKind,
     fileName: options.fileName,
@@ -208,6 +269,29 @@ async function writeAndRegisterArtifact(options: WriteAndRegisterOptions): Promi
     contentHash: options.contentHash,
     storagePath,
   });
+
+  // And only then the superseded files, which no row points at any more. Confined to this attempt's
+  // own directory, so a malformed or hand-edited `storagePath` can never make this delete something
+  // outside the artifact store. The path this run just wrote is skipped explicitly: re-staging
+  // byte-identical content produces the same content hash and therefore the same file name, so
+  // without this an idempotent re-stage would delete its own freshly written PDF and register a row
+  // pointing at nothing.
+  for (const artifact of superseded) {
+    if (!artifact.storagePath) continue;
+    if (dirname(resolve(artifact.storagePath)) !== attemptStorage) continue;
+    if (resolve(artifact.storagePath) === resolve(storagePath)) continue;
+    try {
+      await rm(artifact.storagePath, { force: true });
+    } catch {
+      // Best effort, same as the compensating delete above: the row swap has already committed by
+      // this point, so a failing rm here (a Windows EBUSY/EPERM on a PDF another handle still has
+      // open, an EACCES) must never surface as a staging failure about an attempt whose current
+      // artifact row and file are in fact fine -- it would only orphan bytes nothing points at any
+      // more, the same inert outcome this function's own doc comment already accepts.
+    }
+  }
+
+  return record;
 }
 
 export interface StageHtmlArtifactOptions {

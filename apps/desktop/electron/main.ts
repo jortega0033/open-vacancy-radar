@@ -61,10 +61,10 @@ import {
   runNextApplicationAttempt,
   startApplicationAttempt,
   type ApplicationPipelineDeps,
-  type ApplicationQueueEntryState,
   type ApplicationQueuePort,
   type PipelineVacancy,
 } from './application-pipeline.js';
+import { applicationQueueRefusal, createApplicationQueuePort } from './application-queue-port.js';
 import type { ApplicationValueProfile } from './application-value-table.js';
 import {
   applyApplicationFieldMap,
@@ -1344,17 +1344,6 @@ const applicationQueueRelay = new ApplicationQueueRelay({
   onEvent: (message, meta) => console.warn(`[application-queue] ${message}`, meta ?? {}),
 });
 
-/** The renderer-facing message for a queue-route refusal, chosen from a closed table by the
- * daemon's machine-readable `code` -- never its `error` text -- matching `daemonRefusal`'s own
- * discipline for the same reason: a message this process did not write must never reach the
- * renderer verbatim. */
-async function applicationQueueRefusal(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { code?: unknown };
-  if (body.code === 'application_not_found') return 'no such attempt is in the queue';
-  if (body.code === 'invalid_transition') return 'that action cannot be applied to this attempt right now';
-  return fallback;
-}
-
 function parseAttemptId(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
     throw new Error('"attemptId" must be a non-empty string');
@@ -1617,45 +1606,13 @@ function applicationArtifactStorageRoot(): string {
   return join(app.getPath('userData'), 'application-artifacts');
 }
 
-const APPLICATION_QUEUE_ENTRY_STATES: readonly ApplicationQueueEntryState[] = [
-  'queued',
-  'active',
-  'paused',
-  'cancelled',
-  'done',
-  'failed',
-];
-
-/** The daemon's queue as the pipeline consumes it. Every method is one HTTP call to a route the
- * daemon owns -- this process keeps no queue state of its own, so a daemon restart is the daemon's
- * recovery to perform, not this one's to reconstruct. */
-const applicationQueuePort: ApplicationQueuePort = {
-  async enqueue(attemptId: string): Promise<void> {
-    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
-    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
-  },
-
-  async acquireLease() {
-    const res = await daemonFetch('/v2/applications/lease/acquire', { method: 'POST' });
-    if (!res.ok) return null;
-    const body = (await res.json().catch(() => ({}))) as { lease?: unknown };
-    const lease = body.lease && typeof body.lease === 'object' ? (body.lease as Record<string, unknown>) : undefined;
-    if (!lease || typeof lease.leaseId !== 'string' || typeof lease.attemptId !== 'string') return null;
-    return { leaseId: lease.leaseId, attemptId: lease.attemptId };
-  },
-
-  async release(leaseId: string, outcome: 'completed' | 'failed' | 'requeue'): Promise<void> {
-    await daemonFetch('/v2/applications/lease/release', { method: 'POST', body: { leaseId, outcome } });
-  },
-
-  async entryState(attemptId: string) {
-    const body = await daemonGetJson(`/v2/applications/${encodeURIComponent(attemptId)}`);
-    const entry = body?.entry && typeof body.entry === 'object' ? (body.entry as Record<string, unknown>) : undefined;
-    const state = entry?.state;
-    if (typeof state !== 'string' || !(APPLICATION_QUEUE_ENTRY_STATES as readonly string[]).includes(state)) return null;
-    return state as ApplicationQueueEntryState;
-  },
-};
+/** The daemon's queue as the pipeline consumes it. Built here, implemented in
+ * `application-queue-port.ts` -- see that module's own comment for why it is not inline. */
+const applicationQueuePort: ApplicationQueuePort = createApplicationQueuePort({
+  request: daemonFetch,
+  getJson: daemonGetJson,
+  log: (message, meta) => console.warn(`[application-queue] ${message}`, meta ?? {}),
+});
 
 /** The narrow projection of the search profile the pipeline's value table draws on. A profile that
  * has never been configured produces `null`, contributing no values rather than assumed ones. */
