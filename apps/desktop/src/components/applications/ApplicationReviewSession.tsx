@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OpenApplicationReviewResult } from '../../../electron/application-executor-types.js';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import type { SelectedVacancy } from '../letters/types.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
 
@@ -292,6 +293,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     || (state.phase === 'tailoring_blocked' && state.busy)
     || (state.phase === 'preparation_blocked' && state.busy)
     || (state.phase === 'ineligible' && state.busy);
+
+  useEscapeToClose(() => onClose('dismissed'), closeDisabled);
 
   // While the live page is on screen, this is the only part of the window the target page cannot
   // draw in: `application-view.ts` reserves exactly this many pixels at the top for it (the height

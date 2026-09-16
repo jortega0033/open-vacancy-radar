@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 
 export interface SavedJobDrawerProps {
@@ -61,6 +62,7 @@ function formatKeptAt(iso: string): string {
  * instead of carrying over stale field values.
  */
 export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJobDrawerProps) {
+  useEscapeToClose(onClose);
   const [form, setForm] = useState<FormState>(() => toFormState(job));
   const [validationError, setValidationError] = useState<string>();
 

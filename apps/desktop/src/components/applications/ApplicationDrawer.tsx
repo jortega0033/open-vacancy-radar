@@ -7,6 +7,7 @@ import type {
   LetterRecord,
   SavedJobRecord,
 } from '../../window.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { APPLICATION_STATUS_LABEL, APPLICATION_STATUS_ORDER, toDateInputValue } from './application-status.js';
 
 interface DraftState {
@@ -81,6 +82,7 @@ export function ApplicationDrawer({
   onCancel,
   onSubmit,
 }: ApplicationDrawerProps) {
+  useEscapeToClose(onCancel);
   const [draft, setDraft] = useState<DraftState>(() => draftFromRecord(record));
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);

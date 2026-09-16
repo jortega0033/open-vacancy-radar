@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useEscapeToClose } from './useEscapeToClose';
 
 export interface ConfirmDialogProps {
   title: string;
@@ -20,6 +21,7 @@ export interface ConfirmDialogProps {
  * track here.
  */
 export function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }: ConfirmDialogProps) {
+  useEscapeToClose(onCancel);
   return (
     <div className="modal modal-open" role="presentation">
       <div className="modal-box" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title">

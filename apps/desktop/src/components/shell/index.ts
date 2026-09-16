@@ -12,6 +12,7 @@ export { ConfirmDialog } from './ConfirmDialog.js';
 export type { ConfirmDialogProps } from './ConfirmDialog.js';
 export { UndoToast } from './UndoToast.js';
 export type { UndoToastProps } from './UndoToast.js';
+export { useEscapeToClose } from './useEscapeToClose.js';
 export { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 export type { OpenVacancyRadarMarkProps } from '../brand/OpenVacancyRadarMark.js';
 export { NavIcon } from './NavIcon.js';
