@@ -508,6 +508,31 @@ describe('extractSnapshotFields: frame origins', () => {
     });
     expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('null');
   });
+
+  /**
+   * `vbscript:` gets its own unique opaque origin the same way `data:` does, not the embedder's --
+   * unlike `about:`/`javascript:`, which really do inherit. Pinned as its own case (not just relying
+   * on `originOfUrl`'s fallthrough) since this exact scheme is the second one CodeQL's
+   * incomplete-URL-scheme-check query names alongside `data:`.
+   */
+  it('reports a vbscript: frame as the opaque origin rather than inheriting the embedder', () => {
+    const root = node({
+      nodeName: '#document',
+      documentURL: 'https://careers.employer.invalid/jobs/7',
+      children: [
+        node({
+          nodeName: 'IFRAME',
+          attributes: attrsFrom({ src: 'vbscript:msgbox("hi")' }),
+          contentDocument: node({
+            nodeName: '#document',
+            documentURL: 'vbscript:msgbox("hi")',
+            children: [node({ nodeName: 'INPUT', attributes: attrsFrom({ type: 'email', name: 'email' }) })],
+          }),
+        }),
+      ],
+    });
+    expect(extractSnapshotFields(root).fields[0]!.frameOrigin).toBe('null');
+  });
 });
 
 describe('extractSubmissionSignals (#271)', () => {

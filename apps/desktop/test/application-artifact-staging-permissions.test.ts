@@ -37,6 +37,7 @@ vi.mock('../electron/document-acceptance.js', async (importOriginal) => ({
 
 const { createWorkspaceDb } = await import('../electron/workspace/client.js');
 const { stageHtmlArtifact } = await import('../electron/application-artifact-staging.js');
+const workspace = await import('../electron/workspace/repository.js');
 import type { WorkspaceDb } from '../electron/workspace/client.js';
 
 const FAKE_CONTRACT = {
@@ -69,7 +70,18 @@ describe('stageHtmlArtifact: filesystem permissions (POSIX)', () => {
   it('writes the staged PDF and its attempt directory with restrictive modes', async () => {
     if (process.platform === 'win32') return;
     const storageRoot = join(dir, 'application-artifacts');
-    const attemptId = 'attempt-1';
+    // `createApplicationArtifact` (electron/workspace/repository.ts) requires a real attempt row
+    // to exist -- a deliberate check, not incidental -- so this has to create one for real rather
+    // than staging against a made-up id. Caught by CI's Linux run, not by a local Windows run:
+    // the `if (process.platform === 'win32') return;` guard above made this test a silent no-op on
+    // Windows, so it never actually exercised this path there.
+    const attempt = workspace.createApplicationAttempt(db, {
+      company: 'Northwind Freight',
+      role: 'Logistics Platform Engineer',
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshotHash: 'b'.repeat(64),
+    });
+    const attemptId = attempt.id;
 
     const record = await stageHtmlArtifact({
       db,

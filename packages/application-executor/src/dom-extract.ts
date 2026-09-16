@@ -52,7 +52,9 @@ function parseUrl(url: string | undefined, base: string | undefined): URL | unde
  * A document's security origin in the same serialization `ApplicationTargetPolicy.origins` uses
  * (`https://host:port`), or `undefined` when the URL establishes no origin of its own.
  *
- * Three deliberate departures from a bare `URL.origin`:
+ * An explicit allowlist of the two web schemes, not an exclusion list of the "special" ones --
+ * deliberately, so a scheme this function doesn't already know about can never fall through to a
+ * bare `URL.origin` and be trusted by accident:
  *
  *  - `about:` (what an `<iframe>` with no `src` and an `<iframe srcdoc>` both resolve to) and
  *    `javascript:` answer `undefined`, because such a document *inherits* its embedder's origin
@@ -64,13 +66,18 @@ function parseUrl(url: string | undefined, base: string | undefined): URL | unde
  *    cannot scope a `file:` target at all (`exactFileUrls` is what does), so this bucket is honest
  *    about carrying no authority of its own; it exists so local fixture pages behave, not so a
  *    `file:` frame earns trust.
- *  - Any other opaque origin keeps WHATWG's `"null"` serialization and is refused downstream by
- *    `isFrameFillAllowed`, since an opaque origin is same-origin with nothing at all.
+ *  - Only `http:`/`https:` ever return a real origin. Every other scheme -- `data:`, `vbscript:`,
+ *    `blob:`, or anything not enumerated above -- gets WHATWG's opaque `"null"` explicitly, refused
+ *    downstream by `isFrameFillAllowed`'s own `=== 'null'` check, since an opaque origin is
+ *    same-origin with nothing at all. This must never be the `about:`/`javascript:` branch above: a
+ *    `data:`/`vbscript:` navigation gets its own unique opaque origin, it does not inherit its
+ *    embedder's -- treating it as inheriting would let a `data:` iframe borrow its embedder's trust.
  */
 function originOfUrl(parsed: URL | undefined): string | undefined {
   if (!parsed) return undefined;
   if (parsed.protocol === 'about:' || parsed.protocol === 'javascript:') return undefined;
   if (parsed.protocol === 'file:') return 'file://';
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'null';
   return parsed.origin;
 }
 
