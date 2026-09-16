@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElectronApplication } from '@playwright/test';
-import { expect, goto, launchApp, test } from './fixtures.js';
+import { dismissWelcomeModalIfShown, expect, goto, launchApp, test } from './fixtures.js';
 
 test.describe('Settings', () => {
   test('theme and density apply to the document immediately, with no reload', async ({ window }) => {
@@ -30,6 +30,7 @@ test.describe('Settings', () => {
       first = await launchApp(userDataDir);
       const firstWindow = await first.firstWindow();
       await firstWindow.waitForLoadState('domcontentloaded');
+      await dismissWelcomeModalIfShown(firstWindow);
 
       await goto(firstWindow, 'Settings');
       await firstWindow.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' }).click();
@@ -40,6 +41,10 @@ test.describe('Settings', () => {
       second = await launchApp(userDataDir);
       const secondWindow = await second.firstWindow();
       await secondWindow.waitForLoadState('domcontentloaded');
+      // Not expected to find anything here: `welcomeSeen: true` was already persisted by the
+      // first window's dismiss above, against the same user-data dir. Called anyway, best-effort,
+      // so this test does not silently depend on that ordering staying true.
+      await dismissWelcomeModalIfShown(secondWindow);
 
       // The setting is applied on load before the user navigates anywhere, so this alone proves
       // it round-tripped through the database rather than being process-local state.

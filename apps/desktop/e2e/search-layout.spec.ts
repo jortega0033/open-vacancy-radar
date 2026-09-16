@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { ensureLightTheme, goto, launchApp } from './fixtures.js';
+import { dismissWelcomeModalIfShown, ensureLightTheme, goto, launchApp } from './fixtures.js';
 
 const REPORT = {
   runId: 'e2e-search-layout',
@@ -86,6 +86,10 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
     try {
       const window = await electronApp.firstWindow();
       await window.waitForLoadState('domcontentloaded');
+      // No CV exists yet at this point (the one below is created after, live) and this launch's
+      // user-data dir is fresh, so `WelcomeModal` will be showing -- unlike
+      // `manual-application-review.spec.ts`, which seeds its CV before `launchApp` ever runs.
+      await dismissWelcomeModalIfShown(window);
       await ensureLightTheme(window);
       await window.evaluate(() =>
         self.workspace.createCvDocument({
