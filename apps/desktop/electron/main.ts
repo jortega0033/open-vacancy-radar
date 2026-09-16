@@ -106,6 +106,7 @@ import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
+import { createDaemonRespawn } from './daemon-respawn.js';
 import { confirmWorkspaceGrant } from './workspace-confirm.js';
 import {
   WorkspaceGrantManager,
@@ -220,24 +221,6 @@ let mainWindowWebContentsId: number | undefined;
  * renderer, so the two can never disagree.
  */
 let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
-/**
- * How many consecutive respawn attempts `scheduleDaemonRespawn` has made since the daemon last
- * reached `ready`. Reset to 0 the moment a spawn actually succeeds (`waitForDaemonReady` below),
- * so a daemon that runs fine for hours and then crashes once gets a fresh retry budget rather than
- * inheriting exhaustion from an unrelated incident earlier in the app's lifetime.
- */
-let daemonRespawnAttempts = 0;
-/**
- * Bumped once per `spawnDaemon()` call and captured by that call's own `waitForDaemonReady` loop.
- * Respawn means `spawnDaemon()` can now run more than once per app lifetime, and that loop polls
- * the discovery file for up to 15s with nothing to cancel it if its own child dies early -- without
- * this, a stale loop left over from an attempt that crashed immediately can still be polling when a
- * *later* attempt's daemon writes the discovery file, "adopt" that unrelated daemon, and re-run the
- * ready side effects (attaching the queue relay, recovering the application pipeline) a second time.
- * Comparing against the live counter lets a stale loop recognize it has been superseded and stand
- * down instead.
- */
-let daemonGeneration = 0;
 
 /**
  * Every in-flight **v1** event forward, keyed by session id (ADI-07).
@@ -475,6 +458,25 @@ const DAEMON_RESPAWN_MAX_ATTEMPTS = 4;
 const DAEMON_RESPAWN_BASE_DELAY_MS = 1_000;
 const DAEMON_RESPAWN_MAX_DELAY_MS = 8_000;
 
+// The attempt counter, the backoff formula, the `isQuitting` gate and the generation guard all live
+// in daemon-respawn.ts, not here: main.ts cannot be imported by a test, so anything that stays in
+// this file is covered by code review alone. `spawnDaemon`/`setTimeout`/`isQuitting` are injected
+// rather than called directly so that module stays free of any Electron API.
+const daemonRespawn = createDaemonRespawn({
+  policy: {
+    maxAttempts: DAEMON_RESPAWN_MAX_ATTEMPTS,
+    baseDelayMs: DAEMON_RESPAWN_BASE_DELAY_MS,
+    maxDelayMs: DAEMON_RESPAWN_MAX_DELAY_MS,
+  },
+  isQuitting: () => isQuitting,
+  spawnDaemon: () => spawnDaemon(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  onExhausted: (reason, maxAttempts) =>
+    console.warn(`[daemon] respawn budget exhausted after ${maxAttempts} attempts, giving up: ${reason}`),
+  onScheduled: (reason, attempt, maxAttempts, delayMs) =>
+    console.warn(`[daemon] respawning after unexpected exit (attempt ${attempt}/${maxAttempts}, retrying in ${delayMs}ms): ${reason}`),
+});
+
 /**
  * Called from every path in `spawnDaemon` that can observe the daemon child dying (the `exit`
  * handler once it was ready, and the early-exit race before it ever became ready). Decides,
@@ -482,34 +484,11 @@ const DAEMON_RESPAWN_MAX_DELAY_MS = 8_000;
  */
 function scheduleDaemonRespawn(reason: string): void {
   sendStatus({ state: 'unavailable', error: reason });
-
-  // `isQuitting` is set by `before-quit` before `killDaemon()` ever runs (#194), so it is already
-  // true here when this exit was the app's own doing. Without this check, quitting the app would
-  // race a fresh daemon into existence just as the process was tearing everything else down.
-  if (isQuitting) return;
-
-  if (daemonRespawnAttempts >= DAEMON_RESPAWN_MAX_ATTEMPTS) {
-    console.warn(`[daemon] respawn budget exhausted after ${DAEMON_RESPAWN_MAX_ATTEMPTS} attempts, giving up: ${reason}`);
-    return;
-  }
-
-  daemonRespawnAttempts += 1;
-  const delayMs = Math.min(
-    DAEMON_RESPAWN_BASE_DELAY_MS * 2 ** (daemonRespawnAttempts - 1),
-    DAEMON_RESPAWN_MAX_DELAY_MS,
-  );
-  console.warn(
-    `[daemon] respawning after unexpected exit (attempt ${daemonRespawnAttempts}/${DAEMON_RESPAWN_MAX_ATTEMPTS}, retrying in ${delayMs}ms): ${reason}`,
-  );
-  setTimeout(() => {
-    // isQuitting may have flipped true while this timer was pending (the user quit mid-backoff).
-    if (isQuitting) return;
-    spawnDaemon();
-  }, delayMs);
+  daemonRespawn.scheduleRespawn(reason);
 }
 
 function spawnDaemon(): void {
-  const generation = ++daemonGeneration;
+  const generation = daemonRespawn.nextGeneration();
   const { cwd, args } = resolveDaemonEntry({
     mainDir: __dirname,
     isDevServer: !!process.env.VITE_DEV_SERVER_URL,
@@ -591,7 +570,7 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
         const health = await candidate.health();
-        if (generation !== daemonGeneration) {
+        if (!daemonRespawn.isCurrentGeneration(generation)) {
           // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
           // stale loop's poll finally landed. Stand down instead of clobbering its state.
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
@@ -603,7 +582,7 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
         // different process, so every outstanding approval is void. Done before the status goes
         // `ready`, so no renderer can consume a stale grant against the new daemon.
         adoptDaemonInstance(health.daemonInstanceId);
-        daemonRespawnAttempts = 0;
+        daemonRespawn.resetAttempts();
         sendStatus({ state: 'ready' });
         // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
         // request), there is exactly one application queue and no per-session redaction concern,
