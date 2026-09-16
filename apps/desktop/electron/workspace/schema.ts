@@ -409,6 +409,52 @@ export const applicationSubmissionReceipts = sqliteTable('application_submission
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 
+/**
+ * A candidate-authored library of reusable application-form answers (#372): a person writes an
+ * answer to a recurring text/textarea question once and can reuse it on a later application
+ * instead of retyping it.
+ *
+ * Populated ONLY by explicit user action -- an answer is saved here because the person chose to
+ * save it, never because it was inferred from a CV/profile, produced by a model, or captured
+ * silently from a value observed on a live page. Looked up by an exact match on normalized label
+ * plus control type (`application-answer-key.ts`'s `applicationAnswerKey`); there is deliberately
+ * no fuzzy or semantic matching, so "why do you want to work here?" and "why do you want to work
+ * with us?" remain two different questions here rather than being guessed at as the same one.
+ *
+ * This table is pure storage: nothing here fills a form. The confirm step that offers a saved
+ * answer back to the user and actually applies it to a live field -- always a deliberate confirm,
+ * never an auto-fill -- lives in `application-review-session.ts`, not in this module.
+ */
+export const applicationAnswers = sqliteTable('application_answers', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /**
+   * The lookup key: `applicationAnswerKey(label, controlType)`, e.g.
+   * `"text::why do you want to work here"`. Not unique-constrained at the DB level -- this schema
+   * declares no indices or unique constraints anywhere else either -- "one answer per key" is
+   * app-level logic enforced by `saveApplicationAnswer`'s upsert-on-save, not a DB constraint.
+   */
+  normalizedKey: text('normalized_key').notNull(),
+  /** The original, unnormalized field label, kept for display in the answer-library management UI. */
+  label: text('label').notNull(),
+  /** V1 covers these two control types only (#372) -- a select/checkbox/radio answer is not a
+   * reusable free-text answer the way a text/textarea one is. */
+  controlType: text('control_type', { enum: ['text', 'textarea'] }).notNull(),
+  /** The saved answer body itself. */
+  answer: text('answer').notNull(),
+  /** Which application this answer was first (and most recently) saved from, for context in the
+   * management UI -- not an identity field, so it is overwritten on every upsert. */
+  originCompany: text('origin_company').notNull().default(''),
+  /** Same idea as `originCompany`, the role title. */
+  originRole: text('origin_role').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /** Bumped on every save/update to the answer text itself (an edit from the management UI, or a
+   * re-save from a later application with the same normalized key). */
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /** Bumped every time this saved answer is actually used ("Use this answer" clicked elsewhere) --
+   * deliberately separate from `updatedAt`, which tracks edits to the answer text, not uses of it. */
+  lastConfirmedAt: integer('last_confirmed_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
 /** Single fixed row (id fixed at 1). This is app-wide preference state, not a multi-row table. */
 export const appSettings = sqliteTable('app_settings', {
   id: integer('id').primaryKey().default(1),

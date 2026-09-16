@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
 import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
-import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
+import type { ApplicationAnswerRecord, ApplicationArtifactSummary, ApplicationAttemptRecord, ConfirmApplicationAnswerResult } from '../../window.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 
 export interface ApplicationReviewSwipeCardProps {
@@ -24,6 +24,9 @@ export interface ApplicationReviewSwipeCardProps {
   onOpenArtifact?: (artifactId: string) => void;
   /** Opens the real, focusable page over the app so the person can finish it themselves. */
   onOpenLiveView: () => void;
+  /** Commits one confirmed answer into a live `awaiting_you` text/textarea field (#372). Passed
+   * straight through to `ApplicationPreparedSummary`; its absence keeps every such field read-only. */
+  onConfirmAnswer?: (fieldIndex: number, fieldRef: string, value: string) => Promise<ConfirmApplicationAnswerResult>;
 }
 
 const SWIPE_THRESHOLD_PX = 120;
@@ -140,11 +143,51 @@ export function ApplicationReviewSwipeCard({
   onSkip,
   onOpenArtifact,
   onOpenLiveView,
+  onConfirmAnswer,
 }: ApplicationReviewSwipeCardProps) {
   const [dragX, setDragX] = useState(0);
   const dragXRef = useRef(0);
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  /** The reusable answer library (#372), fetched once per card mount -- this is a small,
+   * personal-scale list, so one plain fetch rather than a subscription. `undefined` (not `[]`)
+   * while unloaded, so `ApplicationPreparedSummary` can tell "still loading" from "loaded, empty"
+   * and never flashes "no saved answer" before the real list has even arrived. */
+  const [savedAnswers, setSavedAnswers] = useState<ApplicationAnswerRecord[]>();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!onConfirmAnswer) return;
+    void window.workspace
+      .listApplicationAnswers()
+      .then((rows) => {
+        if (!cancelled) setSavedAnswers(rows);
+      })
+      .catch(() => {
+        // A failed read here only means suggestions stay unavailable for this review -- it must
+        // never block filling the field manually, so this is silent rather than surfaced as an
+        // error over the whole card.
+        if (!cancelled) setSavedAnswers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onConfirmAnswer]);
+
+  async function handleSaveAnswer(input: { label: string; controlType: 'text' | 'textarea'; answer: string }) {
+    const saved = await window.workspace.saveApplicationAnswer({
+      ...input,
+      originCompany: attempt.company,
+      originRole: attempt.role,
+    });
+    // Reflects the save immediately (an upsert may have replaced an existing row's text/timestamps
+    // without changing its id), so a second awaiting-you field with the same normalized key -- or
+    // this same one, if the person edits and saves again -- sees the fresh answer without a refetch.
+    setSavedAnswers((current) => {
+      const rest = (current ?? []).filter((row) => row.id !== saved.id);
+      return [saved, ...rest];
+    });
+  }
 
   const { verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers } = readiness;
   const canSubmit = readiness.ready && !busy;
@@ -315,7 +358,15 @@ export function ApplicationReviewSwipeCard({
 
       <details className="rounded-lg border border-base-300 bg-base-100">
         <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Prepared application details</summary>
-        <ApplicationPreparedSummary attempt={attempt} documents={documents} onOpenArtifact={onOpenArtifact} />
+        <ApplicationPreparedSummary
+          attempt={attempt}
+          documents={documents}
+          onOpenArtifact={onOpenArtifact}
+          snapshot={snapshot}
+          savedAnswers={savedAnswers}
+          onConfirmAnswer={onConfirmAnswer}
+          onSaveAnswer={onConfirmAnswer ? handleSaveAnswer : undefined}
+        />
       </details>
 
       <details className="rounded-lg border border-base-300 bg-base-100">

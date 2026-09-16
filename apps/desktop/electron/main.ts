@@ -71,6 +71,7 @@ import {
   cancelScheduledAutomaticSubmission,
   closeAllApplicationReviews,
   closeApplicationReview,
+  confirmApplicationAnswer,
   evaluateAndScheduleAutomaticSubmission,
   fireDueAutomaticSubmissions,
   hideApplicationReviewHandoff,
@@ -88,6 +89,7 @@ import { isWindowInBackground } from './app-background-state.js';
 import type {
   ApplicationValueTableEntryInput,
   ApplyApplicationFieldMapInput,
+  ConfirmApplicationAnswerInput,
   OpenApplicationReviewInput,
 } from './application-executor-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
@@ -119,6 +121,8 @@ import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
 import type { CvExportResult } from './workspace/types.js';
 import {
+  parseApplicationAnswerInput,
+  parseApplicationAnswerPatch,
   parseApplicationAttemptPatch,
   parseApplicationFilter,
   parseApplicationInput,
@@ -1330,6 +1334,24 @@ function parseAttemptId(value: unknown): string {
   return value;
 }
 
+/** Bounds are generous on purpose: the real per-answer size limit for what gets *saved* into the
+ * reusable answer library lives in `workspace/validate.ts`'s `LIMITS.applicationAnswer` (#372) --
+ * this only guards the live-fill IPC call itself against a malformed payload. */
+function parseConfirmApplicationAnswerInput(value: unknown): ConfirmApplicationAnswerInput {
+  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const attemptId = parseAttemptId(source.attemptId);
+  if (typeof source.fieldRef !== 'string' || source.fieldRef.length === 0 || source.fieldRef.length > 200) {
+    throw new Error('"fieldRef" must be a non-empty string');
+  }
+  if (typeof source.value !== 'string' || source.value.length === 0 || source.value.length > 10_000) {
+    throw new Error('"value" must be a non-empty string of at most 10,000 characters');
+  }
+  if (typeof source.fieldIndex !== 'number' || !Number.isInteger(source.fieldIndex) || source.fieldIndex < 0) {
+    throw new Error('"fieldIndex" must be a non-negative integer');
+  }
+  return { attemptId, fieldRef: source.fieldRef, value: source.value, fieldIndex: source.fieldIndex };
+}
+
 guardedIpc.handle('application-queue:enqueue', async (_event, input: unknown) => {
   return applicationDataResetGate.runMutation(async () => {
     const attemptId = parseAttemptId(input);
@@ -1465,6 +1487,12 @@ guardedIpc.handle('application-executor:apply-field-map', async (_event, input: 
     }
     return result;
   });
+});
+
+guardedIpc.handle('application-executor:confirm-answer', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () =>
+    confirmApplicationAnswer(await ensureWorkspaceDb(), parseConfirmApplicationAnswerInput(input)),
+  );
 });
 
 guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {
@@ -2409,6 +2437,33 @@ guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) 
 guardedIpc.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
   applicationDataResetGate.runMutation(async () =>
     workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:list', async () => workspace.listApplicationAnswers(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:application-answers:save', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.saveApplicationAnswer(await ensureWorkspaceDb(), parseApplicationAnswerInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplicationAnswer(await ensureWorkspaceDb(), id, parseApplicationAnswerPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:application-answers:record-used', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.recordApplicationAnswerUsed(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteApplicationAnswer(await ensureWorkspaceDb(), parseIdEnvelope(input)),
   ),
 );
 

@@ -33,6 +33,7 @@ import type {
   ApplicationExecutorBridge,
   ApplicationManualHandoff,
   ApplyApplicationFieldMapResult,
+  ConfirmApplicationAnswerResult,
   OpenApplicationReviewResult,
   RequestAutomationGrantResult,
   ScheduleAutomaticSubmissionResult,
@@ -310,6 +311,22 @@ const workspaceApi: WorkspaceBridge = {
   },
   deleteSavedJob(id) {
     return ipcRenderer.invoke('workspace:saved-jobs:delete', { id });
+  },
+
+  listApplicationAnswers() {
+    return ipcRenderer.invoke('workspace:application-answers:list');
+  },
+  saveApplicationAnswer(input) {
+    return ipcRenderer.invoke('workspace:application-answers:save', input);
+  },
+  updateApplicationAnswer(id, patch) {
+    return ipcRenderer.invoke('workspace:application-answers:update', { id, patch });
+  },
+  recordApplicationAnswerUsed(id) {
+    return ipcRenderer.invoke('workspace:application-answers:record-used', { id });
+  },
+  deleteApplicationAnswer(id) {
+    return ipcRenderer.invoke('workspace:application-answers:delete', { id });
   },
 
   listApplications(filter) {
@@ -1480,6 +1497,25 @@ function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationField
   };
 }
 
+function toConfirmApplicationAnswerResult(value: unknown): ConfirmApplicationAnswerResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ConfirmApplicationAnswerResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(source?.readiness !== undefined ? { readiness: toFormReadiness(source.readiness) } : {}),
+    // Passed through as main's own typed return, the same trust boundary `getApplicationAttempt`
+    // already applies to this exact shape -- see that bridge method in this same file.
+    ...(source?.preparedFields !== undefined ? { preparedFields: source.preparedFields as ConfirmApplicationAnswerResult['preparedFields'] } : {}),
+  };
+}
+
 function toSubmitApplicationReviewResult(value: unknown): SubmitApplicationReviewResult {
   const source = asRecord(value);
   const ok = source?.ok;
@@ -1536,6 +1572,11 @@ const applicationExecutorApi: ApplicationExecutorBridge = {
   async applyFieldMap(input) {
     const result = await ipcRenderer.invoke('application-executor:apply-field-map', input);
     return toApplyApplicationFieldMapResult(result);
+  },
+
+  async confirmApplicationAnswer(input) {
+    const result = await ipcRenderer.invoke('application-executor:confirm-answer', input);
+    return toConfirmApplicationAnswerResult(result);
   },
 
   async submitReview(attemptId) {

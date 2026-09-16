@@ -590,6 +590,47 @@ export interface ApplicationSubmissionReceiptInput {
   observedAt?: string;
 }
 
+/**
+ * One saved answer in the reusable application-answer library (#372). See `schema.ts`'s comment
+ * on `applicationAnswers` for the full reasoning: candidate-authored only, exact-key lookup only,
+ * pure storage -- the confirm/fill step lives in `application-review-session.ts`.
+ */
+export interface ApplicationAnswerRecord {
+  id: string;
+  /** `applicationAnswerKey(label, controlType)` (`application-answer-key.ts`); the exact-match
+   * lookup key, not shown to the user. */
+  normalizedKey: string;
+  /** The original, unnormalized field label -- what the management UI displays. */
+  label: string;
+  controlType: 'text' | 'textarea';
+  answer: string;
+  originCompany: string;
+  originRole: string;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601. Bumped on every edit to `answer`. */
+  updatedAt: string;
+  /** ISO-8601. Bumped every time this saved answer is actually used elsewhere, not on an edit. */
+  lastConfirmedAt: string;
+}
+
+export interface ApplicationAnswerInput {
+  label: string;
+  controlType: 'text' | 'textarea';
+  answer: string;
+  originCompany: string;
+  originRole: string;
+}
+
+/**
+ * Editing an existing saved answer from the management UI. Deliberately only `answer` is
+ * patchable: `label`/`controlType` together derive `normalizedKey`, so editing either after
+ * creation would silently break the match to the application this answer was originally saved
+ * from, and `originCompany`/`originRole` are provenance of that original save, not user-editable
+ * fields -- #372 does not ask for either, and both would be surprising to allow.
+ */
+export type ApplicationAnswerPatch = Partial<{ answer: string }>;
+
 /** An explicit grant of automatic-submission authority for one compiled target policy (#203). See
  * `schema.ts`'s own comment on `automationGrants` for why this is scoped per-policy, not per-posting,
  * and why `expiresAt`/`revokedAt` are re-checked at every use rather than only at creation. */
@@ -674,6 +715,7 @@ export interface ApplicationDataResetResult {
     applicationArtifacts: number;
     submissionReceipts: number;
     automationGrants: number;
+    applicationAnswers: number;
   };
 }
 
@@ -750,4 +792,20 @@ export interface WorkspaceBridge {
    * `{ saved: false }` means the user cancelled the dialog, not a failure.
    */
   exportCvDocument(id: string, format: CvExportFormat): Promise<CvExportResult>;
+
+  /**
+   * The reusable application-answer library (#372). See `schema.ts`'s comment on
+   * `applicationAnswers` for what this stores and why it is never auto-filled from here.
+   */
+  listApplicationAnswers(): Promise<ApplicationAnswerRecord[]>;
+  /** Upsert on the normalized label+controlType key: an existing answer for the same key is
+   * updated in place (`answer`, `originCompany`, `originRole`, `updatedAt`, `lastConfirmedAt`)
+   * rather than duplicated. */
+  saveApplicationAnswer(input: ApplicationAnswerInput): Promise<ApplicationAnswerRecord>;
+  updateApplicationAnswer(id: string, patch: ApplicationAnswerPatch): Promise<ApplicationAnswerRecord>;
+  /** Bumps only `lastConfirmedAt`, for the moment a saved answer is actually reused on a live field
+   * ("Use this answer"). Separate from `updateApplicationAnswer`: this is a pure use-confirmation
+   * signal, never a way to edit the answer's own text. */
+  recordApplicationAnswerUsed(id: string): Promise<ApplicationAnswerRecord>;
+  deleteApplicationAnswer(id: string): Promise<DeleteResult>;
 }

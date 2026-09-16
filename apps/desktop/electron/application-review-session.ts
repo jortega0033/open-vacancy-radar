@@ -6,6 +6,7 @@ import {
   ExecutorPolicyError,
   classifyDelayedReceipt,
   describeBlockers,
+  findSnapshotField,
   isActionAllowed,
   isNavigationAllowed,
   resolveSubmitControl,
@@ -36,6 +37,8 @@ import type {
   ApplicationAttachmentResult,
   ApplyApplicationFieldMapInput,
   ApplyApplicationFieldMapResult,
+  ConfirmApplicationAnswerInput,
+  ConfirmApplicationAnswerResult,
   OpenApplicationReviewInput,
   OpenApplicationReviewResult,
   ShowApplicationHandoffResult,
@@ -367,6 +370,109 @@ export async function applyApplicationFieldMap(
     readiness: await active.executor.evaluateReadiness(),
     ...(attachments.length > 0 ? { attachments } : {}),
   };
+}
+
+/**
+ * Commits one confirmed answer (#372) into one live field, and updates the attempt's durable
+ * `preparedFields` record if that succeeds.
+ *
+ * Deliberately NOT built on top of `applyApplicationFieldMap`/`validateFieldMap`, despite that
+ * being the first, more consistent-looking design: that validator's Rule 9 ("every active required
+ * field is assigned or explicitly listed as unmapped") exists to stop a *complete* AI-generated
+ * field map from silently skipping a required field, and it does not know how to say "every other
+ * required field was already handled by an earlier fill in this same session" -- a one-assignment
+ * map built that way is refused as `incomplete` on essentially any real form with more than the one
+ * field being confirmed. So this function instead replicates, directly against the live snapshot
+ * field, exactly the subset of `validateFieldMap`'s rules that genuinely apply to filling one
+ * already-decided field: it must exist in the current snapshot (rule 4), must not be a structurally
+ * classified consent/credential field (rule 8), must be part of the active form (rule 8b), and must
+ * be a plain-text control (rule 7, narrowed further than the shared rule to `text`/`textarea`
+ * specifically -- this feature's own V1 boundary, not just "not a file/select/radio"). What it does
+ * not and must not replicate is rule 9: that check belongs to "is this a complete map for the whole
+ * form", which is simply not the question being asked here.
+ *
+ * `preparedFields` is updated here, not left to the caller, because this is the only place that
+ * knows both which field just changed and that the live page actually confirmed it: a caller
+ * updating it separately would risk marking a field `committed` the page never verified, or
+ * skipping the update and leaving the review's own summary stale after a successful fill.
+ *
+ * Reconciliation targets `input.fieldIndex` -- the field's own position in
+ * `attempt.preparedFields.fields` -- rather than matching by label+controlType. Two distinct
+ * `awaiting_you` fields can share an identical label and control type (nothing on a real page stops
+ * two textareas both being labelled "Additional comments"); matching by label+controlType alone
+ * would flip every entry that happens to share them, not just the one field the live page actually
+ * verified. `fieldIndex` is exactly what the caller was looking at when it offered this action, so it
+ * is the only reference that unambiguously names one field even when several share a label.
+ */
+export async function confirmApplicationAnswer(
+  db: WorkspaceDb,
+  input: ConfirmApplicationAnswerInput,
+): Promise<ConfirmApplicationAnswerResult> {
+  const active = activeReviews.get(input.attemptId);
+  if (!active) {
+    return { ok: false, reason: 'no_open_review', detail: `no open review for attempt ${input.attemptId}` };
+  }
+  const snapshot = active.executor.currentSnapshot;
+  if (!snapshot) {
+    return { ok: false, reason: 'no_open_review', detail: `attempt ${input.attemptId} has no snapshot yet` };
+  }
+  const liveField = findSnapshotField(snapshot, input.fieldRef);
+  if (!liveField) {
+    return {
+      ok: false,
+      reason: 'stale_field',
+      detail: `field ${input.fieldRef} is not part of the current form snapshot`,
+    };
+  }
+  if (liveField.classification) {
+    return {
+      ok: false,
+      reason: 'excluded_field_targeted',
+      detail: `field ${input.fieldRef} is a ${liveField.classification}, which this app never fills on your behalf`,
+    };
+  }
+  if (!liveField.active) {
+    return { ok: false, reason: 'stale_field', detail: `field ${input.fieldRef} is not part of the active form` };
+  }
+  if (liveField.controlType !== 'text' && liveField.controlType !== 'textarea') {
+    return {
+      ok: false,
+      reason: 'type_mismatch',
+      detail: `field ${input.fieldRef} is a ${liveField.controlType} control, not text or textarea`,
+    };
+  }
+
+  const verification = await active.executor.fill(input.fieldRef, input.value);
+  if (verification.status !== 'verified') {
+    return {
+      ok: false,
+      reason: 'not_verified',
+      detail: `field ${input.fieldRef} was filled but the page did not confirm the value afterwards`,
+    };
+  }
+
+  const attempt = workspace.getApplicationAttempt(db, input.attemptId);
+  const target = attempt.preparedFields?.fields[input.fieldIndex];
+  // Defensive, not load-bearing: the index came from the same `preparedFields` this reads back, so
+  // a mismatch here only means the record changed shape between the click and this write (a
+  // re-preparation racing the confirm) -- in that case the fill already succeeded on the live page,
+  // this reconciliation is simply skipped rather than risking a write to the wrong entry.
+  let preparedFields = attempt.preparedFields ?? undefined;
+  if (attempt.preparedFields && target && target.status === 'awaiting_you' && target.label === liveField.label && target.controlType === liveField.controlType) {
+    const fields = attempt.preparedFields.fields.slice();
+    fields[input.fieldIndex] = {
+      label: target.label,
+      controlType: target.controlType,
+      required: target.required,
+      status: 'committed',
+      value: input.value,
+      provenance: 'user_answer',
+    };
+    preparedFields = { ...attempt.preparedFields, fields };
+    workspace.recordPreparedApplicationFields(db, input.attemptId, preparedFields);
+  }
+
+  return { ok: true, readiness: await active.executor.evaluateReadiness(), preparedFields };
 }
 
 /**

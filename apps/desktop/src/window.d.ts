@@ -211,6 +211,8 @@ export type {
   ApplyApplicationFieldMapInput,
   ApplyApplicationFieldMapResult,
   ApplicationValueTableEntryInput,
+  ConfirmApplicationAnswerInput,
+  ConfirmApplicationAnswerResult,
   OpenApplicationReviewInput,
   OpenApplicationReviewResult,
 } from '../electron/application-executor-types.js';
@@ -224,6 +226,9 @@ export type {
  * renderer bundle. It is erased at compile time.
  */
 export type {
+  ApplicationAnswerInput,
+  ApplicationAnswerPatch,
+  ApplicationAnswerRecord,
   ApplicationArtifactKind,
   ApplicationArtifactRecord,
   ApplicationArtifactSummary,
