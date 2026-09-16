@@ -153,14 +153,17 @@ different boundaries, are stored differently, and never mix:
 3. **Optional MCP job-source credentials** — the daemon and desktop bridge already implement full
    support for connecting an MCP-based job-source provider (see
    [docs/mcp-source-policy.md](docs/mcp-source-policy.md)) that needs its own API key or token,
-   unrelated to either of the above, but **no provider is registered in this build**: the daemon
-   wires its `McpConnectionManager` with an empty policy list (`apps/daemon/src/index.ts`), so every
-   `/mcp/providers/:providerId/...` route currently answers "not allowlisted" for any id, and the
-   desktop app has no screen that calls it. Once a provider is registered, a credential would be
-   written through `PUT /mcp/providers/:providerId/credential` (bearer-token-protected, like every
-   other route) and stored via `apps/daemon/src/mcp/credential-store.ts`, which delegates to the
-   OS's native credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret
-   Service — through `@napi-rs/keyring`, under a service name namespaced to this app
+   unrelated to either of the above. One reviewed provider is registered today, InfoSec Job Board
+   (`apps/daemon/src/mcp/providers/infosec-job-board.ts`), and it needs **no credential at all** — a
+   public, no-auth MCP server (`apps/daemon/src/index.ts` wires it into the `McpConnectionManager`).
+   Every other provider id still answers "not allowlisted", and the desktop app has no screen that
+   calls any of this — the daemon and the typed Electron bridge (`listMcpProviders`, `searchMcp`,
+   `setMcpCredential`, `removeMcpProvider`) are the only things that can reach it today. If a
+   credential-bearing provider is ever registered, its credential would be written through
+   `PUT /mcp/providers/:providerId/credential` (bearer-token-protected, like every other route) and
+   stored via `apps/daemon/src/mcp/credential-store.ts`, which delegates to the OS's native
+   credential store — Windows Credential Manager, macOS Keychain, or the Linux Secret Service —
+   through `@napi-rs/keyring`, under a service name namespaced to this app
    (`open-vacancy-radar.mcp`). No route ever reads a stored credential back out: the daemon can set
    one, delete one, and report a provider's connection *status* (connected/not), but there is no API
    that returns the credential value itself once it's been written.

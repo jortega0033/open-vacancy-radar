@@ -59,9 +59,11 @@ This desktop app relies on CLIs the user already has installed and authenticated
 subscription or API key: if a user already has `claude` or `codex` installed and logged in, Open
 Vacancy Radar can use that existing session for local AI workflows (gap analysis, letter drafting).
 The installed CLI stays the sole authentication and provider boundary; this project never receives
-a password, token, or API key for those AI CLIs. (A separate, optional MCP job-source credential
-layer exists in the daemon for a future job-source provider; no provider is registered in this
-build, so it is not reachable from the app today — see [SECURITY.md](SECURITY.md).)
+a password, token, or API key for those AI CLIs. (A separate MCP job-source layer exists in the
+daemon; it ships with one reviewed, no-auth provider registered — InfoSec Job Board, a public
+vacancy-search MCP server that needs no credential — while generic credential-bearing/OAuth MCP
+providers remain a future, separately reviewed integration. There is currently no screen in the app
+that surfaces this provider; see [SECURITY.md](SECURITY.md).)
 
 ```
 Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──▶ Local Daemon (Fastify, protocol v1)
