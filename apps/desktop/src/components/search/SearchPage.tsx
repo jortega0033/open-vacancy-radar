@@ -207,7 +207,7 @@ export function SearchPage({
   // refinements sync immediately, while scan criteria commit with a successful report.
   const [filters, setFilters] = useSearchSessionField(session, setSession, 'filters');
   const [appliedFilters, setAppliedFilters] = useSearchSessionField(session, setSession, 'appliedFilters');
-  const [, setPendingScanFilters] = useSearchSessionField(session, setSession, 'pendingScanFilters');
+  const [pendingScanFilters, setPendingScanFilters] = useSearchSessionField(session, setSession, 'pendingScanFilters');
 
   useEffect(() => {
     if (settingsHydrated) return;
@@ -601,9 +601,17 @@ export function SearchPage({
   );
 
   const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
+  // The filters that actually describe what's currently on screen: while live/provisional rows are
+  // shown, that's the just-submitted scan criteria, not the last-applied report's filters --
+  // otherwise a fresh scan's live rows render against stale (or, on a first-ever scan, empty)
+  // filters until the scan resolves, showing every raw discovery hit as if it already matched the
+  // just-submitted role/location. Every read site that describes the current view (the list itself,
+  // and the salary note/count below) must derive from this single value, not `appliedFilters`
+  // directly, so they never disagree about which filters are in effect.
+  const effectiveFilters = showLiveResults && pendingScanFilters ? pendingScanFilters : appliedFilters;
   const visible = useMemo(
-    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, appliedFilters)),
-    [resultIndex, appliedFilters],
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters)),
+    [resultIndex, effectiveFilters],
   );
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -743,9 +751,18 @@ export function SearchPage({
       // scan to finish, rather than reporting this attempt's own rejection as "scan failed", which
       // would read as this attempt having broken something.
       if (message.includes('already running')) {
+        // This attempt's own (losing) criteria are not the real scan's -- clearing them here, not
+        // just on outright failure below, keeps the live view from filtering the *other* scan's
+        // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
+        setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
       } else {
         setPendingScanFilters(null);
+        // This attempt's own criteria are gone (line above), but rows it already streamed into
+        // `partialVacancies` before failing are not -- left in place, they would render against
+        // whatever `appliedFilters` happens to be, resurrecting the unfiltered-live-view bug #394
+        // fixed for the success path.
+        setPartialVacancies([]);
         setScanning(false);
         setScanError(message);
       }
@@ -783,9 +800,18 @@ export function SearchPage({
       const message = describeError(error, 'scan failed');
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       if (message.includes('already running')) {
+        // This attempt's own (losing) criteria are not the real scan's -- clearing them here, not
+        // just on outright failure below, keeps the live view from filtering the *other* scan's
+        // rows by this attempt's unrelated, stale query while `waitForScanToFinish` catches up.
+        setPendingScanFilters(null);
         waitForScanToFinish(requestGeneration);
       } else {
         setPendingScanFilters(null);
+        // This attempt's own criteria are gone (line above), but rows it already streamed into
+        // `partialVacancies` before failing are not -- left in place, they would render against
+        // whatever `appliedFilters` happens to be, resurrecting the unfiltered-live-view bug #394
+        // fixed for the success path.
+        setPartialVacancies([]);
         setScanning(false);
         setScanError(message);
       }
@@ -924,8 +950,8 @@ export function SearchPage({
   // the latter isn't a number a user can do anything with here (there is no "browse everything"
   // view), so pairing it with the real, viewable count as "X of Y" read as a mismatch to explain
   // rather than useful context.
-  const reportSalaryCounts = useMemo(() => salaryCounts(results, appliedFilters), [appliedFilters, results]);
-  const salaryNote = appliedFilters.salaryMinimum?.trim()
+  const reportSalaryCounts = useMemo(() => salaryCounts(results, effectiveFilters), [effectiveFilters, results]);
+  const salaryNote = effectiveFilters.salaryMinimum?.trim()
     ? `${reportSalaryCounts.comparable.toLocaleString()} comparable · ${reportSalaryCounts.unknown.toLocaleString()} unknown`
     : SALARY_NOTE;
 
