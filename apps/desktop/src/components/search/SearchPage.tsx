@@ -207,7 +207,7 @@ export function SearchPage({
   // refinements sync immediately, while scan criteria commit with a successful report.
   const [filters, setFilters] = useSearchSessionField(session, setSession, 'filters');
   const [appliedFilters, setAppliedFilters] = useSearchSessionField(session, setSession, 'appliedFilters');
-  const [, setPendingScanFilters] = useSearchSessionField(session, setSession, 'pendingScanFilters');
+  const [pendingScanFilters, setPendingScanFilters] = useSearchSessionField(session, setSession, 'pendingScanFilters');
 
   useEffect(() => {
     if (settingsHydrated) return;
@@ -601,9 +601,14 @@ export function SearchPage({
   );
 
   const resultIndex = useMemo(() => buildSearchResultIndex(results), [results]);
+  // While live/provisional rows are on screen, filter by the just-submitted scan criteria rather
+  // than the last-applied report's filters -- otherwise a fresh scan's live rows render against
+  // stale (or, on a first-ever scan, empty) filters until the scan resolves, showing every raw
+  // discovery hit as if it already matched the just-submitted role/location.
+  const liveFilters = showLiveResults && pendingScanFilters ? pendingScanFilters : appliedFilters;
   const visible = useMemo(
-    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, appliedFilters)),
-    [resultIndex, appliedFilters],
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, liveFilters)),
+    [resultIndex, liveFilters],
   );
 
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));

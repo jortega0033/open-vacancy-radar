@@ -897,6 +897,59 @@ describe('SearchPage', () => {
       expect(screen.queryByText(/showing vacancies as each source finishes/i)).not.toBeInTheDocument();
     });
 
+    it('filters live rows by the just-submitted role and country instead of showing every raw streamed hit (issue #394)', async () => {
+      let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+      const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+        resolveScan = resolve;
+      });
+      const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      enterSearchQuery('frontend engineer');
+      fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Netherlands' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      // A mixed batch, streamed before `runScan`'s own promise resolves: one matches the
+      // just-submitted role+country, the rest match neither (a different role, or the right role
+      // in the wrong country) -- exactly the shape of the raw, cross-source discovery feed.
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [
+          makeWorldwideVacancy({
+            key: 'match-1',
+            title: 'Frontend Engineer',
+            location: 'Netherlands',
+            profileScore: null,
+          }),
+          makeWorldwideVacancy({
+            key: 'wrong-role-1',
+            title: 'Business Analyst',
+            location: 'Netherlands',
+            profileScore: null,
+          }),
+          makeWorldwideVacancy({
+            key: 'wrong-country-1',
+            title: 'Frontend Engineer',
+            location: 'United Kingdom',
+            profileScore: null,
+          }),
+        ],
+      });
+
+      await waitFor(() => expect(screen.getAllByText('Frontend Engineer').length).toBeGreaterThan(0));
+      // Only the row matching the just-submitted role AND country is shown live -- not the raw,
+      // unfiltered streamed batch, and not a stale/empty filter left over from before this scan.
+      expect(screen.queryByText('Business Analyst')).not.toBeInTheDocument();
+      // The running count reflects the filtered set (1), never the raw streamed batch size (3).
+      expect(screen.getByText(/^1 vacancy so far$/i)).toBeInTheDocument();
+
+      resolveScan(makeWorldwideReport([makeWorldwideVacancy({ title: 'Frontend Engineer', location: 'Netherlands' })]));
+      await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+    });
+
     it('subscribes exactly once per mount and unsubscribes on unmount, so navigating away and back never duplicates the listener', async () => {
       const { bridge, listenerCount, unsubscribeFns } = installProgressCapturingBridge();
 
