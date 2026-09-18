@@ -950,6 +950,59 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
     });
 
+    it('keeps the salary note/count in sync with the live-filtered list instead of the stale applied filters (issue #394)', async () => {
+      const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
+      const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      enterSearchQuery('frontend engineer');
+      fireEvent.change(screen.getByLabelText('Minimum annual salary'), { target: { value: '100000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'salary-1', title: 'Frontend Engineer', profileScore: null })],
+      });
+      await waitFor(() => expect(screen.getAllByText('Frontend Engineer').length).toBeGreaterThan(0));
+
+      // The just-submitted salary minimum is already in effect for the live list (not the generic
+      // no-filter note), matching what `visible` is actually filtering by while streaming.
+      expect(screen.queryByText('Salary shown only where advertised')).not.toBeInTheDocument();
+      expect(screen.getByText(/comparable.*unknown/i)).toBeInTheDocument();
+    });
+
+    it('clears stale streamed rows on a genuine scan failure instead of leaving them filtered by the wrong criteria (issue #394)', async () => {
+      let rejectScan: (error: Error) => void = () => {};
+      const scanPromise = new Promise<GlobalRemoteReport>((_resolve, reject) => {
+        rejectScan = reject;
+      });
+      const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      enterSearchQuery('frontend');
+      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'doomed-1', title: 'Frontend Doomed Role', profileScore: null })],
+      });
+      await waitFor(() => expect(screen.getAllByText('Frontend Doomed Role').length).toBeGreaterThan(0));
+
+      rejectScan(new Error('scan failed: source timed out'));
+
+      // The failed attempt's own streamed rows do not linger on screen filtered by whatever the
+      // (empty, on a first scan) applied filters happen to be -- they are cleared along with its
+      // now-abandoned pending criteria.
+      await waitFor(() => expect(screen.queryByText('Frontend Doomed Role')).not.toBeInTheDocument());
+      expect(screen.getByText(/scan failed/i)).toBeInTheDocument();
+    });
+
     it('subscribes exactly once per mount and unsubscribes on unmount, so navigating away and back never duplicates the listener', async () => {
       const { bridge, listenerCount, unsubscribeFns } = installProgressCapturingBridge();
 
