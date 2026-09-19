@@ -34,6 +34,15 @@ export interface ProviderRunConfig {
    * closed immediately with nothing written).
    */
   promptViaStdin?: boolean;
+  /**
+   * Overrides what's actually written to stdin when `promptViaStdin` is true (port of
+   * agentdock#152/#153). Only needed by an adapter whose CLI must receive something other than the
+   * raw prompt string to deliver an attachment (Claude's `--input-format stream-json` message
+   * envelope). Absent for every adapter without attachment support, and for Claude itself whenever
+   * `options.attachments` is empty, which keeps stdin byte-for-byte identical to before this
+   * option existed -- see each provider's own module for exactly when it diverges.
+   */
+  buildStdinPayload?(options: StartSessionOptions): string;
 }
 
 /**
@@ -142,7 +151,7 @@ export function runProviderSession(
     // closing the stream, no explicit wait needed here, and preserves the string exactly
     // (spaces, quotes, newlines, unicode) since it's a plain UTF-8 write, not shell-parsed.
     if (config.promptViaStdin) {
-      spawned.child.stdin.write(options.prompt, 'utf8');
+      spawned.child.stdin.write(config.buildStdinPayload?.(options) ?? options.prompt, 'utf8');
       // Fired after the write call, which is the point at which the bytes are irrevocably queued
       // for the child: Node buffers and flushes them without further action from us, and there is
       // no later observable moment (no per-write ack from the CLI) to wait for.

@@ -74,6 +74,15 @@ export interface ProviderCapabilities {
    * flag honestly. Selection and enforcement are two independent layers, on purpose.
    */
   hardenedNoNetwork?: boolean;
+  /**
+   * Can `StartSessionOptions.attachments` be delivered to the CLI with the initial prompt (port of
+   * agentdock#152/#153)? `true` only for a provider whose adapter has a verified attachment-delivery
+   * mechanism -- Claude: a `document`/`image` content block via `--input-format stream-json`; Codex:
+   * `-i/--image <path>` argv, and only on its `'exec'` transport (see `codex/adapter.ts`). See each
+   * provider's own `capabilities.ts` for the exact MIME types its `getAttachmentMimeTypes()`
+   * (`packages/agent-runtime/src/types.ts`) accepts -- this flag is only the boolean gate.
+   */
+  attachments?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 

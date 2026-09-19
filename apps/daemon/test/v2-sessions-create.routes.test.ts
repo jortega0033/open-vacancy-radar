@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,6 +65,8 @@ class TestProvider implements AgentProvider {
   mode: ProviderMode = 'complete';
   models: string[] | undefined = ['sonnet', 'opus'];
   resumeSupported = true;
+  attachmentsSupported = false;
+  attachmentMimeTypes: string[] = ['application/pdf'];
   startError: Error | undefined;
   /** The provider-native thread id a completed session reports, so a later resume can name it. */
   providerSessionId: string | undefined = 'thread-one';
@@ -83,9 +85,14 @@ class TestProvider implements AgentProvider {
         tools: true,
         usage: true,
         thinking: true,
+        ...(this.attachmentsSupported ? { attachments: true } : {}),
       },
       ...(this.models === undefined ? {} : { availableModels: [...this.models] }),
     };
+  }
+
+  getAttachmentMimeTypes(): readonly string[] {
+    return this.attachmentMimeTypes;
   }
 
   startSession(options: StartSessionOptions): ProviderSessionHandle {
@@ -1112,5 +1119,98 @@ describe('v1 sessions are unaffected by ADI-13', () => {
     expect(first.statusCode).toBe(201);
     expect(second.statusCode).toBe(201);
     expect(leaseManager.activeLeaseCount).toBe(0);
+  });
+});
+
+// -------------------------------------------------------------------------------------------
+// Attachments (port of agentdock#152/#153)
+// -------------------------------------------------------------------------------------------
+
+describe('POST /v2/sessions: attachments (port of agentdock#152/#153)', () => {
+  function attachmentFixture(mimeType = 'application/pdf'): { path: string; mimeType: string } {
+    const path = join(workspaceDir, 'attachment.bin');
+    writeFileSync(path, 'fake attachment bytes');
+    return { path, mimeType };
+  }
+
+  it('rejects attachments for a provider whose capabilities.attachments is falsy', async () => {
+    const { app, provider } = setup();
+    const identity = await trust(app);
+    provider.attachmentsSupported = false;
+
+    const res = await create(app, createBody(identity, { attachments: [attachmentFixture()] }));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/does not support attachments/);
+    expect(provider.started).toHaveLength(0);
+  });
+
+  it('rejects an attachment MIME type the provider does not accept', async () => {
+    const { app, provider } = setup();
+    const identity = await trust(app);
+    provider.attachmentsSupported = true;
+
+    const res = await create(
+      app,
+      createBody(identity, { attachments: [attachmentFixture('application/x-msdownload')] }),
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/does not accept attachment MIME type/);
+    expect(provider.started).toHaveLength(0);
+  });
+
+  it('rejects an attachment whose file does not exist on disk', async () => {
+    const { app, provider } = setup();
+    const identity = await trust(app);
+    provider.attachmentsSupported = true;
+
+    const res = await create(app, createBody(identity, {
+      attachments: [{ path: join(workspaceDir, 'does-not-exist.pdf'), mimeType: 'application/pdf' }],
+    }));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/attachment file does not exist/);
+  });
+
+  it("rejects an attachment whose path resolves outside the session's cwd", async () => {
+    const { app, provider } = setup();
+    const identity = await trust(app);
+    provider.attachmentsSupported = true;
+
+    const outsideDir = mkdtempSync(join(tmpdir(), 'agent-dock-outside-cwd-'));
+    const outsidePath = join(outsideDir, 'secret.pdf');
+    writeFileSync(outsidePath, 'contents that must never leave the machine via this route');
+    try {
+      const res = await create(app, createBody(identity, {
+        attachments: [{ path: outsidePath, mimeType: 'application/pdf' }],
+      }));
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/must be inside the session's working directory/);
+      expect(provider.started).toHaveLength(0);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a supported attachment and threads it through to the provider', async () => {
+    const { app, provider } = setup();
+    const identity = await trust(app);
+    provider.attachmentsSupported = true;
+    const attachment = attachmentFixture();
+
+    const res = await create(app, createBody(identity, { attachments: [attachment] }));
+
+    expect(res.statusCode).toBe(201);
+    expect(provider.started.at(-1)?.attachments).toEqual([attachment]);
+  });
+
+  it('does not reject or require attachments for a request that omits the field entirely', async () => {
+    const { app } = setup();
+    const identity = await trust(app);
+
+    const res = await create(app, createBody(identity));
+
+    expect(res.statusCode).toBe(201);
   });
 });

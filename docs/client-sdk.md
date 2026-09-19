@@ -56,6 +56,9 @@ const session = await client.sessions.create({
   cwd: '/path/to/project',
   prompt: 'Inspect this repository',
   // resumeProviderSessionId: session.providerSessionId, // to continue a prior thread
+  // attachments: [{ path: '/path/to/project/report.pdf', mimeType: 'application/pdf' }], // path
+  // must resolve inside cwd; only for a provider whose capabilities.attachments is true -- port
+  // of agentdock#152/#153, see providers.md#provider-capabilities
 });
 
 for await (const event of client.sessions.events(session.id)) {

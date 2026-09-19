@@ -81,7 +81,7 @@ another app id's daemon, since they're different files. See
 | `GET /health` | none | `{ status: 'ok', uptimeSeconds, protocolVersion, supportedProtocolVersions, daemonInstanceId }`. `protocolVersion` is frozen at `1` forever; `supportedProtocolVersions` is `[1, 2]` when the durable store opened, and `[1]` when it did not (see [v2 read routes](#v2-read-routes) and [protocol-v1.md](protocol-v1.md)). `daemonInstanceId` is a UUID minted once per daemon **process** and stable for its lifetime: a client that sees it change knows this is a different daemon, even though the port, the token, and the discovery file may all be identical (see [Workspace trust routes](#workspace-trust-routes)) |
 | `GET /providers` | required | `{ providers: ProviderStatus[] }`: runs each adapter's `detect()` |
 | `GET /providers/:providerId` | required | One `ProviderStatus`, or `404` for an unregistered id |
-| `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, or a `cwd` that doesn't exist. `409` when the [active-session limit](#active-session-limits) is reached, `507` when the session store has no room. `201` + `AgentSession` on success |
+| `POST /sessions` | required | Body validated against `createSessionRequestSchema`. `400` for an unknown provider, a `resumeProviderSessionId` on a provider whose `capabilities.resume` is `false`, a `cwd` that doesn't exist, or an invalid `attachments` entry (unsupported provider/MIME type, missing file, path outside `cwd`, or over the size bound -- port of agentdock#152/#153, see [providers.md#provider-capabilities](providers.md#provider-capabilities)). `409` when the [active-session limit](#active-session-limits) is reached, `507` when the session store has no room. `201` + `AgentSession` on success |
 | `GET /sessions/:sessionId` | required | Current `AgentSession` record, or `404` |
 | `GET /sessions/:sessionId/events` | required | SSE stream (see [Event history and replay](#event-history-and-replay) below) |
 | `POST /sessions/:sessionId/cancel` | required | `202` + `{ status: 'cancelling' }`. `404` for an unknown id **or** a session that's already terminal: cancelling a finished session is never reported as a success |
@@ -112,12 +112,21 @@ it did not, none of them exist and every path below returns the ordinary `404`.
 | `GET /v2/sessions/search?query=&cursor=&limit=` | Bounded, case-insensitive literal search over persisted session history (ADI-28). `{ schemaVersion: 1, matches, nextCursor? }`. Matches only the small set of plaintext fields the durable store persists unredacted -- a tool's name, a status word, an error code, a rate-limit's name -- never conversation text: ADI-05's store keeps assistant/thinking text and tool input/output as SHA-256 digests only, so there is nothing else to search. `query` is 1-200 characters with no control characters; `400 { code: 'invalid_query' }`, `400 { code: 'invalid_limit' }`, or `400 { code: 'invalid_cursor' }` for a malformed request. Scans at most 200 sessions per call regardless of match count, so a query that matches nothing still returns promptly with a `nextCursor` when more history remains unscanned |
 | `GET /v2/sessions/:sessionId/attachments/:attachmentId` | The complete content of one `tool.completed` result too large for the inline preview (ADI-29). `{ schemaVersion: 1, metadata, content }`, or `404 { code: 'attachment_not_found' }` when the id doesn't exist, doesn't belong to that session, or no attachment store is configured for this daemon instance. `400 { code: 'invalid_attachment_reference' }` for a malformed session or attachment id |
 
-There is deliberately **no `POST /v2/sessions`**, no `DELETE`, and no v2 cancel. Creating a session
-over v2 means accepting a capability-negotiation request shape this repo does not have, and
-inventing one here would freeze a public request contract nobody has reviewed. Session creation and
-control stay on the v1 routes. See
+There is no v2 `DELETE` or v2 cancel: cancellation and removal stay on the v1 routes
+(`POST /sessions/:id/cancel`, `DELETE /sessions/:id`) even for a session created via v2. See
 [the ADR](adr-agentdock-v2-provenance.md#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
-for the full deferral note.
+for ADI-05's original v2-is-read-only deferral note; `POST /v2/sessions` (ADI-13,
+`apps/daemon/src/routes/v2-sessions-create.ts`) later added session creation with negotiated
+capabilities on top of that read surface -- accepting `provider`, `cwd`, `workspaceId`,
+`incarnation`, `prompt`, an optional `resumeProviderSessionId`, an optional `capabilities` list, and
+(port of agentdock#152/#153) an optional `attachments` array (see
+[providers.md#provider-capabilities](providers.md#provider-capabilities) for what that validates).
+It requires an already-trusted workspace (`POST /v2/workspaces/consume-grant`), acquires an
+exclusive workspace lease per session, and audits every grant/denial before effect. A full
+route-by-route writeup of its refusal codes and audit semantics is a known documentation gap, not
+covered here or in [protocol-v1.md](protocol-v1.md) -- read
+`apps/daemon/src/routes/v2-sessions-create.ts`'s own extensive inline comments for the authoritative
+behavior in the meantime.
 
 ### Stage-routing eligibility (issue #284)
 

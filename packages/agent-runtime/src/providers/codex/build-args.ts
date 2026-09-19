@@ -61,6 +61,16 @@ export const CODEX_STDIN_PROMPT_PLACEHOLDER = '-';
  */
 const CODEX_IGNORE_USER_CONFIG_ARG = '--ignore-user-config';
 
+/**
+ * `opts.attachments` (port of agentdock#152/#153) is delivered as `-i`/`--image <path>` argv, one
+ * flag+path pair per attachment -- a real local file path Codex reads itself, not inline content,
+ * so the prompt keeps going over stdin unchanged either way. Appended last so it can never shift
+ * the position of any existing flag for a session with no attachments (empty array).
+ */
+function attachmentArgs(opts: StartSessionOptions): string[] {
+  return (opts.attachments ?? []).flatMap((attachment) => ['--image', attachment.path]);
+}
+
 export function buildCodexArgs(opts: StartSessionOptions): string[] {
   if (opts.resumeProviderSessionId) {
     return [
@@ -71,6 +81,7 @@ export function buildCodexArgs(opts: StartSessionOptions): string[] {
       '--json',
       '--skip-git-repo-check',
       CODEX_IGNORE_USER_CONFIG_ARG,
+      ...attachmentArgs(opts),
     ];
   }
   return [
@@ -79,5 +90,6 @@ export function buildCodexArgs(opts: StartSessionOptions): string[] {
     '--json',
     '--skip-git-repo-check',
     CODEX_IGNORE_USER_CONFIG_ARG,
+    ...attachmentArgs(opts),
   ];
 }

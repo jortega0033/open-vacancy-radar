@@ -118,3 +118,49 @@ describe('buildCodexArgs: does not silently inherit the host config.toml (issue 
     );
   });
 });
+
+/**
+ * Port of agentdock#152/#153. `application/pdf` via `--image <path>` was verified end to end
+ * against the real installed codex-cli 0.147.0 -- a real PDF was attached this way and Codex
+ * correctly read its content, despite the flag's name suggesting images only.
+ */
+describe('buildCodexArgs: attachments (port of agentdock#152/#153)', () => {
+  it('does not change argv shape when attachments is an empty array', () => {
+    const args = buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', attachments: [] });
+    expect(args).toEqual([...FRESH_ARGV]);
+  });
+
+  it('appends --image <path> for a fresh session', () => {
+    const args = buildCodexArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(args).toEqual([...FRESH_ARGV, '--image', '/tmp/cv.pdf']);
+  });
+
+  it('appends --image <path> after resume flags too, one pair per attachment', () => {
+    const args = buildCodexArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      resumeProviderSessionId: 'thread-1',
+      attachments: [
+        { path: '/tmp/cv.pdf', mimeType: 'application/pdf' },
+        { path: '/tmp/photo.png', mimeType: 'image/png' },
+      ],
+    });
+    expect(args).toEqual([...RESUMED_ARGV, '--image', '/tmp/cv.pdf', '--image', '/tmp/photo.png']);
+  });
+
+  it('never includes attachment file content, only the path, anywhere in argv', () => {
+    const args = buildCodexArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(args.join(' ')).not.toMatch(/base64|data:/);
+  });
+});

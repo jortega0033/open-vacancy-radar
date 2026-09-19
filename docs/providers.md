@@ -86,6 +86,7 @@ interface ProviderCapabilities {
   thinking?: boolean;
   modelCatalog?: boolean;
   hardenedNoNetwork?: boolean;
+  attachments?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 ```
@@ -120,6 +121,7 @@ rather than an omission.
 | `thinking` | ✅ | ✅ | Claude's `thinking` content blocks and Codex's `reasoning` items both normalize to `thinking.delta`: **only surfaced when the CLI's own extended-thinking/reasoning-effort configuration produces one**; a `true` here means "the adapter passes it through when present," not "always present" |
 | `modelCatalog` | ❌ | ✅ | Codex implements `AgentProvider.fetchModelCatalog()` over its app-server `model/list` RPC (ADI-22a). Claude's stays absent until #144: there is no live catalog behind it, and the static `availableModels` list is a different, weaker thing |
 | `hardenedNoNetwork` | ✅ | ❌ | Only `buildClaudeArgs` reads `opts.hardened` at all, so only Claude actually applies the reviewed `'no-network'` argv (`CLAUDE_HARDENING_ARGS_NO_NETWORK`). Asking Codex for the profile changes its argv not at all, which is precisely what this flag makes machine-readable. Added by #284 so a policy layer outside this package can refuse a selection without branching on a provider id. It is **not** what gates `POST /sessions/application-field-map`: that route's own literal provider check is deliberately independent of any self-declared capability |
+| `attachments` | ✅ | ✅ | Port of agentdock#152/#153: `StartSessionOptions.attachments` delivered with the initial prompt. Claude sends an Anthropic Messages-API-shaped `document`/`image` content block via `--input-format stream-json`; Codex passes `-i/--image <path>` argv, only on its `'exec'` transport (`CodexProvider.startSession` throws if requested on `'app-server'`/`'auto'`). Each adapter's `getAttachmentMimeTypes()` (an optional `AgentProvider` method) reports the MIME types it actually accepts, distinguishing directly-verified types from documented-but-untested ones -- see each provider's `capabilities.ts`. Both routes (`POST /sessions`, `POST /v2/sessions`) validate the attachment's MIME type, existence, size (`MAX_SESSION_ATTACHMENT_BYTES`), and that its path resolves inside the session's own working directory before ever spawning a process -- unlike `cwd`, an attachment's bytes are automatically sent to the provider's API, so its path is held to a tighter bar |
 
 `FakeProvider` (used across the test suite) deliberately declares `resume: false`, `tools: false`,
 `thinking: false` even though it *could* trivially fake any of them: the contrast is what lets

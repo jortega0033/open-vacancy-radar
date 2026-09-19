@@ -17,9 +17,18 @@ import type { StartSessionOptions } from '../../types.js';
  * that is not v1 behavior. It is a suffix rather than a prefix so that when it is unset — which is
  * every v1 caller — the returned array is not merely equivalent to the pre-ADI-08b one but produced
  * by the same statements in the same order.
+ *
+ * `--input-format` switches to `stream-json` only when `opts.attachments` is non-empty (port of
+ * agentdock#152/#153): a plain prompt has no way to carry an attachment, so the CLI needs the
+ * structured, Anthropic Messages-API-shaped input format instead (see stdin-payload.ts, which this
+ * function must always agree with on which mode is in effect for the same `opts`). Verified
+ * end-to-end combined with `CLAUDE_HARDENING_ARGS` below, since every session in this repo is
+ * hardened. Every session without attachments keeps the exact args this function produced before
+ * that port, byte for byte.
  */
 export function buildClaudeArgs(opts: StartSessionOptions): string[] {
-  const args = ['-p', '--input-format', 'text', '--output-format', 'stream-json', '--verbose'];
+  const inputFormat = opts.attachments?.length ? 'stream-json' : 'text';
+  const args = ['-p', '--input-format', inputFormat, '--output-format', 'stream-json', '--verbose'];
   if (opts.resumeProviderSessionId) {
     args.push('--resume', opts.resumeProviderSessionId);
   } else {
