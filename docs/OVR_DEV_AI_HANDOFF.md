@@ -152,13 +152,173 @@ Also preserve these boundaries:
 - #396: removed stale rasterization cleanup language and replaced it with staged PDF/scratch attachment cleanup.
 - No labels were changed in Batch 1 because the current readiness labels already match the reviewed state.
 
+
+---
+
+## Batch 2 — source policy, scraper research, and MCP vacancy connectors
+
+Reviewed: #3, #5, #7, #8, #10, #28, #29, #30, #31, #32.
+
+### Recommended disposition
+
+- **#29 Upwork MCP** — implementation-ready only in the newly narrowed principal-directed/unscored V1.
+- **#3 JobSpy** — keep as policy-first spike; do not build Python runtime until one named source proves value and permission.
+- **#30 JobGPT** — keep as bounded API-key spike; production remains blocked on vendor/data-rights evidence.
+- **#5 BambooHR** — keep deferred.
+- **#7 enterprise ATS tranche** — keep deferred and split provider-by-provider if resumed.
+- **#8 browser/Crawlee fallback** — keep deferred until one concrete reviewed source proves static HTTP is insufficient.
+- **#28 Indeed MCP** — keep deferred; official docs still say Claude Connector only.
+- **#31 LoopCV MCP** — keep deferred pending written commercial/data-rights agreement.
+- **#32 openings-mcp** — keep wholesale integration prohibited/deferred; use only as provider-by-provider research evidence.
+- **#10 source-expansion epic** — coordination/history only; do not implement the epic directly.
+
+### #29 — Upwork MCP
+
+Status: **implementation-ready for a narrower V1 than the original ticket implied**.  
+Label: `decision: implement` remains justified after refinement.
+
+Current OVR state:
+- #27 MCP foundation is already shipped.
+- policy-gated daemon manager, strict tool allowlisting, OS credential storage, cache expiry, daemon routes and renderer IPC all exist;
+- `McpTransportPolicy` supports `oauth-pkce`;
+- `McpSdkConnectorFactory` can accept a provider-specific `OAuthClientProvider`;
+- `buildMcpManager()` currently injects no OAuth provider factory, so provider onboarding still needs explicit work.
+
+Current Upwork API & MCP Terms v2.3 (effective 2026-08-13) create an important product constraint: an Agent may retrieve/display results using search/filter criteria explicitly supplied by the Principal, but must not independently rank/score/filter employment opportunities using criteria it determines.
+
+Therefore V1 must:
+- live in a separate Freelance/Upwork surface;
+- use only contemporaneous user-entered search criteria;
+- never feed Upwork rows through OVR profile scoring, SemanticScorer, CV matching, automatic recommendation, or AI-derived filtering;
+- never run in a scheduler/background scan;
+- preserve provider ordering unless the user explicitly chooses a deterministic display sort;
+- retain only according to Upwork's current MCP-output limits;
+- expose no application/proposal/message/contract/payment tools.
+
+Implementation should extend the existing MCP foundation rather than create another client. Provider-specific OAuth/PKCE, localhost redirect handling and token persistence belong in this ticket.
+
+### #30 — JobGPT MCP
+
+Status: **time-boxed spike only**.  
+Label: `decision: spike` remains correct.
+
+The upstream facts changed:
+- official JobGPT now supports browser OAuth 2.1/PKCE as well as API-key auth;
+- current API keys are documented as `sk_`, not `mcp_`;
+- upstream reviewed at `17f9f3b51cf8db4ecc288f1626c086b0750b8b25`.
+
+For this spike, use OVR's already-shipped API-key credential path unless OAuth is specifically needed to answer the spike questions. Do not build general OAuth onboarding merely for this experiment.
+
+Allowlist only `search_jobs` and `get_job`. The vendor exposes many write/profile/resume/outreach/auto-apply tools; those remain mechanically unreachable.
+
+Production remains blocked on source rights, storage/redistribution terms, GDPR allocation and vendor agreement evidence.
+
+### #28 — Indeed MCP
+
+Status: **deferred, freshly reverified**.
+
+Indeed's official MCP docs were updated on 2026-09-12 and still explicitly say the MCP server is available only for the Claude Connector. Current Developer Agreement language also requires written approval of integrations and restricts unapproved combinations, permanent-copy/database behavior and algorithmic API calls.
+
+Do not implement a generic OVR Indeed connector until Indeed gives written authorization for OVR's exact client/aggregation model.
+
+### #31 — LoopCV MCP
+
+Status: **deferred, unchanged**.
+
+LoopCV still publicly advertises job-search API/MCP coverage over LinkedIn, Indeed, Glassdoor and 30+ sources, but MCP remains beta/early access and its generic website terms still grant personal, non-commercial use only. The required commercial/source-rights agreement remains missing.
+
+No implementation work should start from this ticket.
+
+### #32 — openings-mcp provider audit
+
+Status: **wholesale integration remains prohibited/deferred**.
+
+Current upstream was rechecked at `3726ec094d5a17e21bed592686a2e126de12a4ab`. The risky evidence is still present:
+- LinkedIn client warms a cookie jar around HTTP 999/authwall behavior and documents the endpoint as reverse-engineered/not public API;
+- Indeed client still sends a mobile app key to `apis.indeed.com/graphql`;
+- upstream README still says the project is unofficial/personal-use, uses some undocumented APIs and provides no internal rate limiter.
+
+Upstream has many useful ATS implementation references. Those may inform #349/provider-specific research, but never justify connecting the whole openings-mcp binary or inheriting all providers.
+
+### #3 — JobSpy worker
+
+Status: **policy-first spike, not runtime implementation**.
+
+OVR now has #9 source-gap telemetry and #341 durable source observations. JobSpy should not receive a Python worker just because the package exists.
+
+Before any second-runtime work:
+1. identify a named JobSpy-backed source with affirmative access/reuse permission;
+2. show that current OVR telemetry has a material gap for it;
+3. show that an existing native adapter or #349 follow-up is not the simpler solution.
+
+Current JobSpy still centers on scraping major boards and documents proxy usage for blocking-sensitive sources, so no production source is implicitly approved.
+
+### #5 — BambooHR
+
+Status: **deferred**.
+
+Fresh BambooHR documentation confirms the documented ATS job-summary endpoint is authenticated and requires ATS-settings access. It is not a documented public job-board discovery API.
+
+#9/#341 provide the telemetry machinery now, but there is still no evidence in this ticket that BambooHR is a sufficiently large unresolved gap or that a stable public discovery interface has affirmative permission. If signatures recur, #349 is the correct evidence lane.
+
+### #7 — enterprise ATS tranche
+
+Status: **deferred; original candidate list was stale**.
+
+Corrections:
+- #9 telemetry shipped;
+- #341 observations/planner shipped;
+- #349 owns unsupported-family evidence;
+- Rippling should no longer be treated as deferred here because its dedicated #192 work completed and current detection treats it as supported.
+
+Any remaining candidate must graduate into its own provider-specific issue. Never implement #7 as one bulk adapter PR.
+
+### #8 — browser/Crawlee fallback
+
+Status: **deferred**.
+
+Telemetry now exists, but this ticket still lacks the required concrete source proving that bounded static HTTP/API/feed/sitemap/JSON-LD cannot recover useful vacancies.
+
+If #349 finds such a provider, justify browser execution in that provider-specific follow-up. Do not create a generic crawler first, and never use this ticket to justify CAPTCHA/WAF/auth bypass.
+
+### #10 — source-expansion epic
+
+Status: **coordination/history only**.
+
+Current continuation:
+- #341 shipped;
+- #348 is the approved bounded scheduled ATS-scouting implementation;
+- #349 is the evidence-only unsupported-family research lane;
+- #3 remains a spike;
+- #5/#7/#8 remain deferred.
+
+The Dev AI should implement the bounded child issue, never the epic itself.
+
+### Batch 2 changes made during review
+
+Ticket bodies materially refined:
+- #3 — raised the threshold for creating a Python worker now that OVR has real telemetry/observations.
+- #5 — recorded fresh official evidence that BambooHR's documented ATS jobs endpoint is authenticated.
+- #7 — removed Rippling conceptually from the deferred tranche and tied remaining providers to #349 evidence.
+- #8 — clarified that any browser fallback must be provider-specific.
+- #10 — reconciled the epic with #341/#348/#349.
+- #29 — updated for Upwork API & MCP Terms v2.3 and prohibited OVR-owned scoring/ranking of Upwork results.
+- #30 — corrected current JobGPT OAuth/API-key behavior and key-prefix assumptions.
+- #32 — revalidated the specific upstream LinkedIn/Indeed risk evidence against current source.
+
+Freshly reviewed but no ticket-body change needed:
+- #28 Indeed — deferral remains accurate.
+- #31 LoopCV — deferral remains accurate.
+
+No decision labels changed in Batch 2.
+
+
 ---
 
 ## Remaining batches
 
 Not yet reviewed in this document:
 
-- source integrations / source-policy / public-data tickets;
 - AgentDock / ADI runtime and capability tickets;
 - deferred product/research tickets;
 - source-scouting / release QA / epics and final backlog cleanup.
