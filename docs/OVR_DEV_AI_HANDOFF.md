@@ -507,13 +507,122 @@ Reviewed with no material ticket-body change required:
 - #148 — still reference-only/deferred.
 
 
+
+---
+
+## Batch 4 — deferred product / AI / application research cleanup
+
+Reviewed: #149, #152, #153, #154, #157, #183.
+
+### Recommended disposition
+
+- **#149 product demo/openvid** — keep deferred; trigger is now release-flow stability, not unfinished ADI runtime work.
+- **#152 SemanticScorer** — **closed not planned**; its old semantic-scoring architecture was removed by #191 and there is no measured reason to recreate it.
+- **#153 free-text AI-ranked search** — **closed not planned in this form**; OVR now already has a real text query surface and #395 owns bounded query-based ordering improvements.
+- **#154 AI auto-apply research** — **closed completed**; research was converted into #193 and focused application-pipeline owners.
+- **#157 selectable/custom CV templates** — keep deferred; #156 shipped, but no concrete need for additional templates is documented yet.
+- **#183 corpus-relative duplicate-template detection** — **closed not planned** because its own real-data gate was investigated and failed to reproduce.
+
+### #149 — product demo video / openvid
+
+Status: **deferred external content task**.
+
+The original "ADI runtime is still mid-build" rationale is stale: the core ADI-05–ADI-13 session/trust/runtime foundation exists and OVR is now at v0.1.3.
+
+The real remaining trigger is release stability:
+- public MVP release gate #39 is still open;
+- independent clean-Windows acceptance #354 is still open.
+
+Do not integrate openvid into OVR. Once the release flow is accepted, record a short demo from synthetic/non-sensitive data and keep the video aligned with the actual Search -> Save -> Prepare/Review -> handoff flow.
+
+### #152 — SemanticScorer secondary LLM ranking
+
+Status: **closed not planned**.
+
+The architecture this ticket was written against no longer exists:
+- `packages/vacancy-engine/src/scoring/semantic-contract.ts` is gone;
+- the old `scoring/service.ts` path is gone;
+- current `domain/models.ts` has no `semanticScoreSchema`.
+
+Those pieces were removed when #191 deleted the old curated Netherlands pipeline and unified the product on the worldwide path.
+
+Current scoring is also more explainable than when #152 was filed:
+- #367/#369 preserve the deterministic profile-score breakdown;
+- #361/#370 provide grounded ATS requirement-to-evidence analysis separately from ranking;
+- #395 handles a concrete scoreless-result ordering problem without an opaque model score.
+
+Do not resurrect the deleted semantic-scoring seam. A future semantic ranking ticket needs a measured present-day false-negative problem, an evaluation corpus, explainability rules, and hard latency/cost bounds.
+
+### #153 — free-text AI-ranked vacancy search
+
+Status: **closed not planned in this form**.
+
+The issue's statement that OVR has no free-text query surface is now false. Current Search already has a submitted role/keyword query:
+- focused scans require it;
+- query-capable sources receive it;
+- local filtering matches the query across title/company/description;
+- Browse All is the explicit no-query mode.
+
+The proposed prerequisite #152 is also retired rather than implemented.
+
+What remains unique would be semantic AI reranking of the existing query. No current evidence justifies that extra model stage. #395 is the current bounded owner for improving deterministic query-match ordering of scoreless results.
+
+If a real synonym/concept retrieval gap appears, write a new ticket against today's Search pipeline rather than reviving this pre-#191 design.
+
+### #154 — AI auto-apply research
+
+Status: **closed completed / superseded by implementation owners**.
+
+This research produced the real implementation program:
+- #193 became the application automation epic and is closed/completed;
+- #196 established the trust-domain split: generation produces structured data, deterministic non-LLM execution owns form interaction/submission;
+- subsequent focused tickets own receipts, field verification, artifacts, duplicate/reapply protection, reusable answers, review flow and other concrete slices;
+- #314 currently owns the fragmented Saved Jobs -> prepared attempt -> review/handoff journey.
+
+The 2026-09-04 guardrail amendment remains historical product/security context, but Dev AI should implement current focused tickets instead of this umbrella research issue.
+
+### #157 — selectable/custom resume templates
+
+Status: **deferred**.
+
+Prerequisite #156 has shipped, so "wait until a default template exists" is no longer the blocker.
+
+The remaining gate is real user/product evidence. No current issue demonstrates that the default PDF/DOCX template fails a submission requirement badly enough to justify template selection/customization.
+
+If that evidence appears, prefer a small curated template set. Do not interpret this ticket as permission for arbitrary user HTML/CSS/template code.
+
+### #183 — corpus-relative duplicate template detection
+
+Status: **closed not planned**.
+
+This ticket explicitly required real-report evidence before adding corpus-wide template-frequency logic. Its own investigation found:
+- the failure fixture was synthetic;
+- the real local corpus had no cross-company candidate pair reaching the prerequisite gate;
+- no user/report issue showed this false-positive pattern.
+
+The ticket's own condition for implementation is therefore unmet. Keep the documented pairwise limitation. Reopen/file anew only with a real anonymized false-positive corpus shape.
+
+### Batch 4 changes made during review
+
+Closed:
+- #152 — not planned.
+- #153 — not planned.
+- #154 — completed research / superseded by focused owners.
+- #183 — not planned.
+
+Refined but kept open/deferred:
+- #149 — updated trigger to release/clean-machine stability.
+- #157 — recorded that #156 shipped; now waiting only on demonstrated product need.
+
+No new implementation labels were added in Batch 4.
+
+
 ---
 
 ## Remaining batches
 
 Not yet reviewed in this document:
 
-- deferred product/research tickets;
 - source-scouting / release QA / epics and final backlog cleanup.
 
 Do not treat unreviewed tickets as implementation-ready merely because they are open.
