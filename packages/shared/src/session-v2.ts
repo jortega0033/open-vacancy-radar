@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { providerIdSchema } from './schemas.js';
+import { providerIdSchema, sessionAttachmentInputSchema } from './schemas.js';
 import { capabilityIdSchema, opaqueExtensionListSchema, opaqueExtensionSchema } from './capabilities-v2.js';
 import { workspaceDigestSchema } from './workspace-v2.js';
 
@@ -227,6 +227,10 @@ export const createSessionV2RequestSchema = z
     prompt: z.string().min(1).max(200_000),
     resumeProviderSessionId: z.string().min(1).max(256).optional(),
     capabilities: opaqueExtensionListSchema.optional(),
+    /** Delivered with the initial prompt when the selected provider's `capabilities.attachments`
+     * is true (port of agentdock#152/#153); rejected by the route otherwise. See
+     * `sessionAttachmentInputSchema` in schemas.ts for the exact shape and trust requirements. */
+    attachments: z.array(sessionAttachmentInputSchema).max(1).optional(),
   })
   .strict();
 

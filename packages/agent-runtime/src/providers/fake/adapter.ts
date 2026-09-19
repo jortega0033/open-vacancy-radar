@@ -18,6 +18,13 @@ export const FAKE_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   thinking: false,
 };
 
+/** MIME types `FakeProvider.getAttachmentMimeTypes()` reports, for tests exercising the ported
+ * attachment path (agentdock#152/#153) without needing a real Claude/Codex install. Not implied by
+ * `FAKE_PROVIDER_CAPABILITIES.attachments`, which stays absent/false by default like every other
+ * capability here -- a test opting into attachment support still sets `capabilities.attachments:
+ * true` explicitly on the status it passes to the constructor. */
+export const FAKE_PROVIDER_ATTACHMENT_MIME_TYPES = ['application/pdf', 'image/png'] as const;
+
 /**
  * In-process fake provider (spawns no subprocess) used by daemon and desktop tests so they never
  * depend on a real Claude/Codex installation or paid API calls. Records every startSession call
@@ -45,6 +52,10 @@ export class FakeProvider implements AgentProvider {
 
   async detect(): Promise<ProviderStatus> {
     return this.status;
+  }
+
+  getAttachmentMimeTypes(): readonly string[] {
+    return FAKE_PROVIDER_ATTACHMENT_MIME_TYPES;
   }
 
   startSession(options: StartSessionOptions): ProviderSessionHandle {

@@ -7,6 +7,7 @@ import { runProviderSession } from '../common/run-session.js';
 import { resolveCodexTransportMode } from './app-server-support.js';
 import { probeCodexModelCatalog } from './app-server/model-catalog.js';
 import { buildCodexArgs } from './build-args.js';
+import { CODEX_ATTACHMENT_MIME_TYPES } from './capabilities.js';
 import { detectCodex } from './detect.js';
 import { parseCodexLine } from './parser.js';
 import { createCodexTransportWithFallback } from './transport-selection.js';
@@ -44,8 +45,23 @@ export class CodexProvider implements AgentProvider {
     return detectCodex(this.logger);
   }
 
+  getAttachmentMimeTypes(): readonly string[] {
+    return CODEX_ATTACHMENT_MIME_TYPES;
+  }
+
   startSession(options: StartSessionOptions): ProviderSessionHandle {
-    if (resolveCodexTransportMode() === 'exec') {
+    const transportMode = resolveCodexTransportMode();
+    // Attachment delivery (port of agentdock#152/#153) is only wired for the 'exec' transport
+    // below -- the opt-in 'app-server'/'auto' path (createCodexTransportWithFallback) has no
+    // equivalent for `-i/--image`. Failing closed here rather than silently starting a session
+    // that ignores the attachment: a caller that explicitly asked for one must get an honest
+    // error, not a session that quietly proceeds without it.
+    if (options.attachments?.length && transportMode !== 'exec') {
+      throw new Error(
+        `codex attachment delivery is only supported on the 'exec' transport, not '${transportMode}'`,
+      );
+    }
+    if (transportMode === 'exec') {
       return runProviderSession(
         {
           providerId: 'codex',

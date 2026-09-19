@@ -6,6 +6,7 @@ import type { SessionManager } from '../session-manager.js';
 import { ActiveSessionLimitError } from '../active-session-limiter.js';
 import { StorageFullError } from '../session-lineage-store.js';
 import { BoundedSseWriter } from '../sse-writer.js';
+import { validateSessionAttachments } from '../attachment-validation.js';
 
 const TERMINAL_SESSION_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
@@ -28,20 +29,36 @@ export function registerSessionRoutes(
       reply.code(400).send({ error: 'invalid request body', details: parsed.error.flatten() });
       return;
     }
-    const { provider, cwd, prompt, resumeProviderSessionId, model } = parsed.data;
+    const { provider, cwd, prompt, resumeProviderSessionId, model, attachments } = parsed.data;
 
     const providerImpl = registry.get(provider);
     if (!providerImpl) {
       reply.code(400).send({ error: `unsupported provider: ${provider}` });
       return;
     }
-    if (resumeProviderSessionId && !(await providerImpl.detect()).capabilities.resume) {
+    // One detect() call, reused below for both the resume check and attachment validation, so a
+    // request carrying both doesn't pay for two round trips to the same provider probe.
+    const status = resumeProviderSessionId || attachments?.length ? await providerImpl.detect() : undefined;
+    if (resumeProviderSessionId && !status?.capabilities.resume) {
       reply.code(400).send({ error: `provider does not support resume: ${provider}` });
       return;
     }
     if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
       reply.code(400).send({ error: `working directory does not exist: ${cwd}` });
       return;
+    }
+    if (attachments?.length) {
+      const failure = validateSessionAttachments(
+        attachments,
+        provider,
+        status!.capabilities,
+        providerImpl.getAttachmentMimeTypes?.() ?? [],
+        cwd,
+      );
+      if (failure) {
+        reply.code(failure.status).send({ error: failure.message, code: failure.code });
+        return;
+      }
     }
 
     // Both failures below are refusals to *start*, not failures of a started session, so they are
@@ -50,7 +67,18 @@ export function registerSessionRoutes(
     // spawned a provider process or written a durable record by the time it throws (see
     // `SessionManager.create`), so a caller is safe to retry either after freeing capacity.
     try {
-      const session = sessionManager.create(provider, cwd, prompt, resumeProviderSessionId, model);
+      const session = sessionManager.create(
+        provider,
+        cwd,
+        prompt,
+        resumeProviderSessionId,
+        model,
+        1,
+        undefined,
+        undefined,
+        'standard',
+        attachments,
+      );
       reply.code(201).send(session);
     } catch (err) {
       if (err instanceof ActiveSessionLimitError) {

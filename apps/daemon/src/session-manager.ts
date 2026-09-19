@@ -11,7 +11,13 @@ import { utf8ByteLength } from '@agent-dock/shared';
 // Same subpath reason `persisted-session-schema.ts` imports it from here: `node:crypto`-dependent,
 // daemon-only.
 import { digestAndPreviewOfUnknown } from '@agent-dock/shared/content-digest';
-import type { Logger, ProviderRegistry, ProviderSessionHandle, SessionLaunchProbe } from '@agent-dock/agent-runtime';
+import type {
+  Logger,
+  ProviderRegistry,
+  ProviderSessionHandle,
+  SessionAttachmentInput,
+  SessionLaunchProbe,
+} from '@agent-dock/agent-runtime';
 import { AcceptedWorkLatch, UnknownFrameLedger } from '@agent-dock/agent-runtime';
 import { MemorySessionStore, type SessionStore } from './session-store.js';
 import { ActiveSessionLimiter } from './active-session-limiter.js';
@@ -342,6 +348,12 @@ export class SessionManager {
     workspaceId?: string,
     v2?: CreateSessionV2Options,
     toolProfile: 'standard' | 'no-network' = 'standard',
+    /** Already-validated attachment(s) for this session (port of agentdock#152/#153) -- the
+     * calling route has already checked provider capability, MIME type, the cwd-jail, and the
+     * size bound before this reaches `create()`. A new trailing, optional parameter, not folded
+     * into `v2`: unlike every other field in that bag, this one is meaningful for a v1 caller too
+     * (routes/sessions.ts), not v2-only. */
+    attachments?: readonly SessionAttachmentInput[],
   ): AgentSession {
     // The v2 route mints the id itself so its pre-effect audit entry can name the session it is
     // about to start. Everything downstream (the limiter, the durable record, the workspace index,
@@ -450,6 +462,7 @@ export class SessionManager {
         // unhardened, since `'standard'` still maps to the same `hardened: true` every other caller
         // has always gotten.
         hardened: toolProfile === 'no-network' ? 'no-network' : true,
+        ...(attachments?.length ? { attachments } : {}),
       });
     } catch (err) {
       if (reserved) this.limiter.release(id);

@@ -17,6 +17,7 @@ export * from './providers/fake/adapter.js';
 // the AD-09 note at the top of this file.
 export * from './providers/compatibility-manifest.js';
 export * from './providers/common/session-supervisor.js';
+export * from './providers/common/attachment-limits.js';
 export * from './process/exec-capture.js';
 export type {
   AcceptedWorkState,

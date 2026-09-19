@@ -17,6 +17,7 @@ export const providerCapabilitiesSchema = z
     usage: z.boolean().optional(),
     thinking: z.boolean().optional(),
     modelCatalog: z.boolean().optional(),
+    attachments: z.boolean().optional(),
   })
   .catchall(z.boolean());
 
@@ -37,6 +38,26 @@ export const providerStatusSchema = z.object({
   authSource: z.enum(['chatgpt', 'api_key', 'unknown']).optional(),
 });
 
+/**
+ * One outbound attachment for a one-shot session (port of agentdock#152/#153), at most one entry
+ * per request today -- widen only with a real second use case. `path` may not start with `-`:
+ * Codex's attachment flag (`-i`/`--image <path>`) takes the path as a bare argv value, and a
+ * leading `-` risks the CLI's own arg parser treating it as a flag rather than a value -- a real
+ * absolute path never legitimately starts with `-` on any platform this app supports, so rejecting
+ * it here costs nothing and closes that ambiguity at the source. The route that consumes this
+ * (`routes/sessions.ts`, `routes/v2-sessions-create.ts`) additionally requires `path` to resolve
+ * inside the session's own working directory -- an attachment's bytes are automatically sent to a
+ * third-party AI provider, a materially different capability than `cwd` merely bounding where the
+ * provider process runs, so it does not inherit `cwd`'s existing trust.
+ */
+export const sessionAttachmentInputSchema = z.object({
+  path: z
+    .string()
+    .min(1, 'attachment path is required')
+    .refine((value) => !value.startsWith('-'), 'attachment path must not start with "-"'),
+  mimeType: z.string().min(1, 'attachment mimeType is required'),
+});
+
 /** Body for POST /sessions. Rejects anything not an absolute-looking, non-empty path/prompt. */
 export const createSessionRequestSchema = z.object({
   provider: providerIdSchema,
@@ -48,6 +69,9 @@ export const createSessionRequestSchema = z.object({
    * flag, unvalidated against that list: an unknown value surfaces as a normal session.failed
    * event from the CLI itself, rather than the daemon guessing which ids are still current. */
   model: z.string().min(1).optional(),
+  /** Delivered with the initial prompt when the selected provider's `capabilities.attachments` is
+   * true; rejected by the route otherwise. */
+  attachments: z.array(sessionAttachmentInputSchema).max(1).optional(),
 });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;

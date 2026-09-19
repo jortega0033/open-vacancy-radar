@@ -1,5 +1,18 @@
 import type { AgentEvent, ProviderId, ProviderModelV2, ProviderStatus } from '@agent-dock/shared';
 
+/**
+ * One outbound attachment for the one-shot session path (port of agentdock#152/#153) --
+ * deliberately narrow: there is no staged-upload store in this codepath, just a daemon-validated
+ * local path. `path` is a daemon-trusted local filesystem path (never a caller/renderer-supplied
+ * one at the adapter layer -- callers must satisfy that trust boundary, including resolving inside
+ * the session's own `cwd`, before it reaches here; see `routes/sessions.ts`/
+ * `routes/v2-sessions-create.ts`).
+ */
+export interface SessionAttachmentInput {
+  path: string;
+  mimeType: string;
+}
+
 export interface StartSessionOptions {
   /** Daemon-generated session UUID. Used only for logging/correlation, never as a process id. */
   sessionId: string;
@@ -55,6 +68,14 @@ export interface StartSessionOptions {
    * `true` or omits the field, exactly as before this value existed.
    */
   hardened?: boolean | 'no-network';
+  /**
+   * One-shot outbound attachment(s) delivered with the initial prompt (port of
+   * agentdock#152/#153). Only honored when the selected provider's
+   * `ProviderCapabilities.attachments` is true; an adapter with no delivery mechanism ignores it
+   * or fails closed rather than silently dropping it -- see each provider's own
+   * `build-args.ts`/adapter for its own mechanism.
+   */
+  attachments?: readonly SessionAttachmentInput[];
 }
 
 /**
@@ -144,6 +165,14 @@ export interface AgentProvider {
   readonly name: string;
   detect(): Promise<ProviderStatus>;
   startSession(options: StartSessionOptions): ProviderSessionHandle;
+  /**
+   * MIME types this provider's `StartSessionOptions.attachments` delivery mechanism accepts (port
+   * of agentdock#152/#153). Absent (or an empty list) means this provider currently has no
+   * verified attachment-delivery mechanism at all -- a caller must treat that the same as
+   * `capabilities.attachments` being falsy. Each implementing provider's own `capabilities.ts`
+   * documents which of its listed MIME types were directly tested versus only documented/assumed.
+   */
+  getAttachmentMimeTypes?(): readonly string[];
   /**
    * Fetches this provider's live, reviewed model catalog (ADI-22a) -- richer than, and the source
    * of truth over, the static `availableModels: string[]` `detect()` reports on `ProviderStatus`.

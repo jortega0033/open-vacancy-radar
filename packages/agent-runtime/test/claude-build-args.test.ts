@@ -223,3 +223,54 @@ describe('buildClaudeArgs: hardened "no-network" sessions (#201)', () => {
     expect(Object.isFrozen(CLAUDE_HARDENING_ARGS_NO_NETWORK)).toBe(true);
   });
 });
+
+/**
+ * Port of agentdock#152/#153. Every session in this repo is hardened (see
+ * `SessionManager.create()`), so the combination with `CLAUDE_HARDENING_ARGS` below was verified
+ * end to end against the real installed 2.1.228 binary -- a real PDF attached via
+ * `--input-format stream-json` combined with the full hardening suffix, and the model correctly
+ * read its content -- not assumed compatible from the two features being independent flags.
+ */
+describe('buildClaudeArgs: attachments (port of agentdock#152/#153)', () => {
+  it('keeps --input-format text when there are no attachments, identical to before this port', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', attachments: [] });
+    expect(args).toEqual([...V1_FRESH_ARGV]);
+  });
+
+  it('switches to --input-format stream-json when an attachment is present', () => {
+    const args = buildClaudeArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(args).toEqual([
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--session-id', 'sess-1',
+    ]);
+  });
+
+  it('switches to stream-json on resume too, when an attachment is present', () => {
+    const args = buildClaudeArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      resumeProviderSessionId: 'thread-1',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(args).toEqual([
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--resume', 'thread-1',
+    ]);
+  });
+
+  it('combines stream-json input with the hardening suffix -- every real session gets both', () => {
+    const args = buildClaudeArgs({
+      sessionId: 'sess-1',
+      cwd: '/tmp',
+      prompt: 'hi',
+      hardened: true,
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(args[2]).toBe('stream-json'); // --input-format value
+    expect(args.slice(-CLAUDE_HARDENING_ARGS.length)).toEqual([...CLAUDE_HARDENING_ARGS]);
+  });
+});

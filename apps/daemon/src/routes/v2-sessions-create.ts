@@ -21,6 +21,7 @@ import {
 } from '../session-manager.js';
 import { StorageFullError, type SessionLineageStore } from '../session-lineage-store.js';
 import { resolveWorkspaceIdentity, type WorkspaceIdentity } from '../workspace-identity.js';
+import { validateSessionAttachments } from '../attachment-validation.js';
 import {
   WorkspaceLeaseConflictError,
   workspaceLeaseModeFor,
@@ -320,7 +321,7 @@ export function registerV2SessionCreateRoute(
       reply.code(400).send({ error: 'invalid request body', code: 'invalid_request' });
       return;
     }
-    const { provider, cwd, prompt, resumeProviderSessionId, capabilities } = parsed.data;
+    const { provider, cwd, prompt, resumeProviderSessionId, capabilities, attachments } = parsed.data;
     const claimed = { workspaceId: parsed.data.workspaceId, incarnation: parsed.data.incarnation };
 
     // ---- Step 2: the provider ----------------------------------------------------------------
@@ -411,8 +412,31 @@ export function registerV2SessionCreateRoute(
       return;
     }
 
-    // ---- Step 7: one detect(), serving both the resume check and the model catalog ------------
+    // ---- Step 7: one detect(), serving the resume check, the model catalog, and attachment
+    // capability/MIME-type validation below (port of agentdock#152/#153) -----------------------
     const status: ProviderStatus = await providerImpl.detect();
+
+    // Attachment validation (port of agentdock#152/#153), reusing the same detect() call above.
+    // Placed here, before any await, so there is no window between this check and step 14's
+    // `create()` reservation in which the check could go stale -- the same discipline the rest of
+    // this route already holds itself to. `identity.canonicalPath`, not the caller's raw `cwd`, is
+    // the jail boundary: it is the filesystem-verified real path, not the unverified claim.
+    if (attachments?.length) {
+      const failure = validateSessionAttachments(
+        attachments,
+        provider,
+        status.capabilities,
+        providerImpl.getAttachmentMimeTypes?.() ?? [],
+        identity.canonicalPath,
+      );
+      if (failure) {
+        await deny(
+          { status: failure.status, code: failure.code, message: failure.message },
+          identity,
+        );
+        return;
+      }
+    }
 
     // ---- Step 8: resume, resolved before any capability work ----------------------------------
     let selection: CapabilitySelectionV2 | undefined;
@@ -553,12 +577,23 @@ export function registerV2SessionCreateRoute(
     // `SessionManager`'s two cleanup sites, which is the same single-release-site discipline ADI-04
     // and ADI-05 established for the active-session limiter.
     try {
-      sessionManager.create(provider, cwd, prompt, resumeProviderSessionId, resolvedModel, 2, identity.workspaceId, {
-        sessionId,
-        lease,
-        expectedWorkspaceEpoch: epochAtDecision,
-        ...(selection === undefined ? {} : { selection }),
-      });
+      sessionManager.create(
+        provider,
+        cwd,
+        prompt,
+        resumeProviderSessionId,
+        resolvedModel,
+        2,
+        identity.workspaceId,
+        {
+          sessionId,
+          lease,
+          expectedWorkspaceEpoch: epochAtDecision,
+          ...(selection === undefined ? {} : { selection }),
+        },
+        'standard',
+        attachments,
+      );
     } catch (err) {
       if (err instanceof RevokedWorkspaceError) {
         await deny(REFUSALS.workspace_revoked, identity, sessionId);
