@@ -313,13 +313,206 @@ Freshly reviewed but no ticket-body change needed:
 No decision labels changed in Batch 2.
 
 
+
+---
+
+## Batch 3 — AgentDock / ADI runtime-capability backlog
+
+Reviewed: #127, #129, #130, #144, #146, #147, #148, #164, #219, #220, #375.
+
+### Recommended disposition
+
+1. **#127 ADI-09 Windows packaging/RC automation** — `decision: implement`; narrowed to the remaining automated packaged-app smoke, installer lifecycle, and runbook/release-integrity delta.
+2. **#164 ADI-20 capability matrix** — newly **implementation-ready** and labeled `decision: implement`.
+3. **#129 ADI-11 attachment/workflow lifecycle** — keep deferred; existing attachment primitives do not equal an approved generic user-upload lifecycle.
+4. **#130 ADI-12 worktree/subagent lifecycle** — keep deferred design work.
+5. **#144 ADI-08c Claude Agent SDK transport** — explicitly `decision: defer`.
+6. **#219 ADI-22 model catalog** — Codex half already shipped; remaining Claude parity is `decision: defer` behind #144.
+7. **#220 ADI-23 worktree-manager fixes** — tracking-only, now labeled `decision: defer`.
+8. **#375 ADI-27 component risk findings** — tracking-only, now labeled `decision: defer`.
+9. **#147 agentic-ai-apis catalog** — deferred reference only; specific provider leads must use the current source-policy/#349 route.
+10. **#148 awesome-llm-apps** — deferred reference only; no Dev AI implementation work.
+11. **#146 agent-browser MCP** — **closed as not planned**; #196 superseded the application-browser use case.
+
+### #127 — ADI-09 Windows packaging / CI / runbooks
+
+Status: **implementation-ready residual scope**.  
+Label: `decision: implement` remains correct.
+
+All listed dependencies (#119/#123/#124/#125/#126) are closed.
+
+Already shipped; do not redo:
+- Windows Job Host build in `prepackage:win`;
+- daemon `dist/` inclusion through electron-builder `extraResources`;
+- NSIS packaging CI;
+- explicit installer/unpacked-exe existence checks;
+- real Windows process-tree termination tests after packaging;
+- VC++ redistributable NSIS include;
+- root preflight and bounded Node-engine declaration.
+
+Remaining useful work:
+- actually launch/smoke the **packaged executable and packaged daemon**, not merely assert their files exist;
+- prove packaged v1/v2 health and native binding/resource availability;
+- add bounded silent install/uninstall lifecycle automation where useful;
+- reconcile migration/recovery/downgrade/rollback runbooks with current v2 behavior;
+- selectively port upstream RC/SBOM/provenance/Windows-stress practices where they create an OVR release gate.
+
+Do not add Claude SDK assets: #144 remains deliberately deferred and OVR has no SDK runtime/binary to package.
+
+Keep **manual clean-machine product QA in #354**, not #127.
+
+### #129 — ADI-11 attachment / structured-workflow lifecycle
+
+Status: **deferred design**, but original wording was stale.
+
+Current OVR now has two distinct attachment mechanisms:
+- ADI-29's private attachment store for retaining large **normalized tool output**;
+- #401/#402 outbound `StartSessionOptions.attachments` for daemon-trusted files sent with an initial provider prompt.
+
+Neither is a generic staged user-upload/workflow lifecycle.
+
+Important implementation rule for the future:
+- never repurpose the ADI-29 output store as a CV/user-input upload store;
+- never accept arbitrary renderer-supplied filesystem paths;
+- preserve explicit staging ownership, deletion/cascade, orphan recovery, quotas, provenance/review, and downgrade semantics.
+
+The ticket remains correctly labeled `decision: defer`.
+
+### #130 — ADI-12 worktree / subagent consent + cleanup
+
+Status: **deferred design**.
+
+Upstream already provides useful answers for:
+- exact workspace trust and TOCTOU revalidation;
+- stable Codex subagent identity;
+- safe worktree cleanup/queue behavior tracked in #220.
+
+What is still genuinely unresolved in OVR is the product/security contract: especially the opaque single-use preview token bound to workspace identity/incarnation, WebContents, Git ref, exact include-list/file hashes, and the user's risk decision.
+
+No OVR worktree/subagent routes or manager should be ported until that design is approved.
+
+### #144 — ADI-08c Claude Agent SDK transport
+
+Status: **deliberately deferred**.  
+New label: `decision: defer`.
+
+The old process-model uncertainty is resolved upstream, but the decisive incompatibility remains:
+- upstream SDK transport accepts API-key/cloud-auth shapes, not OVR's subscription-login path;
+- OVR deliberately strips provider API/cloud credentials from child environments;
+- adopting the SDK would add a second SDK-owned Claude binary and a materially larger runtime dependency surface.
+
+The CLI path already satisfies OVR's current product/security needs. Revisit only if the explicit flip conditions in the ticket change.
+
+### #146 — agent-browser MCP
+
+Status: **closed as not planned**.
+
+Upstream has generic stdio MCP and documents agent-browser as an example, but OVR deliberately keeps generic MCP/component control disabled via ADI-10.
+
+More importantly, #196 resolved the actual application-browser requirement differently: AI produces a structured field map; a separate deterministic non-LLM executor performs form operations. An LLM-controlled agent-browser is neither required nor desired for that workflow.
+
+Any future read-only browser discovery requirement must be a fresh provider/source-specific ticket under current source-policy/#151 rules.
+
+### #147 / #148 — external reference catalogs
+
+Status: **deferred reference material, not implementation tickets**.
+
+#147 has already demonstrated the correct pattern: a useful Rippling lead became a dedicated, independently reviewed #192 ticket rather than causing a bulk catalog integration. Future unsupported-source evidence belongs through #349/source-policy review.
+
+#148 is similar: use the relevant example folder only when a concrete OVR feature needs design prior art. Dev AI should not "implement awesome-llm-apps."
+
+### #164 — ADI-20 canonical capability matrix
+
+Status: **newly implementation-ready**.  
+New label: `decision: implement`.
+
+The previous wait conditions are now resolved:
+- #239 closed;
+- #250 closed;
+- #219 split cleanly, with Codex shipped and Claude explicitly deferred;
+- #220 has a settled tracking/defer decision.
+
+The ticket has also already caught real drift:
+- product-specific vacancy MCP is **not** globally off anymore; InfoSec Job Board is an active compiled policy, while **generic provider MCP/component control remains intentionally unsupported**;
+- `accountEvidence: 'cli_owned'` remains conservative runtime behavior, but its explanatory comments lag newer auth/account-scope evidence;
+- `workspaceLeaseModeFor` and surrounding prose lag the now-shipped v2/Codex transport state.
+
+Build the matrix against current facts rather than the original four-symbol snapshot.
+
+Suggested categories now include:
+- fallback transport behavior;
+- workspace lease semantics;
+- provider/account identity evidence;
+- product-specific vacancy MCP vs generic provider MCP/component control;
+- Codex live model catalog vs Claude static/deferred catalog;
+- outbound session attachments vs absent generic user-upload lifecycle;
+- absent worktree/subagent/component-control surfaces.
+
+The checker should verify links/required entries/banned overclaims and mechanically test only claims that have a concrete invariant. It must not pretend prose can prove runtime support.
+
+### #219 — ADI-22 live model catalog
+
+Status: **remaining Claude-only parity is deferred**.  
+New label: `decision: defer`.
+
+Codex is done:
+- #256 was the split;
+- #262 merged;
+- `AgentProvider.fetchModelCatalog()`, Codex live `model/list`, the v2 models route, and live-catalog session resolution are now present.
+
+Do not redo Codex from this parent ticket.
+
+Only Claude parity remains, and the live catalog is SDK-only. Since #144 deliberately rejects that SDK path under OVR's current auth/credential policy, Claude should keep the static `availableModels` fallback.
+
+### #220 — ADI-23 worktree fixes
+
+Status: **tracking-only / deferred**.  
+New label: `decision: defer`.
+
+There is no OVR worktree manager to patch. Preserve the upstream requirements for the future #130 implementation child:
+- untracked-only cleanup may be explicitly allowed without ever deleting tracked changes;
+- branch deletion is separate/best-effort;
+- same-repo worktree operations serialize through a queue instead of reject-on-busy.
+
+### #375 — ADI-27 component risk findings
+
+Status: **tracking-only / deferred**.  
+New label: `decision: defer`.
+
+Upstream's deterministic component risk findings are real, but they extend the generic component-control surface ADI-10 intentionally disables in OVR.
+
+OVR's active vacancy-provider MCP policies are a different, compiled and source-specific surface. Do not use them as justification for porting generic component inspection/control.
+
+### Batch 3 changes made during review
+
+Material ticket refinements:
+- #127 — removed stale dependency/packaging assumptions and narrowed remaining work.
+- #129 — reconciled the design ticket with the two attachment primitives that have since shipped.
+- #147 — routed future catalog leads through the current #349/source-policy flow.
+- #164 — reconciled stale capability claims and declared the docs/CI matrix ready to implement.
+- #219 — reconciled the parent after Codex #256/#262 shipped; only Claude remains.
+- #220 — recorded current tracking-only status.
+- #375 — clarified that vacancy MCP does not reopen generic component control.
+
+State/label cleanup:
+- #146 — closed `not planned`.
+- #144 — added `decision: defer`.
+- #164 — added `decision: implement`.
+- #219 — added `decision: defer`.
+- #220 — added `decision: defer`.
+- #375 — added `decision: defer`.
+
+Reviewed with no material ticket-body change required:
+- #130 — still correctly deferred.
+- #148 — still reference-only/deferred.
+
+
 ---
 
 ## Remaining batches
 
 Not yet reviewed in this document:
 
-- AgentDock / ADI runtime and capability tickets;
 - deferred product/research tickets;
 - source-scouting / release QA / epics and final backlog cleanup.
 
