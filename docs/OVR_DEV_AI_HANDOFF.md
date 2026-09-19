@@ -512,6 +512,9 @@ Reviewed with no material ticket-body change required:
 
 ## Batch 4 — deferred product / AI / application research cleanup
 
+> **Cross-repo issue-number warning:** OVR issues #152 and #153 in Batch 4 are Open Vacancy Radar's own SemanticScorer / free-text AI-search tickets. They are unrelated to upstream `jortega0033/agentdock` issues #152/#153, which concern outbound session attachments and were later ported into OVR via #401/#402. Treat issue numbers as repository-scoped identifiers throughout this handoff.
+
+
 Reviewed: #149, #152, #153, #154, #157, #183.
 
 ### Recommended disposition
