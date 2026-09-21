@@ -63,6 +63,41 @@ describe('requiredScanQuery', () => {
       mode: 'query', query: 'frontend', salary: { minimumAnnual: '1,234', currency: 'EUR' },
     })).toThrow();
   });
+
+  it('parses aiWebDiscovery on both the query and browse_all arms, omitting it entirely by default (issue #398)', () => {
+    // Omitted (or absent) -- the true no-op shape: identical to a request from before this feature
+    // existed, protecting every scan test that never mentions this field.
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'frontend' })).toEqual({
+      mode: 'query', query: 'frontend',
+    });
+    expect(parseVacancyScanRequest({ mode: 'browse_all' })).toEqual({ mode: 'browse_all' });
+
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'frontend', aiWebDiscovery: true })).toEqual({
+      mode: 'query', query: 'frontend', aiWebDiscovery: true,
+    });
+    expect(parseVacancyScanRequest({ mode: 'query', query: 'frontend', aiWebDiscovery: false })).toEqual({
+      mode: 'query', query: 'frontend', aiWebDiscovery: false,
+    });
+    expect(parseVacancyScanRequest({ mode: 'browse_all', aiWebDiscovery: true })).toEqual({
+      mode: 'browse_all', aiWebDiscovery: true,
+    });
+    expect(() => parseVacancyScanRequest({ mode: 'query', query: 'frontend', aiWebDiscovery: 'yes' })).toThrow(
+      'AI web discovery must be a boolean.',
+    );
+    expect(() => parseVacancyScanRequest({ mode: 'browse_all', aiWebDiscovery: 'yes' })).toThrow(
+      'AI web discovery must be a boolean.',
+    );
+  });
+
+  it('runs the AI web discovery pass only inside the already-acquired scan guard, and never at all unless explicitly requested (issue #398)', () => {
+    const mainSource = source('main.ts');
+    // The `runAiWebDiscovery` call site sits textually between the guard's `async () => {` open and
+    // the `runGlobalRemoteScan` call it feeds -- i.e. inside `runExclusiveScan`'s own callback, never
+    // wrapping or preceding the acquisition of that guard itself.
+    expect(mainSource).toMatch(
+      /runExclusiveScan\(\s*async \(\) => \{[\s\S]*if \(request\.aiWebDiscovery === true\) \{[\s\S]*runAiWebDiscovery\(client, \{[\s\S]*runGlobalRemoteScan\(/,
+    );
+  });
 });
 
 describe('scheduledScanQueryFromProfile', () => {
