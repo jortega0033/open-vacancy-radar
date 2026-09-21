@@ -34,7 +34,10 @@ export {
   type AiWebDiscoveryCandidate,
   type AiWebDiscoveryResponse,
 } from './global-remote/ai-web-discovery.js';
-export { globalRemoteSourceRegistry } from './global-remote/source-registry.js';
+export {
+  globalRemoteSourceRegistry,
+  prohibitedOrBlockedSourceRegistryEntries,
+} from './global-remote/source-registry.js';
 export {
   assessSalary,
   normalizeSalary,

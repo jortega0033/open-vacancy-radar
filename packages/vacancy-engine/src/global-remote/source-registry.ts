@@ -150,3 +150,61 @@ export function globalRemoteSourceRegistry(config: GlobalRemoteConfig): SourceRe
     entry({ id: 'google_jobs', name: 'Google Jobs', url: 'https://www.google.com/search?q=frontend+developer+jobs', transport: 'none', state: 'prohibited', provider: null, reason: 'Automated Google result-page/browser scraping is not part of the production architecture.' }),
   ];
 }
+
+/**
+ * A `GlobalRemoteConfig` used only to enumerate the static entries below -- every field on it is
+ * read exclusively by this function's config-dependent entries (muse/adzuna/jooble/reed/jobspipe/
+ * navArbeidsplassen), none of which is ever `'prohibited'`/`'blocked'`, so the actual values here
+ * never affect `prohibitedOrBlockedSourceRegistryEntries`'s result.
+ */
+const NEUTRAL_REGISTRY_CONFIG: GlobalRemoteConfig = {
+  version: 'prohibited-or-blocked-lookup',
+  minimumAnnualBaseUsd: null,
+  discovery: {
+    roleQuery: '',
+    himalayasQueries: [],
+    himalayasCountry: '',
+    himalayasMaxPagesPerQuery: 1,
+    jobicyCount: 1,
+    freehireLimit: 1,
+    jobOpportunitiesLimit: 1,
+    remoteLandersMaxPages: 1,
+    jobgetherMaxPages: 1,
+    remoteFirstMaxPages: 1,
+    jobRemotelyMaxPages: 1,
+    arbeitnowMaxPages: 1,
+    diceMaxPages: 1,
+    remooteRoleTitle: '',
+    remooteCountry: '',
+    remooteLimit: 1,
+    aiDevJobsMaxPages: 1,
+    taiwanJobsMaxCities: 1,
+    museEnabled: false,
+    museMaxPages: 1,
+    adzunaAppId: '',
+    adzunaAppKey: '',
+    adzunaMaxPages: 1,
+    joobleApiKey: '',
+    reedApiKey: '',
+    jobspipeApiKey: '',
+    atsRosterConcurrency: 1,
+    navArbeidsplassenApiKey: '',
+    navArbeidsplassenMaxPages: 1,
+  },
+  officialSources: [],
+};
+
+/**
+ * The subset of the source registry already marked `'prohibited'`/`'blocked'` -- these entries are
+ * static and never read any `GlobalRemoteConfig` field, so this needs no config to compute (unlike
+ * `globalRemoteSourceRegistry`'s other, config-dependent entries). Exists specifically for
+ * `isBlockedDiscoveryDomain` callers (like the desktop AI-web-discovery orchestrator) that need this
+ * list without loading or faking a full scan config themselves -- the neutral config above lives
+ * here, next to the registry it feeds, so it can never drift out of sync with a future
+ * `'prohibited'`/`'blocked'` entry the way a second, hand-maintained copy elsewhere would.
+ */
+export function prohibitedOrBlockedSourceRegistryEntries(): SourceRegistryEntry[] {
+  return globalRemoteSourceRegistry(NEUTRAL_REGISTRY_CONFIG).filter(
+    (candidate) => candidate.state === 'prohibited' || candidate.state === 'blocked',
+  );
+}

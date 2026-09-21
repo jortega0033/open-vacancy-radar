@@ -8,7 +8,10 @@ import {
 } from '../../src/global-remote/ai-web-discovery.js';
 import { SOURCE_FILTER_CAPABILITIES } from '../../src/global-remote/focused-scan.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
-import { globalRemoteSourceRegistry } from '../../src/global-remote/source-registry.js';
+import {
+  globalRemoteSourceRegistry,
+  prohibitedOrBlockedSourceRegistryEntries,
+} from '../../src/global-remote/source-registry.js';
 
 function validCandidate(overrides: Partial<AiWebDiscoveryCandidate> = {}): unknown {
   return {
@@ -82,6 +85,7 @@ describe('AiWebDiscoveryCandidateSchema', () => {
   it('accepts a candidate with every missing fact as null/unknown, never fabricated', () => {
     const result = AiWebDiscoveryCandidateSchema.safeParse(
       validCandidate({
+        location: 'Not stated',
         description: null,
         employmentType: null,
         currency: null,
@@ -142,6 +146,95 @@ describe('AiWebDiscoveryCandidateSchema', () => {
     const result = AiWebDiscoveryCandidateSchema.safeParse(candidate);
     expect(result.success).toBe(false);
   });
+
+  describe('url field: non-http(s) schemes and embedded credentials (issue #398 security fix)', () => {
+    it('rejects a javascript: URL', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(validCandidate({ url: 'javascript:alert(1)' }));
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a data: URL', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(
+        validCandidate({ url: 'data:text/html,<script>alert(1)</script>' }),
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a file: URL', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(validCandidate({ url: 'file:///etc/passwd' }));
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a vbscript: URL', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(validCandidate({ url: 'vbscript:msgbox(1)' }));
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an http(s) URL with embedded credentials', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(
+        validCandidate({ url: 'http://user:pass@host.example/x' }),
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it('still accepts a plain http(s) URL with no credentials', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(validCandidate({ url: 'https://acme.example/careers/eng-1' }));
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('evidence.<fact>.stated === false implies the paired value must be the honest "missing" sentinel (issue #398, extended to every fact, not only salary)', () => {
+    it('rejects a claimed location while evidence.location.stated is false', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(
+        validCandidate({
+          location: 'Amsterdam, Netherlands',
+          evidence: {
+            salary: { stated: true, quote: '$120,000/year base' },
+            location: { stated: false, quote: null },
+            employmentType: { stated: true, quote: 'Full-time' },
+            postedAt: { stated: true, quote: 'Posted Sep 1, 2026' },
+            visaSponsorship: 'unknown',
+            exactUrlVerified: true,
+          },
+        }),
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-null employmentType while evidence.employmentType.stated is false', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(
+        validCandidate({
+          employmentType: 'full_time',
+          evidence: {
+            salary: { stated: true, quote: '$120,000/year base' },
+            location: { stated: true, quote: 'Worldwide remote' },
+            employmentType: { stated: false, quote: null },
+            postedAt: { stated: true, quote: 'Posted Sep 1, 2026' },
+            visaSponsorship: 'unknown',
+            exactUrlVerified: true,
+          },
+        }),
+      );
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a non-null postedAt while evidence.postedAt.stated is false', () => {
+      const result = AiWebDiscoveryCandidateSchema.safeParse(
+        validCandidate({
+          postedAt: '2026-09-01',
+          evidence: {
+            salary: { stated: true, quote: '$120,000/year base' },
+            location: { stated: true, quote: 'Worldwide remote' },
+            employmentType: { stated: true, quote: 'Full-time' },
+            postedAt: { stated: false, quote: null },
+            visaSponsorship: 'unknown',
+            exactUrlVerified: true,
+          },
+        }),
+      );
+      expect(result.success).toBe(false);
+    });
+  });
 });
 
 describe('normalizeAiWebDiscoveryCandidates', () => {
@@ -164,6 +257,7 @@ describe('normalizeAiWebDiscoveryCandidates', () => {
   it('keeps missing facts as null rather than inventing values', () => {
     const parsed = AiWebDiscoveryCandidateSchema.parse(
       validCandidate({
+        location: 'Not stated',
         description: null,
         employmentType: null,
         currency: null,
@@ -203,8 +297,24 @@ describe('isBlockedDiscoveryDomain', () => {
     expect(isBlockedDiscoveryDomain('https://www.indeed.com/viewjob?jk=abc123', registry)).toBe(true);
   });
 
+  it('returns true for a country-subdomain LinkedIn variant (nl.linkedin.com)', () => {
+    expect(isBlockedDiscoveryDomain('https://nl.linkedin.com/jobs/view/12345', registry)).toBe(true);
+  });
+
+  it('returns true for another LinkedIn subdomain (jobs.linkedin.com)', () => {
+    expect(isBlockedDiscoveryDomain('https://jobs.linkedin.com/view/12345', registry)).toBe(true);
+  });
+
+  it('returns true for a country-subdomain Indeed variant (uk.indeed.com)', () => {
+    expect(isBlockedDiscoveryDomain('https://uk.indeed.com/viewjob?jk=abc123', registry)).toBe(true);
+  });
+
   it('returns false for an unrelated domain', () => {
     expect(isBlockedDiscoveryDomain('https://acme.example/careers/frontend', registry)).toBe(false);
+  });
+
+  it('returns false for a look-alike, differently-registrable domain (linkedin.com.evil.com)', () => {
+    expect(isBlockedDiscoveryDomain('https://linkedin.com.evil.com/jobs/view/12345', registry)).toBe(false);
   });
 
   it('fails closed (returns true) for a malformed URL string', () => {
@@ -220,5 +330,30 @@ describe('SOURCE_FILTER_CAPABILITIES / DiscoveryProvider compile-time coverage',
   it('defines an entry for ai_web_search', () => {
     expect(SOURCE_FILTER_CAPABILITIES.ai_web_search).toBeDefined();
     expect(SOURCE_FILTER_CAPABILITIES.ai_web_search).toEqual({});
+  });
+});
+
+describe('prohibitedOrBlockedSourceRegistryEntries', () => {
+  it('takes no GlobalRemoteConfig argument and returns exactly the prohibited/blocked entries', () => {
+    const entries = prohibitedOrBlockedSourceRegistryEntries();
+    expect(entries.every((entry) => entry.state === 'prohibited' || entry.state === 'blocked')).toBe(true);
+    const ids = entries.map((entry) => entry.id).sort();
+    expect(ids).toEqual(
+      ['eures', 'glassdoor_direct', 'google_jobs', 'indeed', 'linkedin', 'ziprecruiter'].sort(),
+    );
+  });
+
+  it('matches the prohibited/blocked subset of the full, config-driven registry', () => {
+    const full = globalRemoteSourceRegistry(registryProfile()).filter(
+      (entry) => entry.state === 'prohibited' || entry.state === 'blocked',
+    );
+    expect(prohibitedOrBlockedSourceRegistryEntries().map((entry) => entry.id).sort()).toEqual(
+      full.map((entry) => entry.id).sort(),
+    );
+  });
+
+  it('never includes a manual_only entry like Built In (not actually caught by isBlockedDiscoveryDomain)', () => {
+    const ids = prohibitedOrBlockedSourceRegistryEntries().map((entry) => entry.id);
+    expect(ids).not.toContain('built_in');
   });
 });

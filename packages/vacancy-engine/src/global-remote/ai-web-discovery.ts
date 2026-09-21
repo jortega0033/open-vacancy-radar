@@ -80,7 +80,20 @@ export const AiWebDiscoveryCandidateSchema = z
   .object({
     company: z.string().min(1),
     title: z.string().min(1),
-    url: z.url(),
+    // `z.url()` alone accepts `javascript:`/`data:`/`file:`/`vbscript:` schemes and embedded
+    // credentials (`http://user:pass@host/...`) -- this source's URLs are effectively chosen by a
+    // model reading attacker-controlled web content, so, like every other discovery source's `url`
+    // field in this package (via `httpUrl()` in discovery-shared.ts, a plain validator rather than a
+    // zod schema piece so not directly reusable here), this is narrowed to http(s)-only with no
+    // embedded credentials.
+    url: z.url().refine((value) => {
+      try {
+        const parsed = new URL(value);
+        return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.username === '' && parsed.password === '';
+      } catch {
+        return false;
+      }
+    }, 'url must be an http(s) URL with no embedded credentials'),
     /** "Not stated" (never omitted) when the source page genuinely never says. */
     location: z.string().min(1),
     description: z.string().nullable(),
@@ -117,6 +130,30 @@ export const AiWebDiscoveryCandidateSchema = z
           message: 'salaryPeriod must be null when evidence.salary.stated is false.',
         });
       }
+    }
+    // Same "no inference, machine-checkable" enforcement as the salary block above, extended to the
+    // other three per-fact evidence flags the doc comment and prompt already claim it applies to:
+    // location, employmentType, postedAt.
+    if (candidate.evidence !== null && !candidate.evidence.location.stated && candidate.location !== 'Not stated') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['location'],
+        message: 'location must be "Not stated" when evidence.location.stated is false.',
+      });
+    }
+    if (candidate.evidence !== null && !candidate.evidence.employmentType.stated && candidate.employmentType !== null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['employmentType'],
+        message: 'employmentType must be null when evidence.employmentType.stated is false.',
+      });
+    }
+    if (candidate.evidence !== null && !candidate.evidence.postedAt.stated && candidate.postedAt !== null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['postedAt'],
+        message: 'postedAt must be null when evidence.postedAt.stated is false.',
+      });
     }
   });
 export type AiWebDiscoveryCandidate = z.infer<typeof AiWebDiscoveryCandidateSchema>;
@@ -192,15 +229,23 @@ function normalizedHostname(url: string): string | null {
 }
 
 /**
- * Issue #398 / #151: whether `url`'s hostname matches a `registry` entry this project has already
- * reviewed and marked `'prohibited'` or `'blocked'` (LinkedIn, Indeed, Built In, ...). Called by the
- * desktop orchestrator (or the normalizer) before ever `WebFetch`-ing a candidate URL -- an
- * AI-web-search session has no awareness of this registry on its own, and can surface a result page
- * on an already-rejected domain exactly as easily as on an approved one.
+ * Issue #398 / #151: whether `url`'s hostname matches, or is a subdomain of, a `registry` entry this
+ * project has already reviewed and marked `'prohibited'` or `'blocked'` (LinkedIn, Indeed, Glassdoor
+ * Direct, Google Jobs, EURES, ZipRecruiter -- only these two states are checked, not every
+ * non-`'active'` state; a `'manual_only'`/`'configuration_required'`/`'partner_required'` entry such
+ * as Built In is deliberately NOT caught here). Called by the desktop orchestrator (or the
+ * normalizer) before ever `WebFetch`-ing a candidate URL -- an AI-web-search session has no awareness
+ * of this registry on its own, and can surface a result page on an already-rejected domain exactly as
+ * easily as on an approved one, and an AI WebSearch pass driven by `primaryCountry` is exactly the
+ * mechanism most likely to surface a country-subdomain variant of one (e.g. `nl.linkedin.com`,
+ * `jobs.linkedin.com`, `uk.indeed.com`).
  *
- * Both sides are normalized (lowercased, `www.` stripped) before comparing, so
- * `https://www.linkedin.com/jobs/...` and `https://linkedin.com/jobs/...` both match a registry
- * entry whose own `url` is `https://www.linkedin.com/jobs/`.
+ * Both sides are normalized (lowercased, `www.` stripped) before comparing, then matched on a
+ * dot-boundary suffix rather than exact equality, so `https://www.linkedin.com/jobs/...`,
+ * `https://linkedin.com/jobs/...`, and `https://nl.linkedin.com/jobs/...` all match a registry entry
+ * whose own `url` is `https://www.linkedin.com/jobs/`, while a look-alike, differently-registrable
+ * domain like `linkedin.com.evil.com` correctly does NOT match (it is not `linkedin.com` and does not
+ * end with `.linkedin.com`).
  *
  * Fails closed: a malformed/unparseable `url` (or a registry entry whose own `url` happens to be
  * unparseable) is treated as blocked rather than silently let through, and this function never
@@ -215,6 +260,6 @@ export function isBlockedDiscoveryDomain(
   return registry.some((source) => {
     if (source.state !== 'prohibited' && source.state !== 'blocked') return false;
     const registryHost = normalizedHostname(source.url);
-    return registryHost !== null && registryHost === candidateHost;
+    return registryHost !== null && (candidateHost === registryHost || candidateHost.endsWith(`.${registryHost}`));
   });
 }

@@ -226,11 +226,21 @@ describe('runAiWebDiscovery', () => {
     expect(moduleSource('vacancy-web-discovery.ts')).not.toMatch(/from\s+['"][^'"]*scan-guard/);
 
     // Behavioral check: spying on the real `createScanGuard` factory and running a full
-    // `runAiWebDiscovery` call (profile-unconfigured path, the cheapest to drive) proves nothing in
-    // this call path ever touches it either.
+    // `runAiWebDiscovery` call through its ENTIRE code path -- a configured profile, a real session,
+    // a full event stream (tool.started budget-tracking events, an assistant message, completion),
+    // all the way through parsing/validation/normalization to a real result -- proves nothing
+    // anywhere in this module ever touches it, not just the cheap early-return branch a profile-
+    // unconfigured call would take (that branch alone would pass this assertion vacuously even if
+    // ScanGuard were called somewhere deeper in the event-handling/cancel path).
     const createScanGuardSpy = vi.spyOn(scanGuardModule, 'createScanGuard');
-    const client = fakeClient([{ type: 'session.completed' }]);
-    await runAiWebDiscovery(client as never, { profile: EMPTY_CANDIDATE_PROFILE, cwd: CWD });
+    const client = fakeClient([
+      { type: 'tool.started', toolName: 'WebSearch' },
+      { type: 'tool.started', toolName: 'WebFetch' },
+      { type: 'assistant.message', text: fencedJson({ candidates: [candidate()], queriesUsed: ['frontend engineer'] }) },
+      { type: 'session.completed' },
+    ]);
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.vacancies).toHaveLength(1);
     expect(createScanGuardSpy).not.toHaveBeenCalled();
     createScanGuardSpy.mockRestore();
   });
@@ -451,14 +461,41 @@ describe('runAiWebDiscovery', () => {
     expect(result.sourceAudit.listings).toBe(2);
   });
 
-  it('propagates a genuinely unexpected error instead of swallowing it as a timeout', async () => {
+  it('a non-abort error mid-stream (e.g. a malformed SSE frame) is caught, not rethrown: zero candidates, status error, session cancelled', async () => {
+    // This module's own contract is "never throws" -- a non-abort error from the event stream (the
+    // daemon dying mid-stream, a malformed SSE frame, ...) must be reported the same honest way every
+    // other failure mode is, not propagated past this function (which would abort the ENTIRE vacancy
+    // scan, deterministic discovery included, since main.ts has no defensive try/catch of its own
+    // around this call).
     const client = fakeClient(async function* (): AsyncGenerator<AgentEventEnvelope, void, void> {
       throw new Error('daemon unreachable');
       yield envelope({ type: 'session.completed' }); // unreachable; satisfies require-yield
     });
-    await expect(
-      runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD }),
-    ).rejects.toThrow('daemon unreachable');
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.vacancies).toEqual([]);
+    expect(result.sourceAudit.status).toBe('error');
+    expect(result.sourceAudit.error).toMatch(/daemon unreachable/);
+    // The session's budget enforcement must not be left running unattended once this function has
+    // given up on it -- cancel must still be called even though this was never a timeout/abort.
+    expect(client.sessions.cancel).toHaveBeenCalledWith('ai-web-session-1');
+  });
+
+  it('the event stream ending cleanly with no terminal event still cancels the session', async () => {
+    // Reachable in production: `BoundedSseWriter` (daemon-side) can close an overflowing
+    // subscriber's connection cleanly without ever sending a terminal event, and the client-side
+    // generator (`parseSseStream`) can also simply `return` on abort rather than throw. Before the
+    // fix, this path fell through to "no terminal event" WITHOUT ever cancelling the session -- a
+    // hardened session with live WebFetch/WebSearch access would keep running with its budget no
+    // longer enforced by anything.
+    const client = fakeClient(async function* (): AsyncGenerator<AgentEventEnvelope, void, void> {
+      yield envelope({ type: 'assistant.message', text: 'still working...' });
+      // Generator returns cleanly here without ever yielding a terminal event.
+    });
+    const result = await runAiWebDiscovery(client as never, { profile: CONFIGURED_PROFILE, cwd: CWD });
+    expect(result.vacancies).toEqual([]);
+    expect(result.sourceAudit.status).toBe('error');
+    expect(result.sourceAudit.error).toMatch(/ended without a terminal event/);
+    expect(client.sessions.cancel).toHaveBeenCalledWith('ai-web-session-1');
   });
 });
 

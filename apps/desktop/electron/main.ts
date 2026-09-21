@@ -2043,18 +2043,28 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
         // `GlobalRemoteScanOptions` to before this feature existed.
         let aiWebDiscovery: Awaited<ReturnType<typeof runAiWebDiscovery>> | undefined;
         if (request.aiWebDiscovery === true) {
-          const profile = await loadCandidateProfile(await candidateProfilePath());
-          aiWebDiscovery = await runAiWebDiscovery(client, {
-            profile,
-            cwd: await ensureAiWorkspaceDir(),
-          });
-          // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
-          // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
-          // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
-          logger.debug(
-            { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
-            'AI web discovery pass finished',
-          );
+          // `runAiWebDiscovery` itself never throws (see its own doc comment), but the setup calls
+          // around it -- `loadCandidateProfile` (rethrows for a malformed/unreadable existing profile
+          // file, only swallowing ENOENT) and `ensureAiWorkspaceDir` (disk full, permission error) --
+          // are not similarly guarded. A failure here must degrade exactly the way an internal
+          // `runAiWebDiscovery` failure already does (`aiWebDiscovery` left undefined, i.e. treated as
+          // if `request.aiWebDiscovery` had been false), never abort the whole scan.
+          try {
+            const profile = await loadCandidateProfile(await candidateProfilePath());
+            aiWebDiscovery = await runAiWebDiscovery(client, {
+              profile,
+              cwd: await ensureAiWorkspaceDir(),
+            });
+            // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
+            // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
+            // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
+            logger.debug(
+              { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
+              'AI web discovery pass finished',
+            );
+          } catch (error) {
+            logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
+          }
         }
         const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           ...(request.mode === 'query'

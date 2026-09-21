@@ -3,10 +3,10 @@ import type { AgentEventEnvelope, AgentSession, ProviderStatus } from '@agent-do
 import {
   AiWebDiscoveryCandidateSchema,
   AiWebDiscoveryResponseSchema,
-  globalRemoteSourceRegistry,
   isBlockedDiscoveryDomain,
   isCandidateProfileConfigured,
   normalizeAiWebDiscoveryCandidates,
+  prohibitedOrBlockedSourceRegistryEntries,
   type AiWebDiscoveryCandidate,
   type CandidateProfile,
   type DiscoverySourceAudit,
@@ -38,7 +38,15 @@ import {
  * -- and it must not be faked as tested. Anyone relying on this feature should treat a
  * loopback/private-network `WebFetch` target as an open question for Phase 1, verify it against the
  * real CLI before depending on it, and track closing this gap (e.g. daemon-side URL egress
- * filtering) as follow-up work, not something this module already guarantees.
+ * filtering) as follow-up work, not something this module already guarantees. Separately: whatever a
+ * prompt-injected fetched page manages to smuggle into the model's final answer -- whether it arrives
+ * before or after the model's own real answer in the stream, see `extractFinalJsonPayload`'s own doc
+ * comment below for that distinction -- a fabricated vacancy row from either source of injection is
+ * still fully bounded by `AiWebDiscoveryCandidateSchema`: the schema has no `passthrough`/`z.any()`/
+ * `z.record()`, so the worst outcome is a fake-looking vacancy candidate, never an escape past
+ * validation into arbitrary data. What actually matters once such a row exists is its `url` field's
+ * own trustworthiness (the schema's `url` refine rejecting non-http(s) schemes and embedded
+ * credentials), since the app later walks the user through applying via that URL.
  *
  * **A second, deliberate scope limit, also documented rather than solved**: the query/fetch budget
  * below (`AI_WEB_DISCOVERY_MAX_QUERIES`/`AI_WEB_DISCOVERY_MAX_FETCHES`) and the domain-block filter
@@ -181,10 +189,17 @@ Report an empty "candidates" array if you genuinely found nothing worth reportin
 /**
  * Trusts only the LAST fenced \`\`\`json ... \`\`\` block in the accumulated response text (or, when
  * no fence is present at all, the whole trimmed text as a bare top-level JSON object) -- this is the
- * concrete mechanism behind the prompt's "last thing in your response" contract above, and this
- * module's defense against prompt injection smuggled in via a fetched job posting: whatever earlier
- * text in the stream says or contains (including something that itself looks like a fenced JSON
- * block) is never parsed, only whatever the model emits last.
+ * concrete mechanism behind the prompt's "last thing in your response" contract above.
+ *
+ * This is ONE layer of defense-in-depth against prompt injection smuggled in via a fetched job
+ * posting, specifically covering injected fenced-JSON content that arrives BEFORE the model's real
+ * final answer in the accumulated stream: whatever earlier text says or contains (including something
+ * that itself looks like a fenced JSON block) is never parsed, only whatever the model emits last.
+ * It offers NO protection against injected content that arrives AFTER the model's real answer -- an
+ * attacker's fence appended later in the stream would win the "last fence" race just as easily as a
+ * legitimate one. Defending against THAT case relies entirely on the instruction-level prompt defense
+ * already present earlier in this same file (`buildAiWebDiscoveryPrompt`'s "UNTRUSTED PAGE CONTENT"
+ * section and its "last thing you write" instruction), not on this extraction function.
  */
 export function extractFinalJsonPayload(text: string): string {
   const fenceRegex = /```(?:json)?\s*\n?([\s\S]*?)```/giu;
@@ -198,66 +213,14 @@ export function extractFinalJsonPayload(text: string): string {
 }
 
 /**
- * A fixed, minimal `GlobalRemoteConfig`-shaped projection used ONLY to compute the domain-block
- * registry (`globalRemoteSourceRegistry`) for `isBlockedDiscoveryDomain` below -- never for anything
- * scan-behavioral. `GlobalRemoteConfig`/`globalRemoteConfigSchema` are internal to `vacancy-engine`
- * (not part of its package "exports" surface -- only `.` and `./salary` are published -- and Stage B
- * is explicitly scoped to never touch that package), so this module cannot import the real type or
- * load the project's actual `config/global-remote-profile-v1.json`.
- *
- * That is fine here: every registry entry `isBlockedDiscoveryDomain` actually cares about (the
- * `'prohibited'`/`'blocked'` ones -- LinkedIn, Indeed, Glassdoor Direct, Google Jobs, EURES,
- * ZipRecruiter) is a hardcoded `entry(...)` call in `source-registry.ts` that never reads any
- * `GlobalRemoteConfig` field. Only the small set of `'active'`/`'configuration_required'` entries
- * (Muse, Adzuna, Jooble, Reed, JobsPipe, NAV Arbeidsplassen) vary by config, and none of those states
- * are ever domain-blocked -- so a fixed, harmless projection produces exactly the same blocked-domain
- * set as the real, live-configured registry would.
- *
- * `Parameters<typeof globalRemoteSourceRegistry>[0]` (rather than importing `GlobalRemoteConfig` by
- * name) type-checks this projection against the real function signature without a disallowed deep
- * import into `vacancy-engine`'s internals.
+ * The `'prohibited'`/`'blocked'` slice of the source registry, for `isBlockedDiscoveryDomain` below.
+ * `vacancy-engine` now exports `prohibitedOrBlockedSourceRegistryEntries()` directly (this PR already
+ * added several new exports there for this same feature, so the "never touch vacancy-engine's
+ * exports" boundary no longer applies) -- this module no longer needs to build a fake
+ * `GlobalRemoteConfig` just to call `globalRemoteSourceRegistry` and filter its result itself.
  */
-type AiWebDiscoveryRegistryConfig = Parameters<typeof globalRemoteSourceRegistry>[0];
-
-const DOMAIN_BLOCK_CHECK_CONFIG: AiWebDiscoveryRegistryConfig = {
-  version: 'ai-web-discovery-domain-check',
-  minimumAnnualBaseUsd: null,
-  discovery: {
-    roleQuery: '',
-    himalayasQueries: [],
-    himalayasCountry: '',
-    himalayasMaxPagesPerQuery: 1,
-    jobicyCount: 1,
-    freehireLimit: 1,
-    jobOpportunitiesLimit: 1,
-    remoteLandersMaxPages: 1,
-    jobgetherMaxPages: 1,
-    remoteFirstMaxPages: 1,
-    jobRemotelyMaxPages: 1,
-    arbeitnowMaxPages: 1,
-    diceMaxPages: 1,
-    remooteRoleTitle: '',
-    remooteCountry: '',
-    remooteLimit: 1,
-    aiDevJobsMaxPages: 1,
-    taiwanJobsMaxCities: 1,
-    museEnabled: false,
-    museMaxPages: 1,
-    adzunaAppId: '',
-    adzunaAppKey: '',
-    adzunaMaxPages: 1,
-    joobleApiKey: '',
-    reedApiKey: '',
-    jobspipeApiKey: '',
-    atsRosterConcurrency: 1,
-    navArbeidsplassenApiKey: '',
-    navArbeidsplassenMaxPages: 1,
-  },
-  officialSources: [],
-};
-
 export function domainBlockRegistry(): SourceRegistryEntry[] {
-  return globalRemoteSourceRegistry(DOMAIN_BLOCK_CHECK_CONFIG);
+  return prohibitedOrBlockedSourceRegistryEntries();
 }
 
 export interface RunAiWebDiscoveryOptions {
@@ -278,10 +241,19 @@ export interface AiWebDiscoveryOutcome {
   queriesUsed: string[];
 }
 
-function blockedOutcome(
-  reasonCode: DiscoverySourceAudit['reasonCode'],
+/**
+ * Shared shape for both non-success terminal outcomes ('blocked'/'error') this module ever returns
+ * -- these differed only in `status` and the optional `reasonCode`, so a single `failureOutcome`
+ * replaces the former `blockedOutcome`/`errorOutcome` pair rather than duplicating the same
+ * `sourceAudit` object literal twice. The inline success-path object literal at the end of
+ * `runAiWebDiscovery` is deliberately NOT routed through this helper -- it computes real fields from
+ * run data, unlike every one of these zero-vacancy failure shapes.
+ */
+function failureOutcome(
+  status: 'blocked' | 'error',
   error: string,
   completenessReason: string,
+  reasonCode?: DiscoverySourceAudit['reasonCode'],
 ): AiWebDiscoveryOutcome {
   return {
     vacancies: [],
@@ -291,30 +263,9 @@ function blockedOutcome(
       url: AI_WEB_DISCOVERY_SOURCE_URL,
       requests: 0,
       listings: 0,
-      status: 'blocked',
+      status,
       error,
       ...(reasonCode ? { reasonCode } : {}),
-      networkAttempts: 0,
-      retries: 0,
-      complete: false,
-      completenessReason,
-      continuationCursor: null,
-    },
-    queriesUsed: [],
-  };
-}
-
-function errorOutcome(error: string, completenessReason: string): AiWebDiscoveryOutcome {
-  return {
-    vacancies: [],
-    sourceAudit: {
-      id: 'ai_web_search',
-      provider: 'ai_web_search',
-      url: AI_WEB_DISCOVERY_SOURCE_URL,
-      requests: 0,
-      listings: 0,
-      status: 'error',
-      error,
       networkAttempts: 0,
       retries: 0,
       complete: false,
@@ -342,8 +293,8 @@ export async function runAiWebDiscovery(
 ): Promise<AiWebDiscoveryOutcome> {
   // (b) Never runs without a usable target-role/profile projection.
   if (!isCandidateProfileConfigured(options.profile)) {
-    return blockedOutcome(
-      undefined,
+    return failureOutcome(
+      'blocked',
       'AI web discovery needs a configured search profile (at least one target role or strongest skill) before it can run.',
       'Skipped: no candidate search profile is configured yet.',
     );
@@ -351,10 +302,11 @@ export async function runAiWebDiscovery(
 
   // (a) Provider availability, checked first and never thrown past this function.
   if (!client) {
-    return blockedOutcome(
-      'provider_unavailable',
+    return failureOutcome(
+      'blocked',
       'The AgentDock daemon was not ready, so AI web discovery could not check Claude availability.',
       'Skipped: the daemon was not ready to check provider availability.',
+      'provider_unavailable',
     );
   }
 
@@ -362,18 +314,20 @@ export async function runAiWebDiscovery(
   try {
     providerStatuses = await client.providers.list();
   } catch (error) {
-    return blockedOutcome(
-      'provider_unavailable',
+    return failureOutcome(
+      'blocked',
       `Could not determine Claude availability: ${errorMessage(error)}`,
       'Skipped: provider availability could not be determined.',
+      'provider_unavailable',
     );
   }
   const claudeStatus = providerStatuses.find((status) => status.id === 'claude');
   if (!claudeStatus?.installed) {
-    return blockedOutcome(
-      'provider_unavailable',
+    return failureOutcome(
+      'blocked',
       'Claude Code is not installed, so AI web discovery was skipped for this scan.',
       'Skipped: Claude Code is not installed.',
+      'provider_unavailable',
     );
   }
 
@@ -389,7 +343,8 @@ export async function runAiWebDiscovery(
   try {
     session = await activeClient.sessions.createVacancyWebDiscovery({ provider: 'claude', cwd: options.cwd, prompt });
   } catch (error) {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       `Could not start the AI web discovery session: ${errorMessage(error)}`,
       'Incomplete: the session failed to start.',
     );
@@ -443,15 +398,30 @@ export async function runAiWebDiscovery(
       if (terminal !== undefined) break;
     }
   } catch (error) {
-    if (!controller.signal.aborted) throw error;
-    timedOut = true;
-    await activeClient.sessions.cancel(session.id).catch(() => {});
+    if (controller.signal.aborted) {
+      timedOut = true;
+    } else {
+      // A non-abort error (a malformed SSE frame, the daemon dying mid-stream, ...) must never
+      // propagate out of this function -- see the module doc comment's "never throws" contract.
+      // Folded into the same `terminal`/`terminalMessage` state a `session.failed` event would set,
+      // so the branch below reports it exactly the same honest way.
+      terminal = 'failed';
+      terminalMessage = errorMessage(error);
+    }
   } finally {
     clearTimeout(timeout);
+    // Unconditional on ANY non-completed exit from the loop above -- timeout, a caught non-abort
+    // error, or the loop simply ending (`return`/`break` in `parseSseStream`, or a clean generator
+    // end) without ever delivering a terminal event. A hardened `web-only` session with live
+    // WebFetch/WebSearch access must never be left running with nothing left enforcing its budget.
+    if (terminal !== 'completed') {
+      await activeClient.sessions.cancel(session.id).catch(() => {});
+    }
   }
 
   if (timedOut) {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       `AI web discovery timed out after ${Math.round(AI_WEB_DISCOVERY_TIMEOUT_MS / 1000)}s and was cancelled.`,
       'Incomplete: the session did not reach a terminal event within its time budget.',
     );
@@ -462,27 +432,33 @@ export async function runAiWebDiscovery(
   // be accepted, however many calls raced it, and the simplest honest way to guarantee that without
   // per-candidate tool-call provenance is that a budget-exceeded run accepts zero candidates.
   if (budgetExceeded) {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       `AI web discovery exceeded its search/fetch budget (max ${AI_WEB_DISCOVERY_MAX_QUERIES} WebSearch calls, ${AI_WEB_DISCOVERY_MAX_FETCHES} WebFetch calls) and was cancelled; budget_exceeded.`,
       'Incomplete: the session was cancelled for exceeding its bounded search/fetch budget.',
     );
   }
   if (terminal === 'failed') {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       terminalMessage && terminalMessage.trim() ? terminalMessage : 'the AI web discovery session failed',
       'Incomplete: the session failed.',
     );
   }
   if (terminal === 'cancelled') {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       'the AI web discovery session was cancelled',
       'Incomplete: the session was cancelled.',
     );
   }
   if (terminal !== 'completed') {
-    // Defensive: the event stream ended (the daemon's generator returned) without ever delivering a
-    // terminal event. Treated the same as any other non-clean completion -- zero candidates.
-    return errorOutcome(
+    // Defensive: the event stream ended (the daemon's generator returned, or `parseSseStream`
+    // resolved as a clean `return` rather than a throw on abort) without ever delivering a terminal
+    // event. Treated the same as any other non-clean completion -- zero candidates. The session was
+    // already cancelled above (in the `finally` block), regardless of which of these paths got here.
+    return failureOutcome(
+      'error',
       'the AI web discovery session ended without a terminal event',
       'Incomplete: no terminal event was received from the session.',
     );
@@ -495,7 +471,8 @@ export async function runAiWebDiscovery(
   try {
     parsedJson = JSON.parse(payload);
   } catch (error) {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       `AI web discovery's response was not valid JSON: ${errorMessage(error)}`,
       'Incomplete: the model response could not be parsed as JSON.',
     );
@@ -522,7 +499,8 @@ export async function runAiWebDiscovery(
         ? (record.queriesUsed as string[])
         : null;
     if (rawCandidates === null || rawQueriesUsed === null) {
-      return errorOutcome(
+      return failureOutcome(
+        'error',
         `AI web discovery's response did not match the expected shape: ${fullParse.error.issues[0]?.message ?? fullParse.error.message}`,
         'Incomplete: the model response did not match the expected schema.',
       );
@@ -538,7 +516,8 @@ export async function runAiWebDiscovery(
   }
 
   if (validCandidates.length === 0 && invalidCandidateCount > 0) {
-    return errorOutcome(
+    return failureOutcome(
+      'error',
       `AI web discovery reported ${invalidCandidateCount} candidate(s), but none passed schema validation.`,
       'Incomplete: no candidate in the model response passed validation.',
     );
