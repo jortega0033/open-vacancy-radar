@@ -347,16 +347,8 @@ export const DEFAULT_FILTERS: SearchFilters = {
  * meaningful for the Netherlands and resets alongside `country`.
  */
 export function browseAllViewFilters(filters: SearchFilters): SearchFilters {
-  return {
-    ...filters,
-    query: '',
-    country: 'all',
-    employment: 'any',
-    salaryMinimum: '',
-    salaryCurrency: 'EUR',
-    includeUnknownSalary: true,
-    sponsorOnly: false,
-  };
+  const { location, postedWithin, source } = filters;
+  return { ...DEFAULT_FILTERS, location, postedWithin, source };
 }
 
 export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
