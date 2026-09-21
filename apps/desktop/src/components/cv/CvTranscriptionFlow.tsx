@@ -1,4 +1,3 @@
-import { ConfirmDialog } from '../shell/ConfirmDialog.js';
 import type { UseCvPicker } from './useCvPicker.js';
 
 export interface CvTranscriptionFlowProps {
@@ -8,30 +7,16 @@ export interface CvTranscriptionFlowProps {
 /**
  * Renders whichever step of the AI-transcription fallback (issue #396) is active in `picker.state`,
  * or nothing at all for `'idle'`/`'picking'`/`'done'` -- the caller (`CvUpload`/`CvUploadAction`)
- * already knows how to render those. Shared by both so the consent, review, and error UI is defined
- * once rather than duplicated across the two upload entry points this fallback applies to.
+ * already knows how to render those. Shared by both so the review and error UI is defined once
+ * rather than duplicated across the two upload entry points this fallback applies to.
+ *
+ * There is deliberately no consent step here: the native `dialog.showMessageBox` prompt main shows
+ * from `cv:select-and-read` (see that handler's own doc comment) is the only place consent is
+ * granted, precisely because a renderer-drawn dialog cannot stand between a compromised renderer
+ * and an IPC call it is otherwise free to make on its own.
  */
 export function CvTranscriptionFlow({ picker }: CvTranscriptionFlowProps) {
   const { state } = picker;
-
-  if (state.phase === 'consent') {
-    return (
-      <ConfirmDialog
-        title="Transcribe with AI?"
-        message={
-          <>
-            &ldquo;{state.fileName}&rdquo; has no selectable text. It looks like a scanned image. {state.providerLabel}{' '}
-            can transcribe it for you, but that means sending the original PDF file to your configured{' '}
-            {state.providerLabel} CLI for this one operation. The transcribed text will be shown to you for review
-            before anything is saved.
-          </>
-        }
-        confirmLabel="Send for transcription"
-        onConfirm={picker.confirmTranscription}
-        onCancel={picker.declineTranscription}
-      />
-    );
-  }
 
   if (state.phase === 'transcribing') {
     return (

@@ -15,6 +15,7 @@ import {
   sessionIdParamSchema,
   workspaceTrustViewSchema,
   type ProviderId,
+  type ProviderStatus,
   type WorkspaceTrustView,
 } from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
@@ -105,11 +106,10 @@ import {
 import { sendToRenderer } from './send-to-renderer.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
-import { CV_FILE_EXTENSIONS, MAX_TRANSCRIBABLE_PDF_PAGES, NoSelectablePdfTextError, readCvFile } from './cv-text.js';
+import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
 import {
   cleanupStagedPath,
   consumeStagedCvAttachment,
-  discardStagedCvAttachment,
   stageForTranscription,
   sweepStaleStagedAttachments,
 } from './cv-transcription-staging.js';
@@ -117,7 +117,8 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
-import { confirmWorkspaceGrant } from './workspace-confirm.js';
+import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
+import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
   WorkspaceGrantManager,
   WorkspaceGrantRefusedError,
@@ -1181,19 +1182,26 @@ guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
   // renderer (issue #396). The only way to attach a file through this channel is the separate,
   // opaque `attachmentCandidateId` handled below, which this process resolves to a path itself.
   const parsed = createSessionRequestSchema.omit({ cwd: true, attachments: true }).parse(input);
-  const cwd = await ensureAiWorkspaceDir();
 
   // Issue #396: resolves a `cv:select-and-read`-issued candidate id (never a path) to the staged
-  // PDF this same process copied there. `attachmentCandidateId` is not part of the daemon's own
-  // request schema at all -- it is a desktop-app-level indirection over `attachments`, read
-  // straight off `input` rather than through `parsed`, the same way `cwd` above is handled outside
-  // the schema it is later merged back into.
+  // PDF this same process copied there, only after the user answered the native consent dialog
+  // that call already showed. `attachmentCandidateId` is not part of the daemon's own request
+  // schema at all -- it is a desktop-app-level indirection over `attachments`, read straight off
+  // `input` rather than through `parsed`, the same way `cwd` above is handled outside the schema
+  // it is later merged back into.
   const attachmentCandidateId =
     input && typeof input === 'object' && typeof (input as Record<string, unknown>).attachmentCandidateId === 'string'
       ? (input as Record<string, unknown>).attachmentCandidateId as string
       : undefined;
   let attachments: { path: string; mimeType: string }[] | undefined;
   let stagedDir: string | undefined;
+  // Overridden below, never left to the renderer's own claim, once a candidate is being consumed:
+  // a candidate id only ever means "the user consented to sending this file to this provider, for
+  // this transcription prompt" (the security review for issue #396 flagged that leaving these to
+  // the renderer would let a compromised one redeem a real consent for a different provider or a
+  // different, self-chosen prompt -- neither of which the user actually agreed to).
+  let provider = parsed.provider;
+  let prompt = parsed.prompt;
   if (attachmentCandidateId) {
     const staged = consumeStagedCvAttachment(attachmentCandidateId);
     if (!staged) {
@@ -1201,11 +1209,24 @@ guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
     }
     attachments = [{ path: staged.path, mimeType: staged.mimeType }];
     stagedDir = staged.dir;
+    provider = staged.provider;
+    prompt = CV_TRANSCRIPTION_PROMPT;
   }
 
   let session;
   try {
-    session = await client.sessions.create({ ...parsed, cwd, ...(attachments ? { attachments } : {}) });
+    session = await client.sessions.create({
+      ...parsed,
+      provider,
+      prompt,
+      // A dedicated per-candidate directory containing only this one staged file, rather than the
+      // shared `ensureAiWorkspaceDir()` root every other v1 session uses (issue #396's security
+      // review): that shared directory is documented elsewhere as deliberately empty so a session
+      // "looking around on its own finds nothing of the user's in reach", an invariant a staged CV
+      // would otherwise quietly break for every other concurrently-running session.
+      cwd: stagedDir ?? (await ensureAiWorkspaceDir()),
+      ...(attachments ? { attachments } : {}),
+    });
   } catch (err) {
     // The session never started: nothing will ever emit the terminal event `forwardSessionEvents`
     // below would otherwise clean this up on, so it is this catch's job instead.
@@ -1951,18 +1972,37 @@ async function ensureAiWorkspaceDir(): Promise<string> {
 guardedIpc.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
 
 /**
+ * The transcription session's own prompt (issue #396). Defined here, in main, and never taken from
+ * the renderer: a staged candidate id must always mean "run *this* transcription", not "attach this
+ * file to whatever prompt the caller happened to send" (see `daemon:create-session`'s own comment
+ * on why `prompt` is overridden whenever a candidate is being consumed).
+ */
+const CV_TRANSCRIPTION_PROMPT = [
+  'The attached PDF is a scanned or image-only CV/resume with no selectable text layer.',
+  'Transcribe it faithfully into plain text: every section, employer, date range, degree, and',
+  'skill, in the same order as the original document. Do not summarize, comment, translate, or',
+  'add anything that is not present in the document. Reply with only the transcribed text.',
+].join(' ');
+
+/**
  * `cv:select-and-read`'s result (issue #396). The `'ok'` case is byte-identical to what this
- * channel always returned. `'scanned-pdf'` is new: a PDF that parsed but has no text layer. It
- * never carries the file's path or bytes -- only a `candidateId`, an opaque handle to a copy of
- * those bytes this process already staged into its own AI-workspace scratch directory (see
- * `cv-transcription-staging.ts`), and only when the page count is within
- * `MAX_TRANSCRIBABLE_PDF_PAGES` (otherwise nothing is staged at all: there is nothing useful the
- * renderer could do with the id). The renderer decides, from `providerStatus.capabilities`, whether
- * to even offer transcription; this channel does not know or care which provider is configured.
+ * channel always returned. `'scanned-pdf'` means the user was shown the native transcription
+ * consent dialog below and approved it: `candidateId` is an opaque handle to a copy of the file's
+ * bytes this process already staged into its own AI-workspace scratch directory (see
+ * `cv-transcription-staging.ts`), never the file's path or bytes themselves.
+ * `'scanned-pdf-unavailable'` covers every other outcome for a PDF with no text layer -- too many
+ * pages to transcribe, no configured provider that can accept an attachment, or the user declining
+ * the consent dialog -- and never stages anything at all.
  */
 type CvSelectResult =
   | { status: 'ok'; fileName: string; text: string }
-  | { status: 'scanned-pdf'; fileName: string; pageCount: number; tooManyPages: boolean; candidateId?: string };
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
 
 /**
  * Opens a native file picker and returns the CV's extracted plain text: never a path the renderer
@@ -1971,6 +2011,16 @@ type CvSelectResult =
  * `dialog:select-directory` above (null on cancel / no window); a genuine read or parse failure
  * (other than the scanned-PDF case below, which is not a failure) rejects, so the UI can show the
  * reason instead of a silent empty state.
+ *
+ * For a scanned/image-only PDF within the transcription page bound, this handler resolves the
+ * effective provider and shows the native transcription-consent dialog **itself**, before ever
+ * returning to the renderer. This is deliberate, not an implementation detail: consent decided in
+ * the renderer (a React-drawn dialog gated by component state) would only gate the honest render
+ * path, not a compromised one -- any renderer JS can already call `window.agentDock.createSession`
+ * directly, bypassing whatever UI main never enforced. Deciding consent here, with a real OS
+ * dialog `dialog.showMessageBox` (via `confirmCvTranscription`), means a candidate id is never
+ * even minted until the user has genuinely answered it -- the same discipline
+ * `confirmWorkspaceGrant`/`workspace-grant.ts` already use for an analogous decision.
  */
 guardedIpc.handle('cv:select-and-read', async (): Promise<CvSelectResult | null> => {
   if (!mainWindow) return null;
@@ -1987,12 +2037,39 @@ guardedIpc.handle('cv:select-and-read', async (): Promise<CvSelectResult | null>
     return { status: 'ok', fileName: content.fileName, text: content.text };
   } catch (err) {
     if (!(err instanceof NoSelectablePdfTextError)) throw err;
+    const { fileName, pageCount } = err;
 
-    const tooManyPages = err.pageCount > MAX_TRANSCRIBABLE_PDF_PAGES;
-    if (tooManyPages) {
-      // Nothing worth staging: this PDF could never be transcribed within the page bound, so the
-      // renderer is told just enough to explain why, with no candidate id to act on.
-      return { status: 'scanned-pdf', fileName: err.fileName, pageCount: err.pageCount, tooManyPages: true };
+    if (!isTranscribablePageCount(pageCount)) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'too-many-pages' };
+    }
+
+    // Resolves the same way the renderer's own `useEffectiveProvider` would (issue #400's
+    // resolver), but entirely here: the consent dialog below must name a real, capability-checked
+    // provider, and whether to even show it must never depend on anything the renderer claims.
+    const unavailable = () =>
+      ({ status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'no-provider' }) as const;
+    if (!client) return unavailable();
+    let providers: ProviderStatus[];
+    try {
+      providers = await client.providers.list();
+    } catch {
+      return unavailable();
+    }
+    const settings = workspace.getSettings(await ensureWorkspaceDb());
+    const provider = resolveEffectiveProvider(settings.defaultProvider, providers);
+    const providerStatus = providers.find((status) => status.id === provider);
+    if (!providerStatus?.installed || providerStatus.capabilities.attachments !== true) {
+      return unavailable();
+    }
+
+    // The one and only place consent is granted for this feature. See this handler's own doc
+    // comment for why a native dialog, not a renderer-drawn one, is required here.
+    const consented = await confirmCvTranscription(mainWindow, {
+      fileName,
+      providerName: PROVIDER_DISPLAY_NAMES[provider],
+    });
+    if (!consented) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'declined' };
     }
 
     // Re-read rather than threading bytes back out of `cv-text.ts`: that module's contract is
@@ -2001,19 +2078,9 @@ guardedIpc.handle('cv:select-and-read', async (): Promise<CvSelectResult | null>
     // keeps that boundary exactly as documented.
     const bytes = await readFile(filePath);
     const workspaceDir = await ensureAiWorkspaceDir();
-    const candidateId = await stageForTranscription(workspaceDir, err.fileName, bytes);
-    return { status: 'scanned-pdf', fileName: err.fileName, pageCount: err.pageCount, tooManyPages: false, candidateId };
+    const candidateId = await stageForTranscription(workspaceDir, fileName, bytes, provider);
+    return { status: 'scanned-pdf', fileName, pageCount, candidateId };
   }
-});
-
-/**
- * Lets the renderer proactively discard a staged transcription candidate it will never use -- the
- * user declined the consent prompt, or picked a different file instead -- rather than leaving it
- * for `sweepStaleStagedAttachments`'s periodic sweep to catch. Best-effort and silent on an unknown
- * id: it may already have been consumed by `daemon:create-session` or swept as stale.
- */
-guardedIpc.handle('cv:discard-staged-transcription', async (_event, input: unknown) => {
-  if (typeof input === 'string') await discardStagedCvAttachment(input);
 });
 
 interface SaveFileFilter {

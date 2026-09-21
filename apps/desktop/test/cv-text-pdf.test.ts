@@ -2,7 +2,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NoSelectablePdfTextError, readCvFile } from '../electron/cv-text.js';
+import {
+  MAX_TRANSCRIBABLE_PDF_PAGES,
+  NoSelectablePdfTextError,
+  isTranscribablePageCount,
+  readCvFile,
+} from '../electron/cv-text.js';
 
 /**
  * The PDF path is the only place user-supplied file *content* (not just a path) is parsed by this
@@ -157,4 +162,9 @@ describe('readCvFile: real PDF extraction', () => {
     expect(err.fileName).toBe('scan-multi.pdf');
     expect(err.pageCount).toBe(4);
   }, 30_000);
+
+  it('isTranscribablePageCount is inclusive of the bound: exactly the max qualifies, one more does not', () => {
+    expect(isTranscribablePageCount(MAX_TRANSCRIBABLE_PDF_PAGES)).toBe(true);
+    expect(isTranscribablePageCount(MAX_TRANSCRIBABLE_PDF_PAGES + 1)).toBe(false);
+  });
 });

@@ -107,26 +107,18 @@ describe('CvUpload', () => {
     expect(await screen.findByText('Frontend architect, Angular.')).toBeInTheDocument();
   });
 
-  it('drives the full scanned-PDF fallback end to end: consent, transcription, review, then save (issue #396)', async () => {
+  it('drives the full scanned-PDF fallback end to end: transcription, review, then save (issue #396)', async () => {
+    // Consent for this feature is a native `dialog.showMessageBox` main.ts shows from
+    // `cv:select-and-read` itself, before that IPC call ever resolves -- not a renderer-drawn
+    // dialog this component renders (see `useCvPicker.ts`'s own doc comment for why). So by the
+    // time `selectAndRead` resolves with `'scanned-pdf'` here, the user has already consented; this
+    // test starts from that point and drives transcription, review, and save.
     const bridges = installBridges({
-      agentDock: {
-        listProviders: vi.fn().mockResolvedValue([
-          {
-            id: 'claude',
-            name: 'Claude Code',
-            installed: true,
-            authenticated: 'authenticated',
-            capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true, attachments: true },
-            availableModels: ['sonnet', 'opus'],
-          },
-        ]),
-      },
       cv: {
         selectAndRead: vi.fn().mockResolvedValue({
           status: 'scanned-pdf',
           fileName: 'scan.pdf',
           pageCount: 2,
-          tooManyPages: false,
           candidateId: 'candidate-e2e',
         }),
       },
@@ -134,23 +126,13 @@ describe('CvUpload', () => {
     const onCvChange = vi.fn();
 
     render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
-    // `findByRole` (rather than `getByRole`), used elsewhere in this codebase for the same reason:
-    // `useEffectiveProvider`'s two settling effects have not resolved on the very first render, and
-    // clicking before they do would read a still-`undefined` providerStatus and fall through to the
-    // no-provider branch instead of offering consent.
-    fireEvent.click(await screen.findByRole('button', { name: /choose cv file/i }));
-
-    const dialog = await screen.findByRole('alertdialog');
-    expect(dialog).toHaveTextContent('Claude Code');
-    expect(dialog).toHaveTextContent(/scan\.pdf/);
-
-    fireEvent.click(screen.getByRole('button', { name: /send for transcription/i }));
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
     expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0]).toMatchObject({
       attachmentCandidateId: 'candidate-e2e',
-      provider: 'claude',
     });
+    expect(await screen.findByText(/transcribing/i)).toBeInTheDocument();
 
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Jake Ortega. Angular architect.' });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
@@ -167,5 +149,24 @@ describe('CvUpload', () => {
         textSource: 'ai_transcription',
       }),
     );
+  });
+
+  it('shows the unavailable guidance and dismisses it, for a scanned PDF main declined to offer transcription for', async () => {
+    installBridges({
+      cv: {
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'scanned-pdf-unavailable', fileName: 'scan.pdf', pageCount: 40, reason: 'too-many-pages' }),
+      },
+    });
+
+    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Claude Code" />);
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent(/too many pages/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

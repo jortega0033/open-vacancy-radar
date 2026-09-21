@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { describeError, useAgentRun } from './useAgentRun.js';
-import { useEffectiveProvider } from '../../use-effective-provider.js';
-import { PROVIDER_LABEL } from '../../provider-labels.js';
 import type { CvTextSource } from '../../window.js';
 
 export interface CvPickerResult {
@@ -13,12 +11,11 @@ export interface CvPickerResult {
 export type CvPickerState =
   | { phase: 'idle' }
   | { phase: 'picking' }
-  /** Explicit, opt-in consent (issue #396): the original PDF is about to leave the local-extraction
-   * path and be sent to `providerLabel` for transcription. Nothing is sent until `confirmTranscription`. */
-  | { phase: 'consent'; fileName: string; providerLabel: string }
-  /** A scanned/image-only PDF this app cannot offer to transcribe -- either it has more pages than
-   * the transcription fallback supports, or no configured AI runtime can accept a file attachment
-   * right now. Either way, the existing re-export/paste guidance is the only path forward. */
+  /** A scanned/image-only PDF this app cannot offer to transcribe (too many pages, no capable
+   * provider), or one the user declined the native consent dialog for. `'declined'` is treated as
+   * silently as a cancelled picker dialog: the user already answered, in an OS-native prompt main
+   * itself showed, so there is nothing more for this hook to add. The other two reasons are surfaced
+   * so the caller can point at the existing re-export/paste guidance. */
   | { phase: 'unavailable'; fileName: string; reason: 'too-many-pages' | 'no-provider' }
   | { phase: 'transcribing'; fileName: string }
   /** The transcribed text is shown for review before it can be saved anywhere -- issue #396's
@@ -36,26 +33,20 @@ export type CvPickerState =
  */
 const MAX_TRANSCRIBED_CV_TEXT_CHARS = 2_000_000;
 
-const TRANSCRIPTION_PROMPT = [
-  'The attached PDF is a scanned or image-only CV/resume with no selectable text layer.',
-  'Transcribe it faithfully into plain text: every section, employer, date range, degree, and',
-  'skill, in the same order as the original document. Do not summarize, comment, translate, or',
-  'add anything that is not present in the document. Reply with only the transcribed text.',
-].join(' ');
-
 export interface UseCvPicker {
   state: CvPickerState;
-  /** Opens the native picker. Every outcome (a plain read, an offer to transcribe, cancellation, or
-   * a genuine read failure) is reflected in `state`, never thrown -- the caller renders `state`,
-   * it does not need to catch this call. */
+  /** Opens the native picker. Every outcome (a plain read, a transcription starting, cancellation,
+   * or a genuine read failure) is reflected in `state`, never thrown -- the caller renders `state`,
+   * it does not need to catch this call. For a scanned/image-only PDF, `pick()` only ever resolves
+   * with a transcription already under way: main itself decides whether to offer one at all and,
+   * if so, shows the native consent dialog and stages the file, all before this promise resolves
+   * (see `cv:select-and-read`'s own doc comment in main.ts for why that decision cannot be made in
+   * this hook, or anywhere else in the renderer). */
   pick(): Promise<void>;
-  confirmTranscription(): void;
-  declineTranscription(): void;
   reviewText: string;
   setReviewText(text: string): void;
   confirmReview(): void;
-  /** Cancels whatever is in flight (an offer not yet answered, a running transcription) and
-   * discards any staged file, returning to `idle`. */
+  /** Cancels a running transcription and returns to `idle`. */
   cancel(): void;
   /** Clears a terminal state (`'done'`, `'error'`, `'unavailable'`) back to `idle` once the caller
    * has consumed it. */
@@ -65,15 +56,7 @@ export interface UseCvPicker {
 export function useCvPicker(): UseCvPicker {
   const [state, setState] = useState<CvPickerState>({ phase: 'idle' });
   const [reviewText, setReviewText] = useState('');
-  const candidateIdRef = useRef<string>();
   const transcription = useAgentRun({ chunkSeparator: '' });
-  const { provider, providerStatus } = useEffectiveProvider();
-
-  const discardCandidate = useCallback(() => {
-    const candidateId = candidateIdRef.current;
-    candidateIdRef.current = undefined;
-    if (candidateId) void window.cv.discardStagedTranscription(candidateId).catch(() => {});
-  }, []);
 
   const pick = useCallback(async () => {
     setState({ phase: 'picking' });
@@ -95,39 +78,26 @@ export function useCvPicker(): UseCvPicker {
       return;
     }
 
-    // status === 'scanned-pdf'
-    if (selected.tooManyPages || !selected.candidateId) {
-      setState({ phase: 'unavailable', fileName: selected.fileName, reason: 'too-many-pages' });
-      return;
-    }
-    // The provider status list can still be loading on first render; this only ever *withholds*
-    // the offer in that window, never wrongly makes one -- `capabilities.attachments` must be
-    // explicitly true.
-    if (!providerStatus?.installed || providerStatus.capabilities.attachments !== true) {
-      candidateIdRef.current = selected.candidateId;
-      discardCandidate(); // nothing will ever consume it; free the staged copy right away
-      setState({ phase: 'unavailable', fileName: selected.fileName, reason: 'no-provider' });
+    if (selected.status === 'scanned-pdf-unavailable') {
+      if (selected.reason === 'declined') {
+        setState({ phase: 'idle' }); // the user already answered a real dialog; nothing more to say
+      } else {
+        setState({ phase: 'unavailable', fileName: selected.fileName, reason: selected.reason });
+      }
       return;
     }
 
-    candidateIdRef.current = selected.candidateId;
-    setState({ phase: 'consent', fileName: selected.fileName, providerLabel: PROVIDER_LABEL[provider] });
-  }, [discardCandidate, provider, providerStatus]);
-
-  const confirmTranscription = useCallback(() => {
-    if (state.phase !== 'consent') return;
-    const candidateId = candidateIdRef.current;
-    if (!candidateId) return;
-    const fileName = state.fileName;
-    setState({ phase: 'transcribing', fileName });
-    void transcription.start(TRANSCRIPTION_PROMPT, { provider, attachmentCandidateId: candidateId });
-  }, [provider, state, transcription]);
-
-  const declineTranscription = useCallback(() => {
-    if (state.phase !== 'consent') return;
-    discardCandidate();
-    setState({ phase: 'idle' });
-  }, [discardCandidate, state.phase]);
+    // status === 'scanned-pdf': the user has already consented, in the native dialog main showed
+    // before this call ever resolved, and the file is already staged. Nothing left to ask here --
+    // start the transcription immediately. The prompt and provider below are placeholders: main's
+    // `daemon:create-session` handler overrides both, and the provider, whenever an
+    // `attachmentCandidateId` is present, precisely so this hook cannot redirect a real consent to
+    // a different provider or a self-chosen prompt (see that handler's own comment).
+    setState({ phase: 'transcribing', fileName: selected.fileName });
+    void transcription.start('transcribe the attached document', {
+      attachmentCandidateId: selected.candidateId,
+    });
+  }, [transcription]);
 
   const confirmReview = useCallback(() => {
     if (state.phase !== 'review') return;
@@ -136,17 +106,12 @@ export function useCvPicker(): UseCvPicker {
 
   const cancel = useCallback(() => {
     if (state.phase === 'transcribing') void transcription.cancel();
-    discardCandidate();
     setState({ phase: 'idle' });
-  }, [discardCandidate, state.phase, transcription]);
+  }, [state.phase, transcription]);
 
   const reset = useCallback(() => setState({ phase: 'idle' }), []);
 
-  // Reacts to the transcription session's terminal status rather than deriving it during render:
-  // `candidateIdRef` is only ever read again by `confirmTranscription` while `state.phase ===
-  // 'consent'`; once a session has actually started (`'transcribing'`), the candidate id has
-  // already been consumed server-side (issue #396's one-shot `consumeStagedCvAttachment`), so this
-  // effect needs no id at all, only `transcription`'s own status/text/error.
+  // Reacts to the transcription session's terminal status rather than deriving it during render.
   useEffect(() => {
     if (state.phase !== 'transcribing') return;
     if (transcription.status === 'completed') {
@@ -173,8 +138,6 @@ export function useCvPicker(): UseCvPicker {
   return {
     state,
     pick,
-    confirmTranscription,
-    declineTranscription,
     reviewText,
     setReviewText,
     confirmReview,

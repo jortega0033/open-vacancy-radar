@@ -89,13 +89,18 @@ export interface CvFile {
 /** Mirror of `CvSelectResult` in electron/preload.ts. See the rationale for the shape there. */
 export type CvSelectResult =
   | { status: 'ok'; fileName: string; text: string }
-  | { status: 'scanned-pdf'; fileName: string; pageCount: number; tooManyPages: boolean; candidateId?: string };
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
 
 /** Mirror of `CvBridge` in electron/preload.ts. See the rationale for the narrow shape there. */
 export interface CvBridge {
   selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
-  discardStagedTranscription(candidateId: string): Promise<void>;
 }
 
 export interface SaveFileFilter {

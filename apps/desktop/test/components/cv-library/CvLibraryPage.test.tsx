@@ -96,7 +96,6 @@ function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
   const bridge: CvBridge = {
     selectAndRead: vi.fn().mockResolvedValue(null),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
-    discardStagedTranscription: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   (window as unknown as { cv: CvBridge }).cv = bridge;

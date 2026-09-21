@@ -1,47 +1,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { installBridges } from './cv-bridges.js';
 import { useCvPicker } from '../src/components/cv/useCvPicker.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-const CAPABILITIES_NO_ATTACHMENTS: ProviderCapabilities = {
-  resume: true,
-  cancellation: true,
-  tools: true,
-  usage: true,
-  thinking: true,
-};
-
-const CAPABILITIES_WITH_ATTACHMENTS: ProviderCapabilities = {
-  ...CAPABILITIES_NO_ATTACHMENTS,
-  attachments: true,
-};
-
-const CLAUDE_WITH_ATTACHMENTS: ProviderStatus = {
-  id: 'claude',
-  name: 'Claude Code',
-  installed: true,
-  authenticated: 'authenticated',
-  capabilities: CAPABILITIES_WITH_ATTACHMENTS,
-  availableModels: ['sonnet', 'opus'],
-};
-
-/**
- * `useEffectiveProvider`'s two settling effects (`workspace.getSettings`, `agentDock.listProviders`)
- * resolve asynchronously and are not otherwise observable from `useCvPicker`'s own return value.
- * `providerStatus` flips from `undefined` to a real object once they do (see that hook), which
- * changes `pick`'s `useCallback` identity -- the one externally visible signal that settling has
- * happened. Every test that calls `pick()` and cares about the provider-dependent branch waits for
- * this first, otherwise `pick()` would run against a stale, still-`undefined` `providerStatus`.
- */
-async function waitForProviderToSettle(result: { current: { pick: () => Promise<void> } }) {
-  const initialPick = result.current.pick;
-  await waitFor(() => expect(result.current.pick).not.toBe(initialPick));
-}
 
 describe('useCvPicker', () => {
   it('pick() on an ok result goes straight to done, tagged as text_layer', async () => {
@@ -91,12 +55,12 @@ describe('useCvPicker', () => {
     expect(message).not.toContain('invoking remote method');
   });
 
-  it('pick() on a scanned PDF over the page bound (no candidateId) reports too-many-pages', async () => {
+  it('pick() on a scanned PDF over the page bound reports too-many-pages', async () => {
     installBridges({
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ status: 'scanned-pdf', fileName: 'scan.pdf', pageCount: 40, tooManyPages: true }),
+          .mockResolvedValue({ status: 'scanned-pdf-unavailable', fileName: 'scan.pdf', pageCount: 40, reason: 'too-many-pages' }),
       },
     });
     const { result } = renderHook(() => useCvPicker());
@@ -108,132 +72,82 @@ describe('useCvPicker', () => {
     expect(result.current.state).toEqual({ phase: 'unavailable', fileName: 'scan.pdf', reason: 'too-many-pages' });
   });
 
-  it('pick() on a scanned PDF within the page bound but no attachment-capable provider reports no-provider and discards the staged candidate', async () => {
-    const bridges = installBridges({
+  it('pick() on a scanned PDF with no attachment-capable provider reports no-provider', async () => {
+    installBridges({
       cv: {
-        selectAndRead: vi.fn().mockResolvedValue({
-          status: 'scanned-pdf',
-          fileName: 'scan.pdf',
-          pageCount: 3,
-          tooManyPages: false,
-          candidateId: 'candidate-1',
-        }),
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'scanned-pdf-unavailable', fileName: 'scan.pdf', pageCount: 3, reason: 'no-provider' }),
       },
-      // installBridges' default CLAUDE_INSTALLED has no `attachments` capability at all.
     });
     const { result } = renderHook(() => useCvPicker());
-    await waitForProviderToSettle(result);
 
     await act(async () => {
       await result.current.pick();
     });
 
     expect(result.current.state).toEqual({ phase: 'unavailable', fileName: 'scan.pdf', reason: 'no-provider' });
-    expect(bridges.cv.discardStagedTranscription).toHaveBeenCalledWith('candidate-1');
   });
 
-  it('pick() on a scanned PDF with an attachment-capable provider offers consent instead', async () => {
+  it('pick() where the user declined the native consent dialog returns to idle silently, like a cancelled picker dialog', async () => {
     installBridges({
-      agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_WITH_ATTACHMENTS]) },
       cv: {
-        selectAndRead: vi.fn().mockResolvedValue({
-          status: 'scanned-pdf',
-          fileName: 'scan.pdf',
-          pageCount: 3,
-          tooManyPages: false,
-          candidateId: 'candidate-2',
-        }),
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'scanned-pdf-unavailable', fileName: 'scan.pdf', pageCount: 3, reason: 'declined' }),
       },
     });
     const { result } = renderHook(() => useCvPicker());
-    await waitForProviderToSettle(result);
 
     await act(async () => {
       await result.current.pick();
-    });
-
-    expect(result.current.state).toEqual({ phase: 'consent', fileName: 'scan.pdf', providerLabel: 'Claude Code' });
-  });
-
-  it('declineTranscription from consent returns to idle and discards the staged candidate', async () => {
-    const bridges = installBridges({
-      agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_WITH_ATTACHMENTS]) },
-      cv: {
-        selectAndRead: vi.fn().mockResolvedValue({
-          status: 'scanned-pdf',
-          fileName: 'scan.pdf',
-          pageCount: 3,
-          tooManyPages: false,
-          candidateId: 'candidate-3',
-        }),
-      },
-    });
-    const { result } = renderHook(() => useCvPicker());
-    await waitForProviderToSettle(result);
-    await act(async () => {
-      await result.current.pick();
-    });
-    expect(result.current.state.phase).toBe('consent');
-
-    act(() => {
-      result.current.declineTranscription();
     });
 
     expect(result.current.state).toEqual({ phase: 'idle' });
-    expect(bridges.cv.discardStagedTranscription).toHaveBeenCalledWith('candidate-3');
   });
 
-  it('confirmTranscription starts the agent session with the candidate id and resolved provider, and moves to transcribing', async () => {
+  it('pick() on a scanned PDF the user already consented to (main already staged it) starts transcribing immediately, with no separate confirm step', async () => {
     const bridges = installBridges({
-      agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_WITH_ATTACHMENTS]) },
       cv: {
         selectAndRead: vi.fn().mockResolvedValue({
           status: 'scanned-pdf',
           fileName: 'scan.pdf',
           pageCount: 3,
-          tooManyPages: false,
           candidateId: 'candidate-4',
         }),
       },
     });
     const { result } = renderHook(() => useCvPicker());
-    await waitForProviderToSettle(result);
-    await act(async () => {
-      await result.current.pick();
-    });
-    expect(result.current.state.phase).toBe('consent');
 
     await act(async () => {
-      result.current.confirmTranscription();
+      await result.current.pick();
     });
 
     expect(result.current.state).toEqual({ phase: 'transcribing', fileName: 'scan.pdf' });
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
     const input = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0];
+    // The provider and prompt this hook sends are placeholders: `daemon:create-session` overrides
+    // both whenever `attachmentCandidateId` is present (issue #396's security review), precisely so
+    // this hook cannot redirect a real consent to a different provider or a self-chosen prompt.
+    // What actually matters, and what this asserts, is that the exact candidate id the user
+    // consented to is the one that gets threaded through.
     expect(input?.attachmentCandidateId).toBe('candidate-4');
-    expect(input?.provider).toBe('claude');
   });
 
   async function pickToTranscribing(candidateId = 'candidate-5') {
     const bridges = installBridges({
-      agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_WITH_ATTACHMENTS]) },
       cv: {
         selectAndRead: vi.fn().mockResolvedValue({
           status: 'scanned-pdf',
           fileName: 'scan.pdf',
           pageCount: 3,
-          tooManyPages: false,
           candidateId,
         }),
       },
     });
     const { result } = renderHook(() => useCvPicker());
-    await waitForProviderToSettle(result);
     await act(async () => {
       await result.current.pick();
-    });
-    await act(async () => {
-      result.current.confirmTranscription();
     });
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
     return { result, bridges };

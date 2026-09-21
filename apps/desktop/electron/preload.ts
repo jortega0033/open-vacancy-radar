@@ -169,16 +169,23 @@ export interface CvFile {
 }
 
 /**
- * `cv:select-and-read`'s result (issue #396). `'scanned-pdf'` is the new case: a PDF that parsed
- * but has no text layer. `candidateId`, when present, is an opaque handle to a copy of that PDF's
- * bytes `main.ts` already staged into its own AI-workspace scratch directory -- never a path, and
- * never present when `tooManyPages` is true (nothing useful to do with an id for a PDF this app
- * will never offer to transcribe). Pass it back unchanged as `CreateSessionInput.attachmentCandidateId`
- * to run the reviewed AI-transcription fallback; anything else about it is opaque to the renderer.
+ * `cv:select-and-read`'s result (issue #396). `'scanned-pdf'` means main already showed the native
+ * transcription-consent dialog and the user approved it: `candidateId` is an opaque handle to a
+ * copy of that PDF's bytes `main.ts` already staged into its own AI-workspace scratch directory --
+ * never a path. Pass it back unchanged as `CreateSessionInput.attachmentCandidateId` to run the
+ * transcription; anything else about it is opaque to the renderer. `'scanned-pdf-unavailable'`
+ * covers every other outcome (too many pages, no capable provider, or the user declining the
+ * dialog) and never carries an id, because nothing was ever staged for it.
  */
 export type CvSelectResult =
   | { status: 'ok'; fileName: string; text: string }
-  | { status: 'scanned-pdf'; fileName: string; pageCount: number; tooManyPages: boolean; candidateId?: string };
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
 
 /**
  * A third independent namespace, for the same reason `vacancyRadar` is separate from `agentDock`:
@@ -194,10 +201,6 @@ export type CvSelectResult =
 export interface CvBridge {
   selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
-  /** Discards a staged transcription candidate the renderer will never use (issue #396):
-   * declined consent, or picking a different file instead. Best-effort; a candidate this call
-   * misses is still cleaned up by the main process's own periodic sweep. */
-  discardStagedTranscription(candidateId: string): Promise<void>;
 }
 
 /**
@@ -457,6 +460,8 @@ contextBridge.exposeInMainWorld('workspace', workspaceApi);
  * path, and nothing else main.ts might one day add to that payload can cross this boundary by
  * accident.
  */
+const SCANNED_PDF_UNAVAILABLE_REASONS = ['too-many-pages', 'no-provider', 'declined'] as const;
+
 function toCvSelectResult(value: unknown): CvSelectResult | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
@@ -465,15 +470,24 @@ function toCvSelectResult(value: unknown): CvSelectResult | null {
     return { status: 'ok', fileName: v.fileName, text: v.text };
   }
   if (v.status === 'scanned-pdf') {
-    if (typeof v.fileName !== 'string' || typeof v.pageCount !== 'number' || typeof v.tooManyPages !== 'boolean') {
+    if (typeof v.fileName !== 'string' || typeof v.pageCount !== 'number' || typeof v.candidateId !== 'string') {
+      return null;
+    }
+    return { status: 'scanned-pdf', fileName: v.fileName, pageCount: v.pageCount, candidateId: v.candidateId };
+  }
+  if (v.status === 'scanned-pdf-unavailable') {
+    if (
+      typeof v.fileName !== 'string' ||
+      typeof v.pageCount !== 'number' ||
+      !SCANNED_PDF_UNAVAILABLE_REASONS.includes(v.reason as (typeof SCANNED_PDF_UNAVAILABLE_REASONS)[number])
+    ) {
       return null;
     }
     return {
-      status: 'scanned-pdf',
+      status: 'scanned-pdf-unavailable',
       fileName: v.fileName,
       pageCount: v.pageCount,
-      tooManyPages: v.tooManyPages,
-      ...(typeof v.candidateId === 'string' ? { candidateId: v.candidateId } : {}),
+      reason: v.reason as (typeof SCANNED_PDF_UNAVAILABLE_REASONS)[number],
     };
   }
   return null;
@@ -489,9 +503,6 @@ const cvApi: CvBridge = {
       throw new Error('main process did not return a workspace directory');
     }
     return result;
-  },
-  async discardStagedTranscription(candidateId) {
-    await ipcRenderer.invoke('cv:discard-staged-transcription', candidateId);
   },
 };
 

@@ -279,6 +279,19 @@ describe('CV documents', () => {
     expect(cv.kind).toBe('uploaded');
   });
 
+  it('defaults textSource to text_layer when the caller omits it (issue #396)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    expect(cv.textSource).toBe('text_layer');
+    expect(workspace.getCvDocument(db, cv.id).textSource).toBe('text_layer');
+  });
+
+  it('persists an explicit ai_transcription textSource and round-trips it through list/get', () => {
+    const cv = workspace.createCvDocument(db, { ...CV, textSource: 'ai_transcription' });
+    expect(cv.textSource).toBe('ai_transcription');
+    expect(workspace.getCvDocument(db, cv.id).textSource).toBe('ai_transcription');
+    expect(workspace.listCvDocuments(db)[0]?.textSource).toBe('ai_transcription');
+  });
+
   it('getCvDocument (#156) reads back a single row by id', () => {
     const cv = workspace.createCvDocument(db, { ...CV, targetRole: 'Frontend Engineer' });
     expect(workspace.getCvDocument(db, cv.id)).toEqual(cv);

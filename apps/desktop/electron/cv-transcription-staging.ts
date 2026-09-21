@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { basename, join } from 'node:path';
 import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import type { ProviderId } from '@agent-dock/shared';
 
 /**
  * Staging for issue #396's reviewed AI-transcription fallback: when `cv-text.ts`'s `readCvFile`
@@ -11,9 +12,15 @@ import { join } from 'node:path';
  * copied into the app-owned AI workspace directory, keyed by an opaque, single-use id the renderer
  * is allowed to hold instead.
  *
+ * `stageForTranscription` is only ever called from `cv:select-and-read`, and only *after* the
+ * user has answered a native `dialog.showMessageBox` consent prompt (see
+ * `workspace-confirm.ts`'s `buildCvTranscriptionConsentOptions`) -- never before, and never from
+ * anything the renderer can trigger on its own. A candidate id therefore always represents a
+ * decision the user has already made, not a capability waiting for one.
+ *
  * Everything here is in-memory (main-process only, never persisted): a staged candidate that is
- * never consumed (the user closes the consent prompt, picks a different file, or the app crashes)
- * is cleaned up by `sweepStaleStagedAttachments`, not by anything the renderer can trigger.
+ * never consumed (a crash between staging and session creation, which should otherwise be near-
+ * instantaneous -- see `daemon:create-session`) is cleaned up by `sweepStaleStagedAttachments`.
  */
 
 export interface StagedCvAttachment {
@@ -22,6 +29,10 @@ export interface StagedCvAttachment {
   mimeType: string;
   /** The directory to remove (recursively) once this attachment is no longer needed. */
   dir: string;
+  /** The provider the user consented to send this file to (issue #396's security review): pinned
+   * at staging time from the same resolution the consent dialog named, so a session created from
+   * this candidate cannot be redirected to a different provider than the one the user approved. */
+  provider: ProviderId;
 }
 
 interface StagedEntry extends StagedCvAttachment {
@@ -31,9 +42,14 @@ interface StagedEntry extends StagedCvAttachment {
 const STAGING_SUBDIR = 'cv-transcription-staging';
 
 /**
- * Generous for a user who leaves the consent prompt open while they think it over, short enough
- * that a crash between staging and either consuming or discarding a candidate cannot leave a real
- * CV's bytes on disk indefinitely.
+ * Backstop for a candidate that is staged but never consumed (a crash between the consent dialog
+ * resolving and `daemon:create-session` running). Consumption now follows staging near-
+ * instantaneously (both happen inside the same `cv:select-and-read` IPC call, before anything is
+ * returned to the renderer), so this is a generous margin for that gap, not a "user thinking it
+ * over" window the way a much longer value would be needed for. It is deliberately kept longer
+ * than `main.ts`'s own `ATTACHMENT_CLEANUP_BACKSTOP_MS` (the per-session cleanup backstop once a
+ * candidate *has* been consumed): that ordering means this sweep can never race a still-running,
+ * already-consumed session's own cleanup -- the session-level backstop always fires first.
  */
 const STALE_MS = 15 * 60 * 1000;
 
@@ -46,19 +62,23 @@ function stagingRoot(workspaceDir: string): string {
 /**
  * Copies `bytes` into a fresh, randomly-named subdirectory of the AI workspace and returns an
  * opaque candidate id for it. `fileName` is only used for the staged file's own name (cosmetic,
- * never read back) -- it is never derived from or compared against the original path.
+ * never read back) -- re-derived via `basename` here too, defense in depth against any future
+ * caller that hands this function something other than the already-`basename`d name
+ * `cv-text.ts`'s `readCvFile` produces today.
  */
 export async function stageForTranscription(
   workspaceDir: string,
   fileName: string,
   bytes: Buffer,
+  provider: ProviderId,
 ): Promise<string> {
   const candidateId = randomUUID();
   const dir = join(stagingRoot(workspaceDir), candidateId);
   await mkdir(dir, { recursive: true });
-  const path = join(dir, fileName);
+  const safeName = basename(fileName) || 'cv.pdf';
+  const path = join(dir, safeName);
   await writeFile(path, bytes);
-  staged.set(candidateId, { path, mimeType: 'application/pdf', dir, stagedAt: Date.now() });
+  staged.set(candidateId, { path, mimeType: 'application/pdf', dir, provider, stagedAt: Date.now() });
   return candidateId;
 }
 
@@ -81,20 +101,11 @@ export async function cleanupStagedPath(dir: string): Promise<void> {
 }
 
 /**
- * Discards a staged candidate that will never be used (e.g. the user declined the consent prompt,
- * or picked a different file instead). No-op if the id is unknown or already consumed.
- */
-export async function discardStagedCvAttachment(candidateId: string): Promise<void> {
-  const entry = staged.get(candidateId);
-  staged.delete(candidateId);
-  if (entry) await cleanupStagedPath(entry.dir);
-}
-
-/**
  * Startup/backstop sweep: removes every staged-attachment directory older than `STALE_MS` (or, with
- * `force`, every one of them regardless of age -- used on app shutdown). Guards against the case
- * nothing else covers: a candidate staged but never consumed or explicitly discarded at all (the
- * user simply walked away from the prompt, or the app crashed before either could run).
+ * `force`, every one of them regardless of age -- used on app shutdown). Guards against the one
+ * case nothing else covers: a candidate staged but never consumed at all (a crash between staging
+ * and the immediately-following `daemon:create-session` call -- see this module's own doc comment
+ * on why that gap is now expected to be brief, not the "user thinking it over" window it once was).
  */
 export async function sweepStaleStagedAttachments(workspaceDir: string, opts: { force?: boolean } = {}): Promise<void> {
   const root = stagingRoot(workspaceDir);

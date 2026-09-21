@@ -69,7 +69,6 @@ export function installBridges(
       .fn()
       .mockResolvedValue({ status: 'ok', fileName: 'cv.pdf', text: 'Angular. TypeScript. 8 years.' }),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
-    discardStagedTranscription: vi.fn().mockResolvedValue(undefined),
     ...overrides.cv,
   };
 

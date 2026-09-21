@@ -57,6 +57,14 @@ export const MAX_CV_EXTRACTED_TEXT_CHARS = 2_000_000;
  */
 export const MAX_TRANSCRIBABLE_PDF_PAGES = 15;
 
+/** Whether a scanned PDF with `pageCount` pages is within the transcription fallback's page bound.
+ * A named, exported function rather than an inline `<=` comparison at each call site, so the
+ * boundary itself (`MAX_TRANSCRIBABLE_PDF_PAGES` pages exactly still qualifies; one more does not)
+ * is something a test can assert on directly. */
+export function isTranscribablePageCount(pageCount: number): boolean {
+  return pageCount <= MAX_TRANSCRIBABLE_PDF_PAGES;
+}
+
 /**
  * Thrown by `readCvFile` specifically for a PDF that parsed successfully but has no selectable
  * text layer -- the scanned/image-only case issue #396 adds a reviewed AI-transcription fallback
@@ -221,6 +229,13 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
     // A PDF that parsed without error but yielded no text is a genuine scan/image-only export, not
     // a corrupt file (that throws from `extractPdfTextForUpload` above instead) -- issue #396's
     // typed error, so `main.ts` can offer the reviewed AI-transcription fallback for this case only.
+    //
+    // Known gap, not fully closed: a PDF encrypted with only an owner password (still openable
+    // with the default empty user password, so pdf.js opens it without throwing) could in
+    // principle also yield empty text for reasons related to that restriction rather than to being
+    // a genuine scan, and would be indistinguishable from one here. Not confirmed against a real
+    // such PDF; noted so a future report of an encrypted PDF being wrongly offered transcription
+    // is not a surprise.
     if (extension === 'pdf') throw new NoSelectablePdfTextError(fileName, pageCount ?? 0);
     throw new Error(extension === 'docx' ? `"${fileName}" contains no readable text` : `"${fileName}" is empty`);
   }

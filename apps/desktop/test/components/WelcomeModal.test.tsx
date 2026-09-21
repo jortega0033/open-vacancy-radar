@@ -104,7 +104,6 @@ function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
       .fn()
       .mockResolvedValue({ status: 'ok', fileName: 'jamie-rivera-cv.pdf', text: 'Angular. TypeScript.' }),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
-    discardStagedTranscription: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   (window as unknown as { cv: CvBridge }).cv = bridge;
