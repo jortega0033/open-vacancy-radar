@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
 import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-source-schema.js';
 import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
@@ -144,21 +144,9 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const sourceAppliedRef = useRef(false);
 
   // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
-  // through: the persisted `default_provider` setting, not a hardcoded provider. A failure here
-  // just leaves the Claude Code default in place rather than blocking the feature.
-  const [provider, setProvider] = useState<ProviderId>('claude');
-  useEffect(() => {
-    let cancelled = false;
-    void window.workspace
-      .getSettings()
-      .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // through (issue #400): the effective provider, not the raw persisted preference, so this still
+  // runs on a machine where the preferred CLI isn't installed but exactly one alternative is.
+  const { provider } = useEffectiveProvider();
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));

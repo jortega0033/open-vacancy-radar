@@ -362,9 +362,17 @@ describe('LetterGenerator', () => {
     // Real regression: this copy (and AiOutput's "Starting Claude Code…" status line) used to
     // hardcode Claude Code regardless of which CLI the run actually goes through.
     const bridges = installBridges({
-      // Never resolves, so the run stays in the 'starting' state deterministically instead of
-      // racing straight through to 'streaming' once the mocked session "starts".
-      agentDock: { createSession: vi.fn(() => new Promise<never>(() => {})) },
+      agentDock: {
+        // Never resolves, so the run stays in the 'starting' state deterministically instead of
+        // racing straight through to 'streaming' once the mocked session "starts".
+        createSession: vi.fn(() => new Promise<never>(() => {})),
+        // Codex reported installed, matching the machine this configured preference describes,
+        // so the effective provider resolves to it rather than falling back to Claude Code.
+        listProviders: vi.fn().mockResolvedValue([
+          { id: 'claude', name: 'Claude Code', installed: false, authenticated: 'unknown', capabilities: {} },
+          { id: 'codex', name: 'Codex', installed: true, authenticated: 'authenticated', capabilities: {} },
+        ]),
+      },
     });
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),

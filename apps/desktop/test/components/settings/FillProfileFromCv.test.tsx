@@ -187,8 +187,17 @@ describe('FillProfileFromCvDrawer', () => {
     // Real regression: this drawer used to call useAgentRun.start() with no provider option at
     // all, which silently falls back to Claude Code regardless of what the user set as their
     // default runtime -- failing outright for anyone who set Codex because Claude Code isn't
-    // authenticated on their machine.
-    const bridges = installBridges();
+    // authenticated on their machine. `listProviders` reports Codex installed, matching that
+    // machine, so the effective provider resolves to the user's actual preference rather than a
+    // fallback alternative.
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([
+          { id: 'claude', name: 'Claude Code', installed: false, authenticated: 'unknown', capabilities: {} },
+          { id: 'codex', name: 'Codex', installed: true, authenticated: 'authenticated', capabilities: {} },
+        ]),
+      },
+    });
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([CV]),
       getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'codex' }),

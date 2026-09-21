@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
@@ -38,38 +38,7 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
   const [libraryError, setLibraryError] = useState<string>();
   const [model, setModel] = useState('');
-  const [provider, setProvider] = useState<ProviderId>('claude');
-  const [providerStatus, setProviderStatus] = useState<ProviderStatus>();
-
-  // The default provider is a settings preference (set from the AI Runtime page); a failure here
-  // just leaves the Claude Code default in place rather than blocking the feature.
-  useEffect(() => {
-    let cancelled = false;
-    void window.workspace
-      .getSettings()
-      .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Best effort: the model picker is a convenience, so a failed provider listing just hides it
-  // rather than blocking the feature (the CLI's own default model is always a valid choice).
-  useEffect(() => {
-    let cancelled = false;
-    window.agentDock
-      .listProviders()
-      .then((providers) => {
-        if (!cancelled) setProviderStatus(providers.find((p) => p.id === provider));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [provider]);
+  const { provider, providerStatus } = useEffectiveProvider();
 
   useEffect(() => {
     let cancelled = false;
