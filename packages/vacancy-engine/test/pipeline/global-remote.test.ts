@@ -106,6 +106,22 @@ describe('global remote discovery aggregation', () => {
     });
   });
 
+  it('merges an ai_web_search row with the same vacancy found by a deterministic source, rather than duplicating it (issue #398)', () => {
+    // GlobalRemoteScanOptions.aiWebDiscoveryVacancies is spliced into the same discovery.vacancies
+    // array this function dedupes (see pipeline/global-remote.ts's runGlobalRemoteScan) before
+    // uniqueDiscovery ever runs -- this proves that splice's whole point: an ai_web_search candidate
+    // is not special-cased past this point, and a shared canonical URL merges into one row exactly
+    // like any other two-provider duplicate above.
+    const url = 'https://apply.workable.com/j/AIWEB123';
+    const results = uniqueDiscovery([
+      vacancy('workable_global', 'workable_global:AIWEB123', url, 'Official title'),
+      vacancy('ai_web_search', 'ai_web_search:https://apply.workable.com/j/AIWEB123#found', `${url}#found`, 'AI-found title'),
+    ]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ provider: 'workable_global', title: 'Official title' });
+  });
+
   it('retains duplicate role and employment metadata before focused filtering', () => {
     const url = 'https://apply.workable.com/j/FRONTEND123';
     const [merged] = uniqueDiscovery([

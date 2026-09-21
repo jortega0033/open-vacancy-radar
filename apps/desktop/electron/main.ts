@@ -104,6 +104,7 @@ import {
 } from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
+import { runAiWebDiscovery } from './vacancy-web-discovery.js';
 import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
@@ -2032,11 +2033,50 @@ async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<Global
     const report = await runExclusiveScan(
       async () => {
         const config = vacancyEngineConfig();
-        const result = await runGlobalRemoteScan(db, config, createLogger(config), await vacancyEngineDataRoot(), {
+        const logger = createLogger(config);
+        // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, entirely
+        // inline here inside the `runExclusiveScan` guard this closure already runs under.
+        // `runAiWebDiscovery` itself never acquires `ScanGuard` (see its own doc comment) -- this
+        // is just more work done under the one exclusive scan this handler already holds, never a
+        // second, nested acquisition of it. Skipped entirely (not even called) when not requested,
+        // so every existing caller/test that never sets `aiWebDiscovery` sees byte-identical
+        // `GlobalRemoteScanOptions` to before this feature existed.
+        let aiWebDiscovery: Awaited<ReturnType<typeof runAiWebDiscovery>> | undefined;
+        if (request.aiWebDiscovery === true) {
+          // `runAiWebDiscovery` itself never throws (see its own doc comment), but the setup calls
+          // around it -- `loadCandidateProfile` (rethrows for a malformed/unreadable existing profile
+          // file, only swallowing ENOENT) and `ensureAiWorkspaceDir` (disk full, permission error) --
+          // are not similarly guarded. A failure here must degrade exactly the way an internal
+          // `runAiWebDiscovery` failure already does (`aiWebDiscovery` left undefined, i.e. treated as
+          // if `request.aiWebDiscovery` had been false), never abort the whole scan.
+          try {
+            const profile = await loadCandidateProfile(await candidateProfilePath());
+            aiWebDiscovery = await runAiWebDiscovery(client, {
+              profile,
+              cwd: await ensureAiWorkspaceDir(),
+            });
+            // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
+            // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
+            // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
+            logger.debug(
+              { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
+              'AI web discovery pass finished',
+            );
+          } catch (error) {
+            logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
+          }
+        }
+        const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
           ...(request.mode === 'query'
             ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
             : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
           onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+          ...(aiWebDiscovery
+            ? {
+                aiWebDiscoveryVacancies: aiWebDiscovery.vacancies,
+                aiWebDiscoverySourceAudit: aiWebDiscovery.sourceAudit,
+              }
+            : {}),
         });
         latestVacancyReport = result.report;
         return result.report;

@@ -193,6 +193,90 @@ describe('SearchPage', () => {
     );
   });
 
+  it('issue #398: the AI web search toggle stays disabled until a search profile is configured', async () => {
+    installAllBridges({ runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])) });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    const toggle = screen.getByRole('checkbox', { name: 'Include AI web search' });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toBeChecked();
+  });
+
+  it('issue #398: the AI web search toggle is enabled once a search profile is configured, and threads aiWebDiscovery: true into the scan request', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+      getSearchProfile: vi.fn().mockResolvedValue({
+        ...DEFAULT_CANDIDATE_PROFILE,
+        targetRoles: ['Frontend Engineer'],
+      }),
+    });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    const toggle = await screen.findByRole('checkbox', { name: 'Include AI web search' });
+    await waitFor(() => expect(toggle).toBeEnabled());
+
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+
+    enterSearchQuery('frontend engineer');
+    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+
+    await waitFor(() =>
+      expect(bridge.runScan).toHaveBeenCalledWith({
+        mode: 'query',
+        query: 'frontend engineer',
+        aiWebDiscovery: true,
+      }),
+    );
+  });
+
+  it('issue #398: the AI web search toggle is a true no-op when left off -- the scan request carries no aiWebDiscovery field at all', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+      getSearchProfile: vi.fn().mockResolvedValue({
+        ...DEFAULT_CANDIDATE_PROFILE,
+        targetRoles: ['Frontend Engineer'],
+      }),
+    });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Include AI web search' })).toBeEnabled());
+
+    enterSearchQuery('frontend engineer');
+    fireEvent.click(screen.getByRole('button', { name: 'Run scan' }));
+
+    await waitFor(() =>
+      expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'query', query: 'frontend engineer' }),
+    );
+    const [request] = (bridge.runScan as ReturnType<typeof vi.fn>).mock.calls[0] as [Record<string, unknown>];
+    expect('aiWebDiscovery' in request).toBe(false);
+  });
+
+  it('issue #398: browse-all also threads the AI web search toggle through as a scan-time option', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(makeWorldwideReport([])),
+      getSearchProfile: vi.fn().mockResolvedValue({
+        ...DEFAULT_CANDIDATE_PROFILE,
+        targetRoles: ['Frontend Engineer'],
+      }),
+    });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    const toggle = await screen.findByRole('checkbox', { name: 'Include AI web search' });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+
+    await waitFor(() =>
+      expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all', aiWebDiscovery: true }),
+    );
+  });
+
   it('blocks a blank or whitespace-only query before any scan request', async () => {
     const bridge = installAllBridges({ runScan: vi.fn() });
 

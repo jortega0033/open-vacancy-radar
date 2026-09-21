@@ -248,6 +248,11 @@ export function SearchPage({
   const [viewingSaved, setViewingSaved] = useState(false);
   const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
   const [searchProfileError, setSearchProfileError] = useState<string>();
+  // Issue #398 Phase 1: a plain, un-persisted scan-time toggle -- deliberately not part of
+  // `SearchFilters`/the session-restore machinery those other fields use (see `SearchFilterBar`'s
+  // own doc comment on this prop): it is a one-off request option for the next scan, not a
+  // client-side result refinement or something worth restoring across a remount.
+  const [aiWebDiscovery, setAiWebDiscovery] = useState(false);
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -712,6 +717,9 @@ export function SearchPage({
               },
             }
           : {}),
+        // Omitted entirely when off, exactly like `country`/`employment`/`salary` above, so a scan
+        // that never opts in produces byte-identical requests to before this feature existed.
+        ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
       });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
@@ -754,7 +762,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -767,7 +775,10 @@ export function SearchPage({
     setPartialVacancies([]);
     setViewingSaved(false);
     try {
-      const report = await window.vacancyRadar.runScan({ mode: 'browse_all' });
+      const report = await window.vacancyRadar.runScan({
+        mode: 'browse_all',
+        ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
+      });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
         ...current,
@@ -803,7 +814,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
@@ -962,6 +973,9 @@ export function SearchPage({
           busy={busy}
           salaryNote={salaryNote}
           hasReport={hasReport}
+          aiWebDiscovery={aiWebDiscovery}
+          onAiWebDiscoveryChange={setAiWebDiscovery}
+          aiWebDiscoveryAvailable={currentProfileConfigured}
         />
       </div>
 

@@ -33,7 +33,18 @@ export interface AgentDockBridge {
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
-export type VacancyScanRequest = string | { mode: 'query'; query: string; country?: string; employment?: string; salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean } } | { mode: 'browse_all' };
+export type VacancyScanRequest =
+  | string
+  | {
+      mode: 'query';
+      query: string;
+      country?: string;
+      employment?: string;
+      salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
+      /** Issue #398 Phase 1: opt in to an on-demand AI-web-search discovery pass for this run only. */
+      aiWebDiscovery?: boolean;
+    }
+  | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;

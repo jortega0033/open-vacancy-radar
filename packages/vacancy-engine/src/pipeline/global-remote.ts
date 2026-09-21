@@ -729,6 +729,23 @@ export type GlobalRemoteScanOptions = {
    * applies, since no new discovery ran to report progress on.
    */
   onProgress?: ScanProgressCallback;
+  /**
+   * Issue #398: already-normalized, already-validated, already domain-filtered AI-web-discovery
+   * rows for this run, produced entirely by the desktop layer (which ran and validated the Claude
+   * `web-only` session against `AiWebDiscoveryCandidateSchema` before calling this function). This
+   * function does not re-validate or re-normalize them -- it only splices them into `discovery`
+   * below, exactly where `workableGlobal`'s rows already are, so they flow through the same
+   * `uniqueDiscovery` dedup/scoring/sponsor-match pipeline as every other source. Omitted (or
+   * empty) when AI-web discovery did not run or is disabled for this run.
+   */
+  aiWebDiscoveryVacancies?: DiscoveryVacancyAudit[];
+  /**
+   * Issue #398: the source-level audit row for this run's AI-web-discovery session (`status`
+   * `'success'`/`'partial'`/`'blocked'`/`'error'`, with `reasonCode: 'provider_unavailable'` when
+   * Claude itself was unavailable), built by the desktop layer alongside
+   * `aiWebDiscoveryVacancies` above. Omitted when AI-web discovery did not run for this run.
+   */
+  aiWebDiscoverySourceAudit?: DiscoverySourceAudit;
 };
 
 /**
@@ -983,12 +1000,27 @@ export async function runGlobalRemoteScan(
           return result;
         }),
   ]);
-  const discovery =
+  const withWorkableGlobal =
     workableGlobal === null
       ? baseDiscovery
       : {
           sources: [...baseDiscovery.sources, ...workableGlobal.sources],
           vacancies: [...baseDiscovery.vacancies, ...workableGlobal.vacancies],
+        };
+  // Issue #398: AI-web-discovery rows/audit are already normalized and validated by the desktop
+  // layer before this function ever sees them (see `GlobalRemoteScanOptions.aiWebDiscoveryVacancies`
+  // above) -- spliced in exactly like `workableGlobal` above, so they go through the same
+  // `uniqueDiscovery` dedup/scoring/sponsor-match pipeline as every other source below, never
+  // special-cased past this point.
+  const discovery =
+    options.aiWebDiscoveryVacancies === undefined && options.aiWebDiscoverySourceAudit === undefined
+      ? withWorkableGlobal
+      : {
+          sources: [
+            ...withWorkableGlobal.sources,
+            ...(options.aiWebDiscoverySourceAudit === undefined ? [] : [options.aiWebDiscoverySourceAudit]),
+          ],
+          vacancies: [...withWorkableGlobal.vacancies, ...(options.aiWebDiscoveryVacancies ?? [])],
         };
   const auditedDiscovery = {
     ...discovery,
