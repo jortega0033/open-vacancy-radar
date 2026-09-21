@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderStatus } from '@agent-dock/shared';
 import { InterviewPrepDrawer } from '../../../src/components/applications/InterviewPrepDrawer.js';
 import type {
   ApplicationAttemptRecord,
@@ -8,8 +9,8 @@ import type {
   LetterRecord,
   SavedJobRecord,
 } from '../../../src/window.js';
-import { installBridges } from '../../cv-bridges.js';
-import { installWorkspaceBridge } from '../../workspace-bridge.js';
+import { CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges } from '../../cv-bridges.js';
+import { DEFAULT_SETTINGS, installWorkspaceBridge } from '../../workspace-bridge.js';
 
 function makeApplication(overrides: Partial<ApplicationRecord> = {}): ApplicationRecord {
   return {
@@ -126,13 +127,20 @@ function setupBridges(options: {
   savedJobs?: SavedJobRecord[];
   cvDocuments?: CvDocumentRecord[];
   letters?: LetterRecord[];
+  providers?: ProviderStatus[];
+  defaultProvider?: 'claude' | 'codex';
 } = {}) {
-  const bridges = installBridges();
+  const bridges = installBridges(
+    options.providers ? { agentDock: { listProviders: vi.fn().mockResolvedValue(options.providers) } } : {},
+  );
   const workspace = installWorkspaceBridge({
     listApplicationAttempts: vi.fn().mockResolvedValue(options.attempts ?? [makeAttempt()]),
     listSavedJobs: vi.fn().mockResolvedValue(options.savedJobs ?? [makeSavedJob()]),
     listCvDocuments: vi.fn().mockResolvedValue(options.cvDocuments ?? [makeCv()]),
     listLetters: vi.fn().mockResolvedValue(options.letters ?? [makeLetter()]),
+    ...(options.defaultProvider
+      ? { getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: options.defaultProvider }) }
+      : {}),
   });
   return { ...bridges, workspace };
 }
@@ -291,5 +299,57 @@ describe('InterviewPrepDrawer', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/recruiter screen or interview stage/i);
     expect(screen.queryByRole('button', { name: /generate prep pack/i })).not.toBeInTheDocument();
+  });
+
+  it('issue #400: falls back to the one installed CLI (Codex) when the persisted preference still names Claude, which is not installed', async () => {
+    const bridges = setupBridges({
+      providers: [CLAUDE_NOT_INSTALLED, CODEX_INSTALLED],
+      defaultProvider: 'claude',
+    });
+    render(
+      <InterviewPrepDrawer
+        application={makeApplication()}
+        savedJobs={[makeSavedJob()]}
+        cvDocuments={[makeCv()]}
+        letters={[makeLetter()]}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // A leftover preference pointing at an uninstalled CLI must not disable the feature outright.
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate prep pack/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /generate prep pack/i }));
+
+    await waitFor(() =>
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'codex' }),
+      ),
+    );
+  });
+
+  it('issue #400: never persists the resolved effective provider back as the default', async () => {
+    const bridges = setupBridges({
+      providers: [CLAUDE_NOT_INSTALLED, CODEX_INSTALLED],
+      defaultProvider: 'claude',
+    });
+    render(
+      <InterviewPrepDrawer
+        application={makeApplication()}
+        savedJobs={[makeSavedJob()]}
+        cvDocuments={[makeCv()]}
+        letters={[makeLetter()]}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate prep pack/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /generate prep pack/i }));
+
+    await waitFor(() =>
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'codex' }),
+      ),
+    );
+    expect(bridges.workspace.updateSettings).not.toHaveBeenCalled();
   });
 });

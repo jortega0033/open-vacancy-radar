@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@agent-dock/shared';
+import type { AgentEvent, ProviderStatus } from '@agent-dock/shared';
 import type { AgentDockBridge } from '../../../src/window.js';
 import { EMPTY_CV_SOURCE, type CvSourceDocument } from '../../../electron/workspace/cv-source-schema.js';
 import { CvLibraryPage } from '../../../src/components/cv-library/index.js';
 import type { CvBridge, CvDocumentRecord } from '../../../src/window.js';
+import { CLAUDE_NOT_INSTALLED, CODEX_INSTALLED } from '../../cv-bridges.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 
 type EmitEvent = (sessionId: string, event: AgentEvent) => void;
@@ -61,12 +62,12 @@ function makeSource(overrides: Partial<CvSourceDocument> = {}): CvSourceDocument
  * `window.agentDock.onSessionEvent` on every render regardless of whether that action is visible,
  * so every test that opens the drawer needs this stub present, not just ones that click it.
  */
-function installAgentDockBridge(): EmitEvent {
+function installAgentDockBridge(providers: ProviderStatus[] = []): EmitEvent {
   const listeners: EmitEvent[] = [];
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
-    listProviders: vi.fn().mockResolvedValue([]),
+    listProviders: vi.fn().mockResolvedValue(providers),
     createSession: vi.fn().mockResolvedValue({
       id: 'sess-cv-parse-1',
       provider: 'claude',
@@ -91,14 +92,14 @@ function installAgentDockBridge(): EmitEvent {
   };
 }
 
-function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
+function installCvBridge(overrides: Partial<CvBridge> = {}, providers: ProviderStatus[] = []): CvBridge {
   const bridge: CvBridge = {
     selectAndRead: vi.fn().mockResolvedValue(null),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
     ...overrides,
   };
   (window as unknown as { cv: CvBridge }).cv = bridge;
-  installAgentDockBridge();
+  installAgentDockBridge(providers);
   return bridge;
 }
 
@@ -392,6 +393,59 @@ describe('CvLibraryPage', () => {
     await waitFor(() =>
       expect(bridge.createSession).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codex' })),
     );
+  });
+
+  it("issue #400: falls back to the one installed CLI (Codex) when the persisted preference still names Claude, which isn't installed", async () => {
+    const record = makeCv({
+      id: 'parse-provider-fallback-1',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Five years. Amsterdam.',
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([record]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }),
+    });
+    installCvBridge({}, [CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]);
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() =>
+      expect(bridge.createSession).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codex' })),
+    );
+  });
+
+  it('issue #400: never persists the resolved effective provider back as the default', async () => {
+    const record = makeCv({
+      id: 'parse-provider-fallback-2',
+      name: 'Uploaded CV',
+      kind: 'uploaded',
+      text: 'Frontend engineer. React, TypeScript. Five years. Amsterdam.',
+    });
+    const workspace = installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([record]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }),
+    });
+    installCvBridge({}, [CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]);
+
+    render(<CvLibraryPage />);
+    await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
+
+    const bridge = (window as unknown as { agentDock: AgentDockBridge }).agentDock;
+    await waitFor(() =>
+      expect(bridge.createSession).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codex' })),
+    );
+    expect(workspace.updateSettings).not.toHaveBeenCalled();
   });
 
   it('surfaces a malformed AI CV-parse response as an error, leaving the form untouched', async () => {

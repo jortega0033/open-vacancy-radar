@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CvAssistant } from '../src/components/cv/CvAssistant.js';
 import type { CvDocumentRecord } from '../src/window.js';
-import { CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges, TEST_VACANCY } from './cv-bridges.js';
+import { CLAUDE_INSTALLED, CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges, TEST_VACANCY } from './cv-bridges.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
 
 function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
@@ -252,6 +252,7 @@ describe('CvAssistant', () => {
         cv: {
           selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
         },
+        agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED, CODEX_INSTALLED]) },
       });
 
       render(<CvAssistant vacancy={TEST_VACANCY} />);

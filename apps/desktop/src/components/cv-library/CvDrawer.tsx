@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
+import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
 import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-source-schema.js';
+import { resolveEffectiveProvider } from '../../resolve-effective-provider.js';
 import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
 import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
@@ -144,21 +145,36 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const sourceAppliedRef = useRef(false);
 
   // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
-  // through: the persisted `default_provider` setting, not a hardcoded provider. A failure here
-  // just leaves the Claude Code default in place rather than blocking the feature.
-  const [provider, setProvider] = useState<ProviderId>('claude');
+  // through: the persisted `default_provider` setting reconciled against what is actually
+  // installed, not the raw preference alone (issue #400). A failure here just leaves the Claude
+  // Code default in place rather than blocking the feature.
+  const [preferredProvider, setPreferredProvider] = useState<ProviderId>('claude');
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
   useEffect(() => {
     let cancelled = false;
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
+        if (!cancelled) setPreferredProvider(settings.defaultProvider);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void window.agentDock
+      .listProviders()
+      .then((list) => {
+        if (!cancelled) setProviders(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const provider = resolveEffectiveProvider(preferredProvider, providers);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
