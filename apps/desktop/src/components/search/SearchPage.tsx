@@ -597,7 +597,7 @@ export function SearchPage({
   // directly, so they never disagree about which filters are in effect.
   const effectiveFilters = showLiveResults && pendingScanFilters ? pendingScanFilters : appliedFilters;
   const visible = useMemo(
-    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters)),
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters), effectiveFilters.query),
     [resultIndex, effectiveFilters],
   );
 
@@ -1105,9 +1105,12 @@ export function SearchPage({
           {profileNotConfigured && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                {results.length.toLocaleString()} vacancies were found, but none were scored because
-                the search profile has no target roles or strongest skills. You can still browse,
-                save and filter these vacancies; fill the profile under Settings to rank future scans.
+                {results.length.toLocaleString()} vacancies were found, but were not scored against
+                your Search Profile because no target roles or strongest skills are configured.
+                {effectiveFilters.query.trim()
+                  ? ' Results are ordered by the submitted query match and posting date.'
+                  : ' Results are ordered by posting date.'}{' '}
+                Fill your Search Profile to enable profile-based ranking on future scans.
               </span>
               {onOpenSearchProfile && (
                 <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>

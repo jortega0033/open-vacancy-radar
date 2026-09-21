@@ -446,7 +446,7 @@ export function filterSearchResultIndex(
   const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
-    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query) && !entry.descriptionLower.includes(query)) return false;
+    if (query && queryMatchTier(entry, query) === 0) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;
 
@@ -484,14 +484,39 @@ function postedAtTimestamp(value: string | null): number | null {
 }
 
 /**
- * Highest profile score first, then most recently posted first among ties or scoreless rows, then
- * title. A row with no known posting date sorts after every row that has one, never assumed recent.
+ * How strongly `entry` matches `normalizedQuery` (issue #395): also what `filterSearchResultIndex`
+ * above uses to decide whether a row passes the query filter at all (tier `0` means no match), so a
+ * row's rank can never disagree with whether that same row was included in the first place. Title
+ * and company are checked ahead of description, and an exact match ahead of a substring one, on the
+ * theory that a query landing on the role or employer itself is a much stronger relevance signal
+ * than one that only happens to appear somewhere in free-text copy.
  */
-export function sortResults(results: SearchResult[]): SearchResult[] {
-  return sortSearchResultIndex(buildSearchResultIndex(results));
+function queryMatchTier(entry: SearchResultIndexEntry, normalizedQuery: string): number {
+  if (entry.titleLower === normalizedQuery || entry.companyLower === normalizedQuery) return 4;
+  if (entry.titleLower.includes(normalizedQuery)) return 3;
+  if (entry.companyLower.includes(normalizedQuery)) return 2;
+  if (entry.descriptionLower.includes(normalizedQuery)) return 1;
+  return 0;
 }
 
-export function sortSearchResultIndex(index: SearchResultIndexEntry[]): SearchResult[] {
+/**
+ * Highest profile score first. Among rows that both lack a score -- the Search Profile has no
+ * target roles or strongest skills configured, so there is no score to lean on -- and only when a
+ * `query` was actually submitted, a query-match tier (`queryMatchTier`) orders them by how well
+ * they match what was searched for, before falling back to recency (issue #395: previously these
+ * rows had zero relevance ordering among themselves and fell straight to the postedAt tiebreak).
+ * A pair with exactly one scored row is untouched by this tier -- it falls through to postedAt
+ * exactly as before, since a score is never allowed to be manufactured for the unscored side just
+ * to make the comparison symmetric. Most recently posted first among ties (or scoreless rows with
+ * an empty query, or an equal tier), then title. A row with no known posting date sorts after every
+ * row that has one, never assumed recent.
+ */
+export function sortResults(results: SearchResult[], query = ''): SearchResult[] {
+  return sortSearchResultIndex(buildSearchResultIndex(results), query);
+}
+
+export function sortSearchResultIndex(index: SearchResultIndexEntry[], query = ''): SearchResult[] {
+  const normalizedQuery = query.trim().toLowerCase();
   return [...index].sort((left, right) => {
     const leftResult = left.result;
     const rightResult = right.result;
@@ -501,6 +526,10 @@ export function sortSearchResultIndex(index: SearchResultIndexEntry[]): SearchRe
       leftResult.profileScore !== rightResult.profileScore
     ) {
       return rightResult.profileScore - leftResult.profileScore;
+    }
+    if (leftResult.profileScore == null && rightResult.profileScore == null && normalizedQuery) {
+      const tierDiff = queryMatchTier(right, normalizedQuery) - queryMatchTier(left, normalizedQuery);
+      if (tierDiff !== 0) return tierDiff;
     }
     const leftPosted = left.postedAtMs;
     const rightPosted = right.postedAtMs;

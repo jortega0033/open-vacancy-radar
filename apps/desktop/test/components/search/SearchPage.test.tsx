@@ -682,9 +682,65 @@ describe('SearchPage', () => {
     render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    expect(screen.getByText(/vacancies were found, but none were scored/i)).toBeInTheDocument();
+    expect(screen.getByText(/vacancies were found, but were not scored against your Search Profile/i)).toBeInTheDocument();
+    // No query was submitted for this report (issue #395's query-match tier is a no-op here), so
+    // the banner must not claim an ordering that never happened.
+    expect(screen.getByText(/results are ordered by posting date\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/submitted query match/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('credits the submitted query in the scoreless-results banner once a query was actually searched (issue #395)', async () => {
+    const initialSession = createSearchSessionState();
+    initialSession.appliedFilters = { ...initialSession.appliedFilters, query: 'frontend' };
+    installAllBridges({
+      getReport: vi
+        .fn()
+        .mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
+    });
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.getByText(/results are ordered by the submitted query match and posting date\./i)).toBeInTheDocument();
+  });
+
+  it('ranks scoreless rows by query-match strength end to end once a query is submitted (issue #395)', async () => {
+    const bridge = installAllBridges({
+      runScan: vi.fn().mockResolvedValue(
+        makeWorldwideReport([
+          makeWorldwideVacancy({
+            key: 'description-match',
+            title: 'Business Analyst',
+            company: 'Other Co',
+            description: 'Works closely with the frontend team on requirements.',
+            profileScore: null,
+          }),
+          makeWorldwideVacancy({
+            key: 'title-match', title: 'Senior Frontend Engineer', company: 'Acme Corp', profileScore: null,
+          }),
+          makeWorldwideVacancy({
+            key: 'exact-match', title: 'frontend', company: 'Other Co', profileScore: null,
+          }),
+        ]),
+      ),
+    });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), { target: { value: 'frontend' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByText(/frontend/i).length).toBeGreaterThan(0));
+
+    const list = screen.getByLabelText('Vacancy results');
+    const titles = Array.from(list.querySelectorAll('.truncate.text-sm.font-semibold')).map((el) => el.textContent);
+    // Exact title match (tier 4) ranks first, a partial title match (tier 3) second, and a row
+    // that only matches in its description (tier 1) last -- all three passed the query filter, but
+    // the tier still orders them by how strongly each one actually matches.
+    expect(titles).toEqual(['frontend', 'Senior Frontend Engineer', 'Business Analyst']);
   });
 
   it('explains when a saved profile exists but the loaded report is still unscored', async () => {
