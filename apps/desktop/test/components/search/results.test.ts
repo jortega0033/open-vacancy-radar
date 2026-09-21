@@ -254,13 +254,15 @@ describe('large report filtering index', () => {
       provider: index % 3 === 0 ? 'jobicy' : 'remotive',
       employmentType: index % 5 === 0 ? 'contract' : 'full_time',
       postedAt: index % 7 === 0 ? '2026-08-31T00:00:00.000Z' : null,
-      profileScore: index % 100,
+      // A third of rows scoreless so the query-match tier comparator (issue #395) actually runs
+      // across a meaningful share of this budget test, not just the pre-existing score/postedAt path.
+      profileScore: index % 3 === 0 ? null : index % 100,
     })) satisfies SearchResult[];
     const filters = { ...DEFAULT_FILTERS, query: 'frontend', country: 'Netherlands' };
     const start = performance.now();
     const index = buildSearchResultIndex(results);
     const filtered = filterSearchResultIndex(index, filters, now);
-    const sorted = sortSearchResultIndex(filtered);
+    const sorted = sortSearchResultIndex(filtered, filters.query);
     const elapsedMs = performance.now() - start;
 
     expect(sorted).toHaveLength(5_000);
@@ -524,6 +526,25 @@ describe('sortResults/sortSearchResultIndex: query-match tier for scoreless rows
     ];
 
     expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['provisional-match', 'provisional-no-match']);
+  });
+
+  it('treats a whitespace-only query the same as an empty one', () => {
+    const results = [
+      sortableResult({ key: 'a', title: 'Frontend Engineer', postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'b', title: 'Backend Engineer', postedAt: '2026-08-20T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results, '   ').map((r) => r.key)).toEqual(sortResults(results, '').map((r) => r.key));
+  });
+
+  it('gives a row with no description text tier 0 against a query, rather than matching or throwing', () => {
+    const results = [
+      sortableResult({ key: 'no-description', title: 'Unrelated Role', company: 'Nowhere', description: null }),
+      sortableResult({ key: 'title-match', title: 'Frontend Engineer', company: 'Nowhere' }),
+    ];
+
+    expect(() => sortResults(results, 'frontend')).not.toThrow();
+    expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['title-match', 'no-description']);
   });
 });
 

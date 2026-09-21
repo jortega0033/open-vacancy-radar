@@ -446,7 +446,7 @@ export function filterSearchResultIndex(
   const salary = salaryCriteriaFromFilters(filters);
 
   return index.filter((entry) => {
-    if (query && !entry.titleLower.includes(query) && !entry.companyLower.includes(query) && !entry.descriptionLower.includes(query)) return false;
+    if (query && queryMatchTier(entry, query) === 0) return false;
 
     if (location && !entry.locationLower.includes(location)) return false;
 
@@ -484,16 +484,12 @@ function postedAtTimestamp(value: string | null): number | null {
 }
 
 /**
- * Where a scoreless row's query-match tier falls when the row is compared against another
- * scoreless row (issue #395): without a `profileScore` to lean on -- because the Search Profile
- * has no target roles or strongest skills configured -- these rows otherwise fall straight to the
- * postedAt tiebreak with zero relevance ordering among themselves, even though the submitted
- * query is right there. Reuses exactly the substring semantics `filterSearchResultIndex` already
- * applies to `query` (plain case-insensitive `.includes()`, no fuzzy matching, stemming, or
- * embeddings) so a row's tier never disagrees with whether that same row passed the query filter
- * in the first place. Title and company are checked ahead of description, and an exact match ahead
- * of a substring one, on the theory that a query landing on the role or employer itself is a much
- * stronger relevance signal than one that only happens to appear somewhere in free-text copy.
+ * How strongly `entry` matches `normalizedQuery` (issue #395): also what `filterSearchResultIndex`
+ * above uses to decide whether a row passes the query filter at all (tier `0` means no match), so a
+ * row's rank can never disagree with whether that same row was included in the first place. Title
+ * and company are checked ahead of description, and an exact match ahead of a substring one, on the
+ * theory that a query landing on the role or employer itself is a much stronger relevance signal
+ * than one that only happens to appear somewhere in free-text copy.
  */
 function queryMatchTier(entry: SearchResultIndexEntry, normalizedQuery: string): number {
   if (entry.titleLower === normalizedQuery || entry.companyLower === normalizedQuery) return 4;

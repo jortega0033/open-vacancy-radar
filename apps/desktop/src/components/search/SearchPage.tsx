@@ -1107,8 +1107,10 @@ export function SearchPage({
               <span>
                 {results.length.toLocaleString()} vacancies were found, but were not scored against
                 your Search Profile because no target roles or strongest skills are configured.
-                Results are ordered by the submitted query match and posting date. Fill your Search
-                Profile to enable profile-based ranking on future scans.
+                {effectiveFilters.query.trim()
+                  ? ' Results are ordered by the submitted query match and posting date.'
+                  : ' Results are ordered by posting date.'}{' '}
+                Fill your Search Profile to enable profile-based ranking on future scans.
               </span>
               {onOpenSearchProfile && (
                 <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
