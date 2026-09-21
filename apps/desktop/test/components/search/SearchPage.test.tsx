@@ -538,6 +538,79 @@ describe('SearchPage', () => {
     expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
   });
 
+  it('a browse-all scan-already-running rejection does not corrupt appliedFilters or the draft either', async () => {
+    // Same race as the runScan case above (a scan started elsewhere between the reattachment check
+    // and this attempt's own request), but through runBrowseAllScan's own copy of that branch.
+    const getScanStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ scanning: false }) // the mount-time reattachment check
+      .mockResolvedValueOnce({ scanning: true }) // still going, once waitForScanToFinish's poll starts
+      .mockResolvedValue({ scanning: false });
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockRejectedValue(new Error('a vacancy scan is already running')),
+      getScanStatus,
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+    expect(screen.queryByText(/scan failed/i)).not.toBeInTheDocument();
+
+    // The losing attempt's own (blanked) criteria never touched appliedFilters or the draft.
+    expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+  });
+
+  it('preserves a leftover postedWithin local refinement through a browse-all scan, live and in the final report', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const now = Date.now();
+    const recentVacancy = makeWorldwideVacancy({
+      key: 'recent-1',
+      title: 'Recent Posting Role',
+      postedAt: new Date(now - 1 * 86_400_000).toISOString(),
+    });
+    const oldVacancy = makeWorldwideVacancy({
+      key: 'old-1',
+      title: 'Old Posting Role',
+      postedAt: new Date(now - 40 * 86_400_000).toISOString(),
+    });
+    const { emit } = installProgressCapturingBridge({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([recentVacancy, oldVacancy])),
+      runScan: vi.fn().mockReturnValue(scanPromise),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Recent Posting Role').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Posted within' }), { target: { value: '7' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    emit({ sourceId: 'remotive', vacancies: [recentVacancy, oldVacancy] });
+
+    // The 'last 7 days' local refinement, still in effect, hides the 40-day-old row in the live view.
+    await waitFor(() => expect(screen.getAllByText('Recent Posting Role').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Old Posting Role')).not.toBeInTheDocument();
+
+    resolveScan(makeWorldwideReport([recentVacancy, oldVacancy]));
+
+    // Same filtering holds for the final saved report.
+    await waitFor(() => expect(screen.getAllByText('Recent Posting Role').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Old Posting Role')).not.toBeInTheDocument();
+  });
+
   it('routes selected country and employment through a focused scan request', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
