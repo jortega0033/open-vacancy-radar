@@ -17,6 +17,7 @@ import { createSearchSessionState, type SearchSessionState } from './search-sess
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
   DEFAULT_FILTERS,
+  browseAllViewFilters,
   buildSearchResultIndex,
   employmentOptions,
   filterSearchResultIndex,
@@ -776,7 +777,7 @@ export function SearchPage({
     setScanError(undefined);
     setScanGuard(undefined);
     setLoadError(undefined);
-    setPendingScanFilters(filters);
+    setPendingScanFilters(browseAllViewFilters(filters));
     setPartialVacancies([]);
     setViewingSaved(false);
     try {
@@ -1225,8 +1226,10 @@ export function SearchPage({
               Browse all vacancies?
             </h3>
             <p className="mt-2 text-sm text-base-content/70">
-              This starts a broad live scan without a role or keyword. It can take longer and hit
-              more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
+              Browse All runs without role, country, employment, or salary scan criteria. Local
+              display refinements such as source or posting date can still narrow what is shown.
+              It can take longer and hit more external sources. The saved report is capped at{' '}
+              {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
             </p>
             <div className="modal-action">
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>

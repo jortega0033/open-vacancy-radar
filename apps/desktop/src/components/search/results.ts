@@ -338,6 +338,27 @@ export const DEFAULT_FILTERS: SearchFilters = {
   includeUnknownSalary: true,
 };
 
+/**
+ * A browse-all request carries none of the scan-bound criteria (`query`, `country`, `employment`,
+ * salary) -- the backend never scopes by them for this mode. Re-applying a leftover scoped value
+ * client-side would filter both the live rows and the final report by criteria the scan never
+ * actually honored. `location`, `postedWithin`, and `source` are local-only refinements regardless
+ * of scan mode, so they pass through unchanged. `sponsorOnly` also clears here since it is only
+ * meaningful for the Netherlands and resets alongside `country`.
+ */
+export function browseAllViewFilters(filters: SearchFilters): SearchFilters {
+  return {
+    ...filters,
+    query: '',
+    country: 'all',
+    employment: 'any',
+    salaryMinimum: '',
+    salaryCurrency: 'EUR',
+    includeUnknownSalary: true,
+    sponsorOnly: false,
+  };
+}
+
 export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
   const minimumAnnual = parseMinimumAnnualSalary(filters.salaryMinimum ?? '');
   if (minimumAnnual === null) return null;

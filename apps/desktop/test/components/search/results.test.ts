@@ -2,6 +2,7 @@ import type { DiscoveryVacancyAudit } from '@open-vacancy-radar/vacancy-engine';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
+  browseAllViewFilters,
   buildSearchResultIndex,
   descriptionExcerpt,
   filterSearchResultIndex,
@@ -265,6 +266,46 @@ describe('large report filtering index', () => {
 
     expect(sorted).toHaveLength(5_000);
     expect(elapsedMs).toBeLessThan(1_500);
+  });
+});
+
+describe('browseAllViewFilters', () => {
+  it('blanks every scan-bound field regardless of what the current draft holds (issue #399)', () => {
+    const scoped: typeof DEFAULT_FILTERS = {
+      ...DEFAULT_FILTERS,
+      query: 'backend engineer',
+      country: 'Germany',
+      employment: 'full_time',
+      salaryMinimum: '100000',
+      salaryCurrency: 'GBP',
+      includeUnknownSalary: false,
+      sponsorOnly: true,
+    };
+
+    const result = browseAllViewFilters(scoped);
+
+    expect(result.query).toBe('');
+    expect(result.country).toBe('all');
+    expect(result.employment).toBe('any');
+    expect(result.salaryMinimum).toBe('');
+    expect(result.salaryCurrency).toBe('EUR');
+    expect(result.includeUnknownSalary).toBe(true);
+    expect(result.sponsorOnly).toBe(false);
+  });
+
+  it('leaves local refinements untouched', () => {
+    const scoped: typeof DEFAULT_FILTERS = {
+      ...DEFAULT_FILTERS,
+      location: 'Berlin',
+      postedWithin: '7',
+      source: 'dice',
+    };
+
+    const result = browseAllViewFilters(scoped);
+
+    expect(result.location).toBe('Berlin');
+    expect(result.postedWithin).toBe('7');
+    expect(result.source).toBe('dice');
   });
 });
 

@@ -387,6 +387,157 @@ describe('SearchPage', () => {
     expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
   });
 
+  it('states which criteria a browse-all scan ignores and which local refinements still apply', async () => {
+    installAllBridges();
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    const dialog = screen.getByRole('dialog', { name: /browse all vacancies/i });
+    expect(within(dialog).getByText(
+      /Browse All runs without role, country, employment, or salary scan criteria\. Local display refinements such as source or posting date can still narrow what is shown\./,
+    )).toBeInTheDocument();
+  });
+
+  it('ignores leftover scoped filters for a browse-all scan, live and in the final report, while keeping local refinements (issue #399)', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const seedVacancies = [
+      makeWorldwideVacancy({
+        key: 'seed-1',
+        title: 'Seed Full Time Role',
+        provider: 'remotive',
+        employmentType: 'full_time',
+        location: 'Munich, Germany',
+      }),
+      makeWorldwideVacancy({
+        key: 'seed-2',
+        title: 'Seed Part Time Role',
+        provider: 'dice',
+        employmentType: 'part_time',
+        location: 'Austin, United States',
+      }),
+    ];
+    const matchingVacancy = makeWorldwideVacancy({
+      key: 'match-1',
+      title: 'Remote Frontend Engineer',
+      provider: 'remotive',
+      employmentType: 'full_time',
+      location: 'Worldwide',
+      advertisedMinimum: 120_000,
+      annualizedMinimumUsd: 120_000,
+    });
+    const otherSourceVacancy = makeWorldwideVacancy({
+      key: 'other-source-1',
+      title: 'Dice Sourced Role',
+      provider: 'dice',
+      employmentType: 'full_time',
+      location: 'Worldwide',
+    });
+    const { emit } = installProgressCapturingBridge({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport(seedVacancies)),
+      runScan: vi.fn().mockReturnValue(scanPromise),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Seed Full Time Role').length).toBeGreaterThan(0));
+
+    // Leftover scoped criteria from an earlier scoped search -- none of this should carry into
+    // Browse All, live or final. (The role/keyword field itself is excluded here: Browse All is
+    // only reachable while it trims to empty, so `browseAllViewFilters` blanking it regardless is
+    // covered directly against the helper in results.test.ts.)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Employment type' }), { target: { value: 'part_time' } });
+    fireEvent.change(screen.getByLabelText('Minimum annual salary'), { target: { value: '200000' } });
+    // Local refinement -- must be preserved through Browse All, unlike the scan-bound fields above.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), { target: { value: 'remotive' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    emit({ sourceId: 'remotive', vacancies: [matchingVacancy, otherSourceVacancy] });
+
+    // Stale country/employment/salary do not hide the matching row in the live view; the
+    // 'remotive' source refinement, still in effect, hides the other-source row.
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Dice Sourced Role')).not.toBeInTheDocument();
+
+    resolveScan(makeWorldwideReport([matchingVacancy, otherSourceVacancy]));
+
+    // Same filtering holds for the final saved report.
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Dice Sourced Role')).not.toBeInTheDocument();
+  });
+
+  it('clears sponsorOnly alongside the country reset for a browse-all scan', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const seedVacancy = makeWorldwideVacancy({
+      key: 'nl-seed-1',
+      title: 'Netherlands Seed Role',
+      location: 'Amsterdam, Netherlands',
+    });
+    const { emit } = installProgressCapturingBridge({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([seedVacancy])),
+      runScan: vi.fn().mockReturnValue(scanPromise),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Netherlands Seed Role').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Netherlands' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /possible ind sponsor match only/i }));
+    expect(screen.getByRole('checkbox', { name: /possible ind sponsor match only/i })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    const noSponsorMatchVacancy = makeWorldwideVacancy({
+      key: 'no-sponsor-1',
+      title: 'No Sponsor Match Role',
+      worldwideSponsorMatch: null,
+    });
+    emit({ sourceId: 'remotive', vacancies: [noSponsorMatchVacancy] });
+
+    // A leftover sponsorOnly=true would have hidden this row; it clears alongside the country reset.
+    await waitFor(() => expect(screen.getAllByText('No Sponsor Match Role').length).toBeGreaterThan(0));
+
+    resolveScan(makeWorldwideReport([noSponsorMatchVacancy]));
+    await waitFor(() => expect(screen.getAllByText('No Sponsor Match Role').length).toBeGreaterThan(0));
+  });
+
+  it('does not corrupt appliedFilters or the editable draft on a failed browse-all request', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockRejectedValue(new Error('network unreachable')),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    // A draft edit that browseAllViewFilters would blank in the pendingScanFilters snapshot, but
+    // which must survive untouched in the editable form itself.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Country' }), { target: { value: 'Germany' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+
+    await waitFor(() => expect(bridge.runScan).toHaveBeenCalledWith({ mode: 'browse_all' }));
+    await waitFor(() => expect(screen.getByText(/scan failed/i)).toBeInTheDocument());
+
+    // The saved report's rows are still visible, unfiltered by the failed attempt's abandoned
+    // criteria -- `appliedFilters` was never touched by the failure branch.
+    expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0);
+    // The editable draft (the form's own state) is untouched by the browse-all snapshot too.
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+  });
+
   it('routes selected country and employment through a focused scan request', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
