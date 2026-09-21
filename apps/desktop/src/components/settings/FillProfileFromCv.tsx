@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
+import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
+import { resolveEffectiveProvider } from '../../resolve-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
@@ -142,7 +143,8 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   // as CvDrawer's parse run.
   const run = useAgentRun({ chunkSeparator: '' });
   const appliedRef = useRef(false);
-  const [provider, setProvider] = useState<ProviderId>('claude');
+  const [preferredProvider, setPreferredProvider] = useState<ProviderId>('claude');
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
 
   // The default provider is a settings preference (set from the AI Runtime page); a failure here
   // just leaves the Claude Code default in place rather than blocking the feature. Without this,
@@ -154,13 +156,32 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
+        if (!cancelled) setPreferredProvider(settings.defaultProvider);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // The live provider-status list, needed alongside the preference above to resolve which CLI a
+  // run actually goes through (issue #400): a preference pointing at an uninstalled CLI must fall
+  // back to the one CLI that is actually installed, not fail outright. Best effort, same as the
+  // preference fetch: a failure here just leaves the preference itself in effect.
+  useEffect(() => {
+    let cancelled = false;
+    void window.agentDock
+      .listProviders()
+      .then((list) => {
+        if (!cancelled) setProviders(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const provider = resolveEffectiveProvider(preferredProvider, providers);
 
   // Only CVs with extracted text can be read: a scanned PDF that produced nothing is listed nowhere
   // here rather than being offered and then failing with an empty answer.

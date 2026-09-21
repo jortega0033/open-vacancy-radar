@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CvAssistant } from '../src/components/cv/CvAssistant.js';
 import type { CvDocumentRecord } from '../src/window.js';
-import { installBridges, TEST_VACANCY } from './cv-bridges.js';
+import { CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges, TEST_VACANCY } from './cv-bridges.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
 
 function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
@@ -186,6 +186,87 @@ describe('CvAssistant', () => {
 
     render(<CvAssistant vacancy={TEST_VACANCY} />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/claude code is not installed/i);
+  });
+
+  describe('issue #400: effective provider resolution', () => {
+    it('falls back to the only installed CLI (Codex) when the persisted preference still names Claude', async () => {
+      // The exact machine this issue is about: `defaultProvider` is still the factory default
+      // ('claude'), a preference that is never auto-rewritten by detection, but only Codex is
+      // actually installed. The assistant must run through Codex, not warn that Claude is missing.
+      installBridges({
+        agentDock: {
+          listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+        },
+      });
+
+      render(<CvAssistant vacancy={TEST_VACANCY} />);
+
+      expect(await screen.findByText(/Runs on your own authenticated Codex CLI/)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('runs the AI features through the resolved alternative, not the uninstalled preference', async () => {
+      const bridges = installBridges({
+        agentDock: {
+          listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+        },
+        cv: {
+          selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+        },
+      });
+
+      render(<CvAssistant vacancy={TEST_VACANCY} />);
+      fireEvent.click(await screen.findByRole('button', { name: /choose cv file/i }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /check ats fit/i })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
+
+      await waitFor(() =>
+        expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ provider: 'codex' }),
+        ),
+      );
+    });
+
+    it('never writes the resolved effective provider back to persisted settings', async () => {
+      const bridges = installBridges({
+        agentDock: {
+          listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+        },
+      });
+      const workspace = installWorkspaceBridge();
+
+      render(<CvAssistant vacancy={TEST_VACANCY} />);
+      await screen.findByText(/Runs on your own authenticated Codex CLI/);
+
+      // Resolving to Codex for this session must never persist 'codex' as the new default: that
+      // stays a user action from the AI Runtime page's "Use as default" button, not a side effect
+      // of a component reading it.
+      expect(workspace.updateSettings).not.toHaveBeenCalled();
+      expect(bridges.agentDock.listProviders).toHaveBeenCalled();
+    });
+
+    it('uses Claude when both CLIs are installed, matching the persisted preference (unchanged behavior)', async () => {
+      const bridges = installBridges({
+        cv: {
+          selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+        },
+      });
+
+      render(<CvAssistant vacancy={TEST_VACANCY} />);
+      fireEvent.click(await screen.findByRole('button', { name: /choose cv file/i }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /check ats fit/i })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
+
+      await waitFor(() =>
+        expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ provider: 'claude' }),
+        ),
+      );
+    });
   });
 
   it('offers the provider model picker and passes the chosen model into the session', async () => {

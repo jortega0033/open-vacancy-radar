@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentEvent, ProviderId } from '@agent-dock/shared';
+import { resolveEffectiveProvider } from '../../resolve-effective-provider.js';
 
 /**
  * One-shot "send a prompt, stream the answer back" runner on top of the AgentDock bridge.
@@ -23,8 +24,11 @@ export type AgentRunStatus =
 
 export interface AgentRunOptions {
   model?: string;
-  /** Which installed CLI to run through. Defaults to Claude Code, matching every existing call
-   * site that didn't previously have a choice. */
+  /** Which installed CLI to run through. Every current call site resolves this itself with
+   * `resolveEffectiveProvider` and passes it explicitly. Omitting it is a fallback for whatever
+   * caller doesn't (issue #400): `start` resolves it the same way, from the user's persisted
+   * preference reconciled against live provider detection, rather than assuming Claude Code is
+   * installed. */
   provider?: ProviderId;
 }
 
@@ -187,11 +191,23 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
       setStatus('starting');
 
       try {
+        // No explicit provider: resolve one the same way every UI call site does (issue #400),
+        // instead of assuming Claude Code is installed. This is a fallback for a caller that
+        // doesn't already know the effective provider; every current call site passes one.
+        let provider = options.provider;
+        if (!provider) {
+          const [settings, providerStatuses] = await Promise.all([
+            window.workspace.getSettings().catch(() => undefined),
+            window.agentDock.listProviders().catch(() => []),
+          ]);
+          provider = resolveEffectiveProvider(settings?.defaultProvider ?? 'claude', providerStatuses);
+        }
+
         // `cwd` is not a field this call can send (issue #175): main pins every session to its own
         // app-owned scratch directory unconditionally and never reads a renderer-supplied path. See
         // main.ts's `ensureAiWorkspaceDir` and the `daemon:create-session` handler.
         const session = await window.agentDock.createSession({
-          provider: options.provider ?? 'claude',
+          provider,
           prompt,
           ...(options.model ? { model: options.model } : {}),
         });

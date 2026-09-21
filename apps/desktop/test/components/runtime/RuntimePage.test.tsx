@@ -147,6 +147,37 @@ describe('RuntimePage', () => {
     expect(within(claudeCard as HTMLElement).getByRole('button', { name: 'Not installed' })).toBeDisabled();
   });
 
+  it("issue #400: the Default badge stays on the persisted preference even when only the other CLI is installed, not the resolved effective provider", async () => {
+    // AI features elsewhere in the app fall back to running through Codex here (the one CLI that
+    // is actually installed), via `resolveEffectiveProvider`. This page must not mirror that: its
+    // job is to show the true persisted preference so the user can see it is misconfigured and fix
+    // it, not to quietly agree with whatever the fallback picked.
+    installAgentDockBridge({
+      listProviders: vi.fn().mockResolvedValue([
+        { ...CLAUDE, installed: false, authenticated: 'unknown' },
+        { ...CODEX_NOT_INSTALLED, installed: true, authenticated: 'authenticated', version: '1.0.0' },
+      ]),
+    });
+    installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: 'claude' }) });
+
+    render(<RuntimePage daemonState="ready" />);
+    await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
+
+    const claudeCard = screen.getAllByText('Claude Code')[0]!.closest('.card');
+    const codexCard = screen.getByText('Codex').closest('.card');
+    expect(claudeCard).not.toBeNull();
+    expect(codexCard).not.toBeNull();
+
+    // The badge names Claude -- the persisted preference -- even though Claude is not installed
+    // and Codex is what a session would actually run through.
+    expect(within(claudeCard as HTMLElement).getByText('Default')).toBeInTheDocument();
+    expect(within(codexCard as HTMLElement).queryByText('Default')).not.toBeInTheDocument();
+    expect(within(claudeCard as HTMLElement).getByRole('button', { name: 'Not installed' })).toBeDisabled();
+    expect(within(codexCard as HTMLElement).getByRole('button', { name: 'Use as default' })).toBeEnabled();
+    // The "Default runtime" summary panel also names the persisted preference, not the fallback.
+    expect(screen.getByText('Default runtime').parentElement?.textContent).toContain('Claude Code');
+  });
+
   it('surfaces a provider-listing failure without crashing', async () => {
     installAgentDockBridge({ listProviders: vi.fn().mockRejectedValue(new Error('daemon unreachable')) });
     installWorkspaceBridge();

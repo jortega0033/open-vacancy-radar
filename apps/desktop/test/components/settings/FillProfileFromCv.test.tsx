@@ -11,7 +11,7 @@ import {
   SearchProfileSection,
   type SearchProfileSectionProps,
 } from '../../../src/components/settings/SearchProfileSection.js';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_INSTALLED, CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges } from '../../cv-bridges.js';
 import {
   DEFAULT_CANDIDATE_PROFILE,
   installVacancyRadarBridge,
@@ -187,8 +187,12 @@ describe('FillProfileFromCvDrawer', () => {
     // Real regression: this drawer used to call useAgentRun.start() with no provider option at
     // all, which silently falls back to Claude Code regardless of what the user set as their
     // default runtime -- failing outright for anyone who set Codex because Claude Code isn't
-    // authenticated on their machine.
-    const bridges = installBridges();
+    // authenticated on their machine. Both CLIs are installed here, so the preference itself is
+    // what decides -- see the next two tests for what happens when it doesn't match what's
+    // actually installed (issue #400).
+    const bridges = installBridges({
+      agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED, CODEX_INSTALLED]) },
+    });
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([CV]),
       getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'codex' }),
@@ -200,6 +204,49 @@ describe('FillProfileFromCvDrawer', () => {
     expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'codex' }),
     );
+  });
+
+  it('issue #400: falls back to the one installed CLI when the persisted preference names one that is not installed', async () => {
+    // The exact bug: `defaultProvider` still says 'claude' (or was explicitly set to it) on a
+    // machine where only Codex is installed. Reading the preference alone used to send every run
+    // at an uninstalled Claude Code; it must resolve to the one CLI that is actually there.
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+      },
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }),
+    });
+
+    render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} />);
+    await runExtraction(bridges, GOOD_RESPONSE);
+
+    expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex' }),
+    );
+  });
+
+  it('issue #400: never overwrites the persisted preference as a side effect of resolving the effective provider', async () => {
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+      },
+    });
+    const workspace = installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }),
+    });
+
+    render(<FillProfileFromCvDrawer profile={USER_SET_PROFILE} onApply={vi.fn()} onClose={vi.fn()} />);
+    await runExtraction(bridges, GOOD_RESPONSE);
+
+    expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex' }),
+    );
+    // Resolving to Codex for this run never wrote 'codex' back as the persisted default.
+    expect(workspace.updateSettings).not.toHaveBeenCalled();
   });
 
   it('never renders an input for a field a CV cannot honestly state', async () => {

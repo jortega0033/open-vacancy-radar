@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
+import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import type {
   CvDocumentRecord,
   LetterInput,
@@ -12,6 +12,7 @@ import type {
 } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { resolveEffectiveProvider } from '../../resolve-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
@@ -124,7 +125,8 @@ export function LetterGenerator({
   const [length, setLength] = useState<LetterLength>(letter?.length ?? 'standard');
   const [status, setStatus] = useState<LetterStatus>(letter?.status ?? 'draft');
   const [instructions, setInstructions] = useState('');
-  const [provider, setProvider] = useState<ProviderId>('claude');
+  const [preferredProvider, setPreferredProvider] = useState<ProviderId>('claude');
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
 
   const [title, setTitle] = useState(letter?.title ?? '');
   // A title the user typed is theirs; only an untouched one keeps tracking the type and company.
@@ -228,7 +230,7 @@ export function LetterGenerator({
     void (async () => {
       try {
         const settings = await window.workspace.getSettings();
-        if (!cancelled) setProvider(settings.defaultProvider);
+        if (!cancelled) setPreferredProvider(settings.defaultProvider);
       } catch {
         // the useState default ('claude') is already sensible
       }
@@ -237,6 +239,26 @@ export function LetterGenerator({
       cancelled = true;
     };
   }, []);
+
+  // The live provider-status list, needed alongside the preference above to resolve which CLI a
+  // generation actually runs through (issue #400): a preference pointing at an uninstalled CLI
+  // must fall back to the one CLI that is actually installed, not fail outright.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await window.agentDock.listProviders();
+        if (!cancelled) setProviders(list);
+      } catch {
+        // best effort: resolveEffectiveProvider falls back to the preference with an empty list
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const provider = resolveEffectiveProvider(preferredProvider, providers);
 
   // Once the library lands, settle on a CV: whatever was already chosen if it still exists, else
   // the library's default, else the first one.

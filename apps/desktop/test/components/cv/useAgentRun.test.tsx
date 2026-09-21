@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges } from '../../cv-bridges.js';
+import { installWorkspaceBridge } from '../../workspace-bridge.js';
 import { useAgentRun } from '../../../src/components/cv/useAgentRun.js';
 
 afterEach(() => {
@@ -97,6 +98,54 @@ describe('useAgentRun', () => {
 
     expect(result.current.status).toBe('streaming');
     expect(result.current.error).toBeUndefined();
+  });
+
+  describe('provider resolution when start() is called with no explicit provider (issue #400)', () => {
+    it('resolves the effective provider from settings + live detection instead of hardcoding Claude Code', async () => {
+      const bridges = installBridges({
+        agentDock: { listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]) },
+      });
+      installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }) });
+      const { result } = renderHook(() => useAgentRun());
+
+      await act(async () => {
+        await result.current.start('draft a letter');
+      });
+
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'codex' }),
+      );
+    });
+
+    it('still uses the preference directly when it is the provider that is actually installed', async () => {
+      const bridges = installBridges();
+      installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'claude' }) });
+      const { result } = renderHook(() => useAgentRun());
+
+      await act(async () => {
+        await result.current.start('draft a letter');
+      });
+
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'claude' }),
+      );
+    });
+
+    it('never resolves a provider, or reads settings/providers at all, when the caller already passed one explicitly', async () => {
+      const bridges = installBridges();
+      const workspace = installWorkspaceBridge();
+      const { result } = renderHook(() => useAgentRun());
+
+      await act(async () => {
+        await result.current.start('draft a letter', { provider: 'codex' });
+      });
+
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'codex' }),
+      );
+      expect(workspace.getSettings).not.toHaveBeenCalled();
+      expect(bridges.agentDock.listProviders).not.toHaveBeenCalled();
+    });
   });
 
   describe('lifecycle invalidation races (issue #362)', () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { resolveEffectiveProvider } from '../../resolve-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
@@ -38,8 +39,11 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
   const [libraryError, setLibraryError] = useState<string>();
   const [model, setModel] = useState('');
-  const [provider, setProvider] = useState<ProviderId>('claude');
-  const [providerStatus, setProviderStatus] = useState<ProviderStatus>();
+  // The persisted preference (AI Runtime page's "Use as default"), and the live provider-status
+  // list detection actually reports. Neither is the provider a session runs through by itself --
+  // see `resolveEffectiveProvider` below for why (issue #400).
+  const [preferredProvider, setPreferredProvider] = useState<ProviderId>('claude');
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
 
   // The default provider is a settings preference (set from the AI Runtime page); a failure here
   // just leaves the Claude Code default in place rather than blocking the feature.
@@ -48,7 +52,7 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
     void window.workspace
       .getSettings()
       .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
+        if (!cancelled) setPreferredProvider(settings.defaultProvider);
       })
       .catch(() => {});
     return () => {
@@ -58,18 +62,26 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
 
   // Best effort: the model picker is a convenience, so a failed provider listing just hides it
   // rather than blocking the feature (the CLI's own default model is always a valid choice).
+  // Fetched once, independent of the preference above: resolving the effective provider needs the
+  // full list regardless of which provider ends up preferred.
   useEffect(() => {
     let cancelled = false;
     window.agentDock
       .listProviders()
-      .then((providers) => {
-        if (!cancelled) setProviderStatus(providers.find((p) => p.id === provider));
+      .then((list) => {
+        if (!cancelled) setProviders(list);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [provider]);
+  }, []);
+
+  // The provider AI features in this screen actually run through: the preference if it is
+  // installed, else the one other installed CLI, else the preference unchanged (issue #400). Never
+  // written back to settings -- purely a runtime choice for this render.
+  const provider = resolveEffectiveProvider(preferredProvider, providers);
+  const providerStatus = providers.find((p) => p.id === provider);
 
   useEffect(() => {
     let cancelled = false;

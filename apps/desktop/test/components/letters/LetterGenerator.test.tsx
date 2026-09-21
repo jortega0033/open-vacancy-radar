@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LetterGenerator, MAX_INSTRUCTION_CHARS } from '../../../src/components/letters/index.js';
-import { installBridges } from '../../cv-bridges.js';
+import { CLAUDE_INSTALLED, CLAUDE_NOT_INSTALLED, CODEX_INSTALLED, installBridges } from '../../cv-bridges.js';
 import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
 import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter, makeUnreviewedCv } from './fixtures.js';
 
@@ -360,11 +360,16 @@ describe('LetterGenerator', () => {
 
   it("names the actually-configured provider in its CLI disclosure and 'starting' status, not a hardcoded Claude Code", async () => {
     // Real regression: this copy (and AiOutput's "Starting Claude Code…" status line) used to
-    // hardcode Claude Code regardless of which CLI the run actually goes through.
+    // hardcode Claude Code regardless of which CLI the run actually goes through. Both CLIs are
+    // installed here, so the preference itself decides -- see the issue #400 tests below for a
+    // preference that names an uninstalled CLI.
     const bridges = installBridges({
       // Never resolves, so the run stays in the 'starting' state deterministically instead of
       // racing straight through to 'streaming' once the mocked session "starts".
-      agentDock: { createSession: vi.fn(() => new Promise<never>(() => {})) },
+      agentDock: {
+        createSession: vi.fn(() => new Promise<never>(() => {})),
+        listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED, CODEX_INSTALLED]),
+      },
     });
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
@@ -379,5 +384,50 @@ describe('LetterGenerator', () => {
     expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
 
     expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('issue #400: falls back to the one installed CLI (Codex) when the persisted preference still names Claude, which is not installed', async () => {
+    // The exact machine this issue is about: only Codex is installed, and `defaultProvider` is
+    // still the factory default ('claude') because it is a preference, not a live detection --
+    // see resolveEffectiveProvider's own doc comment for why it stays that way.
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+      },
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: 'claude' }),
+    });
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    expect(await screen.findByText(/Generated on your own Codex CLI/)).toBeInTheDocument();
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex' }),
+    );
+  });
+
+  it('issue #400: never persists the resolved effective provider back as the default', async () => {
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([CLAUDE_NOT_INSTALLED, CODEX_INSTALLED]),
+      },
+    });
+    const workspace = installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: 'claude' }),
+    });
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() =>
+      expect(bridges.agentDock.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'codex' }),
+      ),
+    );
+    expect(workspace.updateSettings).not.toHaveBeenCalled();
   });
 });

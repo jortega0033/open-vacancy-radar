@@ -26,6 +26,24 @@ export const CLAUDE_INSTALLED: ProviderStatus = {
   availableModels: ['sonnet', 'opus'],
 };
 
+/** For issue #400 regression tests: a machine with Codex installed (and, paired with an explicit
+ * `listProviders` mock that omits or marks Claude as not installed, one with only Codex). */
+export const CODEX_INSTALLED: ProviderStatus = {
+  id: 'codex',
+  name: 'Codex',
+  installed: true,
+  authenticated: 'authenticated',
+  capabilities: CAPABILITIES,
+};
+
+export const CLAUDE_NOT_INSTALLED: ProviderStatus = {
+  id: 'claude',
+  name: 'Claude Code',
+  installed: false,
+  authenticated: 'unknown',
+  capabilities: CAPABILITIES,
+};
+
 export type EmitEvent = (sessionId: string, event: AgentEvent) => void;
 
 export interface InstalledBridges {
