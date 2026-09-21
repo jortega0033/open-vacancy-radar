@@ -26,6 +26,7 @@ const CV: CvDocumentRecord = {
   text: 'Senior Frontend Engineer at Redwood. Angular, TypeScript, RxJS. Eight years.',
   profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
   source: null,
+  textSource: 'text_layer',
   isDefault: true,
   uploadedAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -33,6 +34,7 @@ const CV: CvDocumentRecord = {
 
 const PARSED_CV: CvDocumentRecord = {
   ...CV,
+  textSource: 'text_layer',
   profile: {
     title: 'Senior Frontend Engineer',
     years: '8',

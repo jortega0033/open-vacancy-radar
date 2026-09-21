@@ -473,9 +473,11 @@ describe('electron/preload.ts: workspace bridge', () => {
 });
 
 describe('electron/preload.ts: cv bridge', () => {
-  it('exposes exactly the two documented capability functions and nothing else', async () => {
+  it('exposes exactly the three documented capability functions and nothing else', async () => {
     const api = await loadPreload('cv');
-    expect(Object.keys(api).sort()).toEqual(['getWorkspaceDir', 'selectAndRead'].sort());
+    expect(Object.keys(api).sort()).toEqual(
+      ['discardStagedTranscription', 'getWorkspaceDir', 'selectAndRead'].sort(),
+    );
     for (const [name, value] of Object.entries(api)) {
       expect(typeof value, `${name} should be a plain function`).toBe('function');
     }
@@ -484,15 +486,16 @@ describe('electron/preload.ts: cv bridge', () => {
   it('takes no file path: selectAndRead invokes cv:select-and-read with no arguments at all', async () => {
     // The renderer must never be able to name the file that gets read: only the user can, in the
     // native dialog. An argument reaching this channel would make it an arbitrary-file-read.
-    invoke.mockResolvedValue({ fileName: 'cv.pdf', text: 'hello' });
+    invoke.mockResolvedValue({ status: 'ok', fileName: 'cv.pdf', text: 'hello' });
     const api = await loadPreload('cv');
     await (api.selectAndRead as (p?: unknown) => Promise<unknown>)('C:/Users/someone/.ssh/id_rsa');
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('cv:select-and-read');
   });
 
-  it('selectAndRead returns only fileName and text, dropping anything else the payload carried', async () => {
+  it('selectAndRead returns only status/fileName/text for the ok case, dropping anything else the payload carried', async () => {
     invoke.mockResolvedValue({
+      status: 'ok',
       fileName: 'cv.pdf',
       text: 'hello',
       absolutePath: 'C:/Users/someone/Documents/cv.pdf',
@@ -502,9 +505,66 @@ describe('electron/preload.ts: cv bridge', () => {
 
     const file = await (api.selectAndRead as () => Promise<unknown>)();
 
-    expect(file).toEqual({ fileName: 'cv.pdf', text: 'hello' });
+    expect(file).toEqual({ status: 'ok', fileName: 'cv.pdf', text: 'hello' });
     expect(file).not.toHaveProperty('absolutePath');
     expect(file).not.toHaveProperty('token');
+  });
+
+  it('selectAndRead rebuilds a scanned-pdf result field by field, dropping an unexpected extra field', async () => {
+    invoke.mockResolvedValue({
+      status: 'scanned-pdf',
+      fileName: 'scan.pdf',
+      pageCount: 3,
+      tooManyPages: false,
+      candidateId: 'candidate-123',
+      absolutePath: 'C:/Users/someone/Documents/scan.pdf',
+    });
+    const api = await loadPreload('cv');
+
+    const result = await (api.selectAndRead as () => Promise<unknown>)();
+
+    expect(result).toEqual({
+      status: 'scanned-pdf',
+      fileName: 'scan.pdf',
+      pageCount: 3,
+      tooManyPages: false,
+      candidateId: 'candidate-123',
+    });
+    expect(result).not.toHaveProperty('absolutePath');
+  });
+
+  it('selectAndRead omits candidateId for a scanned-pdf result over the page bound, never inventing one', async () => {
+    invoke.mockResolvedValue({ status: 'scanned-pdf', fileName: 'scan.pdf', pageCount: 40, tooManyPages: true });
+    const api = await loadPreload('cv');
+
+    const result = await (api.selectAndRead as () => Promise<unknown>)();
+
+    expect(result).toEqual({ status: 'scanned-pdf', fileName: 'scan.pdf', pageCount: 40, tooManyPages: true });
+    expect(result).not.toHaveProperty('candidateId');
+  });
+
+  it('selectAndRead still forwards candidateId when tooManyPages is true, since main.ts is what decides whether to ever send one', async () => {
+    // toCvSelectResult reads `candidateId` and `tooManyPages` independently, so nothing here strips
+    // one based on the other -- documenting the actual (not the "obviously safer") behavior in case
+    // main.ts is ever the one that regresses and sends both at once.
+    invoke.mockResolvedValue({
+      status: 'scanned-pdf',
+      fileName: 'scan.pdf',
+      pageCount: 40,
+      tooManyPages: true,
+      candidateId: 'candidate-should-not-happen',
+    });
+    const api = await loadPreload('cv');
+
+    const result = await (api.selectAndRead as () => Promise<unknown>)();
+
+    expect(result).toEqual({
+      status: 'scanned-pdf',
+      fileName: 'scan.pdf',
+      pageCount: 40,
+      tooManyPages: true,
+      candidateId: 'candidate-should-not-happen',
+    });
   });
 
   it('selectAndRead returns null for a cancelled dialog and for a malformed payload', async () => {
@@ -512,15 +572,23 @@ describe('electron/preload.ts: cv bridge', () => {
     let api = await loadPreload('cv');
     expect(await (api.selectAndRead as () => Promise<unknown>)()).toBeNull();
 
-    invoke.mockResolvedValue({ fileName: 'cv.pdf' }); // no text
+    invoke.mockResolvedValue({ fileName: 'cv.pdf', text: 'hello' }); // no status discriminant
+    api = await loadPreload('cv');
+    expect(await (api.selectAndRead as () => Promise<unknown>)()).toBeNull();
+
+    invoke.mockResolvedValue({ status: 'ok', fileName: 'cv.pdf' }); // no text
+    api = await loadPreload('cv');
+    expect(await (api.selectAndRead as () => Promise<unknown>)()).toBeNull();
+
+    invoke.mockResolvedValue({ status: 'scanned-pdf', fileName: 'scan.pdf' }); // no pageCount/tooManyPages
     api = await loadPreload('cv');
     expect(await (api.selectAndRead as () => Promise<unknown>)()).toBeNull();
   });
 
   it('selectAndRead lets a main-process read failure reject, so the UI can show the reason', async () => {
-    invoke.mockRejectedValue(new Error('no selectable text found in "scan.pdf"'));
+    invoke.mockRejectedValue(new Error('could not read "scan.pdf" as a PDF: Invalid PDF structure. It may be encrypted or corrupted.'));
     const api = await loadPreload('cv');
-    await expect((api.selectAndRead as () => Promise<unknown>)()).rejects.toThrow(/no selectable text/);
+    await expect((api.selectAndRead as () => Promise<unknown>)()).rejects.toThrow(/encrypted or corrupted/);
   });
 
   it('getWorkspaceDir invokes only cv:get-workspace-dir and rejects a non-string response', async () => {
@@ -532,6 +600,13 @@ describe('electron/preload.ts: cv bridge', () => {
     invoke.mockResolvedValue(undefined);
     api = await loadPreload('cv');
     await expect((api.getWorkspaceDir as () => Promise<unknown>)()).rejects.toThrow(/workspace directory/);
+  });
+
+  it('discardStagedTranscription sends the candidate id to cv:discard-staged-transcription', async () => {
+    invoke.mockResolvedValue(undefined);
+    const api = await loadPreload('cv');
+    await (api.discardStagedTranscription as (id: string) => Promise<void>)('candidate-123');
+    expect(invoke).toHaveBeenCalledWith('cv:discard-staged-transcription', 'candidate-123');
   });
 });
 
@@ -670,7 +745,11 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'recordApplicationAnswerUsed',
     'deleteApplicationAnswer',
   ],
-  cv: ['getWorkspaceDir', 'selectAndRead'],
+  // Added by issue #396, same reasoning as `workspace`'s own additions above: `cv` legitimately
+  // grows here (discarding a staged transcription candidate the renderer will never use, next to
+  // the other two verbs on this same namespace), so the literal is updated rather than left
+  // blocking real growth.
+  cv: ['discardStagedTranscription', 'getWorkspaceDir', 'selectAndRead'],
   system: ['getAppVersion', 'saveFile', 'setLaunchAtLogin'],
 };
 

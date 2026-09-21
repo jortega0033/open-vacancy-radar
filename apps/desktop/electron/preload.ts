@@ -66,6 +66,13 @@ export interface CreateSessionInput {
   provider: ProviderId;
   prompt: string;
   model?: string;
+  /**
+   * Issue #396: an opaque, single-use handle from a `cv:select-and-read` `'scanned-pdf'` result --
+   * never a path. `main.ts`'s `daemon:create-session` handler resolves it to the real, already-
+   * staged PDF this process copied into its own AI-workspace scratch directory; the daemon-facing
+   * `attachments` field (which does take a path) is never read from what the renderer sends here.
+   */
+  attachmentCandidateId?: string;
 }
 
 export interface AgentDockBridge {
@@ -162,18 +169,35 @@ export interface CvFile {
 }
 
 /**
+ * `cv:select-and-read`'s result (issue #396). `'scanned-pdf'` is the new case: a PDF that parsed
+ * but has no text layer. `candidateId`, when present, is an opaque handle to a copy of that PDF's
+ * bytes `main.ts` already staged into its own AI-workspace scratch directory -- never a path, and
+ * never present when `tooManyPages` is true (nothing useful to do with an id for a PDF this app
+ * will never offer to transcribe). Pass it back unchanged as `CreateSessionInput.attachmentCandidateId`
+ * to run the reviewed AI-transcription fallback; anything else about it is opaque to the renderer.
+ */
+export type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; tooManyPages: boolean; candidateId?: string };
+
+/**
  * A third independent namespace, for the same reason `vacancyRadar` is separate from `agentDock`:
  * it is the only part of the bridge that touches the user's own documents, so it stays isolated
  * and auditable on its own terms. Note what is deliberately *not* here: no `readFile(path)`, no
- * path argument of any kind. `selectAndRead()` returns already-extracted text for a file **the
- * user picked in a native dialog**; the renderer never names a file and never receives a filesystem
- * path, so a compromised renderer cannot turn this into an arbitrary-file-read primitive.
- * `getWorkspaceDir()` returns one app-owned scratch directory (main.ts creates it) purely so the
- * AI features have a valid `cwd` for `createSession`. It grants no access to that directory.
+ * path argument of any kind. `selectAndRead()` returns already-extracted text (or, for a scanned
+ * PDF, an opaque staged-attachment handle -- never a path) for a file **the user picked in a native
+ * dialog**; the renderer never names a file and never receives a filesystem path, so a compromised
+ * renderer cannot turn this into an arbitrary-file-read primitive. `getWorkspaceDir()` returns one
+ * app-owned scratch directory (main.ts creates it) purely so the AI features have a valid `cwd` for
+ * `createSession`. It grants no access to that directory.
  */
 export interface CvBridge {
-  selectAndRead(): Promise<CvFile | null>;
+  selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
+  /** Discards a staged transcription candidate the renderer will never use (issue #396):
+   * declined consent, or picking a different file instead. Best-effort; a candidate this call
+   * misses is still cleaned up by the main process's own periodic sweep. */
+  discardStagedTranscription(candidateId: string): Promise<void>;
 }
 
 /**
@@ -428,19 +452,36 @@ contextBridge.exposeInMainWorld('workspace', workspaceApi);
 
 /**
  * Rebuilt field by field rather than passed through, on the same principle as `toDaemonStatus`:
- * whatever `cv:select-and-read` sends, only `fileName` and `text` can ever reach the renderer. An
- * absolute path accidentally added to that payload later could not cross this boundary.
+ * whatever `cv:select-and-read` sends, only these named fields can ever reach the renderer -- in
+ * particular, `candidateId` is opaque data this function copies as a string if present, never a
+ * path, and nothing else main.ts might one day add to that payload can cross this boundary by
+ * accident.
  */
-function toCvFile(value: unknown): CvFile | null {
+function toCvSelectResult(value: unknown): CvSelectResult | null {
   if (!value || typeof value !== 'object') return null;
-  const { fileName, text } = value as { fileName?: unknown; text?: unknown };
-  if (typeof fileName !== 'string' || typeof text !== 'string') return null;
-  return { fileName, text };
+  const v = value as Record<string, unknown>;
+  if (v.status === 'ok') {
+    if (typeof v.fileName !== 'string' || typeof v.text !== 'string') return null;
+    return { status: 'ok', fileName: v.fileName, text: v.text };
+  }
+  if (v.status === 'scanned-pdf') {
+    if (typeof v.fileName !== 'string' || typeof v.pageCount !== 'number' || typeof v.tooManyPages !== 'boolean') {
+      return null;
+    }
+    return {
+      status: 'scanned-pdf',
+      fileName: v.fileName,
+      pageCount: v.pageCount,
+      tooManyPages: v.tooManyPages,
+      ...(typeof v.candidateId === 'string' ? { candidateId: v.candidateId } : {}),
+    };
+  }
+  return null;
 }
 
 const cvApi: CvBridge = {
   async selectAndRead() {
-    return toCvFile(await ipcRenderer.invoke('cv:select-and-read'));
+    return toCvSelectResult(await ipcRenderer.invoke('cv:select-and-read'));
   },
   async getWorkspaceDir() {
     const result: unknown = await ipcRenderer.invoke('cv:get-workspace-dir');
@@ -448,6 +489,9 @@ const cvApi: CvBridge = {
       throw new Error('main process did not return a workspace directory');
     }
     return result;
+  },
+  async discardStagedTranscription(candidateId) {
+    await ipcRenderer.invoke('cv:discard-staged-transcription', candidateId);
   },
 };
 

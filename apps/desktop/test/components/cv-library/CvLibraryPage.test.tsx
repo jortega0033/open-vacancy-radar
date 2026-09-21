@@ -18,6 +18,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
     text: 'Angular. TypeScript. 8 years.',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
     source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
@@ -95,6 +96,7 @@ function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
   const bridge: CvBridge = {
     selectAndRead: vi.fn().mockResolvedValue(null),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
+    discardStagedTranscription: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   (window as unknown as { cv: CvBridge }).cv = bridge;
@@ -668,7 +670,9 @@ describe('CvLibraryPage', () => {
     const createCvDocument = vi.fn().mockResolvedValue(created);
     const listCvDocuments = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([created]);
     installWorkspaceBridge({ listCvDocuments, createCvDocument });
-    const selectAndRead = vi.fn().mockResolvedValue({ fileName: 'resume.pdf', text: 'Angular developer.' });
+    const selectAndRead = vi
+      .fn()
+      .mockResolvedValue({ status: 'ok', fileName: 'resume.pdf', text: 'Angular developer.' });
     installCvBridge({ selectAndRead });
 
     render(<CvLibraryPage />);
@@ -684,6 +688,7 @@ describe('CvLibraryPage', () => {
         name: 'resume.pdf',
         kind: 'uploaded',
         text: 'Angular developer.',
+        textSource: 'text_layer',
       }),
     );
 

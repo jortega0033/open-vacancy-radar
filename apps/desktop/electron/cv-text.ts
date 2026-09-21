@@ -48,6 +48,39 @@ export const MAX_CV_FILE_BYTES = 10 * 1024 * 1024;
  */
 export const MAX_CV_EXTRACTED_TEXT_CHARS = 2_000_000;
 
+/**
+ * Issue #396: a page-count bound for the *AI-transcription fallback* specifically, not for local
+ * extraction in general (a long text-layer PDF above this many pages still reads fine today). A
+ * scanned CV a handful of pages long is the case this fallback exists for; anything past this is
+ * cheaper and more reliable to ask the user to re-export or paste as .txt than to hand a vision
+ * model a large multi-page attachment against `MAX_SESSION_ATTACHMENT_BYTES`.
+ */
+export const MAX_TRANSCRIBABLE_PDF_PAGES = 15;
+
+/**
+ * Thrown by `readCvFile` specifically for a PDF that parsed successfully but has no selectable
+ * text layer -- the scanned/image-only case issue #396 adds a reviewed AI-transcription fallback
+ * for. Kept as its own type (rather than a plain `Error`, which every other failure in this module
+ * still throws) so `main.ts`'s `cv:select-and-read` handler can distinguish "this PDF is a genuine
+ * scan, safe to offer transcription for" from every other failure -- most importantly, from an
+ * encrypted or corrupted PDF (`extractPdfTextForUpload` below throws a plain `Error` for those),
+ * which must keep failing with its own clear, distinct message rather than ever being offered the
+ * transcription fallback.
+ */
+export class NoSelectablePdfTextError extends Error {
+  readonly fileName: string;
+  readonly pageCount: number;
+
+  constructor(fileName: string, pageCount: number) {
+    super(
+      `no selectable text found in "${fileName}". It looks like a scanned image; export a text-based PDF or paste the CV as .txt`,
+    );
+    this.name = 'NoSelectablePdfTextError';
+    this.fileName = fileName;
+    this.pageCount = pageCount;
+  }
+}
+
 function tooLargeError(fileName: string, byteLength: number): Error {
   return new Error(
     `"${fileName}" is ${Math.round(byteLength / 1024 / 1024)} MB. CV files are limited to ${
@@ -81,6 +114,29 @@ export async function extractPdfText(bytes: Uint8Array): Promise<string> {
   const { extractText } = await import('unpdf');
   const { text } = await extractText(bytes, { mergePages: true });
   return text;
+}
+
+/**
+ * The upload path's own PDF extraction (issue #396): unlike `extractPdfText` above -- shared with
+ * two other callers that must keep seeing pdf.js's own raw failure, unchanged -- this wraps a parse
+ * failure in a clear, upload-specific message naming the file and calling out the likely cause
+ * (encrypted or corrupted), and also returns the page count `readCvFile` needs to size the
+ * transcription fallback. A thrown error here is always a plain `Error`, never
+ * `NoSelectablePdfTextError`: that type is reserved for a PDF that parsed fine but has no text.
+ */
+async function extractPdfTextForUpload(bytes: Uint8Array, fileName: string): Promise<{ text: string; pageCount: number }> {
+  const { extractText } = await import('unpdf');
+  try {
+    const { text, totalPages } = await extractText(bytes, { mergePages: true });
+    return { text, pageCount: totalPages };
+  } catch (err) {
+    throw new Error(
+      `could not read "${fileName}" as a PDF: ${
+        err instanceof Error ? err.message : 'unknown error'
+      }. It may be encrypted or corrupted.`,
+      { cause: err },
+    );
+  }
 }
 
 /**
@@ -143,9 +199,14 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
 
   // Copied into a standalone Uint8Array: pdf.js takes ownership of (and may detach) the buffer it
   // is handed, which must never be Node's shared allocation pool that `readFile` can return.
+  let pageCount: number | undefined;
   const raw =
     extension === 'pdf'
-      ? await extractPdfText(Uint8Array.from(buffer))
+      ? await (async () => {
+          const extracted = await extractPdfTextForUpload(Uint8Array.from(buffer), fileName);
+          pageCount = extracted.pageCount;
+          return extracted.text;
+        })()
       : extension === 'docx'
         ? await extractDocxText(buffer, fileName)
         : buffer.toString('utf8');
@@ -157,13 +218,11 @@ export async function readCvFile(filePath: string): Promise<CvFileContent> {
 
   const text = normalizeText(raw);
   if (!text) {
-    throw new Error(
-      extension === 'pdf'
-        ? `no selectable text found in "${fileName}". It looks like a scanned image; export a text-based PDF or paste the CV as .txt`
-        : extension === 'docx'
-          ? `"${fileName}" contains no readable text`
-          : `"${fileName}" is empty`,
-    );
+    // A PDF that parsed without error but yielded no text is a genuine scan/image-only export, not
+    // a corrupt file (that throws from `extractPdfTextForUpload` above instead) -- issue #396's
+    // typed error, so `main.ts` can offer the reviewed AI-transcription fallback for this case only.
+    if (extension === 'pdf') throw new NoSelectablePdfTextError(fileName, pageCount ?? 0);
+    throw new Error(extension === 'docx' ? `"${fileName}" contains no readable text` : `"${fileName}" is empty`);
   }
 
   return { fileName, text };

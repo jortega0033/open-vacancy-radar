@@ -1,6 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { CvTranscriptionFlow } from '../cv/CvTranscriptionFlow.js';
 import { SaveCvToLibrary } from '../cv/SaveCvToLibrary.js';
-import type { CvFile } from '../../window.js';
+import { useCvPicker } from '../cv/useCvPicker.js';
+import type { CvDocument } from '../cv/types.js';
 
 export interface CvUploadActionProps {
   /** Called once the picked file has been persisted, so the parent can refresh its list. */
@@ -8,40 +10,33 @@ export interface CvUploadActionProps {
 }
 
 /**
- * "Upload CV" for the CV library. Picks a file through the same `window.cv` bridge the CV
- * assistant's `CvUpload` uses (PDF, Word, plain text or Markdown -- issue #357 added DOCX support
- * to the real `cv:select-and-read` bridge, matching what the design reference's prototype already
- * showed), then hands the extracted text to the existing `SaveCvToLibrary`
- * component to persist unchanged rather than re-implementing `createCvDocument` persistence that
- * is already implemented and already tested.
+ * "Upload CV" for the CV library. Picks a file through `useCvPicker` (issue #396; the same hook
+ * the CV assistant's `CvUpload` uses, so a scanned/image-only PDF gets the same reviewed AI-
+ * transcription offer here as everywhere else in the app), then hands the resolved text to the
+ * existing `SaveCvToLibrary` component to persist unchanged rather than re-implementing
+ * `createCvDocument` persistence that is already implemented and already tested.
  *
- * Only the plain bridge call lives here (no picker UI, no show/hide-extracted-text affordance),
- * so this stays a thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`)
- * rather than a second `CvUpload`.
+ * Only the pick-and-resolve flow lives here (no "show extracted text" affordance), so this stays a
+ * thin composition of "pick" (this component) and "persist" (`SaveCvToLibrary`) rather than a
+ * second `CvUpload`.
  */
 export function CvUploadAction({ onSaved }: CvUploadActionProps) {
-  const [picked, setPicked] = useState<CvFile | null>(null);
-  const [isPicking, setIsPicking] = useState(false);
-  const [error, setError] = useState<string>();
+  const picker = useCvPicker();
+  const [picked, setPicked] = useState<CvDocument | null>(null);
 
-  const handlePick = useCallback(async () => {
-    setError(undefined);
-    setIsPicking(true);
-    try {
-      const selected = await window.cv.selectAndRead();
-      // null = the user closed the dialog; nothing to do.
-      if (selected) setPicked(selected);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not read that file');
-    } finally {
-      setIsPicking(false);
-    }
-  }, []);
+  useEffect(() => {
+    if (picker.state.phase !== 'done') return;
+    const { result } = picker.state;
+    setPicked({ fileName: result.fileName, text: result.text, textSource: result.textSource });
+    picker.reset();
+  }, [picker]);
 
   const handleSaved = useCallback(() => {
     setPicked(null);
     onSaved();
   }, [onSaved]);
+
+  const isPicking = picker.state.phase === 'picking' || picker.state.phase === 'transcribing';
 
   if (picked) {
     return (
@@ -59,16 +54,16 @@ export function CvUploadAction({ onSaved }: CvUploadActionProps) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <button className="btn btn-primary btn-sm" type="button" onClick={handlePick} disabled={isPicking}>
-        {isPicking && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
-        Upload CV
-      </button>
-      {error && (
-        <span className="text-sm text-error" role="alert">
-          {error}
-        </span>
-      )}
+    <div className="flex flex-col items-start gap-2">
+      <div className="flex items-center gap-2">
+        <button className="btn btn-primary btn-sm" type="button" onClick={() => void picker.pick()} disabled={isPicking}>
+          {picker.state.phase === 'picking' && (
+            <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />
+          )}
+          Upload CV
+        </button>
+      </div>
+      <CvTranscriptionFlow picker={picker} />
     </div>
   );
 }

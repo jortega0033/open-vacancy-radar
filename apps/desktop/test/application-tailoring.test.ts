@@ -26,6 +26,7 @@ const cv: CvDocumentRecord = {
     maxProjects: 1, complete: true, incompleteReason: '', coveredChars: 100, sourceChars: 100,
     reviewedAt: '2026-09-10T00:00:00.000Z',
   },
+  textSource: 'text_layer',
   isDefault: true, uploadedAt: '2026-09-10T00:00:00.000Z', updatedAt: '2026-09-10T00:00:00.000Z',
 };
 

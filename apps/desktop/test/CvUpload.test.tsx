@@ -20,7 +20,11 @@ void _assignabilityCheck;
 describe('CvUpload', () => {
   it('reads the picked CV through the bridge and reports the file name and character count', async () => {
     const bridges = installBridges({
-      cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }) },
+      cv: {
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'ok', fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }),
+      },
     });
     const onCvChange = vi.fn();
 
@@ -28,7 +32,11 @@ describe('CvUpload', () => {
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() =>
-      expect(onCvChange).toHaveBeenCalledWith({ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }),
+      expect(onCvChange).toHaveBeenCalledWith({
+        fileName: 'jake-cv.pdf',
+        text: 'a'.repeat(1234),
+        textSource: 'text_layer',
+      }),
     );
     expect(bridges.cv.selectAndRead).toHaveBeenCalledTimes(1);
 

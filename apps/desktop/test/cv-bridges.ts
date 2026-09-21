@@ -65,8 +65,11 @@ export function installBridges(
   };
 
   const cv: CvBridge = {
-    selectAndRead: vi.fn().mockResolvedValue({ fileName: 'cv.pdf', text: 'Angular. TypeScript. 8 years.' }),
+    selectAndRead: vi
+      .fn()
+      .mockResolvedValue({ status: 'ok', fileName: 'cv.pdf', text: 'Angular. TypeScript. 8 years.' }),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
+    discardStagedTranscription: vi.fn().mockResolvedValue(undefined),
     ...overrides.cv,
   };
 

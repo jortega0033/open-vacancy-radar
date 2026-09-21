@@ -61,6 +61,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
     text: 'Angular architect. 8 years of frontend work. Led the design system rebuild.',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
     source: null,
+    textSource: 'text_layer',
     isDefault: true,
     uploadedAt: '2026-01-01T10:00:00.000Z',
     updatedAt: '2026-01-01T10:00:00.000Z',

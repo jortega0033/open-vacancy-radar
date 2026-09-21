@@ -82,6 +82,19 @@ export const cvDocuments = sqliteTable('cv_documents', {
    * time, and nothing queries, orders or joins across it in SQL.
    */
   sourceCv: text('source_cv', { mode: 'json' }).$type<CvSourceDocument>(),
+  /**
+   * Provenance of `text` (issue #396): `'text_layer'` for pdf.js/mammoth local extraction (every
+   * row before this column existed, via the column default, and every ordinary upload since), or
+   * `'ai_transcription'` for a scanned/image-only PDF whose text came from an AI provider instead.
+   * A vision-capable model can misread dates, employers or technologies, so this is never inferred
+   * after the fact -- `createCvDocument`'s caller states it explicitly, and the renderer can only
+   * ever request `'ai_transcription'` after the user has reviewed and confirmed the transcribed
+   * text (see `useCvPicker.ts`'s transcription-review step): the row simply would not exist yet
+   * otherwise. `text_layer` needs no separate review gate the way transcription does -- pdf.js and
+   * mammoth extract the document's own text characters rather than inferring them, so there is
+   * nothing equivalent to a vision model's misread to confirm.
+   */
+  textSource: text('text_source', { enum: ['text_layer', 'ai_transcription'] }).notNull().default('text_layer'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),

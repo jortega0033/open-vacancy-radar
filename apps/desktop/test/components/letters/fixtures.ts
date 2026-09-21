@@ -71,6 +71,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
       sourceChars: 4_000,
       reviewedAt: '2026-08-01T09:00:00.000Z',
     },
+    textSource: 'text_layer',
     isDefault: true,
     uploadedAt: '2026-08-01T09:00:00.000Z',
     updatedAt: '2026-08-01T09:00:00.000Z',
