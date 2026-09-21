@@ -20,7 +20,11 @@ void _assignabilityCheck;
 describe('CvUpload', () => {
   it('reads the picked CV through the bridge and reports the file name and character count', async () => {
     const bridges = installBridges({
-      cv: { selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }) },
+      cv: {
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'ok', fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }),
+      },
     });
     const onCvChange = vi.fn();
 
@@ -28,7 +32,11 @@ describe('CvUpload', () => {
     fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
 
     await waitFor(() =>
-      expect(onCvChange).toHaveBeenCalledWith({ fileName: 'jake-cv.pdf', text: 'a'.repeat(1234) }),
+      expect(onCvChange).toHaveBeenCalledWith({
+        fileName: 'jake-cv.pdf',
+        text: 'a'.repeat(1234),
+        textSource: 'text_layer',
+      }),
     );
     expect(bridges.cv.selectAndRead).toHaveBeenCalledTimes(1);
 
@@ -97,5 +105,68 @@ describe('CvUpload', () => {
     expect(screen.queryByText('Frontend architect, Angular.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /show extracted text/i }));
     expect(await screen.findByText('Frontend architect, Angular.')).toBeInTheDocument();
+  });
+
+  it('drives the full scanned-PDF fallback end to end: transcription, review, then save (issue #396)', async () => {
+    // Consent for this feature is a native `dialog.showMessageBox` main.ts shows from
+    // `cv:select-and-read` itself, before that IPC call ever resolves -- not a renderer-drawn
+    // dialog this component renders (see `useCvPicker.ts`'s own doc comment for why). So by the
+    // time `selectAndRead` resolves with `'scanned-pdf'` here, the user has already consented; this
+    // test starts from that point and drives transcription, review, and save.
+    const bridges = installBridges({
+      cv: {
+        selectAndRead: vi.fn().mockResolvedValue({
+          status: 'scanned-pdf',
+          fileName: 'scan.pdf',
+          pageCount: 2,
+          candidateId: 'candidate-e2e',
+        }),
+      },
+    });
+    const onCvChange = vi.fn();
+
+    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
+
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0]).toMatchObject({
+      attachmentCandidateId: 'candidate-e2e',
+    });
+    expect(await screen.findByText(/transcribing/i)).toBeInTheDocument();
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Jake Ortega. Angular architect.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const textarea = await screen.findByLabelText(/transcribed cv text/i);
+    expect(textarea).toHaveValue('Jake Ortega. Angular architect.');
+
+    fireEvent.click(screen.getByRole('button', { name: /looks correct, use this text/i }));
+
+    await waitFor(() =>
+      expect(onCvChange).toHaveBeenCalledWith({
+        fileName: 'scan.pdf',
+        text: 'Jake Ortega. Angular architect.',
+        textSource: 'ai_transcription',
+      }),
+    );
+  });
+
+  it('shows the unavailable guidance and dismisses it, for a scanned PDF main declined to offer transcription for', async () => {
+    installBridges({
+      cv: {
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'scanned-pdf-unavailable', fileName: 'scan.pdf', pageCount: 40, reason: 'too-many-pages' }),
+      },
+    });
+
+    render(<CvUpload cv={null} onCvChange={vi.fn()} providerLabel="Claude Code" />);
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
+
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent(/too many pages/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

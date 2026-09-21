@@ -28,6 +28,10 @@ export type ApplicationStatus =
 
 export type CvKind = 'uploaded' | 'manual';
 
+/** Provenance of a `CvDocumentRecord`'s `text` (issue #396). See `schema.ts`'s `textSource` column
+ * doc comment for why this is never inferred after the fact. */
+export type CvTextSource = 'text_layer' | 'ai_transcription';
+
 export type LetterType = 'motivation_letter' | 'cover_letter' | 'recruiter_message' | 'short_application_message';
 export type LetterTone = 'formal' | 'natural' | 'confident' | 'concise';
 export type LetterLength = 'short' | 'standard' | 'detailed';
@@ -168,6 +172,8 @@ export interface CvDocumentRecord {
    * the sections this record genuinely does not have.
    */
   source: CvSourceDocument | null;
+  /** See `CvTextSource`. `'text_layer'` for every record that predates this column. */
+  textSource: CvTextSource;
   isDefault: boolean;
   /** ISO-8601 */
   uploadedAt: string;
@@ -188,6 +194,12 @@ export interface CvDocumentInput {
    * was confirmed at a time nobody confirmed it. Sending an explicit `null` clears it.
    */
   source?: CvSourceDocument | null;
+  /**
+   * See `CvTextSource`. Defaults to `'text_layer'` (the column default) when omitted, which is
+   * every existing call site: only the AI-transcription review step (`useCvPicker.ts`) ever sends
+   * `'ai_transcription'`, and only once the user has confirmed the transcribed text is correct.
+   */
+  textSource?: CvTextSource;
   /** When true (or when this is the first CV in the library) the new row becomes the default. */
   isDefault?: boolean;
 }

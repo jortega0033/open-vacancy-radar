@@ -22,6 +22,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
       auth: '',
     },
     source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-01T09:00:00.000Z',
     updatedAt: '2026-08-01T09:00:00.000Z',
@@ -61,7 +62,7 @@ describe('CvAssistant', () => {
   it('switches library CVs and still allows a one-off upload fallback', async () => {
     installBridges({
       cv: {
-        selectAndRead: vi.fn().mockResolvedValue({ fileName: 'one-off.pdf', text: 'One off CV.' }),
+        selectAndRead: vi.fn().mockResolvedValue({ status: 'ok', fileName: 'one-off.pdf', text: 'One off CV.' }),
       },
     });
     installWorkspaceBridge({
@@ -102,7 +103,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 
@@ -134,7 +135,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 
@@ -196,7 +197,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
       agentDock: {
         listProviders: vi.fn().mockResolvedValue([
@@ -244,7 +245,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 

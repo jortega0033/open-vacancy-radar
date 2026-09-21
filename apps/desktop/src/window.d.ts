@@ -19,6 +19,12 @@ export interface CreateSessionInput {
   provider: ProviderId;
   prompt: string;
   model?: string;
+  /**
+   * Issue #396: an opaque, single-use handle from a `cv:select-and-read` `'scanned-pdf'` result --
+   * never a path. The main process resolves it to an already-staged PDF before the daemon ever
+   * sees it.
+   */
+  attachmentCandidateId?: string;
 }
 
 export interface AgentDockBridge {
@@ -80,9 +86,20 @@ export interface CvFile {
   text: string;
 }
 
+/** Mirror of `CvSelectResult` in electron/preload.ts. See the rationale for the shape there. */
+export type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
+
 /** Mirror of `CvBridge` in electron/preload.ts. See the rationale for the narrow shape there. */
 export interface CvBridge {
-  selectAndRead(): Promise<CvFile | null>;
+  selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
 }
 
@@ -266,6 +283,7 @@ export type {
   CvSourceEducationEntry,
   CvSourceExperienceEntry,
   CvSourceProjectEntry,
+  CvTextSource,
   DeleteResult,
   DensityPreference,
   LetterInput,

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -15,6 +15,7 @@ import {
   sessionIdParamSchema,
   workspaceTrustViewSchema,
   type ProviderId,
+  type ProviderStatus,
   type WorkspaceTrustView,
 } from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
@@ -105,12 +106,19 @@ import {
 import { sendToRenderer } from './send-to-renderer.js';
 import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
 import { runAiWebDiscovery } from './vacancy-web-discovery.js';
-import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
+import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
+import {
+  cleanupStagedPath,
+  consumeStagedCvAttachment,
+  stageForTranscription,
+  sweepStaleStagedAttachments,
+} from './cv-transcription-staging.js';
 import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
-import { confirmWorkspaceGrant } from './workspace-confirm.js';
+import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
+import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
   WorkspaceGrantManager,
   WorkspaceGrantRefusedError,
@@ -842,6 +850,38 @@ function expireGrantsForWebContents(webContentsId: number, reason: GrantExpiryRe
  * concurrent sessions running in the user's own folders. Folding them together would either
  * redact v1 (breaking `useAgentRun`) or un-redact v2 (breaking the boundary ADI-07 exists to add).
  */
+/**
+ * Issue #396: a session started with a staged CV attachment registers its staging directory here so
+ * it gets cleaned up once (and only once) the session is truly done -- not right after
+ * `client.sessions.create()` returns, which only means the daemon accepted the request and started
+ * the provider process. For Codex specifically, the attachment path is handed to the CLI as an argv
+ * flag (`-i`/`--image`) that the subprocess reads on its own after starting, not bytes the daemon
+ * reads up front the way Claude's `stream-json` payload does -- deleting the file on `create()`'s
+ * own return could race that read. `ATTACHMENT_CLEANUP_BACKSTOP_MS` is a main-process-side timeout
+ * independent of the renderer's own (`useAgentRun`'s `RUN_TIMEOUT_MS`): it fires even if the
+ * renderer that started this session is gone (reloaded, crashed) and never gets to cancel it.
+ */
+const pendingAttachmentCleanup = new Map<string, { dir: string; timer: ReturnType<typeof setTimeout> }>();
+const ATTACHMENT_CLEANUP_BACKSTOP_MS = 10 * 60 * 1000;
+
+function registerAttachmentCleanup(sessionId: string, dir: string): void {
+  const timer = setTimeout(() => {
+    pendingAttachmentCleanup.delete(sessionId);
+    void cleanupStagedPath(dir);
+    if (client) void client.sessions.cancel(sessionId).catch(() => {});
+  }, ATTACHMENT_CLEANUP_BACKSTOP_MS);
+  pendingAttachmentCleanup.set(sessionId, { dir, timer });
+}
+
+/** No-op for any session that never had a staged attachment -- safe to call unconditionally. */
+function finishAttachmentCleanup(sessionId: string): void {
+  const pending = pendingAttachmentCleanup.get(sessionId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingAttachmentCleanup.delete(sessionId);
+  void cleanupStagedPath(pending.dir);
+}
+
 function forwardSessionEvents(sessionId: string): void {
   if (!client) return;
   const controller = new AbortController();
@@ -863,6 +903,11 @@ function forwardSessionEvents(sessionId: string): void {
       // Guarded on identity so a re-forwarded session id does not have its successor's
       // registration deleted by its predecessor's late teardown.
       if (v1EventForwards.get(sessionId) === controller) v1EventForwards.delete(sessionId);
+      // Reached whether the loop above ended on a genuine terminal event (completed/failed/
+      // cancelled), the synthesized non-recoverable `error` above, or an abort from `killDaemon`
+      // below -- every path a v1 session's forwarding can end on, which is exactly when a staged
+      // attachment (if any) is safe to remove.
+      finishAttachmentCleanup(sessionId);
     }
   })();
 }
@@ -889,6 +934,10 @@ async function killDaemon(): Promise<void> {
     }
   }
   daemonChild?.kill();
+  // Issue #396: a final unconditional sweep, so a CV staged for transcription but never consumed
+  // (the user closed the app instead of answering the consent prompt) or a session whose own
+  // per-session cleanup above hasn't run yet does not survive process exit.
+  await sweepStaleStagedAttachments(await ensureAiWorkspaceDir(), { force: true });
 }
 
 const packagedEntryUrl = pathToFileURL(join(__dirname, '..', 'dist', 'index.html')).href;
@@ -1127,11 +1176,66 @@ guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
   // more be pointed at an arbitrary directory than those are -- the daemon's own `cwd` validation
   // (`existsSync`/`isDirectory` in `routes/sessions.ts`) is intentionally left permissive, since it
   // is reached only by this now-pinned call, never directly by the renderer.
-  const parsed = createSessionRequestSchema.omit({ cwd: true }).parse(input);
-  const cwd = await ensureAiWorkspaceDir();
-  const session = await client.sessions.create({ ...parsed, cwd });
+  //
+  // `attachments` is dropped the same way: the daemon-facing schema's `attachments` field takes a
+  // real filesystem path per entry, and this channel must never accept one of those from the
+  // renderer (issue #396). The only way to attach a file through this channel is the separate,
+  // opaque `attachmentCandidateId` handled below, which this process resolves to a path itself.
+  const parsed = createSessionRequestSchema.omit({ cwd: true, attachments: true }).parse(input);
+
+  // Issue #396: resolves a `cv:select-and-read`-issued candidate id (never a path) to the staged
+  // PDF this same process copied there, only after the user answered the native consent dialog
+  // that call already showed. `attachmentCandidateId` is not part of the daemon's own request
+  // schema at all -- it is a desktop-app-level indirection over `attachments`, read straight off
+  // `input` rather than through `parsed`, the same way `cwd` above is handled outside the schema
+  // it is later merged back into.
+  const attachmentCandidateId =
+    input && typeof input === 'object' && typeof (input as Record<string, unknown>).attachmentCandidateId === 'string'
+      ? (input as Record<string, unknown>).attachmentCandidateId as string
+      : undefined;
+  let attachments: { path: string; mimeType: string }[] | undefined;
+  let stagedDir: string | undefined;
+  // Overridden below, never left to the renderer's own claim, once a candidate is being consumed:
+  // a candidate id only ever means "the user consented to sending this file to this provider, for
+  // this transcription prompt" (the security review for issue #396 flagged that leaving these to
+  // the renderer would let a compromised one redeem a real consent for a different provider or a
+  // different, self-chosen prompt -- neither of which the user actually agreed to).
+  let provider = parsed.provider;
+  let prompt = parsed.prompt;
+  if (attachmentCandidateId) {
+    const staged = consumeStagedCvAttachment(attachmentCandidateId);
+    if (!staged) {
+      throw new Error('this file is no longer available for transcription; please pick it again');
+    }
+    attachments = [{ path: staged.path, mimeType: staged.mimeType }];
+    stagedDir = staged.dir;
+    provider = staged.provider;
+    prompt = CV_TRANSCRIPTION_PROMPT;
+  }
+
+  let session;
+  try {
+    session = await client.sessions.create({
+      ...parsed,
+      provider,
+      prompt,
+      // A dedicated per-candidate directory containing only this one staged file, rather than the
+      // shared `ensureAiWorkspaceDir()` root every other v1 session uses (issue #396's security
+      // review): that shared directory is documented elsewhere as deliberately empty so a session
+      // "looking around on its own finds nothing of the user's in reach", an invariant a staged CV
+      // would otherwise quietly break for every other concurrently-running session.
+      cwd: stagedDir ?? (await ensureAiWorkspaceDir()),
+      ...(attachments ? { attachments } : {}),
+    });
+  } catch (err) {
+    // The session never started: nothing will ever emit the terminal event `forwardSessionEvents`
+    // below would otherwise clean this up on, so it is this catch's job instead.
+    if (stagedDir) await cleanupStagedPath(stagedDir);
+    throw err;
+  }
   // `activeSessionId = session.id` used to sit here. It was write-only state (see `v1EventForwards`
   // above): nothing ever read it, and tracking "the one session" is the shape ADI-07 removes.
+  if (stagedDir) registerAttachmentCleanup(session.id, stagedDir);
   forwardSessionEvents(session.id);
   return session;
 });
@@ -1868,13 +1972,57 @@ async function ensureAiWorkspaceDir(): Promise<string> {
 guardedIpc.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
 
 /**
+ * The transcription session's own prompt (issue #396). Defined here, in main, and never taken from
+ * the renderer: a staged candidate id must always mean "run *this* transcription", not "attach this
+ * file to whatever prompt the caller happened to send" (see `daemon:create-session`'s own comment
+ * on why `prompt` is overridden whenever a candidate is being consumed).
+ */
+const CV_TRANSCRIPTION_PROMPT = [
+  'The attached PDF is a scanned or image-only CV/resume with no selectable text layer.',
+  'Transcribe it faithfully into plain text: every section, employer, date range, degree, and',
+  'skill, in the same order as the original document. Do not summarize, comment, translate, or',
+  'add anything that is not present in the document. Reply with only the transcribed text.',
+].join(' ');
+
+/**
+ * `cv:select-and-read`'s result (issue #396). The `'ok'` case is byte-identical to what this
+ * channel always returned. `'scanned-pdf'` means the user was shown the native transcription
+ * consent dialog below and approved it: `candidateId` is an opaque handle to a copy of the file's
+ * bytes this process already staged into its own AI-workspace scratch directory (see
+ * `cv-transcription-staging.ts`), never the file's path or bytes themselves.
+ * `'scanned-pdf-unavailable'` covers every other outcome for a PDF with no text layer -- too many
+ * pages to transcribe, no configured provider that can accept an attachment, or the user declining
+ * the consent dialog -- and never stages anything at all.
+ */
+type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
+
+/**
  * Opens a native file picker and returns the CV's extracted plain text: never a path the renderer
  * could then ask something else to open, and never raw filesystem access. The renderer cannot
  * choose *which* file is read: only the user can, through the OS dialog. Mirrors
  * `dialog:select-directory` above (null on cancel / no window); a genuine read or parse failure
- * rejects, so the UI can show the reason instead of a silent empty state.
+ * (other than the scanned-PDF case below, which is not a failure) rejects, so the UI can show the
+ * reason instead of a silent empty state.
+ *
+ * For a scanned/image-only PDF within the transcription page bound, this handler resolves the
+ * effective provider and shows the native transcription-consent dialog **itself**, before ever
+ * returning to the renderer. This is deliberate, not an implementation detail: consent decided in
+ * the renderer (a React-drawn dialog gated by component state) would only gate the honest render
+ * path, not a compromised one -- any renderer JS can already call `window.agentDock.createSession`
+ * directly, bypassing whatever UI main never enforced. Deciding consent here, with a real OS
+ * dialog `dialog.showMessageBox` (via `confirmCvTranscription`), means a candidate id is never
+ * even minted until the user has genuinely answered it -- the same discipline
+ * `confirmWorkspaceGrant`/`workspace-grant.ts` already use for an analogous decision.
  */
-guardedIpc.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => {
+guardedIpc.handle('cv:select-and-read', async (): Promise<CvSelectResult | null> => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select your CV',
@@ -1883,7 +2031,56 @@ guardedIpc.handle('cv:select-and-read', async (): Promise<CvFileContent | null> 
   });
   const filePath = result.filePaths[0];
   if (result.canceled || !filePath) return null;
-  return readCvFile(filePath);
+
+  try {
+    const content = await readCvFile(filePath);
+    return { status: 'ok', fileName: content.fileName, text: content.text };
+  } catch (err) {
+    if (!(err instanceof NoSelectablePdfTextError)) throw err;
+    const { fileName, pageCount } = err;
+
+    if (!isTranscribablePageCount(pageCount)) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'too-many-pages' };
+    }
+
+    // Resolves the same way the renderer's own `useEffectiveProvider` would (issue #400's
+    // resolver), but entirely here: the consent dialog below must name a real, capability-checked
+    // provider, and whether to even show it must never depend on anything the renderer claims.
+    const unavailable = () =>
+      ({ status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'no-provider' }) as const;
+    if (!client) return unavailable();
+    let providers: ProviderStatus[];
+    try {
+      providers = await client.providers.list();
+    } catch {
+      return unavailable();
+    }
+    const settings = workspace.getSettings(await ensureWorkspaceDb());
+    const provider = resolveEffectiveProvider(settings.defaultProvider, providers);
+    const providerStatus = providers.find((status) => status.id === provider);
+    if (!providerStatus?.installed || providerStatus.capabilities.attachments !== true) {
+      return unavailable();
+    }
+
+    // The one and only place consent is granted for this feature. See this handler's own doc
+    // comment for why a native dialog, not a renderer-drawn one, is required here.
+    const consented = await confirmCvTranscription(mainWindow, {
+      fileName,
+      providerName: PROVIDER_DISPLAY_NAMES[provider],
+    });
+    if (!consented) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'declined' };
+    }
+
+    // Re-read rather than threading bytes back out of `cv-text.ts`: that module's contract is
+    // "path in, text out" (see its own doc comment), never bytes out. `filePath` never left this
+    // process, so re-reading it here costs a second read of a file already bounded to 10 MB and
+    // keeps that boundary exactly as documented.
+    const bytes = await readFile(filePath);
+    const workspaceDir = await ensureAiWorkspaceDir();
+    const candidateId = await stageForTranscription(workspaceDir, fileName, bytes, provider);
+    return { status: 'scanned-pdf', fileName, pageCount, candidateId };
+  }
 });
 
 interface SaveFileFilter {
@@ -2274,6 +2471,24 @@ function scheduleApplicationPipelineTick(): void {
   setInterval(() => {
     void applicationPipelineTick.runOnce();
   }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
+}
+
+/** How often the staging sweep below runs. Independent of, and much shorter than, the 15-minute
+ * staleness bound itself (`cv-transcription-staging.ts`'s `STALE_MS`) so a candidate the user
+ * abandoned is not left on disk for the rest of a long-running app session. */
+const CV_TRANSCRIPTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Issue #396: the only cleanup path for a CV staged for transcription that is never consumed (the
+ * consent prompt is closed, or a different file is picked instead) -- everything else (a completed,
+ * failed, or cancelled session; app shutdown) is cleaned up at the point it happens, in
+ * `finishAttachmentCleanup`/`killDaemon`. Run once at startup (recovers anything a previous crash
+ * left behind) and then on the interval above for the rest of this process's lifetime.
+ */
+function scheduleCvTranscriptionStagingSweep(): void {
+  const sweep = () => void ensureAiWorkspaceDir().then((dir) => sweepStaleStagedAttachments(dir)).catch(() => {});
+  sweep();
+  setInterval(sweep, CV_TRANSCRIPTION_SWEEP_INTERVAL_MS);
 }
 
 /**
@@ -2733,6 +2948,7 @@ if (gotSingleInstanceLock) {
     scheduleBackgroundScanTick();
     scheduleAutomaticSubmissionTick();
     scheduleApplicationPipelineTick();
+    scheduleCvTranscriptionStagingSweep();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

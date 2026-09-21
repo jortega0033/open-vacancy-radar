@@ -386,6 +386,10 @@ function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
     // fields the renderer treats as required, so it is filled in rather than trusted.
     profile: { ...EMPTY_PROFILE, ...(row.profile ?? {}) },
     source: toCvSource(row.sourceCv ?? null),
+    // `?? 'text_layer'`: a row written before this column existed has no value for it, and
+    // `'text_layer'` (the same default the column itself declares) is the correct provenance for
+    // every one of them -- they all came from local pdf.js/mammoth extraction.
+    textSource: row.textSource ?? 'text_layer',
     isDefault: row.isDefault,
     uploadedAt: iso(row.uploadedAt),
     updatedAt: iso(row.updatedAt),
@@ -429,6 +433,7 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
         text: input.text ?? '',
         profile: { ...EMPTY_PROFILE, ...(input.profile ?? {}) },
         sourceCv: stampReviewed(input.source ?? null),
+        textSource: input.textSource ?? 'text_layer',
         isDefault: shouldBeDefault,
       })
       .returning()

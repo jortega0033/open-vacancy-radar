@@ -46,6 +46,7 @@ import type {
   CvExportFormat,
   CvKind,
   CvProfile,
+  CvTextSource,
   DefaultAiProvider,
   DensityPreference,
   LetterInput,
@@ -190,6 +191,7 @@ export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
 ];
 export const APPLICATION_FILTERS: readonly ApplicationFilter[] = ['all', 'active', 'archived'];
 export const CV_KINDS: readonly CvKind[] = ['uploaded', 'manual'];
+export const CV_TEXT_SOURCES: readonly CvTextSource[] = ['text_layer', 'ai_transcription'];
 export const CV_EXPORT_FORMATS: readonly CvExportFormat[] = ['pdf', 'docx'];
 export const LETTER_TYPES: readonly LetterType[] = [
   'motivation_letter',
@@ -495,6 +497,7 @@ export function parseCvDocumentInput(value: unknown): CvDocumentInput {
     text: input.text === undefined ? '' : str(input.text, 'text', LIMITS.cvText),
     profile: input.profile === undefined ? {} : parseProfile(input.profile),
     source: input.source === undefined ? null : parseCvSource(input.source),
+    textSource: input.textSource === undefined ? undefined : oneOf(input.textSource, 'textSource', CV_TEXT_SOURCES),
     isDefault: input.isDefault === undefined ? false : bool(input.isDefault, 'isDefault'),
   };
 }
@@ -510,6 +513,11 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
   // source back, and merging arrays entry by entry would make "I deleted a project during review"
   // impossible to express. An explicit `null` clears it.
   patch(input, out, 'source', (v) => parseCvSource(v));
+  // `textSource` is deliberately NOT patchable, the same way `isDefault` below is not: it can only
+  // be set at creation (`parseCvDocumentInput` above), which is also the only place the AI-
+  // transcription review step ever runs. Allowing it here would let a later, unrelated patch claim
+  // `'ai_transcription'` provenance -- or silently launder it back to `'text_layer'` -- with no
+  // review having happened for that patch at all.
   // `isDefault` is deliberately NOT patchable: promoting a CV has to go through
   // `workspace:cv-documents:set-default`, which demotes the previous default in the same
   // transaction. Allowing it here would let the library end up with two defaults, or none.

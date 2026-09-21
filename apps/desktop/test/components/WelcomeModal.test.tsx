@@ -26,6 +26,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
     text: 'Angular. TypeScript. 8 years.',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
     source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-20T10:00:00.000Z',
     updatedAt: '2026-08-20T10:00:00.000Z',
@@ -99,7 +100,9 @@ const GOOD_PROFILE_RESPONSE = JSON.stringify({
 
 function installCvBridge(overrides: Partial<CvBridge> = {}): CvBridge {
   const bridge: CvBridge = {
-    selectAndRead: vi.fn().mockResolvedValue({ fileName: 'jamie-rivera-cv.pdf', text: 'Angular. TypeScript.' }),
+    selectAndRead: vi
+      .fn()
+      .mockResolvedValue({ status: 'ok', fileName: 'jamie-rivera-cv.pdf', text: 'Angular. TypeScript.' }),
     getWorkspaceDir: vi.fn().mockResolvedValue('/userData/ai-workspace'),
     ...overrides,
   };

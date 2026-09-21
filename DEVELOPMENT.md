@@ -155,6 +155,30 @@ touches `cv-text.ts`'s DOCX path or the `mammoth` dependency itself, verify agai
   dependencies (`jszip` et al.) are pure JS, so nothing here should trigger `electron-rebuild` or
   require a Python toolchain the way a native module would.
 
+## Manual QA: AI-transcription fallback for scanned PDFs (issue #396)
+
+The automated suite (`cv-text-pdf.test.ts`'s hand-built scanned-PDF fixture, `useCvPicker.test.tsx`,
+`cv-transcription-staging.test.ts`) never calls a real Claude/Codex CLI, so it cannot prove the
+attachment actually reaches a real provider process or that a real consent dialog reads well.
+Before shipping a change that touches `cv-text.ts`'s PDF path, `cv-transcription-staging.ts`,
+`useCvPicker.ts`, or `CvTranscriptionFlow.tsx`, verify against a real, installed provider CLI:
+
+- Upload a genuinely scanned/image-only PDF (a phone photo of a printed CV works) through both
+  upload entry points ("Upload CV" in the CV Library, and the Welcome modal's first-run upload,
+  which reuses the same `CvUploadAction`) and confirm the consent prompt appears, names the correct
+  configured provider, and that declining it leaves the picker back at its starting state with no
+  session ever started.
+- Confirm accepting it actually transcribes real text back, that the review step shows it before
+  anything is saved, and that editing the reviewed text before confirming is what actually gets
+  saved (not the original transcription).
+- Confirm the staged copy of the PDF under `<userData>/ai-workspace/cv-transcription-staging/` is
+  gone from disk once the session finishes, and again after declining consent without ever starting
+  a session.
+- Try a PDF with more pages than `MAX_TRANSCRIBABLE_PDF_PAGES` (`cv-text.ts`) and confirm the app
+  never offers transcription for it, only the existing re-export/paste guidance.
+- With no AI provider installed at all, confirm the same PDF falls back to that guidance instead of
+  offering transcription or hanging.
+
 ## Common architectural rules
 
 These aren't style preferences. Breaking them tends to break the security model or the layering
