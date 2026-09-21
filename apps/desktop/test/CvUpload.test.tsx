@@ -106,4 +106,66 @@ describe('CvUpload', () => {
     fireEvent.click(screen.getByRole('button', { name: /show extracted text/i }));
     expect(await screen.findByText('Frontend architect, Angular.')).toBeInTheDocument();
   });
+
+  it('drives the full scanned-PDF fallback end to end: consent, transcription, review, then save (issue #396)', async () => {
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([
+          {
+            id: 'claude',
+            name: 'Claude Code',
+            installed: true,
+            authenticated: 'authenticated',
+            capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true, attachments: true },
+            availableModels: ['sonnet', 'opus'],
+          },
+        ]),
+      },
+      cv: {
+        selectAndRead: vi.fn().mockResolvedValue({
+          status: 'scanned-pdf',
+          fileName: 'scan.pdf',
+          pageCount: 2,
+          tooManyPages: false,
+          candidateId: 'candidate-e2e',
+        }),
+      },
+    });
+    const onCvChange = vi.fn();
+
+    render(<CvUpload cv={null} onCvChange={onCvChange} providerLabel="Claude Code" />);
+    // `findByRole` (rather than `getByRole`), used elsewhere in this codebase for the same reason:
+    // `useEffectiveProvider`'s two settling effects have not resolved on the very first render, and
+    // clicking before they do would read a still-`undefined` providerStatus and fall through to the
+    // no-provider branch instead of offering consent.
+    fireEvent.click(await screen.findByRole('button', { name: /choose cv file/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Claude Code');
+    expect(dialog).toHaveTextContent(/scan\.pdf/);
+
+    fireEvent.click(screen.getByRole('button', { name: /send for transcription/i }));
+
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0]).toMatchObject({
+      attachmentCandidateId: 'candidate-e2e',
+      provider: 'claude',
+    });
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Jake Ortega. Angular architect.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const textarea = await screen.findByLabelText(/transcribed cv text/i);
+    expect(textarea).toHaveValue('Jake Ortega. Angular architect.');
+
+    fireEvent.click(screen.getByRole('button', { name: /looks correct, use this text/i }));
+
+    await waitFor(() =>
+      expect(onCvChange).toHaveBeenCalledWith({
+        fileName: 'scan.pdf',
+        text: 'Jake Ortega. Angular architect.',
+        textSource: 'ai_transcription',
+      }),
+    );
+  });
 });

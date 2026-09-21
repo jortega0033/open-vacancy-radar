@@ -111,6 +111,19 @@ describe('cv-transcription-staging', () => {
     expect(await exists(dir)).toBe(false);
   });
 
+  it('a sweep removes the in-memory entry along with the directory, so a swept candidate reads back as unknown', async () => {
+    // A candidate the sweep deletes from disk must be indistinguishable from one this module never
+    // heard of: consumeStagedCvAttachment must not hand back a `{path, mimeType, dir}` pointing at a
+    // directory that no longer exists.
+    const candidateId = await stageForTranscription(workspaceDir, 'swept.pdf', Buffer.from('will be swept'));
+    const dir = join(workspaceDir, 'cv-transcription-staging', candidateId);
+
+    await sweepStaleStagedAttachments(workspaceDir, { force: true });
+    expect(await exists(dir)).toBe(false);
+
+    expect(consumeStagedCvAttachment(candidateId)).toBeUndefined();
+  });
+
   it('sweepStaleStagedAttachments without force does not remove a freshly-staged directory (age-based, not consumed-based)', async () => {
     const candidateId = await stageForTranscription(workspaceDir, 'fresh2.pdf', Buffer.from('fresh bytes 2'));
     const dir = join(workspaceDir, 'cv-transcription-staging', candidateId);

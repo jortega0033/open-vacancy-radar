@@ -108,13 +108,21 @@ export async function sweepStaleStagedAttachments(workspaceDir: string, opts: { 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
+    // `entry.name` is the candidateId `stageForTranscription` minted for this directory. Removed
+    // from `staged` here too, not just from disk: otherwise a swept candidate's map entry survives
+    // with a `path` pointing at a now-deleted directory, and `consumeStagedCvAttachment` would hand
+    // it back as if still valid instead of correctly reporting it gone.
     if (opts.force) {
+      staged.delete(entry.name);
       await cleanupStagedPath(dir);
       continue;
     }
     try {
       const info = await stat(dir);
-      if (info.mtimeMs < cutoff) await cleanupStagedPath(dir);
+      if (info.mtimeMs < cutoff) {
+        staged.delete(entry.name);
+        await cleanupStagedPath(dir);
+      }
     } catch {
       // already gone
     }
