@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { ProviderId } from '@agent-dock/shared';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
@@ -272,9 +272,10 @@ export function SearchPage({
   const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
   const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
-  // Which CLI the gap-analysis offer below actually runs through, so its copy names the real
-  // provider instead of assuming Claude Code. A failure here just leaves that default in place.
-  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
+  // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
+  // provider, matching what CvAssistant itself resolves, so this copy never names a CLI the
+  // analysis won't actually use.
+  const { provider: effectiveProvider } = useEffectiveProvider();
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -530,21 +531,6 @@ export function SearchPage({
         // the card falls back to "a CV you load"
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void window.workspace
-      .getSettings()
-      .then((settings) => {
-        if (!cancelled) setDefaultProvider(settings.defaultProvider);
-      })
-      .catch(() => {
-        // the card falls back to the Claude Code default
-      });
     return () => {
       cancelled = true;
     };
@@ -1174,7 +1160,7 @@ export function SearchPage({
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
-                providerLabel={PROVIDER_LABEL[defaultProvider]}
+                providerLabel={PROVIDER_LABEL[effectiveProvider]}
                 saveState={saveState}
                 prepareState={prepareState}
                 prepareAvailable={!selected.provisional}

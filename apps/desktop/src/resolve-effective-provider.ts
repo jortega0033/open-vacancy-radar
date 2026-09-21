@@ -16,8 +16,5 @@ export function resolveEffectiveProvider(
   const installedAlternatives = providerStatuses.filter(
     (status) => status.id !== preferred && status.installed,
   );
-  const [onlyAlternative, ...rest] = installedAlternatives;
-  if (onlyAlternative && rest.length === 0) return onlyAlternative.id;
-
-  return preferred;
+  return installedAlternatives.length === 1 ? (installedAlternatives[0]?.id ?? preferred) : preferred;
 }

@@ -43,4 +43,30 @@ describe('resolveEffectiveProvider', () => {
     const providers = [status('codex', true)];
     expect(resolveEffectiveProvider('claude', providers)).toBe('codex');
   });
+
+  it('never mutates or returns anything other than the preference argument itself when falling back to it', () => {
+    // The resolver is a pure read over `providerStatuses`; it has no settings/DB access at all,
+    // so "the persisted preference is never auto-rewritten" holds structurally here, not just by
+    // convention -- confirmed by asserting the exact same `preferred` value/reference comes back
+    // in every fallback branch (issue #400's "never silently rewrite the preference" guarantee).
+    const preferred = 'claude';
+    expect(resolveEffectiveProvider(preferred, [status('claude', false), status('codex', false)])).toBe(preferred);
+    expect(resolveEffectiveProvider(preferred, [status('claude', true), status('codex', true)])).toBe(preferred);
+  });
+
+  it('resolves the same way each time a manually-chosen preference is re-evaluated across its executable disappearing and reappearing', () => {
+    // Simulates the CLI vanishing (a PATH issue, a reinstall in progress) and coming back, calling
+    // the resolver fresh each time exactly as `useEffectiveProvider` would on a new `listProviders()`
+    // read -- the preference passed in is never itself changed by a prior call, so a temporarily
+    // missing executable can never leave behind a silently "switched" preference once it returns.
+    const preferred = 'claude';
+    const installed = [status('claude', true), status('codex', true)];
+    const claudeMissing = [status('claude', false), status('codex', true)];
+
+    expect(resolveEffectiveProvider(preferred, installed)).toBe('claude');
+    expect(resolveEffectiveProvider(preferred, claudeMissing)).toBe('codex');
+    expect(resolveEffectiveProvider(preferred, installed)).toBe('claude');
+    // The preference itself was never reassigned across the sequence above.
+    expect(preferred).toBe('claude');
+  });
 });

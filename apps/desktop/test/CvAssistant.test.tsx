@@ -234,6 +234,9 @@ describe('CvAssistant', () => {
     await waitFor(() =>
       expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].provider).toBe('codex'),
     );
+    // The persisted preference itself was never rewritten to match the resolved fallback: only an
+    // explicit "Use as default" action on the AI Runtime page may do that (issue #400).
+    expect(window.workspace.updateSettings).not.toHaveBeenCalled();
   });
 
   it('offers the provider model picker and passes the chosen model into the session', async () => {
