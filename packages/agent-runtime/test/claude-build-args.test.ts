@@ -3,8 +3,10 @@ import {
   CLAUDE_HARDENED_DISALLOWED_TOOLS,
   CLAUDE_HARDENED_TOOLS,
   CLAUDE_HARDENED_TOOLS_NO_NETWORK,
+  CLAUDE_HARDENED_TOOLS_WEB_ONLY,
   CLAUDE_HARDENING_ARGS,
   CLAUDE_HARDENING_ARGS_NO_NETWORK,
+  CLAUDE_HARDENING_ARGS_WEB_ONLY,
   buildClaudeArgs,
 } from '../src/providers/claude/build-args.js';
 
@@ -221,6 +223,53 @@ describe('buildClaudeArgs: hardened "no-network" sessions (#201)', () => {
 
   it('is a frozen constant, so no caller can compose a weaker hardening set', () => {
     expect(Object.isFrozen(CLAUDE_HARDENING_ARGS_NO_NETWORK)).toBe(true);
+  });
+});
+
+/**
+ * Issue #398: the AI-web vacancy-discovery session drops the opposite half of
+ * `CLAUDE_HARDENED_TOOLS` from the `'no-network'` profile above -- it keeps `WebSearch`/`WebFetch`
+ * and drops every filesystem tool, since this session type exists specifically to fetch untrusted
+ * web content and must never also be able to read a workspace file to exfiltrate via `WebFetch`.
+ */
+describe('buildClaudeArgs: hardened "web-only" sessions (#398)', () => {
+  it('is exactly WebSearch/WebFetch, with none of Read/Write/Edit/Glob/Grep/NotebookEdit', () => {
+    expect([...CLAUDE_HARDENED_TOOLS_WEB_ONLY]).toEqual(['WebSearch', 'WebFetch']);
+    for (const filesystemTool of ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit']) {
+      expect(CLAUDE_HARDENED_TOOLS_WEB_ONLY).not.toContain(filesystemTool);
+    }
+  });
+
+  it('carries the same five non-tools restriction flags as the other hardened profiles', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'web-only' });
+    const pairAt = (flag: string): string | undefined => args[args.indexOf(flag) + 1];
+
+    expect(args).toContain('--safe-mode');
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).toContain('--disable-slash-commands');
+    expect(pairAt('--setting-sources')).toBe('');
+    expect(pairAt('--tools')).toBe('WebSearch,WebFetch');
+    expect(pairAt('--disallowed-tools')).toBe('Bash,PowerShell');
+  });
+
+  it('grants WebSearch and WebFetch but none of Read/Write/Edit/Glob/Grep/NotebookEdit', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'web-only' });
+    const toolsValue = args[args.indexOf('--tools') + 1];
+    expect(toolsValue).toContain('WebSearch');
+    expect(toolsValue).toContain('WebFetch');
+    for (const filesystemTool of ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit']) {
+      expect(toolsValue).not.toContain(filesystemTool);
+    }
+  });
+
+  it('appends the web-only suffix as a suffix, leaving the v1 prefix untouched', () => {
+    const args = buildClaudeArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'web-only' });
+    expect(args.slice(0, V1_FRESH_ARGV.length)).toEqual([...V1_FRESH_ARGV]);
+    expect(args.slice(V1_FRESH_ARGV.length)).toEqual([...CLAUDE_HARDENING_ARGS_WEB_ONLY]);
+  });
+
+  it('is a frozen constant, so no caller can compose a weaker hardening set', () => {
+    expect(Object.isFrozen(CLAUDE_HARDENING_ARGS_WEB_ONLY)).toBe(true);
   });
 });
 

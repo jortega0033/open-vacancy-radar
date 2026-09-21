@@ -207,7 +207,7 @@ describe('adding client.v2 moved nothing at the top level', () => {
     const client = makeClient(vi.fn());
     expect(Object.keys(client.providers).sort()).toEqual(['get', 'list'].sort());
     expect(Object.keys(client.sessions).sort()).toEqual(
-      ['cancel', 'cancelAll', 'create', 'createFieldMapGeneration', 'delete', 'events', 'get'].sort(),
+      ['cancel', 'cancelAll', 'create', 'createFieldMapGeneration', 'createVacancyWebDiscovery', 'delete', 'events', 'get'].sort(),
     );
     expect(Object.keys(client.mcp).sort()).toEqual(['remove', 'search', 'setCredential', 'statuses'].sort());
     expect(Object.keys(client.v2).sort()).toEqual(['isSupported', 'require', 'support'].sort());

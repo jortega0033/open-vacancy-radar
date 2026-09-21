@@ -212,6 +212,7 @@ export type DiscoveryProvider =
   | 'jooble'
   | 'reed'
   | 'jobspipe'
+  | 'ai_web_search'
   | 'ats_roster_greenhouse'
   | 'ats_roster_lever'
   | 'ats_roster_ashby'
@@ -350,6 +351,13 @@ export type DiscoverySourceAudit = {
   listings: number;
   status: 'success' | 'partial' | 'blocked' | 'error';
   error: string | null;
+  /**
+   * Set when `status: 'blocked'` and the specific reason is that the configured AI provider CLI
+   * (e.g. Claude, for `ai_web_search`) was not available to run this source's session -- never the
+   * general-purpose upstream-blocked case every other source's `status: 'blocked'` already covers.
+   * `undefined` for every other source and every other blocked reason.
+   */
+  reasonCode?: 'provider_unavailable';
   /**
    * Actual network attempts `SafeHttpClient` made on this source's behalf, including every bounded
    * retry (429/5xx/timeout) and every redirect hop -- always `>= requests`. Attributed via

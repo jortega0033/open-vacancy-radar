@@ -51,6 +51,7 @@ const DISCOVERY_PROVIDER_LABEL: Record<DiscoveryProvider, string> = {
   ats_roster_recruitee: 'Recruitee (ATS roster)',
   ats_roster_personio: 'Personio (ATS roster)',
   nav_arbeidsplassen: 'NAV Arbeidsplassen',
+  ai_web_search: 'AI Web Search',
 };
 
 /**

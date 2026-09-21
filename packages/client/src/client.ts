@@ -49,6 +49,12 @@ import { parseSseStream } from './sse.js';
  * `apps/daemon/src/routes/application-generation.ts`) -- this session type never resumes a thread. */
 export type FieldMapGenerationRequest = Omit<CreateSessionRequest, 'resumeProviderSessionId'>;
 
+/** Input to `sessions.createVacancyWebDiscovery`: `CreateSessionRequest` minus
+ * `resumeProviderSessionId`, which the daemon's `POST /sessions/vacancy-web-discovery` route drops
+ * even if sent (see `apps/daemon/src/routes/vacancy-web-discovery.ts`) -- this session type never
+ * resumes a thread. */
+export type VacancyWebDiscoveryRequest = Omit<CreateSessionRequest, 'resumeProviderSessionId'>;
+
 function stripTrailingSlashes(url: string): string {
   let end = url.length;
   while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) end--;
@@ -129,6 +135,15 @@ export class AgentDockClient {
      */
     createFieldMapGeneration: (input: FieldMapGenerationRequest): Promise<AgentSession> =>
       this.createFieldMapGenerationSession(input),
+    /**
+     * Creates an AI-web vacancy-discovery session (issue #398): a Claude session hardened to the
+     * `'web-only'` profile server side (`WebSearch`/`WebFetch` only), via the daemon's dedicated
+     * `POST /sessions/vacancy-web-discovery` route rather than `POST /sessions`.
+     * `resumeProviderSessionId` is not part of this input type at all -- this session type is
+     * always a fresh, one-shot search-and-extract call, never a resumed thread.
+     */
+    createVacancyWebDiscovery: (input: VacancyWebDiscoveryRequest): Promise<AgentSession> =>
+      this.createVacancyWebDiscoverySession(input),
     get: (id: string): Promise<AgentSession> => this.getSession(id),
     events: (id: string, options?: SessionEventsOptions): AsyncGenerator<AgentEventEnvelope, void, void> =>
       this.streamSessionEvents(id, options),
@@ -341,6 +356,16 @@ export class AgentDockClient {
   private async createFieldMapGenerationSession(input: FieldMapGenerationRequest): Promise<AgentSession> {
     createSessionRequestSchema.omit({ resumeProviderSessionId: true }).parse(input);
     const raw = await this.request<unknown>('/sessions/application-field-map', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return validate(agentSessionSchema, raw, 'session');
+  }
+
+  private async createVacancyWebDiscoverySession(input: VacancyWebDiscoveryRequest): Promise<AgentSession> {
+    createSessionRequestSchema.omit({ resumeProviderSessionId: true }).parse(input);
+    const raw = await this.request<unknown>('/sessions/vacancy-web-discovery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),

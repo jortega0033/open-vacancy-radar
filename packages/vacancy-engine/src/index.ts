@@ -27,6 +27,15 @@ export {
 } from './global-remote/structured-discovery.js';
 export { applyFocusedScanCriteria, SOURCE_FILTER_CAPABILITIES, type FocusedScanCriteria } from './global-remote/focused-scan.js';
 export {
+  AiWebDiscoveryCandidateSchema,
+  AiWebDiscoveryResponseSchema,
+  isBlockedDiscoveryDomain,
+  normalizeAiWebDiscoveryCandidates,
+  type AiWebDiscoveryCandidate,
+  type AiWebDiscoveryResponse,
+} from './global-remote/ai-web-discovery.js';
+export { globalRemoteSourceRegistry } from './global-remote/source-registry.js';
+export {
   assessSalary,
   normalizeSalary,
   parseMinimumAnnualSalary,
@@ -94,11 +103,13 @@ export {
 export type {
   GlobalRemoteReport,
   DiscoveryProvider,
+  DiscoverySourceAudit,
   DiscoveryVacancyAudit,
   OfficialVacancyAudit,
   ProfileMatchBreakdown,
   ScanProgressEvent,
   ScanProgressCallback,
+  SourceRegistryEntry,
   GapTelemetryReport,
 } from './global-remote/models.js';
 export { ALL_COUNTRIES, normalizeCountry, UNSPECIFIED_LOCATION } from './geo/countries.js';
