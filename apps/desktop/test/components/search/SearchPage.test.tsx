@@ -387,6 +387,161 @@ describe('SearchPage', () => {
     expect(screen.getByText(/browse-all cap 5,000 .* incomplete/i)).toBeInTheDocument();
   });
 
+  it('states in the confirmation dialog which scan criteria browse-all ignores and which local refinements still apply (issue #399)', async () => {
+    installAllBridges({ runScan: vi.fn() });
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    const dialog = screen.getByRole('dialog', { name: /browse all vacancies/i });
+    expect(within(dialog).getByText(/runs without role, country, employment, or salary/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/local display refinements/i)).toBeInTheDocument();
+  });
+
+  it('does not filter live rows or the final report by leftover scoped query/country/employment/salary/sponsor criteria during a browse-all scan (issue #399)', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+    const initialSession = createSearchSessionState();
+    initialSession.filters = {
+      ...initialSession.filters,
+      country: 'Netherlands',
+      employment: 'full_time',
+      salaryMinimum: '500000',
+      salaryCurrency: 'USD',
+      includeUnknownSalary: false,
+      sponsorOnly: true,
+    };
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    // A raw streamed batch, unfiltered by the backend: one row would satisfy every leftover
+    // scoped criterion above (country/employment/salary/sponsor), the other satisfies none of
+    // them. If any leftover criterion were still applied, the second row would be hidden live.
+    emit({
+      sourceId: 'himalayas',
+      vacancies: [
+        makeWorldwideVacancy({
+          key: 'nl-match',
+          title: 'Dutch Sponsor Role',
+          location: 'Netherlands',
+          employmentType: 'full_time',
+          worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '01234567' },
+          profileScore: null,
+        }),
+        makeWorldwideVacancy({
+          key: 'uk-nomatch',
+          title: 'UK Unmatched Role',
+          location: 'United Kingdom',
+          employmentType: 'part_time',
+          worldwideSponsorMatch: null,
+          advertisedMinimum: null,
+          annualizedMinimumUsd: null,
+          profileScore: null,
+        }),
+      ],
+    });
+
+    await waitFor(() => expect(screen.getAllByText('UK Unmatched Role').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Dutch Sponsor Role').length).toBeGreaterThan(0);
+
+    resolveScan(makeWorldwideReport([
+      makeWorldwideVacancy({
+        key: 'nl-match',
+        title: 'Dutch Sponsor Role',
+        location: 'Netherlands',
+        employmentType: 'full_time',
+        worldwideSponsorMatch: { legalName: 'Acme Technologies B.V.', kvkNumber: '01234567' },
+      }),
+      makeWorldwideVacancy({
+        key: 'uk-nomatch',
+        title: 'UK Unmatched Role',
+        location: 'United Kingdom',
+        employmentType: 'part_time',
+        worldwideSponsorMatch: null,
+        advertisedMinimum: null,
+        annualizedMinimumUsd: null,
+      }),
+    ]));
+
+    await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+    // Same leftover criteria must stay ignored for the final saved report, not just the live view.
+    expect(screen.getAllByText('UK Unmatched Role').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Dutch Sponsor Role').length).toBeGreaterThan(0);
+  });
+
+  it('preserves local source and posted-within refinements through a browse-all scan, live and in the final report (issue #399)', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+    const initialSession = createSearchSessionState();
+    initialSession.filters = { ...initialSession.filters, source: 'himalayas' };
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+    await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+    emit({
+      sourceId: 'himalayas',
+      vacancies: [
+        makeWorldwideVacancy({ key: 'himalayas-1', title: 'Himalayas Sourced Role', provider: 'himalayas', profileScore: null }),
+        makeWorldwideVacancy({ key: 'remotive-1', title: 'Remotive Sourced Role', provider: 'remotive', profileScore: null }),
+      ],
+    });
+
+    await waitFor(() => expect(screen.getAllByText('Himalayas Sourced Role').length).toBeGreaterThan(0));
+    expect(screen.queryByText('Remotive Sourced Role')).not.toBeInTheDocument();
+
+    resolveScan(makeWorldwideReport([
+      makeWorldwideVacancy({ key: 'himalayas-1', title: 'Himalayas Sourced Role', provider: 'himalayas' }),
+      makeWorldwideVacancy({ key: 'remotive-1', title: 'Remotive Sourced Role', provider: 'remotive' }),
+    ]));
+
+    await waitFor(() => expect(screen.queryByText(/scanning live sources/i)).not.toBeInTheDocument());
+    expect(screen.getAllByText('Himalayas Sourced Role').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Remotive Sourced Role')).not.toBeInTheDocument();
+  });
+
+  it('does not corrupt appliedFilters or the editable draft filters on a failed browse-all request (issue #399)', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(
+        makeWorldwideReport([makeWorldwideVacancy({ key: 'de-1', title: 'Backend Engineer DE', location: 'Germany' })]),
+      ),
+      runScan: vi.fn().mockRejectedValue(new Error('scan failed: network unreachable')),
+    });
+    const initialSession = createSearchSessionState();
+    initialSession.filters = { ...initialSession.filters, country: 'Germany' };
+    initialSession.appliedFilters = { ...initialSession.filters };
+
+    render(<SearchSessionHarness initialSession={initialSession} />);
+    await waitFor(() => expect(screen.getAllByText('Backend Engineer DE').length).toBeGreaterThan(0));
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse all vacancies' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Browse all vacancies' }));
+
+    await waitFor(() => expect(screen.getByText(/scan failed/i)).toBeInTheDocument());
+    expect(bridge.runScan).toHaveBeenCalledTimes(1);
+    // The prior scoped report survives untouched: neither the applied filters that produced it nor
+    // the editable draft were overwritten by this attempt's now-abandoned browse-all snapshot.
+    expect(screen.getAllByText('Backend Engineer DE').length).toBeGreaterThan(0);
+    expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany');
+  });
+
   it('routes selected country and employment through a focused scan request', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
