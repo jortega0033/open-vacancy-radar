@@ -682,7 +682,7 @@ describe('SearchPage', () => {
     render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
 
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-    expect(screen.getByText(/vacancies were found, but none were scored/i)).toBeInTheDocument();
+    expect(screen.getByText(/vacancies were found, but were not scored against your Search Profile/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Fill search profile' }));
     expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
   });
