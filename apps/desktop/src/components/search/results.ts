@@ -338,6 +338,17 @@ export const DEFAULT_FILTERS: SearchFilters = {
   includeUnknownSalary: true,
 };
 
+/** The backend `browse_all` request carries none of the scan-bound criteria (`query`, `country`,
+ * `employment`, salary), so leaving them set in the client-side view would re-apply scoping that
+ * was never honored server-side. `location`, `postedWithin`, and `source` are local refinements
+ * independent of scan mode and pass through unchanged. `sponsorOnly` clears alongside `country`
+ * resetting to `'all'` since it's only meaningful (and only shown) for the Netherlands. */
+export function browseAllViewFilters(filters: SearchFilters): SearchFilters {
+  const { query, country, employment, salaryMinimum, salaryCurrency, includeUnknownSalary, sponsorOnly } =
+    DEFAULT_FILTERS;
+  return { ...filters, query, country, employment, salaryMinimum, salaryCurrency, includeUnknownSalary, sponsorOnly };
+}
+
 export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
   const minimumAnnual = parseMinimumAnnualSalary(filters.salaryMinimum ?? '');
   if (minimumAnnual === null) return null;
