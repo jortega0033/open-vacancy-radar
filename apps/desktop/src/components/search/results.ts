@@ -344,16 +344,9 @@ export const DEFAULT_FILTERS: SearchFilters = {
  * independent of scan mode and pass through unchanged. `sponsorOnly` clears alongside `country`
  * resetting to `'all'` since it's only meaningful (and only shown) for the Netherlands. */
 export function browseAllViewFilters(filters: SearchFilters): SearchFilters {
-  return {
-    ...filters,
-    query: '',
-    country: 'all',
-    employment: 'any',
-    salaryMinimum: '',
-    salaryCurrency: 'EUR',
-    includeUnknownSalary: true,
-    sponsorOnly: false,
-  };
+  const { query, country, employment, salaryMinimum, salaryCurrency, includeUnknownSalary, sponsorOnly } =
+    DEFAULT_FILTERS;
+  return { ...filters, query, country, employment, salaryMinimum, salaryCurrency, includeUnknownSalary, sponsorOnly };
 }
 
 export function salaryCriteriaFromFilters(filters: SearchFilters): SalaryFilterCriteria | null {
