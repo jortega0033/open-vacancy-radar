@@ -31,6 +31,13 @@ export default tseslint.config(
     },
   },
   {
+    // Plain static site (no build step, no TS), runs directly in the browser.
+    files: ['apps/landing/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
