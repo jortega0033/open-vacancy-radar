@@ -43,7 +43,7 @@
     "daisyui": "^5.7.22",
     "docx": "^9.7.1",
     "drizzle-kit": "^0.31.10",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^25.0.1",
