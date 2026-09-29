@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "ovr-landing"
+  },
+  "targets": {
+    "ovr-landing": {
+      "hosting": {
+        "landing": ["ovr"]
+      }
+    }
+  }
+}
