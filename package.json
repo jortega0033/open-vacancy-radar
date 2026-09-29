@@ -55,7 +55,9 @@
       "esbuild": "^0.25.0",
       "electron-builder-squirrel-windows": "^26.15.3",
       "app-builder-lib": "^26.15.3",
-      "builder-util-runtime": "^9.7.0"
+      "builder-util-runtime": "^9.7.0",
+      "fast-uri": "^4.1.4",
+      "undici": "^7.29.1"
     }
   }
 }
