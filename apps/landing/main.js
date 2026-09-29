@@ -76,7 +76,7 @@
         await navigator.clipboard.writeText(button.dataset.copy || '');
         ok = true;
       } catch {
-        ok = false;
+        // ok already false
       }
       if (label) label.textContent = ok ? 'Copied' : 'Select and copy';
       button.classList.toggle('is-copied', ok);
