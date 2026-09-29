@@ -1,6 +1,9 @@
 packages:
   - "packages/*"
   - "apps/*"
+  # apps/showreel is a local-only Remotion project (gitignored, not part of the shipped
+  # product) with its own dependency tree; excluded so it never enters the shared lockfile.
+  - "!apps/showreel"
 
 onlyBuiltDependencies:
   - esbuild
