@@ -14,11 +14,17 @@ API key.
 _Reference interface shown with sample data; production behavior comes from the Electron source in
 this repository, not the bundled prototype used to prepare the image._
 
+### 30-second overview
+
+<video src="https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/showreel.mp4" poster="https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/element-899.png" controls muted width="640"></video>
+
+If the player above doesn't render, [watch/download the video directly](https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/showreel.mp4). Illustrative UI recreation with sample data, not screen-captured footage of the live app.
+
 ## What this is
 
 A personal job-search workspace built around one worldwide/remote discovery pipeline: frontend-only
-roles from ~50 researched public sources (ATS APIs, RSS feeds, keyed job-board APIs), filtered for
-genuinely remote, non-US-only eligibility, with no default country, role, or salary bias baked in.
+roles from roughly 40 researched public sources (ATS APIs, RSS feeds, keyed job-board APIs), filtered
+for genuinely remote, non-US-only eligibility, with no default country, role, or salary bias baked in.
 
 For any vacancy that normalizes to a Netherlands location, a best-effort check additionally looks
 up the employer by name against the IND's official recognised-sponsor register. This is a
@@ -34,6 +40,13 @@ nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for t
 vendored from the standalone `ind-job-radar` CLI project and ported from PostgreSQL to an embedded
 `better-sqlite3` database so the desktop app needs no external services at all.
 
+On top of that deterministic pipeline, an opt-in "Include AI web search" checkbox on the Search page
+can add one budget-capped session of your configured Claude CLI (its `WebSearch`/`WebFetch` tools
+only, no filesystem access) to look for further candidate vacancies. It only runs once a search
+profile is configured, never blocks the rest of a scan if it fails or times out, and every candidate
+it returns is schema-validated and checked against the same blocked/prohibited source list as the
+deterministic sources before being accepted.
+
 Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
 broadest mode its evidence supports. Sources that take longer to implement remain planned.
 Unclear republication rights use a factual linked index; explicit prohibitions, authentication or
@@ -42,18 +55,25 @@ partner boundaries, and technical access controls stop ingestion. See
 
 On top of that, the desktop app is a full personal tracker:
 
-- **Search:** run the pipeline on demand, save leads, or open the CV assistant on any result.
+- **Search:** run the pipeline on demand, optionally add the AI web search pass above, save leads,
+  or open the CV assistant on any result.
 - **Saved Jobs** / **Applications:** track status end to end, with confirm-before-delete and a
-  short undo window on every delete.
+  short undo window on every delete. An application in recruiter-screen or interview stage can also
+  generate a review-only interview-prep pack (likely questions, claims to defend, gaps, STAR
+  candidates) built only from data already in the workspace, never invented and never auto-saved.
 - **CV Library:** upload or hand-enter multiple CVs, one marked default, each usable for AI
-  gap-analysis against a specific vacancy.
+  gap-analysis against a specific vacancy. A scanned or image-only PDF with no selectable text can
+  fall back to AI transcription with your explicit consent; you review and correct the text before
+  it's saved, and the CV record keeps track of which source produced it.
 - **Letters:** generate motivation letters, cover letters, recruiter messages, or short
   application-form blurbs from a CV + vacancy pair, in a chosen tone and length, with a library of
   saved drafts.
-- **Settings:** theme (light/dark/system), density, default market, application-data reset, and
-  documented manual backup, all persisted locally.
-- **AI Runtime:** the AgentDock provider panel: pick a provider (Claude Code, Codex) and, where
-  supported, a specific model, and watch a run's events stream live.
+- **Settings:** theme (light/dark/system), density, default market, application-data reset,
+  documented manual backup, and (under Workspace) saved answers to recurring application-form
+  questions that are reused only when you explicitly click "Use this answer," all persisted locally.
+- **AI Runtime:** the AgentDock provider panel: see each installed CLI's authentication, version,
+  and capabilities, set one as the default AI features run through, and verify it without spending a
+  model call.
 
 This desktop app relies on CLIs the user already has installed and authenticated, not its own
 subscription or API key: if a user already has `claude` or `codex` installed and logged in, Open
@@ -107,7 +127,7 @@ See [docs/architecture.md](docs/architecture.md) for the full breakdown, and
 ```
 apps/
   desktop/          Open Vacancy Radar Electron + React application
-                       src/components/{search,saved,applications,cv-library,letters,settings}/
+                       src/components/{search,saved,applications,cv,cv-library,letters,runtime,settings}/
                        electron/workspace/  : the personal-data SQLite schema, IPC, repository
   daemon/           Standalone local Node.js service (Fastify), runnable without Electron
 packages/
@@ -116,6 +136,9 @@ packages/
   agent-runtime/    Provider-neutral runtime: process management, adapters, normalized events
   client/           @agent-dock/client: typed daemon SDK (HTTP+SSE, auth, protocol version check)
   shared/           Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
+  application-executor/  CDP-based application-form field mapping, readiness, and submission-outcome
+                     primitives behind the desktop app's auto-apply review pipeline, currently
+                     hidden from the UI pending further scoping
 ```
 
 Design tokens and shared UI primitives live in `apps/desktop/src/styles/tokens.css` (the single
@@ -295,7 +318,7 @@ contract suite, register it. No daemon, client, or desktop changes required.
 - [docs/assets.md](docs/assets.md): brand sources, icon generation, renderer mapping and rebranding
 - [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md): the design-token rules every component follows
 - [docs/troubleshooting.md](docs/troubleshooting.md): common problems and how to diagnose them
-- [docs/release-notes-v0.1.0.md](docs/release-notes-v0.1.0.md): what shipped, known limitations, privacy implications
+- [docs/release-notes-v0.1.3.md](docs/release-notes-v0.1.3.md): what shipped, known limitations, privacy implications (earlier releases: [v0.1.0](docs/release-notes-v0.1.0.md), [v0.1.1](docs/release-notes-v0.1.1.md), [v0.1.2](docs/release-notes-v0.1.2.md))
 - [docs/privacy.md](docs/privacy.md): what data is stored, what leaves your machine and when, retention/deletion
 - [docs/release-checklist.md](docs/release-checklist.md): the repeatable pre-release verification checklist
 - [SECURITY.md](SECURITY.md): the daemon's threat model and local-auth mechanism
