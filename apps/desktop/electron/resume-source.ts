@@ -5,6 +5,7 @@ import {
   type CvSourceExperienceEntry,
   type CvSourceProjectEntry,
 } from './workspace/cv-source-schema.js';
+import { describeCvEvidenceOverlayGaps, type CvEvidenceOverlay } from './workspace/cv-evidence-schema.js';
 import type { ResumeExperienceEntry, ResumeProjectEntry, TailoredResume } from './resume-schema.js';
 
 /**
@@ -194,4 +195,103 @@ export function reconcileTailoredResumeWithSource(
     },
     dropped,
   };
+}
+
+export interface ComposedTailoredResume {
+  resume: TailoredResume;
+  /** Everything that keeps this composition from being approvable, in the user's terms. Empty
+   * means it may be approved. Never a boolean alone, for the same reason `describeCvSourceGaps`
+   * and `describeCvExportBlockers` are not: the caller has to be able to say what is wrong. */
+  blockers: string[];
+}
+
+/**
+ * The third bridge this module offers (#419, step 5-6), and the one the candidate-approved path
+ * actually uses: composes a `TailoredResume` from *only* unchanged reviewed source text and
+ * active, exact candidate-approved wording -- never from a free-form AI draft.
+ *
+ * `TailorCv.tsx`'s existing live draft (`reconcileTailoredResumeWithSource` above) stays exactly
+ * as it is and keeps working exactly as it does: an advisory draft a candidate reads and discards,
+ * never the input to this function and never itself eligible to become the approved document. A
+ * free-form draft cannot become approved by being run through a text checker -- the only way text
+ * reaches this function's output is by having been through the requirement-mapping/clarification
+ * review and explicitly approved (`CvApprovedWording.status === 'candidate_approved'`), or by
+ * never having changed from what the candidate already confirmed when they reviewed their source
+ * CV in the first place.
+ *
+ * What an approved variant does to the base (`tailoredResumeFromSource`'s own unchanged-source
+ * resume) depends on whether its `targetField` is a single string or a list on the record it
+ * scopes to: `summary` and `project_description` *replace* that field outright (there is exactly
+ * one of each per record, so an approved variant for it is unambiguously the field's content);
+ * `skill` and `experience_bullet` *add* an entry (each is one line among several, and adding never
+ * risks silently dropping a bullet the candidate's own source already carried and never asked to
+ * remove).
+ *
+ * Three things block approval, each named in `blockers` rather than silently excluded:
+ *  - The overlay's own `describeCvEvidenceOverlayGaps` (unreviewed requirements, a required item
+ *    still `needs_verification`, an overlay left in conflict, and so on).
+ *  - An approved variant whose `sourceRevision` no longer matches the *current* source hash --
+ *    reviewed against a source that has since changed, whatever the overlay's own stored hash says.
+ *  - An approved variant whose `parentId` no longer names a real role or project in the current
+ *    source (the role was deleted or re-extracted since the variant was approved).
+ * A blocked composition still returns the best resume it could build (excluding only the specific
+ * variants that failed), so the review screen has something concrete to show next to the reasons
+ * it cannot be approved yet -- the same "recoverable, never a dead end" shape `GenerationReadiness`
+ * already uses elsewhere in this app.
+ */
+export function composeApprovedTailoredResume(
+  source: CvSourceDocument,
+  overlay: CvEvidenceOverlay,
+  currentSourceCvContentHash: string,
+  skills: readonly string[],
+): ComposedTailoredResume {
+  const blockers = describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash);
+
+  const experienceById = new Map(source.experience.map((entry) => [entry.id, entry]));
+  const projectById = new Map(source.projects.map((entry) => [entry.id, entry]));
+
+  const usable = overlay.wordingVariants.filter((variant) => {
+    if (variant.status !== 'candidate_approved') return false;
+    if (variant.sourceRevision !== currentSourceCvContentHash) {
+      blockers.push(`an approved "${variant.targetField}" variant was approved against a source CV revision that no longer matches`);
+      return false;
+    }
+    if (variant.parentId && !experienceById.has(variant.parentId) && !projectById.has(variant.parentId)) {
+      blockers.push(`an approved "${variant.targetField}" variant refers to a role or project that no longer exists in your reviewed source`);
+      return false;
+    }
+    return true;
+  });
+
+  const resume = tailoredResumeFromSource(source, skills);
+  // Keyed by the source entry's own stable id, not array position: `tailoredResumeFromSource`
+  // happens to preserve `source.experience`'s order today, but this function should not depend on
+  // that staying true. `ResumeExperienceEntry`/`ResumeProjectEntry` carry no id of their own (the
+  // exported shape predates #419), so the correlation is rebuilt here from the source ids instead.
+  const resumeExperienceById = new Map(source.experience.map((entry, index) => [entry.id, resume.experience[index]]));
+  const resumeProjectById = new Map(
+    selectSourceProjects(source).map((project, index) => [project.id, resume.projects[index]]),
+  );
+
+  for (const variant of usable) {
+    if (variant.targetField === 'summary') {
+      resume.summary = variant.text;
+      continue;
+    }
+    if (variant.targetField === 'skill') {
+      if (!resume.skills.includes(variant.text)) resume.skills.push(variant.text);
+      continue;
+    }
+    if (variant.targetField === 'experience_bullet') {
+      const entry = resumeExperienceById.get(variant.parentId);
+      if (entry && !entry.bullets.includes(variant.text)) entry.bullets.push(variant.text);
+      continue;
+    }
+    if (variant.targetField === 'project_description') {
+      const entry = resumeProjectById.get(variant.parentId);
+      if (entry) entry.description = variant.text;
+    }
+  }
+
+  return { resume, blockers };
 }

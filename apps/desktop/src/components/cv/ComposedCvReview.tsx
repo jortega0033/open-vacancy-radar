@@ -1,0 +1,160 @@
+import { useCallback, useEffect, useState } from 'react';
+import { composeApprovedTailoredResume, type ComposedTailoredResume } from '../../../electron/resume-source.js';
+import type { CvEvidenceOverlayRecord, CvProfile, CvSourceDocument } from '../../window.js';
+import { sha256Hex } from './content-hash.js';
+import type { VacancyLead } from './types.js';
+import { describeError } from './useAgentRun.js';
+import { vacancyKeyFor } from './vacancy-key.js';
+
+export interface ComposedCvReviewProps {
+  cvId: string | null;
+  vacancy: VacancyLead | null;
+  sourceCv?: CvSourceDocument | null;
+  profile?: CvProfile | null;
+}
+
+/**
+ * The candidate-approved composition path (#419, step 5-6): previews and approves the CV
+ * `composeApprovedTailoredResume` builds from unchanged reviewed source text and active,
+ * candidate-approved wording only -- never from `TailorCv`'s free-form advisory draft, which this
+ * component neither reads nor affects.
+ */
+export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedCvReviewProps) {
+  const [overlay, setOverlay] = useState<CvEvidenceOverlayRecord | null>(null);
+  const [composed, setComposed] = useState<ComposedTailoredResume | null>(null);
+  const [error, setError] = useState<string>();
+  const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState(false);
+
+  const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
+
+  useEffect(() => {
+    setComposed(null);
+    setApproved(false);
+    setError(undefined);
+    if (!cvId || !vacancyKey) {
+      setOverlay(null);
+      return;
+    }
+    let cancelled = false;
+    void window.workspace.getCvEvidenceOverlay(cvId, vacancyKey).then((record) => {
+      if (!cancelled) setOverlay(record);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cvId, vacancyKey]);
+
+  const canPreview = !!overlay && !!sourceCv;
+
+  const handlePreview = useCallback(async () => {
+    if (!overlay || !sourceCv) return;
+    setError(undefined);
+    setApproved(false);
+    try {
+      const currentHash = await sha256Hex(JSON.stringify(sourceCv));
+      setComposed(composeApprovedTailoredResume(sourceCv, overlay, currentHash, profile?.skills ?? []));
+    } catch (err) {
+      setError(describeError(err, 'could not build the composed CV'));
+    }
+  }, [overlay, sourceCv, profile]);
+
+  const handleApprove = useCallback(async () => {
+    if (!overlay || !composed || composed.blockers.length > 0) return;
+    setApproving(true);
+    setError(undefined);
+    try {
+      await window.workspace.updateCvEvidenceOverlay(overlay.id, { state: 'candidate_approved' });
+      setApproved(true);
+    } catch (err) {
+      setError(describeError(err, 'could not approve this CV'));
+    } finally {
+      setApproving(false);
+    }
+  }, [overlay, composed]);
+
+  if (!cvId || !vacancy) return null;
+
+  return (
+    <div className="card card-border rounded-box border-base-300 bg-base-100">
+      <div className="card-body gap-3 p-5">
+        <div className="card-title text-base font-bold">Approved CV</div>
+        <p className="text-sm text-base-content/60">
+          Built only from your unchanged reviewed CV and wording you explicitly approved above --
+          never from the tailored draft, which stays a separate, advisory read.
+        </p>
+
+        {!overlay && (
+          <div className="text-sm text-base-content/60">
+            Map this vacancy&rsquo;s requirements above first, so there is something to compose from.
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-outline" onClick={() => void handlePreview()} disabled={!canPreview}>
+            Preview approved CV
+          </button>
+          {composed && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleApprove()}
+              disabled={composed.blockers.length > 0 || approving || approved}
+            >
+              {approving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {approved ? 'Approved' : 'Approve CV'}
+            </button>
+          )}
+        </div>
+
+        {error && (
+          <div className="alert alert-error text-sm" role="alert">
+            {error}
+          </div>
+        )}
+        {approved && (
+          <div className="text-sm font-medium" role="status">
+            Approved. This is the version ready for export.
+          </div>
+        )}
+
+        {composed && composed.blockers.length > 0 && (
+          <div className="alert alert-warning text-sm" role="alert">
+            <ul className="list-disc pl-4">
+              {composed.blockers.map((blocker) => (
+                <li key={blocker}>{blocker}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {composed && (
+          <div className="rounded-box border border-base-300 p-4 text-sm" aria-label="Composed CV preview">
+            {composed.resume.summary && <p className="mb-2">{composed.resume.summary}</p>}
+            {composed.resume.experience.map((entry) => (
+              <div key={`${entry.company}-${entry.title}`} className="mb-2">
+                <div className="font-medium">
+                  {entry.title} at {entry.company}
+                </div>
+                <ul className="list-disc pl-5">
+                  {entry.bullets.map((bullet) => (
+                    <li key={bullet}>{bullet}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            {composed.resume.projects.map((project) => (
+              <div key={project.name} className="mb-2">
+                <div className="font-medium">{project.name}</div>
+                <p>{project.description}</p>
+              </div>
+            ))}
+            {composed.resume.skills.length > 0 && (
+              <div className="text-xs text-base-content/60">Skills: {composed.resume.skills.join(', ')}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
