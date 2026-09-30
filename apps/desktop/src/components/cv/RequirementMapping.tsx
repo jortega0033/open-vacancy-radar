@@ -10,6 +10,8 @@ import type {
 } from '../../window.js';
 import { jobDescriptionBody } from '../../../electron/generation-input.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { ClarificationForm } from './ClarificationForm.js';
+import { applyClarificationAnswer, type ClarificationAnswer } from './clarification-answer.js';
 import { sha256Hex } from './content-hash.js';
 import { buildRequirementMappingPrompt } from './prompts.js';
 import { mergeRequirementMappings } from './requirement-mapping-merge.js';
@@ -64,6 +66,8 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const [loadError, setLoadError] = useState<string>();
   const [saveError, setSaveError] = useState<string>();
   const [newRequirementText, setNewRequirementText] = useState('');
+  /** Which requirement's clarification form is open, at most one at a time. */
+  const [openRequirementId, setOpenRequirementId] = useState<string | null>(null);
 
   const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
 
@@ -160,6 +164,29 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         setOverlay(updated);
       } catch (err) {
         setSaveError(describeError(err, 'could not save that change'));
+      }
+    },
+    [overlay],
+  );
+
+  const handleAnswer = useCallback(
+    async (requirement: CvRequirementMapping, answer: ClarificationAnswer) => {
+      if (!overlay) return;
+      const { requirement: nextRequirement, fact } = applyClarificationAnswer(requirement, answer);
+      const nextRequirements = overlay.requirements.map((existing) =>
+        existing.requirementId === requirement.requirementId ? nextRequirement : existing,
+      );
+      const nextFacts = fact ? [...overlay.facts, fact] : overlay.facts;
+      setOverlay({ ...overlay, requirements: nextRequirements, facts: nextFacts }); // optimistic
+      setOpenRequirementId(null);
+      try {
+        const updated = await window.workspace.updateCvEvidenceOverlay(overlay.id, {
+          requirements: nextRequirements,
+          facts: nextFacts,
+        });
+        setOverlay(updated);
+      } catch (err) {
+        setSaveError(describeError(err, 'could not save that answer'));
       }
     },
     [overlay],
@@ -349,7 +376,23 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                         {anchorLabel(sourceCv, requirement.anchorParentId)}
                       </span>
                     )}
+                    {requirement.evidenceClass === 'needs_verification' && openRequirementId !== requirement.requirementId && (
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        onClick={() => setOpenRequirementId(requirement.requirementId)}
+                      >
+                        Answer
+                      </button>
+                    )}
                   </div>
+                  {openRequirementId === requirement.requirementId && (
+                    <ClarificationForm
+                      sourceCv={sourceCv}
+                      onAnswer={(answer) => void handleAnswer(requirement, answer)}
+                      onCancel={() => setOpenRequirementId(null)}
+                    />
+                  )}
                 </li>
               ))}
             </ul>

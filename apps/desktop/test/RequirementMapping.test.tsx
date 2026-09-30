@@ -1,12 +1,20 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CvEvidenceOverlayRecord, CvEvidenceOverlayPatch } from '../src/window.js';
+import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
+import type { CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvSourceDocument } from '../src/window.js';
 import { RequirementMapping } from '../src/components/cv/RequirementMapping.js';
 import type { CvDocument } from '../src/components/cv/types.js';
 import { installBridges, TEST_VACANCY } from './cv-bridges.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
 
 const CV: CvDocument = { fileName: 'cv.pdf', text: 'Angular architect. 8 years of frontend work.' };
+
+const SOURCE: CvSourceDocument = {
+  ...EMPTY_CV_SOURCE,
+  experience: [
+    { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: [] },
+  ],
+};
 
 /** A minimal stateful overlay store, so create/update/get behave consistently across calls the
  * way the real IPC bridge does, without standing up a real SQLite file for a renderer test. */
@@ -143,5 +151,80 @@ describe('RequirementMapping (#419)', () => {
 
     await screen.findByText('A manual one');
     expect(workspace.createCvEvidenceOverlay).not.toHaveBeenCalled();
+  });
+
+  describe('clarification flow (#419, step 3)', () => {
+    async function seedOneNeedsVerificationRequirement() {
+      const bridges = installBridges();
+      const workspace = installStatefulOverlayBridge();
+      render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} sourceCv={SOURCE} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+      bridges.emit('sess-cv-1', {
+        type: 'assistant.message',
+        text: JSON.stringify({
+          requirements: [{ text: 'GraphQL schema design', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' }],
+        }),
+      });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+      await screen.findByText('GraphQL schema design');
+      return workspace;
+    }
+
+    it('answering saves a self-reported fact and flips the requirement to direct evidence', async () => {
+      const workspace = await seedOneNeedsVerificationRequirement();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+
+      fireEvent.change(screen.getByLabelText(/role or project/i), { target: { value: 'experience:experience-1' } });
+      fireEvent.change(screen.getByLabelText(/what did you personally do/i), {
+        target: { value: 'Designed the GraphQL schema for checkout' },
+      });
+      fireEvent.change(screen.getByLabelText(/how, including/i), { target: { value: 'Apollo Server, schema-first' } });
+      fireEvent.click(screen.getByRole('button', { name: /save answer/i }));
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^answer$/i })).not.toBeInTheDocument());
+      expect(screen.getByText(/frontend engineer at redwood software/i)).toBeInTheDocument();
+      const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
+      expect(lastPatch?.facts).toHaveLength(1);
+      expect(lastPatch?.facts?.[0]).toMatchObject({ verification: 'self_reported', parentId: 'experience-1' });
+      expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'direct' });
+    });
+
+    it('"not my work" records a confirmed-gap fact and marks the requirement unsupported', async () => {
+      const workspace = await seedOneNeedsVerificationRequirement();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /not my work/i }));
+
+      // "Not my work" resolves the row to unsupported, not needs_verification, so the Answer
+      // action (and the form) disappear the same as a real answer would.
+      await waitFor(() => expect(screen.queryByRole('button', { name: /^answer$/i })).not.toBeInTheDocument());
+      const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
+      expect(lastPatch?.facts?.[0]).toMatchObject({ verification: 'candidate_confirmed_gap' });
+      expect(lastPatch?.requirements?.[0]).toMatchObject({ evidenceClass: 'unsupported' });
+    });
+
+    it('"skip" closes the form and saves nothing', async () => {
+      const workspace = await seedOneNeedsVerificationRequirement();
+      vi.mocked(workspace.updateCvEvidenceOverlay).mockClear();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
+
+      expect(screen.queryByLabelText(/role or project/i)).not.toBeInTheDocument();
+      expect(workspace.updateCvEvidenceOverlay).not.toHaveBeenCalled();
+    });
+
+    it('requires a number to state where it came from before saving', async () => {
+      await seedOneNeedsVerificationRequirement();
+      fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
+      fireEvent.change(screen.getByLabelText(/role or project/i), { target: { value: 'experience:experience-1' } });
+      fireEvent.change(screen.getByLabelText(/what did you personally do/i), { target: { value: 'X' } });
+      fireEvent.change(screen.getByLabelText(/how, including/i), { target: { value: 'Y' } });
+      fireEvent.change(screen.getByLabelText(/what was the result/i), { target: { value: 'cut load time' } });
+      fireEvent.change(screen.getByLabelText(/number, if there is one/i), { target: { value: '30%' } });
+
+      expect(screen.getByRole('button', { name: /save answer/i })).toBeDisabled();
+      expect(screen.getByText(/needs a stated source/i)).toBeInTheDocument();
+    });
   });
 });
