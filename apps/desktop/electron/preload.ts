@@ -411,6 +411,9 @@ const workspaceApi: WorkspaceBridge = {
   updateCvEvidenceOverlay(id, patch) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:update', { id, patch });
   },
+  approveCvEvidenceOverlay(id, expectedCaseRevision) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:approve', { id, expectedCaseRevision });
+  },
   deleteCvEvidenceOverlay(id) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
   },

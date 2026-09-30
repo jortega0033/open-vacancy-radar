@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import * as workspace from '../electron/workspace/repository.js';
 import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
 import * as schema from '../electron/workspace/schema.js';
 import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
+import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
@@ -183,13 +185,42 @@ describe('cv evidence overlays (#419)', () => {
       vacancyKey: 'vacancy-1',
       sourceCvContentHash: HASH_A,
       jdComplete: true,
+      jdRevisions: [],
       listingStatus: 'unknown',
       state: 'needs_input',
       requirements: [],
       facts: [],
       wordingVariants: [],
+      origin: 'vacancy',
+      caseRevision: '1',
+      approvedResumeSnapshot: null,
     });
     expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toEqual(created);
+  });
+
+  it('seeds jdRevisions with the initial JD text when one is given at creation (#421)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshot: 'We need a frontend engineer.',
+      jdSnapshotHash: HASH_B,
+    });
+    expect(created.jdRevisions).toHaveLength(1);
+    expect(created.jdRevisions[0]).toMatchObject({ text: 'We need a frontend engineer.', textHash: HASH_B, complete: true });
+  });
+
+  it('creates a manual-origin overlay when asked, defaulting to vacancy otherwise (#421)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const manual = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'manual:case-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      origin: 'manual',
+    });
+    expect(manual.origin).toBe('manual');
   });
 
   it('is idempotent: a second create for the same (cvId, vacancyKey) returns the existing row unchanged', () => {
@@ -270,7 +301,11 @@ describe('cv evidence overlays (#419)', () => {
       sourceCvContentHash: HASH_A,
       jdSnapshotHash: HASH_B,
     });
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'candidate_approved' });
+    // 'candidate_approved' is seeded via 'artifact_approved' rather than the real approval flow --
+    // `updateCvEvidenceOverlay`'s patch no longer accepts 'candidate_approved' at all (#421: only
+    // `approveCvEvidenceOverlay` may set it), and `invalidatedOverlayState` treats both the same
+    // way, which is exactly the behavior this test is about.
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
     // The source CV was re-reviewed (a new content hash) after approval, and this patch does not
     // itself assert a new state -- the approval must not silently survive that.
     const afterDrift = workspace.updateCvEvidenceOverlay(db, overlay.id, { sourceCvContentHash: HASH_B });
@@ -285,9 +320,9 @@ describe('cv evidence overlays (#419)', () => {
       sourceCvContentHash: HASH_A,
       jdSnapshotHash: HASH_B,
     });
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'candidate_approved' });
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
     const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
-    expect(after.state).toBe('candidate_approved');
+    expect(after.state).toBe('artifact_approved');
   });
 
   it('deletes an overlay, and deletes every overlay when its CV is deleted (cascade)', () => {
@@ -310,6 +345,149 @@ describe('cv evidence overlays (#419)', () => {
     expect(second).toBeTruthy();
     workspace.deleteCvDocument(db, cv.id);
     expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
+  });
+
+  describe('caseRevision and jdRevisions (#421)', () => {
+    it('bumps caseRevision on every update, regardless of which field changed', () => {
+      const cv = workspace.createCvDocument(db, CV);
+      const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+      expect(overlay.caseRevision).toBe('1');
+      const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
+      expect(after.caseRevision).toBe('2');
+      const afterAgain = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'open' });
+      expect(afterAgain.caseRevision).toBe('3');
+    });
+
+    it('appends a jdRevisions entry only when the JD text, hash or completeness actually changes', () => {
+      const cv = workspace.createCvDocument(db, CV);
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshot: 'v1',
+        jdSnapshotHash: HASH_B,
+      });
+      expect(overlay.jdRevisions).toHaveLength(1);
+
+      // Re-sending the exact same JD fields pads nothing.
+      const resent = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdSnapshot: 'v1', jdSnapshotHash: HASH_B });
+      expect(resent.jdRevisions).toHaveLength(1);
+
+      // A genuinely new JD text appends, and the old text is still there.
+      const HASH_C = 'c'.repeat(64);
+      const changed = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdSnapshot: 'v2', jdSnapshotHash: HASH_C });
+      expect(changed.jdRevisions).toHaveLength(2);
+      expect(changed.jdRevisions[0]).toMatchObject({ text: 'v1' });
+      expect(changed.jdRevisions[1]).toMatchObject({ text: 'v2' });
+      expect(changed.jdSnapshot).toBe('v2');
+    });
+  });
+
+  describe('approveCvEvidenceOverlay (#421)', () => {
+    const SOURCE: CvSourceDocument = {
+      ...EMPTY_CV_SOURCE,
+      summary: 'Original summary.',
+      experience: [
+        { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
+      ],
+    };
+
+    const FACT = {
+      factId: 'fact-1',
+      parentId: 'experience-1',
+      parentType: 'experience' as const,
+      client: '',
+      activity: 'Designed the GraphQL schema',
+      mechanism: 'Apollo Server, schema-first',
+      result: 'cut client-side overfetching',
+      ownership: 'unknown' as const,
+      sourceKind: 'candidate_testimony' as const,
+      sourceReference: '',
+      verification: 'self_reported' as const,
+      metricValue: '',
+      metricUnit: '',
+      metricBasis: '',
+      supersedes: '',
+      createdAt: '2026-09-30T00:00:00.000Z',
+    };
+
+    // `createCvDocument` stamps `reviewedAt` onto the source it stores (`stampReviewed`), so the
+    // hash an overlay must match is the *stored* source's hash, not a hash of `SOURCE` computed
+    // before that stamp was applied.
+    function cvWithSource() {
+      const cv = workspace.createCvDocument(db, { ...CV, source: SOURCE });
+      const sourceHash = createHash('sha256').update(stableCvSourceJson(cv.source!)).digest('hex');
+      return { cv, sourceHash };
+    }
+
+    it('re-derives wording from facts server-side, freezes an approved-resume snapshot, and bumps caseRevision', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [FACT] });
+
+      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, '2');
+
+      expect(approved.state).toBe('candidate_approved');
+      expect(approved.wordingVariants).toHaveLength(1);
+      expect(approved.wordingVariants[0]).toMatchObject({ status: 'candidate_approved', factIds: ['fact-1'] });
+      expect(approved.approvedResumeSnapshot).not.toBeNull();
+      expect(approved.approvedResumeSnapshot?.caseRevision).toBe(approved.caseRevision);
+      expect(approved.approvedResumeSnapshot?.resume.experience[0]?.bullets).toContain(
+        'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching',
+      );
+      expect(approved.caseRevision).toBe('3');
+    });
+
+    it('rejects a stale expectedCaseRevision without applying anything, naming the real current revision', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, '999')).toThrow(workspace.CvEvidenceOverlayRevisionConflictError);
+      try {
+        workspace.approveCvEvidenceOverlay(db, overlay.id, '999');
+      } catch (err) {
+        expect((err as InstanceType<typeof workspace.CvEvidenceOverlayRevisionConflictError>).currentRevision).toBe('1');
+      }
+      // Nothing was applied: still the pre-approval state.
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).state).toBe('needs_input');
+    });
+
+    it('refuses to approve while a gap remains, and applies nothing', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      const withGap = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+        requirements: [
+          { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
+        ],
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, withGap.caseRevision)).toThrow(/cannot be approved/);
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).state).not.toBe('candidate_approved');
+    });
+
+    it('refuses to approve a CV with no reviewed source yet', () => {
+      const cv = workspace.createCvDocument(db, CV); // no `source`
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshotHash: HASH_B,
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, overlay.caseRevision)).toThrow(/no reviewed source/);
+    });
   });
 });
 

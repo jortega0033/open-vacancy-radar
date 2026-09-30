@@ -322,6 +322,7 @@ describe('electron/preload.ts: workspace bridge', () => {
     'getCvEvidenceOverlay',
     'createCvEvidenceOverlay',
     'updateCvEvidenceOverlay',
+    'approveCvEvidenceOverlay',
     'deleteCvEvidenceOverlay',
     'exportCvEvidenceOverlay',
     'listLetters',
@@ -388,6 +389,13 @@ describe('electron/preload.ts: workspace bridge', () => {
     const api = await loadPreload('workspace');
     await (api.updateSavedJob as (id: string, patch: unknown) => Promise<unknown>)('job-1', { notes: 'hi' });
     expect(invoke).toHaveBeenCalledWith('workspace:saved-jobs:update', { id: 'job-1', patch: { notes: 'hi' } });
+  });
+
+  it('approveCvEvidenceOverlay (#421) sends an { id, expectedCaseRevision } envelope to workspace:cv-evidence-overlays:approve', async () => {
+    invoke.mockResolvedValue({ id: 'overlay-1', state: 'candidate_approved' });
+    const api = await loadPreload('workspace');
+    await (api.approveCvEvidenceOverlay as (id: string, expectedCaseRevision: string) => Promise<unknown>)('overlay-1', '3');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-evidence-overlays:approve', { id: 'overlay-1', expectedCaseRevision: '3' });
   });
 
   it('wraps id-only verbs in a { id } envelope', async () => {
@@ -709,6 +717,7 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     'getCvEvidenceOverlay',
     'createCvEvidenceOverlay',
     'updateCvEvidenceOverlay',
+    'approveCvEvidenceOverlay',
     'deleteCvEvidenceOverlay',
     'exportCvEvidenceOverlay',
     'listLetters',

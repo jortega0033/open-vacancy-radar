@@ -10,9 +10,16 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
-import { EMPTY_CV_SOURCE, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
-import { invalidatedOverlayState } from './cv-evidence-schema.js';
+import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
+import {
+  invalidatedOverlayState,
+  proposeWordingFromFacts,
+  withJdRevision,
+  type CvEvidenceOverlay,
+} from './cv-evidence-schema.js';
+import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
@@ -53,6 +60,7 @@ import {
   type AutomationGrantInput,
   type AutomationGrantRecord,
   type CompletedApplicationMatch,
+  type CvApprovedResumeSnapshot,
   type CvDocumentInput,
   type CvDocumentPatch,
   type CvDocumentRecord,
@@ -81,6 +89,18 @@ export class WorkspaceNotFoundError extends Error {
   constructor(entity: string, id: string) {
     super(`no ${entity} with id "${id}"`);
     this.name = 'WorkspaceNotFoundError';
+  }
+}
+
+/** Thrown by `approveCvEvidenceOverlay` when `expectedCaseRevision` does not match the overlay's
+ * current `caseRevision` -- #421's own acceptance criterion ("a stale revision returns a conflict
+ * with the current revision, without partially applying a proposal"). Carries the actual current
+ * revision so a caller (the UI today, an MCP tool later) can decide whether to re-fetch and retry
+ * rather than just failing. */
+export class CvEvidenceOverlayRevisionConflictError extends Error {
+  constructor(public readonly currentRevision: string) {
+    super(`case has changed since it was last read (current revision: ${currentRevision})`);
+    this.name = 'CvEvidenceOverlayRevisionConflictError';
   }
 }
 
@@ -533,6 +553,10 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     requirements: row.requirements ?? [],
     facts: row.facts ?? [],
     wordingVariants: row.wordingVariants ?? [],
+    jdRevisions: row.jdRevisions ?? [],
+    origin: (row.origin ?? 'vacancy') as CvEvidenceOverlayRecord['origin'],
+    caseRevision: row.caseRevision ?? '0',
+    approvedResumeSnapshot: row.approvedResumeSnapshot ?? null,
     capturedAt: iso(row.capturedAt),
     updatedAt: iso(row.updatedAt),
   };
@@ -588,16 +612,25 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
       .get();
     if (existing) return toCvEvidenceOverlay(existing);
 
+    const jdSnapshot = input.jdSnapshot ?? '';
+    const now = new Date().toISOString();
     const [row] = tx
       .insert(cvEvidenceOverlays)
       .values({
         cvId: input.cvId,
         vacancyKey: input.vacancyKey,
         sourceCvContentHash: input.sourceCvContentHash,
-        jdSnapshot: input.jdSnapshot ?? '',
+        jdSnapshot,
         jdSnapshotHash: input.jdSnapshotHash,
         jdComplete: input.jdComplete ?? true,
+        // The overlay's first JD capture is already a revision, not a blank starting point -- an
+        // empty `jdSnapshot` (no JD read yet) stays out of the history until real text arrives.
+        jdRevisions: jdSnapshot
+          ? [{ revisionId: randomUUID(), text: jdSnapshot, textHash: input.jdSnapshotHash, complete: input.jdComplete ?? true, capturedAt: now }]
+          : [],
         listingStatus: input.listingStatus ?? 'unknown',
+        origin: input.origin ?? 'vacancy',
+        caseRevision: '1',
       })
       .returning()
       .all();
@@ -611,14 +644,26 @@ export function updateCvEvidenceOverlay(
   id: string,
   values: CvEvidenceOverlayPatch,
 ): CvEvidenceOverlayRecord {
-  const existing = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
-  if (!existing) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  const existingRow = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  const existing = toCvEvidenceOverlay(existingRow);
 
-  const set: Partial<CvEvidenceOverlayRow> = { updatedAt: new Date() };
+  const set: Partial<CvEvidenceOverlayRow> = {
+    updatedAt: new Date(),
+    // #421's case contract: every write bumps this, regardless of which fields changed -- an MCP
+    // tool's revision check is against this, never against a specific field.
+    caseRevision: String(Number(existing.caseRevision) + 1),
+  };
   if (values.sourceCvContentHash !== undefined) set.sourceCvContentHash = values.sourceCvContentHash;
-  if (values.jdSnapshot !== undefined) set.jdSnapshot = values.jdSnapshot;
-  if (values.jdSnapshotHash !== undefined) set.jdSnapshotHash = values.jdSnapshotHash;
-  if (values.jdComplete !== undefined) set.jdComplete = values.jdComplete;
+  if (values.jdSnapshot !== undefined || values.jdSnapshotHash !== undefined || values.jdComplete !== undefined) {
+    const jdSnapshot = values.jdSnapshot ?? existing.jdSnapshot;
+    const jdSnapshotHash = values.jdSnapshotHash ?? existing.jdSnapshotHash;
+    const jdComplete = values.jdComplete ?? existing.jdComplete;
+    set.jdSnapshot = jdSnapshot;
+    set.jdSnapshotHash = jdSnapshotHash;
+    set.jdComplete = jdComplete;
+    set.jdRevisions = withJdRevision(existing, jdSnapshot, jdSnapshotHash, jdComplete, new Date().toISOString());
+  }
   if (values.listingStatus !== undefined) set.listingStatus = values.listingStatus;
   if (values.requirements !== undefined) set.requirements = values.requirements;
   if (values.facts !== undefined) set.facts = values.facts;
@@ -627,7 +672,9 @@ export function updateCvEvidenceOverlay(
   // slices) knows exactly what state it is asserting. Absent an explicit one, a patch that touches
   // any input the approval depended on invalidates a prior approval rather than leaving it standing
   // against inputs that just changed underneath it (#419: "do not silently carry forward an
-  // approval").
+  // approval"). `CvEvidenceOverlayPatch['state']` excludes `'candidate_approved'` at the type level
+  // (#421: that transition only happens through `approveCvEvidenceOverlay` below), so this can only
+  // ever move state to something else.
   const touchesInputs =
     values.sourceCvContentHash !== undefined ||
     values.jdSnapshot !== undefined ||
@@ -638,12 +685,77 @@ export function updateCvEvidenceOverlay(
   if (values.state !== undefined) {
     set.state = values.state;
   } else if (touchesInputs) {
-    set.state = invalidatedOverlayState(existing.state as CvEvidenceOverlayRecord['state']);
+    set.state = invalidatedOverlayState(existing.state);
   }
 
   const [row] = db.update(cvEvidenceOverlays).set(set).where(eq(cvEvidenceOverlays.id, id)).returning().all();
   if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
   return toCvEvidenceOverlay(row);
+}
+
+/**
+ * The *only* path that may move `state` to `'candidate_approved'` (#421's case contract). Unlike
+ * the generic patch above, this never trusts a caller-supplied `wordingVariants` for the wording it
+ * is about to approve: it re-derives proposed wording from the overlay's own facts
+ * (`proposeWordingFromFacts`), the exact computation `ComposedCvReview.tsx`'s preview already runs
+ * client-side, then re-verifies every gap (`describeCvEvidenceOverlayGaps`, via
+ * `composeApprovedTailoredResume`'s own blockers) against the CV's *current* reviewed source before
+ * writing anything. `expectedCaseRevision` must match the overlay's current `caseRevision`, checked
+ * and applied inside one transaction so a second writer's change in between cannot be silently lost
+ * or silently overwritten -- a mismatch throws `CvEvidenceOverlayRevisionConflictError` naming the
+ * actual current revision, with nothing partially applied.
+ */
+export function approveCvEvidenceOverlay(
+  db: WorkspaceDb,
+  id: string,
+  expectedCaseRevision: string,
+): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const existingRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+    if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    const existing = toCvEvidenceOverlay(existingRow);
+    if (existing.caseRevision !== expectedCaseRevision) {
+      throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
+    }
+
+    const doc = getCvDocument(tx, existing.cvId);
+    if (!doc.source) {
+      throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+    }
+    const currentSourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+
+    const proposed = proposeWordingFromFacts(existing, currentSourceCvContentHash);
+    const wordingVariants = [...existing.wordingVariants, ...proposed];
+    const candidate: CvEvidenceOverlay = { ...existing, wordingVariants };
+
+    const { resume, blockers } = composeApprovedTailoredResume(doc.source, candidate, currentSourceCvContentHash, doc.profile.skills);
+    if (blockers.length > 0) {
+      throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);
+    }
+
+    const newCaseRevision = String(Number(existing.caseRevision) + 1);
+    const approvedResumeSnapshot: CvApprovedResumeSnapshot = {
+      resume,
+      digest: createHash('sha256').update(JSON.stringify(resume)).digest('hex'),
+      approvedAt: new Date().toISOString(),
+      caseRevision: newCaseRevision,
+    };
+
+    const [row] = tx
+      .update(cvEvidenceOverlays)
+      .set({
+        wordingVariants,
+        state: 'candidate_approved',
+        approvedResumeSnapshot,
+        caseRevision: newCaseRevision,
+        updatedAt: new Date(),
+      })
+      .where(eq(cvEvidenceOverlays.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    return toCvEvidenceOverlay(row);
+  });
 }
 
 export function deleteCvEvidenceOverlay(db: WorkspaceDb, id: string): DeleteResult {

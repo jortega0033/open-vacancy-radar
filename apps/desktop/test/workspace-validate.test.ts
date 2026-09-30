@@ -14,6 +14,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
   parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
   parseCvEvidenceOverlayLookup,
@@ -707,6 +708,47 @@ describe('workspace cv evidence overlays (#419)', () => {
   it('parses the (cvId, vacancyKey) lookup and cvId list envelopes', () => {
     expect(parseCvEvidenceOverlayLookup({ cvId: 'cv-1', vacancyKey: 'v-1' })).toEqual({ cvId: 'cv-1', vacancyKey: 'v-1' });
     expect(parseCvIdEnvelope({ cvId: 'cv-1' })).toBe('cv-1');
+  });
+
+  it('defaults origin to "vacancy" and accepts an explicit "manual" (#421)', () => {
+    const vacancyOrigin = parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    expect(vacancyOrigin.origin).toBe('vacancy');
+    const manualOrigin = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'manual:case-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      origin: 'manual',
+    });
+    expect(manualOrigin.origin).toBe('manual');
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B, origin: 'ai' }),
+    ).toThrow(/"origin" must be one of/);
+  });
+
+  it('never accepts "candidate_approved" through the generic patch (#421: only approveCvEvidenceOverlay may set it)', () => {
+    expect(() => parseCvEvidenceOverlayPatch({ state: 'candidate_approved' })).toThrow(/"state" must be one of/);
+    // Every other state is still a plain patch value.
+    expect(parseCvEvidenceOverlayPatch({ state: 'artifact_approved' }).state).toBe('artifact_approved');
+  });
+
+  it('never accepts caseRevision, jdRevisions or approvedResumeSnapshot through the generic patch (#421)', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      caseRevision: '999',
+      jdRevisions: [{ revisionId: 'r-1', text: 'x', textHash: HASH_A, complete: true, capturedAt: '2026-10-01T00:00:00.000Z' }],
+      approvedResumeSnapshot: { resume: {}, digest: HASH_A, approvedAt: '2026-10-01T00:00:00.000Z', caseRevision: '999' },
+    });
+    expect('caseRevision' in patch).toBe(false);
+    expect('jdRevisions' in patch).toBe(false);
+    expect('approvedResumeSnapshot' in patch).toBe(false);
+  });
+
+  it('parses the { id, expectedCaseRevision } approve envelope (#421)', () => {
+    expect(parseCvEvidenceOverlayApproveInput({ id: 'overlay-1', expectedCaseRevision: '3' })).toEqual({
+      id: 'overlay-1',
+      expectedCaseRevision: '3',
+    });
+    expect(() => parseCvEvidenceOverlayApproveInput({ id: 'overlay-1' })).toThrow();
   });
 
   it('parses the export request (#419 slice 4) and rejects an unknown format', () => {

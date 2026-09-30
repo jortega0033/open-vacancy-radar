@@ -15,9 +15,12 @@
 
 import type { CvSourceDocument } from './cv-source-schema.js';
 import type {
+  CvApprovedResumeSnapshot,
   CvApprovedWording,
   CvEvidenceFact,
+  CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
+  CvJdRevision,
   CvListingStatus,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
@@ -79,14 +82,17 @@ export type {
 /** #419's evidence/approved-wording overlay, re-exported for the same reason the source-CV types
  * above are: the renderer reaches every workspace record type through this one module. */
 export type {
+  CvApprovedResumeSnapshot,
   CvApprovedWording,
   CvClaimField,
   CvEvidenceClass,
   CvEvidenceFact,
+  CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
   CvFactOwnership,
   CvFactSourceKind,
   CvFactVerification,
+  CvJdRevision,
   CvListingStatus,
   CvRequirementClassification,
   CvRequirementMapping,
@@ -244,11 +250,23 @@ export interface CvEvidenceOverlayRecord {
   jdSnapshot: string;
   jdSnapshotHash: string;
   jdComplete: boolean;
+  /** #421's case contract: see `CvJdRevision`. */
+  jdRevisions: CvJdRevision[];
   listingStatus: CvListingStatus;
   state: CvEvidenceOverlayState;
   requirements: CvRequirementMapping[];
   facts: CvEvidenceFact[];
   wordingVariants: CvApprovedWording[];
+  /** #421's case contract: see `CvEvidenceOverlayOrigin`. */
+  origin: CvEvidenceOverlayOrigin;
+  /** #421's case contract: an opaque token bumped by the repository layer on every write, never
+   * accepted from a caller (see `updateCvEvidenceOverlay`'s patch type below, which has no field
+   * for it). `approveCvEvidenceOverlay` takes the caller's last-known value back as
+   * `expectedCaseRevision`, purely to detect a conflicting write in between; it is never itself
+   * writable. */
+  caseRevision: string;
+  /** #421's case contract: `null` until the first approval. See `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: CvApprovedResumeSnapshot | null;
   /** ISO-8601 */
   capturedAt: string;
   /** ISO-8601 */
@@ -263,14 +281,23 @@ export interface CvEvidenceOverlayInput {
   jdSnapshotHash: string;
   jdComplete?: boolean;
   listingStatus?: CvListingStatus;
+  /** Defaults to `'vacancy'` -- the only origin every existing caller creates today. #421's future
+   * MCP `start_tailoring_case` tool is what will pass `'manual'`. */
+  origin?: CvEvidenceOverlayOrigin;
 }
 
 /**
  * Every field a later step writes is patchable, `cvId`/`vacancyKey` are not: those are the row's
  * identity, and changing them would silently reassign an overlay to a different tailoring session
- * rather than update this one. `state` is patchable directly (unlike, say, `CvDocumentInput`'s
- * `isDefault`) because the composition/QA gate slices need to set it as a plain consequence of
- * their own checks, not through a separate verb per transition.
+ * rather than update this one. `state` is patchable directly for every value except
+ * `'candidate_approved'` (unlike, say, `CvDocumentInput`'s `isDefault`) because the composition/QA
+ * gate slices need to set most transitions as a plain consequence of their own checks, not through
+ * a separate verb per transition -- `'candidate_approved'` is the one exception, gated instead
+ * behind `approveCvEvidenceOverlay` below, because #421 requires that specific transition to
+ * re-derive wording from facts and freeze an approved-resume snapshot atomically, not merely accept
+ * whatever the caller already computed (see that method's own doc comment). `caseRevision`,
+ * `jdRevisions`, and `approvedResumeSnapshot` have no field here at all: they are write-layer-owned
+ * derived state, never directly settable by any caller, MCP or otherwise.
  */
 export interface CvEvidenceOverlayPatch {
   sourceCvContentHash?: string;
@@ -278,11 +305,12 @@ export interface CvEvidenceOverlayPatch {
   jdSnapshotHash?: string;
   jdComplete?: boolean;
   listingStatus?: CvListingStatus;
-  state?: CvEvidenceOverlayState;
+  state?: Exclude<CvEvidenceOverlayState, 'candidate_approved'>;
   requirements?: CvRequirementMapping[];
   facts?: CvEvidenceFact[];
   wordingVariants?: CvApprovedWording[];
 }
+
 
 /** #156: the two formats the manual CV Library export action offers, matching what the existing
  * Letters export already supports (`letters/export.ts`'s `exportDocx`/`exportPdf`) minus markdown,
@@ -896,6 +924,18 @@ export interface WorkspaceBridge {
   getCvEvidenceOverlay(cvId: string, vacancyKey: string): Promise<CvEvidenceOverlayRecord | null>;
   createCvEvidenceOverlay(input: CvEvidenceOverlayInput): Promise<CvEvidenceOverlayRecord>;
   updateCvEvidenceOverlay(id: string, patch: CvEvidenceOverlayPatch): Promise<CvEvidenceOverlayRecord>;
+  /**
+   * #421's case contract: the *only* path that may move `state` to `'candidate_approved'`. Unlike
+   * `updateCvEvidenceOverlay` (which accepts and stores whatever `wordingVariants` the caller sends
+   * as a plain patch), this re-derives wording from the overlay's own facts server-side
+   * (`proposeWordingFromFacts`) rather than trusting a caller-computed value, re-checks every gap
+   * (`describeCvEvidenceOverlayGaps`) before applying anything, and freezes an
+   * `approvedResumeSnapshot` in the same write -- so an MCP tool (or a compromised renderer) cannot
+   * approve arbitrary text merely by getting it validated and stored through the generic patch
+   * verb. `expectedCaseRevision` must match the overlay's current `caseRevision` or the call
+   * rejects with a conflict naming the actual current revision, never a partial apply.
+   */
+  approveCvEvidenceOverlay(id: string, expectedCaseRevision: string): Promise<CvEvidenceOverlayRecord>;
   deleteCvEvidenceOverlay(id: string): Promise<DeleteResult>;
   /**
    * #419, slice 4: renders the *candidate-approved* composition (`composeApprovedTailoredResume`,

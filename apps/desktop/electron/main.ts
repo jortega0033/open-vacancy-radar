@@ -138,6 +138,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
   parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
   parseCvEvidenceOverlayLookup,
@@ -2882,6 +2883,18 @@ guardedIpc.handle('workspace:cv-evidence-overlays:update', async (_event, input:
   return applicationDataResetGate.runMutation(async () => {
     const { id, patch } = parseIdAndPatch(input);
     return workspace.updateCvEvidenceOverlay(await ensureWorkspaceDb(), id, parseCvEvidenceOverlayPatch(patch));
+  });
+});
+
+/**
+ * #421's case contract: the only channel that may move an overlay's `state` to
+ * `'candidate_approved'` -- see `workspace.approveCvEvidenceOverlay`'s own doc comment for why this
+ * is a dedicated verb rather than another `:update` patch.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:approve', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, expectedCaseRevision } = parseCvEvidenceOverlayApproveInput(input);
+    return workspace.approveCvEvidenceOverlay(await ensureWorkspaceDb(), id, expectedCaseRevision);
   });
 });
 

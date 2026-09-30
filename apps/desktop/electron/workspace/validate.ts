@@ -30,6 +30,7 @@ import {
   CV_CLAIM_FIELDS,
   CV_EVIDENCE_CLASSES,
   CV_EVIDENCE_LIMITS,
+  CV_EVIDENCE_OVERLAY_ORIGINS,
   CV_EVIDENCE_OVERLAY_STATES,
   CV_FACT_OWNERSHIPS,
   CV_FACT_SOURCE_KINDS,
@@ -41,6 +42,7 @@ import {
 import type {
   CvApprovedWording,
   CvEvidenceFact,
+  CvEvidenceOverlayState,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import type {
@@ -652,8 +654,16 @@ export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayIn
     jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
     jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
     listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
+    origin: input.origin === undefined ? 'vacancy' : oneOf(input.origin, 'origin', CV_EVIDENCE_OVERLAY_ORIGINS),
   };
 }
+
+// #421's case contract: `'candidate_approved'` is never accepted through the generic patch --
+// only `approveCvEvidenceOverlay` may set it. `CvEvidenceOverlayPatch['state']` already excludes
+// it at the type level; this is the same rule enforced against the raw, unknown runtime payload.
+const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candidate_approved'>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
+  (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
+);
 
 export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
   const input = asRecord(value, '"patch"');
@@ -663,11 +673,20 @@ export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPa
   patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
   patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
   patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
-  patch(input, out, 'state', (v) => oneOf(v, 'state', CV_EVIDENCE_OVERLAY_STATES));
+  patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
   patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
   patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
   patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));
   return out;
+}
+
+/** `{ id, expectedCaseRevision }` envelope for `workspace:cv-evidence-overlays:approve` (#421). */
+export function parseCvEvidenceOverlayApproveInput(value: unknown): { id: string; expectedCaseRevision: string } {
+  const input = asRecord(value, 'approve request');
+  return {
+    id: parseId(input.id),
+    expectedCaseRevision: requiredNonEmpty(input.expectedCaseRevision, 'expectedCaseRevision', LIMITS.short),
+  };
 }
 
 /** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */

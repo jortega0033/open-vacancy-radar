@@ -6,6 +6,7 @@ import {
   invalidatedOverlayState,
   isCvEvidenceOverlayApprovable,
   proposeWordingFromFacts,
+  withJdRevision,
   type CvApprovedWording,
   type CvEvidenceFact,
   type CvEvidenceOverlay,
@@ -213,5 +214,34 @@ describe('proposeWordingFromFacts (#419, step 4)', () => {
     const existing = wording({ factIds: ['fact-1'] });
     const proposed = proposeWordingFromFacts(overlay({ facts: [fact()], wordingVariants: [existing] }), HASH);
     expect(proposed).toEqual([]);
+  });
+});
+
+describe('withJdRevision (#421)', () => {
+  it('appends a new revision when the JD text actually changes', () => {
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true });
+    const revisions = withJdRevision(base, 'v2', 'h2', true, '2026-10-01T00:00:00.000Z');
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({ text: 'v2', textHash: 'h2', complete: true, capturedAt: '2026-10-01T00:00:00.000Z' });
+  });
+
+  it('does not pad the history when the write resends the exact current text, hash and completeness', () => {
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true, jdRevisions: [] });
+    const revisions = withJdRevision(base, 'v1', 'h1', true, '2026-10-01T00:00:00.000Z');
+    expect(revisions).toBe(base.jdRevisions);
+  });
+
+  it('treats only jdComplete flipping as a change too, even with identical text', () => {
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: false });
+    const revisions = withJdRevision(base, 'v1', 'h1', true, '2026-10-01T00:00:00.000Z');
+    expect(revisions).toHaveLength(1);
+  });
+
+  it('preserves earlier revisions rather than replacing them', () => {
+    const earlier = { revisionId: 'r-1', text: 'v1', textHash: 'h1', complete: true, capturedAt: '2026-09-30T00:00:00.000Z' };
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true, jdRevisions: [earlier] });
+    const revisions = withJdRevision(base, 'v2', 'h2', true, '2026-10-01T00:00:00.000Z');
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]).toEqual(earlier);
   });
 });

@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
 import {
+  CV_EVIDENCE_OVERLAY_ORIGINS,
   CV_EVIDENCE_OVERLAY_STATES,
   CV_LISTING_STATUSES,
+  type CvApprovedResumeSnapshot,
   type CvApprovedWording,
   type CvEvidenceFact,
+  type CvJdRevision,
   type CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import type { PreparedApplicationFields } from './types.js';
@@ -130,6 +133,8 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
   jdSnapshot: text('jd_snapshot').notNull().default(''),
   jdSnapshotHash: text('jd_snapshot_hash').notNull(),
   jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  /** #421's case contract: every past `jdSnapshot`, oldest first -- see `CvJdRevision`. */
+  jdRevisions: text('jd_revisions', { mode: 'json' }).notNull().$type<CvJdRevision[]>().default([]),
   listingStatus: text('listing_status', { enum: CV_LISTING_STATUSES as unknown as [string, ...string[]] })
     .notNull()
     .default('unknown'),
@@ -139,6 +144,18 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
   requirements: text('requirements', { mode: 'json' }).notNull().$type<CvRequirementMapping[]>().default([]),
   facts: text('facts', { mode: 'json' }).notNull().$type<CvEvidenceFact[]>().default([]),
   wordingVariants: text('wording_variants', { mode: 'json' }).notNull().$type<CvApprovedWording[]>().default([]),
+  /** #421's case contract: how this case began -- see `CvEvidenceOverlayOrigin`. */
+  origin: text('origin', { enum: CV_EVIDENCE_OVERLAY_ORIGINS as unknown as [string, ...string[]] })
+    .notNull()
+    .default('vacancy'),
+  /** #421's case contract: bumped by the repository layer on every write, never caller-supplied.
+   * A plain `text` column (not `integer`), since every reader treats it as an opaque token to
+   * compare for equality -- see `CvEvidenceOverlay.caseRevision`. */
+  caseRevision: text('case_revision').notNull().default('0'),
+  /** #421's case contract: `null` until the first approval -- see `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: text('approved_resume_snapshot', { mode: 'json' })
+    .$type<CvApprovedResumeSnapshot | null>()
+    .default(null),
   capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });

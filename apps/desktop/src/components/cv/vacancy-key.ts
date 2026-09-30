@@ -20,3 +20,15 @@ export function vacancyKeyFor(vacancy: VacancyLead): string {
   const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/gu, ' ');
   return `fields:${normalize(vacancy.title)}|${normalize(vacancy.company)}|${normalize(vacancy.location)}`;
 }
+
+/**
+ * A stable key for a case with no `VacancyLead` behind it at all -- #421's MCP case contract, where
+ * an external client may start a case from pasted JD text alone. Freshly minted per call, never
+ * derived from the JD text itself: two cases started from identical JD text are still two distinct
+ * cases the candidate may want to track separately, the same "app assigns ids, never derives them
+ * from content" discipline `cv-evidence-schema.ts` already follows for `factId`/`variantId`. The
+ * `manual:` prefix can never collide with `vacancyKeyFor`'s own `url:`/`fields:` prefixes.
+ */
+export function mintManualCaseKey(): string {
+  return `manual:${crypto.randomUUID()}`;
+}
