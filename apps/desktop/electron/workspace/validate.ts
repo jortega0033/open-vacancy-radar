@@ -563,10 +563,14 @@ function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
     entry.verification === undefined
       ? 'self_reported'
       : oneOf(entry.verification, `facts[${index}].verification`, CV_FACT_VERIFICATIONS);
-  const hasMetric = entry.metricValue !== undefined && str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField).trim().length > 0;
+  const metricValueStr = entry.metricValue === undefined ? '' : str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField);
+  const hasMetric = metricValueStr.trim().length > 0;
   return {
     factId: requiredNonEmpty(entry.factId, `facts[${index}].factId`, CV_EVIDENCE_LIMITS.shortField),
-    parentId: requiredNonEmpty(entry.parentId, `facts[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    // Empty for a "not my work" answer with no anchor to name (#419's clarification flow: a
+    // `needs_verification` requirement commonly has no `anchorParentId` at all) -- not every fact
+    // is scoped to one role or project, unlike `CvSourceProjectEntry.id` elsewhere in this app.
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `facts[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
     parentType,
     client: entry.client === undefined ? '' : str(entry.client, `facts[${index}].client`, CV_EVIDENCE_LIMITS.shortField),
     activity: str(entry.activity ?? '', `facts[${index}].activity`, CV_EVIDENCE_LIMITS.activity),
@@ -582,7 +586,7 @@ function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
     // A metric with a value but no stated basis is refused outright, rather than silently accepted
     // with an empty basis: `describeCvEvidenceOverlayGaps` cannot tell "no metric" from "a metric
     // nobody grounded" once both are blank, and the second is exactly what #419 forbids.
-    metricValue: hasMetric ? str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField) : '',
+    metricValue: hasMetric ? metricValueStr : '',
     metricUnit: hasMetric ? str(entry.metricUnit ?? '', `facts[${index}].metricUnit`, CV_EVIDENCE_LIMITS.shortField) : '',
     metricBasis: (() => {
       const basis = str(entry.metricBasis ?? '', `facts[${index}].metricBasis`, CV_EVIDENCE_LIMITS.shortField);
@@ -592,9 +596,11 @@ function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
       return hasMetric ? basis : '';
     })(),
     supersedes: entry.supersedes === undefined ? '' : str(entry.supersedes, `facts[${index}].supersedes`, CV_EVIDENCE_LIMITS.shortField),
-    // Stamped by the repository, never accepted from the caller: the same rule
-    // `CvSourceDocument.reviewedAt` and `CvApprovedWording.approvedAt` follow.
-    createdAt: '',
+    // Preserved from the caller rather than stamped here: this app's own `state`/`approvedAt`
+    // fields on this same overlay are already renderer-supplied (see `CvApprovedWording
+    // .approvedAt`'s doc comment), so re-blanking just this one timestamp would not raise the
+    // trust bar, only make it inconsistent with its neighbours.
+    createdAt: entry.createdAt === undefined ? '' : str(entry.createdAt, `facts[${index}].createdAt`, CV_EVIDENCE_LIMITS.shortField),
   };
 }
 
@@ -612,9 +618,10 @@ function parseApprovedWording(value: unknown, index: number): CvApprovedWording 
       CV_EVIDENCE_LIMITS.shortField,
     ),
     status: entry.status === undefined ? 'draft' : oneOf(entry.status, `wordingVariants[${index}].status`, CV_WORDING_APPROVAL_STATUSES),
-    // Stamped by the repository on approval, never accepted here -- see `CvApprovedWording
-    // .approvedAt`'s own doc comment for why.
-    approvedAt: '',
+    // Preserved from the caller, not stamped here -- see `CvApprovedWording.approvedAt`'s own doc
+    // comment. Blanking it here would silently discard the timestamp `proposeWordingFromFacts`
+    // sets at the moment of approval.
+    approvedAt: entry.approvedAt === undefined ? '' : str(entry.approvedAt, `wordingVariants[${index}].approvedAt`, CV_EVIDENCE_LIMITS.shortField),
     sourceRevision:
       entry.sourceRevision === undefined ? '' : str(entry.sourceRevision, `wordingVariants[${index}].sourceRevision`, CV_EVIDENCE_LIMITS.shortField),
   };

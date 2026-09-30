@@ -264,14 +264,24 @@ export function composeApprovedTailoredResume(
   });
 
   const resume = tailoredResumeFromSource(source, skills);
-  // Keyed by the source entry's own stable id, not array position: `tailoredResumeFromSource`
-  // happens to preserve `source.experience`'s order today, but this function should not depend on
-  // that staying true. `ResumeExperienceEntry`/`ResumeProjectEntry` carry no id of their own (the
-  // exported shape predates #419), so the correlation is rebuilt here from the source ids instead.
-  const resumeExperienceById = new Map(source.experience.map((entry, index) => [entry.id, resume.experience[index]]));
-  const resumeProjectById = new Map(
-    selectSourceProjects(source).map((project, index) => [project.id, resume.projects[index]]),
-  );
+  // Rebuilt here rather than correlated back to `resume.experience`/`resume.projects` by array
+  // position: `ResumeExperienceEntry`/`ResumeProjectEntry` carry no id of their own (that shape
+  // predates #419), and zipping two independently-produced arrays by index is only as safe as the
+  // assumption that neither ever reorders, filters or dedupes relative to the other -- an
+  // assumption with nothing enforcing it. Building each resume entry and its id lookup in the same
+  // loop, from the same source entry, makes the correlation correct by construction instead.
+  const resumeExperienceById = new Map<string, ResumeExperienceEntry>();
+  resume.experience = source.experience.map((entry) => {
+    const resumeEntry = sourceExperienceToResumeEntry(entry, [...entry.bullets]);
+    resumeExperienceById.set(entry.id, resumeEntry);
+    return resumeEntry;
+  });
+  const resumeProjectById = new Map<string, ResumeProjectEntry>();
+  resume.projects = selectSourceProjects(source).map((project) => {
+    const resumeEntry = sourceProjectToResumeEntry(project);
+    resumeProjectById.set(project.id, resumeEntry);
+    return resumeEntry;
+  });
 
   for (const variant of usable) {
     if (variant.targetField === 'summary') {
@@ -290,7 +300,12 @@ export function composeApprovedTailoredResume(
     if (variant.targetField === 'project_description') {
       const entry = resumeProjectById.get(variant.parentId);
       if (entry) entry.description = variant.text;
+      continue;
     }
+    // Exhaustiveness check: a fifth `CvClaimField` added to `CV_CLAIM_FIELDS` without a branch
+    // here is a compile error, not a silently-dropped approved variant.
+    const exhaustive: never = variant.targetField;
+    throw new Error(`composeApprovedTailoredResume: unhandled targetField "${exhaustive as string}"`);
   }
 
   return { resume, blockers };

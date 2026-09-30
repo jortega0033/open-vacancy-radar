@@ -644,14 +644,14 @@ describe('workspace cv evidence overlays (#419)', () => {
     });
   });
 
-  it('never accepts a fact createdAt or a wording approvedAt from the caller', () => {
-    const patch = parseCvEvidenceOverlayPatch({
+  it('preserves a fact createdAt / a wording approvedAt the caller sends, and defaults both to empty', () => {
+    const withTimestamps = parseCvEvidenceOverlayPatch({
       facts: [
         {
           factId: 'fact-1',
           parentId: 'experience-1',
           parentType: 'experience',
-          createdAt: '2020-01-01T00:00:00.000Z',
+          createdAt: '2026-09-30T00:00:00.000Z',
         },
       ],
       wordingVariants: [
@@ -659,12 +659,26 @@ describe('workspace cv evidence overlays (#419)', () => {
           variantId: 'variant-1',
           targetField: 'summary',
           text: 'Approved wording.',
-          approvedAt: '2020-01-01T00:00:00.000Z',
+          approvedAt: '2026-09-30T00:00:00.000Z',
         },
       ],
     });
-    expect(patch.facts?.[0]?.createdAt).toBe('');
-    expect(patch.wordingVariants?.[0]?.approvedAt).toBe('');
+    expect(withTimestamps.facts?.[0]?.createdAt).toBe('2026-09-30T00:00:00.000Z');
+    expect(withTimestamps.wordingVariants?.[0]?.approvedAt).toBe('2026-09-30T00:00:00.000Z');
+
+    const withoutTimestamps = parseCvEvidenceOverlayPatch({
+      facts: [{ factId: 'fact-1', parentId: 'experience-1', parentType: 'experience' }],
+      wordingVariants: [{ variantId: 'variant-1', targetField: 'summary', text: 'x' }],
+    });
+    expect(withoutTimestamps.facts?.[0]?.createdAt).toBe('');
+    expect(withoutTimestamps.wordingVariants?.[0]?.approvedAt).toBe('');
+  });
+
+  it('allows a fact with no parentId (#419: a "not my work" answer with no anchor to name)', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      facts: [{ factId: 'fact-1', parentType: 'experience' }],
+    });
+    expect(patch.facts?.[0]?.parentId).toBe('');
   });
 
   it('rejects a targetField or classification/evidenceClass outside the known set', () => {

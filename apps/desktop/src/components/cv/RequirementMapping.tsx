@@ -12,10 +12,11 @@ import { jobDescriptionBody } from '../../../electron/generation-input.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { ClarificationForm } from './ClarificationForm.js';
 import { applyClarificationAnswer, type ClarificationAnswer } from './clarification-answer.js';
-import { sha256Hex } from './content-hash.js';
+import { sha256Hex, sha256HexOfSource } from './content-hash.js';
 import { buildRequirementMappingPrompt } from './prompts.js';
 import { mergeRequirementMappings } from './requirement-mapping-merge.js';
 import { parseRequirementMappingResponse } from './requirement-mapping-response.js';
+import { sourceAnchors } from './source-anchors.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import { vacancyKeyFor } from './vacancy-key.js';
@@ -35,11 +36,34 @@ export interface RequirementMappingProps {
 
 function anchorLabel(source: CvSourceDocument | null | undefined, anchorParentId: string): string {
   if (!anchorParentId) return '';
-  const experience = source?.experience.find((entry) => entry.id === anchorParentId);
-  if (experience) return `${experience.title || 'Role'} at ${experience.company || 'unknown employer'}`;
-  const project = source?.projects.find((entry) => entry.id === anchorParentId);
-  if (project) return `Project: ${project.name || 'unnamed'}`;
-  return anchorParentId;
+  return sourceAnchors(source).find((anchor) => anchor.id === anchorParentId)?.label ?? anchorParentId;
+}
+
+/**
+ * The overlay for this (cvId, vacancyKey) if one already exists, or a freshly created one.
+ * Shared by the mapping-run-completion effect and `handleAddRequirement` below -- both need "get
+ * or create" and nothing else, and hashing the whole reviewed CV (only needed on the create path)
+ * is skipped entirely once an overlay already exists, the common case for either caller.
+ */
+async function getOrCreateOverlay(
+  existing: CvEvidenceOverlayRecord | null,
+  cvId: string,
+  vacancyKey: string,
+  sourceCv: CvSourceDocument | null | undefined,
+  vacancy: VacancyLead,
+): Promise<CvEvidenceOverlayRecord> {
+  if (existing) return existing;
+  const [sourceCvContentHash, jdSnapshotHash] = await Promise.all([
+    sha256HexOfSource(sourceCv ?? null),
+    sha256Hex(jobDescriptionBody(vacancy)),
+  ]);
+  return window.workspace.createCvEvidenceOverlay({
+    cvId,
+    vacancyKey,
+    sourceCvContentHash,
+    jdSnapshotHash,
+    jdSnapshot: jobDescriptionBody(vacancy),
+  });
 }
 
 const CLASSIFICATION_LABEL: Record<CvRequirementClassification, string> = {
@@ -120,19 +144,11 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         return;
       }
       try {
+        const base = await getOrCreateOverlay(overlay, cvId, vacancyKey, sourceCv, vacancy);
         const [sourceCvContentHash, jdSnapshotHash] = await Promise.all([
-          sha256Hex(JSON.stringify(sourceCv ?? null)),
+          sha256HexOfSource(sourceCv ?? null),
           sha256Hex(jobDescriptionBody(vacancy)),
         ]);
-        const base =
-          overlay ??
-          (await window.workspace.createCvEvidenceOverlay({
-            cvId,
-            vacancyKey,
-            sourceCvContentHash,
-            jdSnapshotHash,
-            jdSnapshot: jobDescriptionBody(vacancy),
-          }));
         const merged = mergeRequirementMappings(base.requirements, extracted);
         const updated = await window.workspace.updateCvEvidenceOverlay(base.id, {
           sourceCvContentHash,
@@ -172,7 +188,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const handleAnswer = useCallback(
     async (requirement: CvRequirementMapping, answer: ClarificationAnswer) => {
       if (!overlay) return;
-      const { requirement: nextRequirement, fact } = applyClarificationAnswer(requirement, answer);
+      const { requirement: nextRequirement, fact } = applyClarificationAnswer(requirement, answer, sourceCv);
       const nextRequirements = overlay.requirements.map((existing) =>
         existing.requirementId === requirement.requirementId ? nextRequirement : existing,
       );
@@ -197,19 +213,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     if (!text || !cvId || !vacancy || !vacancyKey) return;
     setSaveError(undefined);
     try {
-      const [sourceCvContentHash, jdSnapshotHash] = await Promise.all([
-        sha256Hex(JSON.stringify(sourceCv ?? null)),
-        sha256Hex(jobDescriptionBody(vacancy)),
-      ]);
-      const base =
-        overlay ??
-        (await window.workspace.createCvEvidenceOverlay({
-          cvId,
-          vacancyKey,
-          sourceCvContentHash,
-          jdSnapshotHash,
-          jdSnapshot: jobDescriptionBody(vacancy),
-        }));
+      const base = await getOrCreateOverlay(overlay, cvId, vacancyKey, sourceCv, vacancy);
       const added: CvRequirementMapping = {
         requirementId: crypto.randomUUID(),
         text,

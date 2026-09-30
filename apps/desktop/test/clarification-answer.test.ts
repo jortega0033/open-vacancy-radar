@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { applyClarificationAnswer } from '../src/components/cv/clarification-answer.js';
-import type { CvRequirementMapping } from '../src/window.js';
+import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
+import type { CvRequirementMapping, CvSourceDocument } from '../src/window.js';
+
+const SOURCE: CvSourceDocument = {
+  ...EMPTY_CV_SOURCE,
+  experience: [
+    { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: [] },
+  ],
+  projects: [
+    { id: 'project-1', name: 'Design System', role: 'Lead', dates: '2023', organization: '', description: '', technologies: [], links: [], pinned: false },
+  ],
+};
 
 function requirement(partial: Partial<CvRequirementMapping> = {}): CvRequirementMapping {
   return {
@@ -32,11 +43,31 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
   });
 
   it('"not my work" records a candidate_confirmed_gap fact and marks the requirement unsupported', () => {
-    const result = applyClarificationAnswer(requirement({ anchorParentId: 'experience-1' }), { kind: 'not_my_work' });
+    const result = applyClarificationAnswer(requirement({ anchorParentId: 'experience-1' }), { kind: 'not_my_work' }, SOURCE);
     expect(result.requirement.evidenceClass).toBe('unsupported');
     expect(result.requirement.anchorParentId).toBe('');
     expect(result.requirement.reviewed).toBe(true);
-    expect(result.fact).toMatchObject({ verification: 'candidate_confirmed_gap', activity: '', parentType: 'experience' });
+    expect(result.fact).toMatchObject({ verification: 'candidate_confirmed_gap', activity: '', parentType: 'experience', parentId: 'experience-1' });
+  });
+
+  it('"not my work" resolves an anchored project id to parentType "project", not the "experience" default', () => {
+    const result = applyClarificationAnswer(requirement({ anchorParentId: 'project-1' }), { kind: 'not_my_work' }, SOURCE);
+    expect(result.fact).toMatchObject({ parentType: 'project', parentId: 'project-1' });
+  });
+
+  it('"not my work" carries no parent scope when the requirement was never anchored (the common needs_verification case)', () => {
+    const result = applyClarificationAnswer(requirement({ anchorParentId: '' }), { kind: 'not_my_work' }, SOURCE);
+    expect(result.fact?.parentId).toBe('');
+  });
+
+  it('"not my work" never trusts an anchor id that no longer resolves in the current source', () => {
+    const result = applyClarificationAnswer(requirement({ anchorParentId: 'deleted-role' }), { kind: 'not_my_work' }, SOURCE);
+    expect(result.fact?.parentId).toBe('');
+  });
+
+  it('"not my work" is safe with no source supplied at all', () => {
+    const result = applyClarificationAnswer(requirement({ anchorParentId: 'experience-1' }), { kind: 'not_my_work' });
+    expect(result.fact?.parentId).toBe('');
   });
 
   it('a real answer creates a self-reported fact and flips evidence class to direct', () => {

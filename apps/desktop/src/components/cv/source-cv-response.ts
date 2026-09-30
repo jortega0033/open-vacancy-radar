@@ -22,7 +22,11 @@ import { MAX_SOURCE_CV_PROMPT_CHARS, wasCvTextTruncated } from './prompts.js';
  * and is refused an export, instead of a shortened one that exports looking finished.
  */
 
-function stringField(value: unknown, limit: number): string {
+/** Exported for `requirement-mapping-response.ts`, which needs exactly this shape (always a
+ * string, empty rather than `undefined` for anything else) -- not `cv-ai-parse.ts`'s differently-
+ * shaped private helper of the same name, which returns `string | undefined` for a different
+ * coercion contract and stays local to that file. */
+export function stringField(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : '';
 }
 

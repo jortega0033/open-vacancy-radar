@@ -226,3 +226,30 @@ export function withStableExperienceIds(experience: CvSourceExperienceEntry[]): 
     entry.id && entry.id.trim().length > 0 ? entry : { ...entry, id: `experience-${index + 1}` },
   );
 }
+
+/**
+ * `JSON.stringify` with every object's keys sorted, recursively. Plain `JSON.stringify` preserves
+ * insertion order, which is exactly wrong for hashing: a record backfilled by
+ * `withStableExperienceIds` above gets its `id` key appended at the end (a genuinely new key on an
+ * existing object), while the same content freshly written by `validate.ts`'s `parseSourceExperience`
+ * has `id` first (the object is built with `id` as the first property) -- two byte-identical-in-
+ * content records would hash to two different digests. `CvEvidenceOverlay.sourceCvContentHash` and
+ * `CvApprovedWording.sourceRevision` (#419) exist specifically to detect *content* drift, not key-
+ * order accidents, so every hash of a `CvSourceDocument` in this app -- renderer (`content-hash.ts`)
+ * and main process (`main.ts`'s export handler) alike -- must stringify through this function, never
+ * through a bare `JSON.stringify`.
+ */
+export function stableCvSourceJson(source: CvSourceDocument): string {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === 'object') {
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
+      }
+      return sorted;
+    }
+    return value;
+  };
+  return JSON.stringify(sortKeys(source));
+}

@@ -131,10 +131,12 @@ export interface CvApprovedWording {
    * trace to at least one fact. */
   factIds: string[];
   status: CvWordingApprovalStatus;
-  /** ISO-8601, stamped by the main process from its own clock on approval, never renderer-supplied
-   * -- the same rule `CvSourceDocument.reviewedAt` already follows and for the same reason: "a
-   * person approved this exact text" is the one claim the export gate relies on. Empty until
-   * `status` is `'candidate_approved'`. */
+  /** ISO-8601, stamped at the moment of approval. Unlike `CvSourceDocument.reviewedAt` (main-
+   * process-stamped, since that value is the export gate's *only* signal that a person reviewed a
+   * source at all), this overlay's `state` field is the actual gate here (`updateCvEvidenceOverlay`
+   * still accepts a renderer-supplied `state`, the same trust boundary `ComposedCvReview.tsx`'s own
+   * approve action already operates inside), so `approvedAt` is a record of when, not a security
+   * boundary of its own. Empty until `status` is `'candidate_approved'`. */
   approvedAt: string;
   /** The `CvSourceDocument.reviewedAt` this variant was approved against. A later re-review of the
    * source (a new `reviewedAt`) means this variant's grounding has not been re-confirmed against
@@ -310,6 +312,58 @@ export function describeCvEvidenceOverlayGaps(
 
 export function isCvEvidenceOverlayApprovable(overlay: CvEvidenceOverlay, currentSourceCvContentHash: string): boolean {
   return describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash).length === 0;
+}
+
+/**
+ * Composes one fact's own words into one candidate CV sentence -- mechanically, never by an AI
+ * paraphrase: every word here already came from the candidate's own clarification answer
+ * (`activity`/`mechanism`/`result`), just joined into a sentence shape a CV bullet reads as. This
+ * is what step 4 of #419 calls "proposed claim-bearing text": the thing a person reviews and
+ * explicitly approves before it can reach a claim-bearing field, never text that reaches one on
+ * its own.
+ */
+export function deriveWordingFromFact(fact: CvEvidenceFact): string {
+  const parts = [fact.activity.trim()];
+  if (fact.mechanism.trim()) parts.push(`using ${fact.mechanism.trim()}`);
+  let sentence = parts.join(', ');
+  if (fact.result.trim()) sentence = `${sentence}, ${fact.result.trim()}`;
+  return sentence;
+}
+
+/**
+ * Proposes one approved-wording variant per self-reported fact that has none yet (#419, step 4).
+ * Only `self_reported` facts propose wording: `candidate_confirmed_gap` is the candidate saying
+ * they did *not* do the thing, and `corroborated` facts (independently verified, not from a
+ * clarification answer) are not yet wired to this path. A fact that already backs an existing
+ * `wordingVariant` (by `factIds`) is never proposed a second time, so re-running this after an
+ * earlier approval does not offer to re-approve the same ground twice.
+ *
+ * Each proposal is emitted already `status: 'candidate_approved'`, scoped to
+ * `currentSourceCvContentHash`: the caller (the composition/approval review screen) shows the
+ * candidate exactly this text, composed into the full CV preview, and only persists it at the
+ * moment the candidate approves *that* preview -- so "propose" and "approve" are the same action
+ * here by construction, not two separate steps that could drift apart. See
+ * `ComposedCvReview.tsx`'s own doc comment for how the preview and the persisted approval stay the
+ * same text.
+ */
+export function proposeWordingFromFacts(
+  overlay: CvEvidenceOverlay,
+  currentSourceCvContentHash: string,
+): CvApprovedWording[] {
+  const alreadyGrounded = new Set(overlay.wordingVariants.flatMap((variant) => variant.factIds));
+  const now = new Date().toISOString();
+  return overlay.facts
+    .filter((fact) => fact.verification === 'self_reported' && !alreadyGrounded.has(fact.factId))
+    .map((fact) => ({
+      variantId: crypto.randomUUID(),
+      targetField: fact.parentType === 'project' ? 'project_description' : 'experience_bullet',
+      parentId: fact.parentId,
+      text: deriveWordingFromFact(fact),
+      factIds: [fact.factId],
+      status: 'candidate_approved',
+      approvedAt: now,
+      sourceRevision: currentSourceCvContentHash,
+    }));
 }
 
 /** The JSON shape the requirement-mapping extraction prompt asks for, and the shape the response

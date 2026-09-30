@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deriveWordingFromFact,
   describeCvEvidenceOverlayGaps,
   EMPTY_CV_EVIDENCE_OVERLAY,
   invalidatedOverlayState,
   isCvEvidenceOverlayApprovable,
+  proposeWordingFromFacts,
   type CvApprovedWording,
+  type CvEvidenceFact,
   type CvEvidenceOverlay,
   type CvRequirementMapping,
 } from '../electron/workspace/cv-evidence-schema.js';
@@ -132,5 +135,83 @@ describe('invalidatedOverlayState', () => {
     expect(invalidatedOverlayState('needs_input')).toBe('needs_input');
     expect(invalidatedOverlayState('conflict')).toBe('conflict');
     expect(invalidatedOverlayState('draft')).toBe('draft');
+  });
+});
+
+function fact(partial: Partial<CvEvidenceFact> = {}): CvEvidenceFact {
+  return {
+    factId: 'fact-1',
+    parentId: 'experience-1',
+    parentType: 'experience',
+    client: '',
+    activity: 'Designed the GraphQL schema',
+    mechanism: 'Apollo Server, schema-first',
+    result: 'cut client-side overfetching',
+    ownership: 'unknown',
+    sourceKind: 'candidate_testimony',
+    sourceReference: '',
+    verification: 'self_reported',
+    metricValue: '',
+    metricUnit: '',
+    metricBasis: '',
+    supersedes: '',
+    createdAt: '2026-09-30T00:00:00.000Z',
+    ...partial,
+  };
+}
+
+describe('deriveWordingFromFact (#419, step 4)', () => {
+  it('joins activity, mechanism and result using only the fact\'s own words', () => {
+    expect(deriveWordingFromFact(fact())).toBe(
+      'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching',
+    );
+  });
+
+  it('omits the mechanism/result clauses when the fact does not state them', () => {
+    expect(deriveWordingFromFact(fact({ mechanism: '', result: '' }))).toBe('Designed the GraphQL schema');
+  });
+});
+
+describe('proposeWordingFromFacts (#419, step 4)', () => {
+  it('proposes one candidate_approved variant per self-reported fact with no existing wording', () => {
+    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()] }), HASH);
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0]).toMatchObject({
+      targetField: 'experience_bullet',
+      parentId: 'experience-1',
+      text: deriveWordingFromFact(fact()),
+      factIds: ['fact-1'],
+      status: 'candidate_approved',
+      sourceRevision: HASH,
+    });
+    expect(proposed[0]?.approvedAt).not.toBe('');
+  });
+
+  it('targets project_description for a project-scoped fact', () => {
+    const proposed = proposeWordingFromFacts(
+      overlay({ facts: [fact({ parentId: 'project-1', parentType: 'project' })] }),
+      HASH,
+    );
+    expect(proposed[0]?.targetField).toBe('project_description');
+    expect(proposed[0]?.parentId).toBe('project-1');
+  });
+
+  it('never proposes wording for a candidate_confirmed_gap or corroborated fact', () => {
+    const proposed = proposeWordingFromFacts(
+      overlay({
+        facts: [
+          fact({ factId: 'fact-2', verification: 'candidate_confirmed_gap' }),
+          fact({ factId: 'fact-3', verification: 'corroborated' }),
+        ],
+      }),
+      HASH,
+    );
+    expect(proposed).toEqual([]);
+  });
+
+  it('never proposes wording twice for a fact that already backs an existing variant', () => {
+    const existing = wording({ factIds: ['fact-1'] });
+    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()], wordingVariants: [existing] }), HASH);
+    expect(proposed).toEqual([]);
   });
 });

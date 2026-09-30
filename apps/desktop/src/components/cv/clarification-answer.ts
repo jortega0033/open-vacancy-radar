@@ -1,4 +1,4 @@
-import type { CvEvidenceFact, CvFactOwnership, CvRequirementMapping } from '../../window.js';
+import type { CvEvidenceFact, CvFactOwnership, CvRequirementMapping, CvSourceDocument } from '../../window.js';
 
 /**
  * One candidate response to a `needs_verification` requirement (#419, step 3): asked as three
@@ -45,6 +45,12 @@ const UNASKED_OWNERSHIP: CvFactOwnership = 'unknown';
 export function applyClarificationAnswer(
   requirement: CvRequirementMapping,
   answer: ClarificationAnswer,
+  /** Only consulted for `'not_my_work'`, to resolve whether `requirement.anchorParentId` (which
+   * can legitimately be set even on a `needs_verification` row -- a model may anchor a requirement
+   * it is not confident enough to call direct evidence) names an experience entry or a project.
+   * `null` is safe: an id that resolves to nothing just means the recorded fact carries no parent
+   * scope, the same as a requirement that was never anchored at all. */
+  source?: CvSourceDocument | null,
 ): ClarificationResult {
   if (answer.kind === 'skip') {
     // Recorded nowhere: this pass leaves the requirement exactly as it was, for someone to answer
@@ -63,10 +69,19 @@ export function applyClarificationAnswer(
   const now = new Date().toISOString();
 
   if (answer.kind === 'not_my_work') {
+    // `requirement.anchorParentId` is empty on the common path (the model leaves it empty exactly
+    // when it is not confident enough to anchor), but not guaranteed to be -- resolve it against
+    // the real source rather than assuming either an experience entry or "always empty".
+    const anchoredExperience = source?.experience.find((entry) => entry.id === requirement.anchorParentId);
+    const anchoredProject = source?.projects.find((entry) => entry.id === requirement.anchorParentId);
+    const resolvedParentId = anchoredExperience || anchoredProject ? requirement.anchorParentId : '';
     const fact: CvEvidenceFact = {
       factId: crypto.randomUUID(),
-      parentId: requirement.anchorParentId,
-      parentType: 'experience',
+      parentId: resolvedParentId,
+      // Meaningless when `resolvedParentId` is empty; `'experience'` is just this field's declared
+      // default in that case, the same way `CvFactOwnership`'s `'unknown'` is a real value rather
+      // than an absence.
+      parentType: anchoredProject ? 'project' : 'experience',
       client: '',
       activity: '',
       mechanism: '',

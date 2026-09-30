@@ -1,29 +1,12 @@
 import { useState } from 'react';
 import type { ClarificationAnswer } from './clarification-answer.js';
+import { sourceAnchors } from './source-anchors.js';
 import type { CvSourceDocument } from '../../window.js';
 
 export interface ClarificationFormProps {
   sourceCv: CvSourceDocument | null | undefined;
   onAnswer(answer: ClarificationAnswer): void;
   onCancel(): void;
-}
-
-interface AnchorOption {
-  id: string;
-  type: 'experience' | 'project';
-  label: string;
-}
-
-function anchorOptions(source: CvSourceDocument | null | undefined): AnchorOption[] {
-  if (!source) return [];
-  return [
-    ...source.experience.map((entry) => ({
-      id: entry.id,
-      type: 'experience' as const,
-      label: `${entry.title || 'Role'} at ${entry.company || 'unknown employer'}`,
-    })),
-    ...source.projects.map((entry) => ({ id: entry.id, type: 'project' as const, label: `Project: ${entry.name || 'unnamed'}` })),
-  ];
 }
 
 /**
@@ -33,7 +16,7 @@ function anchorOptions(source: CvSourceDocument | null | undefined): AnchorOptio
  * requires stay gaps rather than being nudged toward a supported-evidence answer.
  */
 export function ClarificationForm({ sourceCv, onAnswer, onCancel }: ClarificationFormProps) {
-  const options = anchorOptions(sourceCv);
+  const options = sourceAnchors(sourceCv);
   const [anchor, setAnchor] = useState('');
   const [activity, setActivity] = useState('');
   const [mechanism, setMechanism] = useState('');

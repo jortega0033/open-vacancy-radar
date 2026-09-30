@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { composeApprovedTailoredResume, type ComposedTailoredResume } from '../../../electron/resume-source.js';
-import type { CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
-import { sha256Hex } from './content-hash.js';
+import { proposeWordingFromFacts } from '../../../electron/workspace/cv-evidence-schema.js';
+import type { CvApprovedWording, CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
+import { sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { vacancyKeyFor } from './vacancy-key.js';
@@ -18,10 +19,18 @@ export interface ComposedCvReviewProps {
  * `composeApprovedTailoredResume` builds from unchanged reviewed source text and active,
  * candidate-approved wording only -- never from `TailorCv`'s free-form advisory draft, which this
  * component neither reads nor affects.
+ *
+ * "Propose" and "approve" are the same action here, by design (#419: "require explicit approval of
+ * the *exact text*"). `handlePreview` computes `proposeWordingFromFacts` -- the sentence each
+ * self-reported clarification fact composes into, in the candidate's own words, never AI-generated
+ * -- and folds those proposals into the very resume shown in the preview below. `handleApprove`
+ * persists exactly that same proposal set. The candidate never approves text they have not seen
+ * rendered in the actual CV.
  */
 export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedCvReviewProps) {
   const [overlay, setOverlay] = useState<CvEvidenceOverlayRecord | null>(null);
   const [composed, setComposed] = useState<ComposedTailoredResume | null>(null);
+  const [proposedWording, setProposedWording] = useState<CvApprovedWording[]>([]);
   const [error, setError] = useState<string>();
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
@@ -32,6 +41,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
 
   useEffect(() => {
     setComposed(null);
+    setProposedWording([]);
     setApproved(false);
     setError(undefined);
     if (!cvId || !vacancyKey) {
@@ -47,33 +57,59 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     };
   }, [cvId, vacancyKey]);
 
-  const canPreview = !!overlay && !!sourceCv;
+  const canPreview = !!overlay && !!cvId && !!vacancyKey && !!sourceCv;
 
   const handlePreview = useCallback(async () => {
-    if (!overlay || !sourceCv) return;
+    if (!cvId || !vacancyKey || !sourceCv) return;
     setError(undefined);
     setApproved(false);
     try {
-      const currentHash = await sha256Hex(JSON.stringify(sourceCv));
-      setComposed(composeApprovedTailoredResume(sourceCv, overlay, currentHash, profile?.skills ?? []));
+      // Re-fetched fresh rather than trusting this component's own `overlay` state: the sibling
+      // RequirementMapping panel (mounted alongside this one in CvAssistant) writes to the same
+      // overlay row independently, and this component has no subscription to those writes.
+      // Composing against a stale snapshot could show wrong blockers -- stale "still needs review"
+      // warnings, or a missing one introduced after this component's initial mount fetch.
+      const fresh = await window.workspace.getCvEvidenceOverlay(cvId, vacancyKey);
+      if (!fresh) {
+        setError('Map this vacancy’s requirements above first, so there is something to compose from.');
+        return;
+      }
+      setOverlay(fresh);
+      const currentHash = await sha256HexOfSource(sourceCv);
+      const proposed = proposeWordingFromFacts(fresh, currentHash);
+      setProposedWording(proposed);
+      setComposed(
+        composeApprovedTailoredResume(
+          sourceCv,
+          { ...fresh, wordingVariants: [...fresh.wordingVariants, ...proposed] },
+          currentHash,
+          profile?.skills ?? [],
+        ),
+      );
     } catch (err) {
       setError(describeError(err, 'could not build the composed CV'));
     }
-  }, [overlay, sourceCv, profile]);
+  }, [cvId, vacancyKey, sourceCv, profile]);
 
   const handleApprove = useCallback(async () => {
     if (!overlay || !composed || composed.blockers.length > 0) return;
     setApproving(true);
     setError(undefined);
     try {
-      await window.workspace.updateCvEvidenceOverlay(overlay.id, { state: 'candidate_approved' });
+      // Persists exactly the wording the preview above showed and nothing more: the same
+      // `proposedWording` list `handlePreview` folded into `composed.resume`.
+      const updated = await window.workspace.updateCvEvidenceOverlay(overlay.id, {
+        wordingVariants: [...overlay.wordingVariants, ...proposedWording],
+        state: 'candidate_approved',
+      });
+      setOverlay(updated);
       setApproved(true);
     } catch (err) {
       setError(describeError(err, 'could not approve this CV'));
     } finally {
       setApproving(false);
     }
-  }, [overlay, composed]);
+  }, [overlay, composed, proposedWording]);
 
   const handleExport = useCallback(
     async (format: CvExportFormat) => {

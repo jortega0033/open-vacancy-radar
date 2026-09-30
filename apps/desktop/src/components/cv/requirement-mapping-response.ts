@@ -5,6 +5,7 @@ import {
   type CvRequirementMapping,
 } from '../../../electron/workspace/cv-evidence-schema.js';
 import { extractAiJsonPayload } from '../cv-library/cv-ai-parse.js';
+import { stringField } from './source-cv-response.js';
 
 /**
  * Coerces one requirement-mapping answer (#419, step 2) into `CvRequirementMapping[]`.
@@ -20,10 +21,6 @@ import { extractAiJsonPayload } from '../cv-library/cv-ai-parse.js';
 
 const CLASSIFICATIONS: readonly CvRequirementClassification[] = ['required', 'preferred', 'unclear'];
 const EVIDENCE_CLASSES: readonly CvEvidenceClass[] = ['direct', 'transferable', 'unsupported', 'needs_verification'];
-
-function stringField(value: unknown, limit: number): string {
-  return typeof value === 'string' ? value.trim().slice(0, limit) : '';
-}
 
 function toRequirementMapping(value: unknown, index: number): CvRequirementMapping | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
