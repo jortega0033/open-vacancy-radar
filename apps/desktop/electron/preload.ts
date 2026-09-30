@@ -399,6 +399,22 @@ const workspaceApi: WorkspaceBridge = {
     return ipcRenderer.invoke('workspace:cv-documents:export', { id, format });
   },
 
+  listCvEvidenceOverlays(cvId) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:list', { cvId });
+  },
+  getCvEvidenceOverlay(cvId, vacancyKey) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:get', { cvId, vacancyKey });
+  },
+  createCvEvidenceOverlay(input) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:create', input);
+  },
+  updateCvEvidenceOverlay(id, patch) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:update', { id, patch });
+  },
+  deleteCvEvidenceOverlay(id) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
+  },
+
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');
   },

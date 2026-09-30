@@ -138,7 +138,11 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
   parseCvExportInput,
+  parseCvIdEnvelope,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -2832,6 +2836,35 @@ guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown
   await writeFile(result.filePath, buffer);
   return { saved: true, path: result.filePath };
 });
+
+// #419, slice 1: plain CRUD, the same shape every other entity's four/five verbs already follow.
+guardedIpc.handle('workspace:cv-evidence-overlays:list', async (_event, input: unknown) =>
+  workspace.listCvEvidenceOverlays(await ensureWorkspaceDb(), parseCvIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:get', async (_event, input: unknown) => {
+  const { cvId, vacancyKey } = parseCvEvidenceOverlayLookup(input);
+  return workspace.getCvEvidenceOverlay(await ensureWorkspaceDb(), cvId, vacancyKey);
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvEvidenceOverlay(await ensureWorkspaceDb(), parseCvEvidenceOverlayInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvEvidenceOverlay(await ensureWorkspaceDb(), id, parseCvEvidenceOverlayPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 

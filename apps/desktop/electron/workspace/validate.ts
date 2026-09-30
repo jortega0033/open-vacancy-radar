@@ -26,6 +26,23 @@ import type {
   CvSourceExperienceEntry,
   CvSourceProjectEntry,
 } from './cv-source-schema.js';
+import {
+  CV_CLAIM_FIELDS,
+  CV_EVIDENCE_CLASSES,
+  CV_EVIDENCE_LIMITS,
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_FACT_OWNERSHIPS,
+  CV_FACT_SOURCE_KINDS,
+  CV_FACT_VERIFICATIONS,
+  CV_LISTING_STATUSES,
+  CV_REQUIREMENT_CLASSIFICATIONS,
+  CV_WORDING_APPROVAL_STATUSES,
+} from './cv-evidence-schema.js';
+import type {
+  CvApprovedWording,
+  CvEvidenceFact,
+  CvRequirementMapping,
+} from './cv-evidence-schema.js';
 import type {
   ApplicationAnswerInput,
   ApplicationAnswerPatch,
@@ -43,6 +60,8 @@ import type {
   AppSettingsPatch,
   CvDocumentInput,
   CvDocumentPatch,
+  CvEvidenceOverlayInput,
+  CvEvidenceOverlayPatch,
   CvExportFormat,
   CvKind,
   CvProfile,
@@ -376,7 +395,12 @@ function parseSourceExperience(value: unknown, index: number): CvSourceExperienc
     entry.engagement === undefined
       ? 'employment'
       : oneOf(entry.engagement, `source.experience[${index}].engagement`, CV_ENGAGEMENT_TYPES);
+  // Same fallback `parseSourceProject` already uses for its own `id`: an empty/missing id gets a
+  // stable, position-keyed one rather than being rejected, so a legacy record without ids is
+  // never blocked from being saved back.
+  const id = str(entry.id ?? '', `source.experience[${index}].id`, LIMITS.short).trim();
   return {
+    id: id.length > 0 ? id : `experience-${index + 1}`,
     company: str(entry.company ?? '', `source.experience[${index}].company`, CV_SOURCE_LIMITS.shortField),
     title: str(entry.title ?? '', `source.experience[${index}].title`, CV_SOURCE_LIMITS.shortField),
     dates: str(entry.dates ?? '', `source.experience[${index}].dates`, CV_SOURCE_LIMITS.shortField),
@@ -528,6 +552,126 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
 export function parseCvExportInput(value: unknown): { id: string; format: CvExportFormat } {
   const input = asRecord(value, 'export request');
   return { id: parseId(input.id), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+// -------------------------------------------------------------------------- cv evidence overlays
+
+function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
+  const entry = asRecord(value, `"facts[${index}]"`);
+  const parentType = oneOf(entry.parentType, `facts[${index}].parentType`, ['experience', 'project'] as const);
+  const verification =
+    entry.verification === undefined
+      ? 'self_reported'
+      : oneOf(entry.verification, `facts[${index}].verification`, CV_FACT_VERIFICATIONS);
+  const hasMetric = entry.metricValue !== undefined && str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField).trim().length > 0;
+  return {
+    factId: requiredNonEmpty(entry.factId, `facts[${index}].factId`, CV_EVIDENCE_LIMITS.shortField),
+    parentId: requiredNonEmpty(entry.parentId, `facts[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    parentType,
+    client: entry.client === undefined ? '' : str(entry.client, `facts[${index}].client`, CV_EVIDENCE_LIMITS.shortField),
+    activity: str(entry.activity ?? '', `facts[${index}].activity`, CV_EVIDENCE_LIMITS.activity),
+    mechanism: str(entry.mechanism ?? '', `facts[${index}].mechanism`, CV_EVIDENCE_LIMITS.mechanism),
+    result: str(entry.result ?? '', `facts[${index}].result`, CV_EVIDENCE_LIMITS.result),
+    ownership: entry.ownership === undefined ? 'unknown' : oneOf(entry.ownership, `facts[${index}].ownership`, CV_FACT_OWNERSHIPS),
+    sourceKind:
+      entry.sourceKind === undefined
+        ? 'candidate_testimony'
+        : oneOf(entry.sourceKind, `facts[${index}].sourceKind`, CV_FACT_SOURCE_KINDS),
+    sourceReference: str(entry.sourceReference ?? '', `facts[${index}].sourceReference`, CV_EVIDENCE_LIMITS.shortField),
+    verification,
+    // A metric with a value but no stated basis is refused outright, rather than silently accepted
+    // with an empty basis: `describeCvEvidenceOverlayGaps` cannot tell "no metric" from "a metric
+    // nobody grounded" once both are blank, and the second is exactly what #419 forbids.
+    metricValue: hasMetric ? str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField) : '',
+    metricUnit: hasMetric ? str(entry.metricUnit ?? '', `facts[${index}].metricUnit`, CV_EVIDENCE_LIMITS.shortField) : '',
+    metricBasis: (() => {
+      const basis = str(entry.metricBasis ?? '', `facts[${index}].metricBasis`, CV_EVIDENCE_LIMITS.shortField);
+      if (hasMetric && basis.trim().length === 0) {
+        fail(`"facts[${index}].metricBasis" is required when metricValue is set`);
+      }
+      return hasMetric ? basis : '';
+    })(),
+    supersedes: entry.supersedes === undefined ? '' : str(entry.supersedes, `facts[${index}].supersedes`, CV_EVIDENCE_LIMITS.shortField),
+    // Stamped by the repository, never accepted from the caller: the same rule
+    // `CvSourceDocument.reviewedAt` and `CvApprovedWording.approvedAt` follow.
+    createdAt: '',
+  };
+}
+
+function parseApprovedWording(value: unknown, index: number): CvApprovedWording {
+  const entry = asRecord(value, `"wordingVariants[${index}]"`);
+  return {
+    variantId: requiredNonEmpty(entry.variantId, `wordingVariants[${index}].variantId`, CV_EVIDENCE_LIMITS.shortField),
+    targetField: oneOf(entry.targetField, `wordingVariants[${index}].targetField`, CV_CLAIM_FIELDS),
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `wordingVariants[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `wordingVariants[${index}].text`, CV_EVIDENCE_LIMITS.wordingText),
+    factIds: stringList(
+      entry.factIds ?? [],
+      `wordingVariants[${index}].factIds`,
+      CV_EVIDENCE_LIMITS.factIdsPerVariant,
+      CV_EVIDENCE_LIMITS.shortField,
+    ),
+    status: entry.status === undefined ? 'draft' : oneOf(entry.status, `wordingVariants[${index}].status`, CV_WORDING_APPROVAL_STATUSES),
+    // Stamped by the repository on approval, never accepted here -- see `CvApprovedWording
+    // .approvedAt`'s own doc comment for why.
+    approvedAt: '',
+    sourceRevision:
+      entry.sourceRevision === undefined ? '' : str(entry.sourceRevision, `wordingVariants[${index}].sourceRevision`, CV_EVIDENCE_LIMITS.shortField),
+  };
+}
+
+function parseRequirementMapping(value: unknown, index: number): CvRequirementMapping {
+  const entry = asRecord(value, `"requirements[${index}]"`);
+  return {
+    requirementId: requiredNonEmpty(entry.requirementId, `requirements[${index}].requirementId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `requirements[${index}].text`, CV_EVIDENCE_LIMITS.requirementText),
+    jdAnchor: entry.jdAnchor === undefined ? '' : str(entry.jdAnchor, `requirements[${index}].jdAnchor`, CV_EVIDENCE_LIMITS.shortField),
+    classification: oneOf(entry.classification, `requirements[${index}].classification`, CV_REQUIREMENT_CLASSIFICATIONS),
+    evidenceClass: oneOf(entry.evidenceClass, `requirements[${index}].evidenceClass`, CV_EVIDENCE_CLASSES),
+    anchorParentId:
+      entry.anchorParentId === undefined ? '' : str(entry.anchorParentId, `requirements[${index}].anchorParentId`, CV_EVIDENCE_LIMITS.shortField),
+    candidateAdded: entry.candidateAdded === undefined ? false : bool(entry.candidateAdded, `requirements[${index}].candidateAdded`),
+    reviewed: entry.reviewed === undefined ? false : bool(entry.reviewed, `requirements[${index}].reviewed`),
+  };
+}
+
+export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayInput {
+  const input = asRecord(value, 'CV evidence overlay');
+  return {
+    cvId: parseId(input.cvId),
+    vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
+    jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
+    jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
+    jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
+  };
+}
+
+export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
+  const input = asRecord(value, '"patch"');
+  const out: CvEvidenceOverlayPatch = {};
+  patch(input, out, 'sourceCvContentHash', (v) => sha256Hex(v, 'sourceCvContentHash'));
+  patch(input, out, 'jdSnapshot', (v) => str(v, 'jdSnapshot', LIMITS.jdSnapshot));
+  patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
+  patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
+  patch(input, out, 'state', (v) => oneOf(v, 'state', CV_EVIDENCE_OVERLAY_STATES));
+  patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
+  patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
+  patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));
+  return out;
+}
+
+/** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */
+export function parseCvEvidenceOverlayLookup(value: unknown): { cvId: string; vacancyKey: string } {
+  const input = asRecord(value, 'lookup');
+  return { cvId: parseId(input.cvId), vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short) };
+}
+
+/** `{ cvId }` envelope for `workspace:cv-evidence-overlays:list`. */
+export function parseCvIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').cvId);
 }
 
 // ------------------------------------------------------------------------------- letters

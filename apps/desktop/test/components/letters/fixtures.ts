@@ -42,6 +42,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
       summary: 'Frontend engineer working on design systems.',
       experience: [
         {
+          id: 'experience-1',
           company: 'Northwind Digital',
           title: 'Senior Frontend Engineer',
           dates: '2021 - present',

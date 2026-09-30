@@ -35,7 +35,7 @@ function stringArray(value: unknown, itemLimit: number, maxItems: number): strin
     .slice(0, maxItems);
 }
 
-function toExperienceEntry(value: unknown): CvSourceExperienceEntry | undefined {
+function toExperienceEntry(value: unknown, index: number): CvSourceExperienceEntry | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
   const company = stringField(record.company, CV_SOURCE_LIMITS.shortField);
@@ -43,6 +43,8 @@ function toExperienceEntry(value: unknown): CvSourceExperienceEntry | undefined 
   if (!company && !title) return undefined;
   const engagement = record.engagement === 'client_engagement' ? 'client_engagement' : 'employment';
   return {
+    // App-assigned, never read from the answer -- same reasoning as `toProjectEntry`'s own `id`.
+    id: `experience-${index + 1}`,
     company,
     title,
     dates: stringField(record.dates, CV_SOURCE_LIMITS.shortField),

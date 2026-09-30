@@ -24,6 +24,7 @@ const SOURCE: CvSourceDocument = {
   },
   experience: [
     {
+      id: 'experience-1',
       company: 'Beacon Consultancy',
       title: 'Frontend Consultant',
       dates: 'Jan 2019 - Feb 2021',

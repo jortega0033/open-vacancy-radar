@@ -14,6 +14,13 @@
  */
 
 import type { CvSourceDocument } from './cv-source-schema.js';
+import type {
+  CvApprovedWording,
+  CvEvidenceFact,
+  CvEvidenceOverlayState,
+  CvListingStatus,
+  CvRequirementMapping,
+} from './cv-evidence-schema.js';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -68,6 +75,23 @@ export type {
   CvSourceExperienceEntry,
   CvSourceProjectEntry,
 } from './cv-source-schema.js';
+
+/** #419's evidence/approved-wording overlay, re-exported for the same reason the source-CV types
+ * above are: the renderer reaches every workspace record type through this one module. */
+export type {
+  CvApprovedWording,
+  CvClaimField,
+  CvEvidenceClass,
+  CvEvidenceFact,
+  CvEvidenceOverlayState,
+  CvFactOwnership,
+  CvFactSourceKind,
+  CvFactVerification,
+  CvListingStatus,
+  CvRequirementClassification,
+  CvRequirementMapping,
+  CvWordingApprovalStatus,
+} from './cv-evidence-schema.js';
 
 export interface SavedJobRecord {
   id: string;
@@ -205,6 +229,60 @@ export interface CvDocumentInput {
 }
 
 export type CvDocumentPatch = Partial<Omit<CvDocumentInput, 'kind'>>;
+
+/**
+ * #419: one (CV, vacancy) tailoring session's reviewable overlay -- see `cv-evidence-schema.ts`'s
+ * header for what this is and is not. `cvId` and `vacancyKey` together are this record's real
+ * identity; `id` exists only because every other workspace record has one and the update/delete
+ * verbs below are shaped like every other entity's.
+ */
+export interface CvEvidenceOverlayRecord {
+  id: string;
+  cvId: string;
+  vacancyKey: string;
+  sourceCvContentHash: string;
+  jdSnapshot: string;
+  jdSnapshotHash: string;
+  jdComplete: boolean;
+  listingStatus: CvListingStatus;
+  state: CvEvidenceOverlayState;
+  requirements: CvRequirementMapping[];
+  facts: CvEvidenceFact[];
+  wordingVariants: CvApprovedWording[];
+  /** ISO-8601 */
+  capturedAt: string;
+  /** ISO-8601 */
+  updatedAt: string;
+}
+
+export interface CvEvidenceOverlayInput {
+  cvId: string;
+  vacancyKey: string;
+  sourceCvContentHash: string;
+  jdSnapshot?: string;
+  jdSnapshotHash: string;
+  jdComplete?: boolean;
+  listingStatus?: CvListingStatus;
+}
+
+/**
+ * Every field a later step writes is patchable, `cvId`/`vacancyKey` are not: those are the row's
+ * identity, and changing them would silently reassign an overlay to a different tailoring session
+ * rather than update this one. `state` is patchable directly (unlike, say, `CvDocumentInput`'s
+ * `isDefault`) because the composition/QA gate slices need to set it as a plain consequence of
+ * their own checks, not through a separate verb per transition.
+ */
+export interface CvEvidenceOverlayPatch {
+  sourceCvContentHash?: string;
+  jdSnapshot?: string;
+  jdSnapshotHash?: string;
+  jdComplete?: boolean;
+  listingStatus?: CvListingStatus;
+  state?: CvEvidenceOverlayState;
+  requirements?: CvRequirementMapping[];
+  facts?: CvEvidenceFact[];
+  wordingVariants?: CvApprovedWording[];
+}
 
 /** #156: the two formats the manual CV Library export action offers, matching what the existing
  * Letters export already supports (`letters/export.ts`'s `exportDocx`/`exportPdf`) minus markdown,
@@ -728,6 +806,7 @@ export interface ApplicationDataResetResult {
     submissionReceipts: number;
     automationGrants: number;
     applicationAnswers: number;
+    cvEvidenceOverlays: number;
   };
 }
 
@@ -804,6 +883,20 @@ export interface WorkspaceBridge {
    * `{ saved: false }` means the user cancelled the dialog, not a failure.
    */
   exportCvDocument(id: string, format: CvExportFormat): Promise<CvExportResult>;
+
+  /**
+   * #419, slice 1: plain CRUD over one CV's tailoring overlays, no approval/composition logic --
+   * that arrives with the slices that read `state`/`requirements`/`wordingVariants` for a reason.
+   * `getCvEvidenceOverlay` returns `null` rather than throwing when no overlay exists yet for a
+   * (cvId, vacancyKey) pair: "never started this vacancy's draft" is the normal first-visit state,
+   * not an error, the same distinction `WorkspaceNotFoundError` already draws for every id lookup
+   * that *should* exist.
+   */
+  listCvEvidenceOverlays(cvId: string): Promise<CvEvidenceOverlayRecord[]>;
+  getCvEvidenceOverlay(cvId: string, vacancyKey: string): Promise<CvEvidenceOverlayRecord | null>;
+  createCvEvidenceOverlay(input: CvEvidenceOverlayInput): Promise<CvEvidenceOverlayRecord>;
+  updateCvEvidenceOverlay(id: string, patch: CvEvidenceOverlayPatch): Promise<CvEvidenceOverlayRecord>;
+  deleteCvEvidenceOverlay(id: string): Promise<DeleteResult>;
 
   /**
    * The reusable application-answer library (#372). See `schema.ts`'s comment on

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { CV_PROFILE_LIMITS } from '../electron/workspace/cv-profile-schema.js';
 import { CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from '../electron/workspace/cv-source-schema.js';
+import { CV_EVIDENCE_LIMITS } from '../electron/workspace/cv-evidence-schema.js';
 import {
   LIMITS,
   parseCvSource,
@@ -13,7 +14,11 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
   parseCvExportInput,
+  parseCvIdEnvelope,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -539,6 +544,20 @@ describe('workspace structured source CV (#274)', () => {
     expect(parseCvSource({ projects: [{ name: 'Aurora Design System' }] })?.projects[0]?.id).toBe('project-1');
   });
 
+  it('assigns an experience id when the caller supplies none (#419), keyed by position', () => {
+    const parsed = parseCvSource({
+      experience: [{ company: 'Redwood Software' }, { company: 'Harbour Analytics' }],
+    });
+    expect(parsed?.experience[0]?.id).toBe('experience-1');
+    expect(parsed?.experience[1]?.id).toBe('experience-2');
+  });
+
+  it('keeps an explicit experience id rather than overwriting it', () => {
+    expect(parseCvSource({ experience: [{ id: 'stable-id', company: 'Redwood Software' }] })?.experience[0]?.id).toBe(
+      'stable-id',
+    );
+  });
+
   it('reaches the CV document parsers, in both create and patch form', () => {
     const created = parseCvDocumentInput({
       name: 'Frontend CV',
@@ -548,5 +567,130 @@ describe('workspace structured source CV (#274)', () => {
     expect(created.source?.contact.name).toBe('Jamie Rivera');
     expect(parseCvDocumentPatch({ source: null }).source).toBeNull();
     expect('source' in parseCvDocumentPatch({ name: 'Frontend CV' })).toBe(false);
+  });
+});
+
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+
+describe('workspace cv evidence overlays (#419)', () => {
+  it('requires a well-formed sha256 hex digest for both hashes', () => {
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: 'not-a-hash', jdSnapshotHash: HASH_B }),
+    ).toThrow(/"sourceCvContentHash" must be a lowercase SHA-256 hex digest/);
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: 'UPPERCASE' + 'a'.repeat(54) }),
+    ).toThrow(/"jdSnapshotHash" must be a lowercase SHA-256 hex digest/);
+  });
+
+  it('defaults jdComplete, listingStatus and the JSON arrays', () => {
+    const parsed = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'v-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(parsed).toMatchObject({ jdSnapshot: '', jdComplete: true, listingStatus: 'unknown' });
+  });
+
+  it('drops properties the caller was never granted, on both input and patch', () => {
+    const parsed = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'v-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      id: 'overlay-9',
+      state: 'artifact_approved',
+    });
+    expect('id' in parsed).toBe(false);
+    expect('state' in parsed).toBe(false);
+  });
+
+  it('parses a fact, defaulting ownership/sourceKind/verification and rejecting a metric with no stated basis', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        facts: [
+          {
+            factId: 'fact-1',
+            parentId: 'experience-1',
+            parentType: 'experience',
+            activity: 'Rebuilt the checkout flow',
+            metricValue: '30%',
+          },
+        ],
+      }),
+    ).toThrow(/"facts\[0\].metricBasis" is required when metricValue is set/);
+
+    const patch = parseCvEvidenceOverlayPatch({
+      facts: [
+        {
+          factId: 'fact-1',
+          parentId: 'experience-1',
+          parentType: 'experience',
+          activity: 'Rebuilt the checkout flow',
+          metricValue: '30%',
+          metricBasis: 'candidate-confirmed figure',
+        },
+      ],
+    });
+    expect(patch.facts?.[0]).toMatchObject({
+      ownership: 'unknown',
+      sourceKind: 'candidate_testimony',
+      verification: 'self_reported',
+      metricValue: '30%',
+      metricUnit: '',
+      metricBasis: 'candidate-confirmed figure',
+    });
+  });
+
+  it('never accepts a fact createdAt or a wording approvedAt from the caller', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      facts: [
+        {
+          factId: 'fact-1',
+          parentId: 'experience-1',
+          parentType: 'experience',
+          createdAt: '2020-01-01T00:00:00.000Z',
+        },
+      ],
+      wordingVariants: [
+        {
+          variantId: 'variant-1',
+          targetField: 'summary',
+          text: 'Approved wording.',
+          approvedAt: '2020-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(patch.facts?.[0]?.createdAt).toBe('');
+    expect(patch.wordingVariants?.[0]?.approvedAt).toBe('');
+  });
+
+  it('rejects a targetField or classification/evidenceClass outside the known set', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({ wordingVariants: [{ variantId: 'v-1', targetField: 'headline', text: 'x' }] }),
+    ).toThrow(/"wordingVariants\[0\].targetField" must be one of/);
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        requirements: [{ requirementId: 'r-1', text: 'React', classification: 'optional', evidenceClass: 'direct' }],
+      }),
+    ).toThrow(/"requirements\[0\].classification" must be one of/);
+  });
+
+  it('bounds the facts/requirements/wordingVariants arrays', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        facts: Array.from({ length: CV_EVIDENCE_LIMITS.facts + 1 }, (_, i) => ({
+          factId: `fact-${i}`,
+          parentId: 'experience-1',
+          parentType: 'experience',
+        })),
+      }),
+    ).toThrow(/"facts" must have at most/);
+  });
+
+  it('parses the (cvId, vacancyKey) lookup and cvId list envelopes', () => {
+    expect(parseCvEvidenceOverlayLookup({ cvId: 'cv-1', vacancyKey: 'v-1' })).toEqual({ cvId: 'cv-1', vacancyKey: 'v-1' });
+    expect(parseCvIdEnvelope({ cvId: 'cv-1' })).toBe('cv-1');
   });
 });

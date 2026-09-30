@@ -44,6 +44,7 @@ function makeSource(overrides: Partial<CvSourceDocument> = {}): CvSourceDocument
     },
     experience: [
       {
+        id: 'experience-1',
         company: 'Redwood Software',
         title: 'Lead Frontend Engineer',
         dates: 'Jan 2019 - Dec 2023',
@@ -339,6 +340,7 @@ describe('CvLibraryPage', () => {
       source: makeSource({
         experience: [
           {
+            id: 'experience-1',
             company: 'Redwood Software',
             title: 'Lead Frontend Engineer',
             dates: 'sinds de zomer van 2019',

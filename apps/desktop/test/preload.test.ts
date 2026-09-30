@@ -318,6 +318,11 @@ describe('electron/preload.ts: workspace bridge', () => {
     'deleteCvDocument',
     'setDefaultCvDocument',
     'exportCvDocument',
+    'listCvEvidenceOverlays',
+    'getCvEvidenceOverlay',
+    'createCvEvidenceOverlay',
+    'updateCvEvidenceOverlay',
+    'deleteCvEvidenceOverlay',
     'listLetters',
     'createLetter',
     'updateLetter',
@@ -697,6 +702,13 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     // (a manual CV export action, alongside the CV library verbs it belongs next to), so the
     // literal is updated rather than left blocking real growth.
     'exportCvDocument',
+    // Added by issue #419, same reasoning: the CRUD verbs for one CV's per-vacancy tailoring
+    // overlays belong in this namespace next to the CV library verbs above.
+    'listCvEvidenceOverlays',
+    'getCvEvidenceOverlay',
+    'createCvEvidenceOverlay',
+    'updateCvEvidenceOverlay',
+    'deleteCvEvidenceOverlay',
     'listLetters',
     'createLetter',
     'updateLetter',

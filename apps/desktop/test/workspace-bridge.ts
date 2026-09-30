@@ -107,6 +107,12 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     setDefaultCvDocument: vi.fn().mockResolvedValue([]),
     exportCvDocument: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\resume.pdf' }),
 
+    listCvEvidenceOverlays: vi.fn().mockResolvedValue([]),
+    getCvEvidenceOverlay: vi.fn().mockResolvedValue(null),
+    createCvEvidenceOverlay: vi.fn(),
+    updateCvEvidenceOverlay: vi.fn(),
+    deleteCvEvidenceOverlay: vi.fn().mockResolvedValue({ deleted: true }),
+
     listLetters: vi.fn().mockResolvedValue([]),
     createLetter: vi.fn(),
     updateLetter: vi.fn(),

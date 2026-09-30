@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
+import {
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_LISTING_STATUSES,
+  type CvApprovedWording,
+  type CvEvidenceFact,
+  type CvRequirementMapping,
+} from './cv-evidence-schema.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -97,6 +104,42 @@ export const cvDocuments = sqliteTable('cv_documents', {
   textSource: text('text_source', { enum: ['text_layer', 'ai_transcription'] }).notNull().default('text_layer'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * #419: one row per (CV, vacancy) tailoring session -- the reviewable requirement/evidence/
+ * approved-wording overlay `cv-evidence-schema.ts` describes. A separate table from `cvDocuments`
+ * rather than another JSON column on it, unlike `sourceCv`: `sourceCv` is 1:1 with its CV, this is
+ * 1:many (the same CV tailored for several vacancies, each with its own JD and its own set of
+ * approved wording), so it needs its own lookup key (`cvId` + `vacancyKey`) a JSON column cannot
+ * offer. `facts`/`requirements`/`wordingVariants` are still JSON columns within this table, for
+ * the same reason `sourceCv` is one: each is only ever read and written whole, for one overlay at
+ * a time, and nothing queries, orders or joins across it in SQL.
+ */
+export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  cvId: text('cv_id').notNull().references(() => cvDocuments.id, { onDelete: 'cascade' }),
+  /** Matches `savedJobs.vacancyKey`/`applicationAttempts`' own vacancy reference: the discovery
+   * report's `key`, not a URL, so the same vacancy is always the same row regardless of how it was
+   * reached. */
+  vacancyKey: text('vacancy_key').notNull(),
+  /** SHA-256 hex of the `CvSourceDocument` this overlay was built from -- see this module's own
+   * doc comment on `CvEvidenceOverlay.sourceCvContentHash` in `cv-evidence-schema.ts`. */
+  sourceCvContentHash: text('source_cv_content_hash').notNull(),
+  jdSnapshot: text('jd_snapshot').notNull().default(''),
+  jdSnapshotHash: text('jd_snapshot_hash').notNull(),
+  jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  listingStatus: text('listing_status', { enum: CV_LISTING_STATUSES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('unknown'),
+  state: text('state', { enum: CV_EVIDENCE_OVERLAY_STATES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('needs_input'),
+  requirements: text('requirements', { mode: 'json' }).notNull().$type<CvRequirementMapping[]>().default([]),
+  facts: text('facts', { mode: 'json' }).notNull().$type<CvEvidenceFact[]>().default([]),
+  wordingVariants: text('wording_variants', { mode: 'json' }).notNull().$type<CvApprovedWording[]>().default([]),
+  capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 

@@ -110,6 +110,12 @@ describe('settings', () => {
       expiresAt: '2026-12-01T00:00:00.000Z',
     });
     workspace.updateSettings(db, { theme: 'dark', defaultCvId: cv.id });
+    workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'fixture-vacancy',
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshotHash: 'b'.repeat(64),
+    });
 
     const result = workspace.resetApplicationData(db);
 
@@ -123,6 +129,7 @@ describe('settings', () => {
       submissionReceipts: 1,
       automationGrants: 1,
       applicationAnswers: 0,
+      cvEvidenceOverlays: 1,
     });
     expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null });
     expect(workspace.listSavedJobs(db)).toEqual([]);
@@ -133,6 +140,164 @@ describe('settings', () => {
     expect(workspace.listAutomationGrants(db)).toEqual([]);
     expect(db.select().from(schema.applicationArtifacts).all()).toEqual([]);
     expect(db.select().from(schema.applicationSubmissionReceipts).all()).toEqual([]);
+    expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
+  });
+});
+
+describe('cv evidence overlays (#419)', () => {
+  const CV = {
+    name: 'Resume',
+    kind: 'manual' as const,
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  };
+  const HASH_A = 'a'.repeat(64);
+  const HASH_B = 'b'.repeat(64);
+
+  it('returns null, not a throw, when no overlay exists yet for a (cvId, vacancyKey) pair', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toBeNull();
+  });
+
+  it('creates an overlay with schema defaults and reads it back by (cvId, vacancyKey)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(created).toMatchObject({
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdComplete: true,
+      listingStatus: 'unknown',
+      state: 'needs_input',
+      requirements: [],
+      facts: [],
+      wordingVariants: [],
+    });
+    expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toEqual(created);
+  });
+
+  it('is idempotent: a second create for the same (cvId, vacancyKey) returns the existing row unchanged', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const first = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    const second = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_B, // a different hash on the second call is ignored, not applied
+      jdSnapshotHash: HASH_B,
+    });
+    expect(second).toEqual(first);
+    expect(workspace.listCvEvidenceOverlays(db, cv.id)).toHaveLength(1);
+  });
+
+  it('lets the same CV hold a separate overlay per vacancy', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-2', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    expect(workspace.listCvEvidenceOverlays(db, cv.id)).toHaveLength(2);
+  });
+
+  it('throws WorkspaceNotFoundError creating an overlay for a CV that does not exist', () => {
+    expect(() =>
+      workspace.createCvEvidenceOverlay(db, {
+        cvId: 'missing-cv',
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshotHash: HASH_B,
+      }),
+    ).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('patches facts/requirements/wordingVariants and an explicit state together', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    const fact = {
+      factId: 'fact-1',
+      parentId: 'experience-1',
+      parentType: 'experience' as const,
+      client: '',
+      activity: 'Rebuilt the checkout flow',
+      mechanism: 'React, Stripe Elements',
+      result: 'reduced drop-off',
+      ownership: 'sole' as const,
+      sourceKind: 'candidate_testimony' as const,
+      sourceReference: '',
+      verification: 'self_reported' as const,
+      metricValue: '',
+      metricUnit: '',
+      metricBasis: '',
+      supersedes: '',
+      createdAt: '2026-09-30T00:00:00.000Z',
+    };
+    const updated = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      facts: [fact],
+      state: 'draft',
+    });
+    expect(updated.facts).toEqual([fact]);
+    expect(updated.state).toBe('draft');
+  });
+
+  it('invalidates an approved state back to draft when an input changes without an explicit new state', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'candidate_approved' });
+    // The source CV was re-reviewed (a new content hash) after approval, and this patch does not
+    // itself assert a new state -- the approval must not silently survive that.
+    const afterDrift = workspace.updateCvEvidenceOverlay(db, overlay.id, { sourceCvContentHash: HASH_B });
+    expect(afterDrift.state).toBe('draft');
+  });
+
+  it('leaves state untouched when a patch does not touch any input the approval depended on', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'candidate_approved' });
+    const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
+    expect(after.state).toBe('candidate_approved');
+  });
+
+  it('deletes an overlay, and deletes every overlay when its CV is deleted (cascade)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(workspace.deleteCvEvidenceOverlay(db, overlay.id)).toEqual({ deleted: true });
+    expect(workspace.deleteCvEvidenceOverlay(db, overlay.id)).toEqual({ deleted: false });
+
+    const second = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-2',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(second).toBeTruthy();
+    workspace.deleteCvDocument(db, cv.id);
+    expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
   });
 });
 
