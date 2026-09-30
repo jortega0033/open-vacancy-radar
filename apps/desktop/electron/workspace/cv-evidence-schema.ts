@@ -312,6 +312,17 @@ export function isCvEvidenceOverlayApprovable(overlay: CvEvidenceOverlay, curren
   return describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash).length === 0;
 }
 
+/** The JSON shape the requirement-mapping extraction prompt asks for, and the shape the response
+ * coercion reads back (`requirement-mapping-response.ts`) -- the same one-dependency-free-file
+ * discipline `CV_SOURCE_JSON_SHAPE` follows. `requirementId`/`candidateAdded`/`reviewed` are absent
+ * on purpose: the app assigns the id and owns the review/candidate-added flags, so a model is
+ * never asked for any of them. */
+export const CV_REQUIREMENT_MAPPING_JSON_SHAPE =
+  '{"requirements": [{"text": string, "jdAnchor": string, ' +
+  '"classification": "required" | "preferred" | "unclear", ' +
+  '"evidenceClass": "direct" | "transferable" | "unsupported" | "needs_verification", ' +
+  '"anchorParentId": string}]}';
+
 /**
  * The state a fresh read/refresh should carry, given whatever change was detected. #419: "a
  * refresh must show what changed and allow review; do not silently carry forward an approval" --

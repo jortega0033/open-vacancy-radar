@@ -5,6 +5,7 @@ import type { CvDocumentRecord } from '../../window.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
+import { RequirementMapping } from './RequirementMapping.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
 import { ResumeToolkit } from './ResumeToolkit.js';
 import { TailorCv } from './TailorCv.js';
@@ -210,6 +211,14 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
           vacancy={vacancy}
           sourceCv={selectedSourceCv}
           profile={selectedProfile}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+        <RequirementMapping
+          cvId={selectedLibraryCv?.id ?? null}
+          cv={cv}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
           provider={provider}
           {...(effectiveModel ? { model: effectiveModel } : {})}
         />
