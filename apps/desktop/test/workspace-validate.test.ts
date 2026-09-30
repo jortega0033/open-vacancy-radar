@@ -14,6 +14,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
   parseCvEvidenceOverlayLookup,
   parseCvEvidenceOverlayPatch,
@@ -692,5 +693,15 @@ describe('workspace cv evidence overlays (#419)', () => {
   it('parses the (cvId, vacancyKey) lookup and cvId list envelopes', () => {
     expect(parseCvEvidenceOverlayLookup({ cvId: 'cv-1', vacancyKey: 'v-1' })).toEqual({ cvId: 'cv-1', vacancyKey: 'v-1' });
     expect(parseCvIdEnvelope({ cvId: 'cv-1' })).toBe('cv-1');
+  });
+
+  it('parses the export request (#419 slice 4) and rejects an unknown format', () => {
+    expect(parseCvEvidenceOverlayExportInput({ overlayId: 'overlay-1', format: 'pdf' })).toEqual({
+      overlayId: 'overlay-1',
+      format: 'pdf',
+    });
+    expect(() => parseCvEvidenceOverlayExportInput({ overlayId: 'overlay-1', format: 'markdown' })).toThrow(
+      /"format" must be one of/,
+    );
   });
 });

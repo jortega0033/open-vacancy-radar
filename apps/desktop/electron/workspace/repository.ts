@@ -538,6 +538,15 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
   };
 }
 
+/** Single-row lookup by id (#419's export action, mirroring `getCvDocument`'s own reasoning): every
+ * other overlay verb so far only needed a list or a (cvId, vacancyKey) pair. Throws
+ * `WorkspaceNotFoundError` for a missing id rather than returning `undefined`. */
+export function getCvEvidenceOverlayById(db: WorkspaceDb, id: string): CvEvidenceOverlayRecord {
+  const row = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
 export function listCvEvidenceOverlays(db: WorkspaceDb, cvId: string): CvEvidenceOverlayRecord[] {
   return db
     .select()

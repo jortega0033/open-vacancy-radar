@@ -158,6 +158,18 @@ describe('cv evidence overlays (#419)', () => {
     expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toBeNull();
   });
 
+  it('getCvEvidenceOverlayById reads back by id (#419 slice 4) and throws for a missing one', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(workspace.getCvEvidenceOverlayById(db, created.id)).toEqual(created);
+    expect(() => workspace.getCvEvidenceOverlayById(db, 'missing-overlay')).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
   it('creates an overlay with schema defaults and reads it back by (cvId, vacancyKey)', () => {
     const cv = workspace.createCvDocument(db, CV);
     const created = workspace.createCvEvidenceOverlay(db, {

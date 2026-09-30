@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
 import { ComposedCvReview } from '../src/components/cv/ComposedCvReview.js';
@@ -33,6 +33,7 @@ function installOverlayBridge(overlay: CvEvidenceOverlayRecord) {
       current = { ...current, ...patch };
       return current;
     }),
+    exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
   });
 }
 
@@ -86,6 +87,26 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     fireEvent.click(approve);
 
     await screen.findByText(/^approved\. this is the version ready for export\.$/i);
+  });
+
+  it('exports the approved composition via the overlay id, and shows the saved path', async () => {
+    const hash = await hashOf(SOURCE);
+    const workspace = installOverlayBridge(baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved' }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    const pdfButton = await screen.findByRole('button', { name: /export as pdf/i });
+    fireEvent.click(pdfButton);
+
+    await waitFor(() => expect(workspace.exportCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', 'pdf'));
+    expect(await screen.findByText(/saved to c:\\fake\\approved-cv\.pdf/i)).toBeInTheDocument();
+  });
+
+  it('offers no export action before the CV has been approved', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+    await screen.findByRole('button', { name: /preview approved cv/i });
+    expect(screen.queryByRole('button', { name: /export as pdf/i })).not.toBeInTheDocument();
   });
 
   it('disables approval and explains why when the overlay still has gaps', async () => {

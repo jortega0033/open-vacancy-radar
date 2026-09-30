@@ -897,6 +897,17 @@ export interface WorkspaceBridge {
   createCvEvidenceOverlay(input: CvEvidenceOverlayInput): Promise<CvEvidenceOverlayRecord>;
   updateCvEvidenceOverlay(id: string, patch: CvEvidenceOverlayPatch): Promise<CvEvidenceOverlayRecord>;
   deleteCvEvidenceOverlay(id: string): Promise<DeleteResult>;
+  /**
+   * #419, slice 4: renders the *candidate-approved* composition (`composeApprovedTailoredResume`,
+   * built fresh against the current reviewed source, never a cached one) to a real file via the
+   * native save dialog -- the same rendering/validation machinery `exportCvDocument` already uses,
+   * pointed at a different resume source. Refuses with the composition's own blockers when the
+   * overlay is not actually approvable, the same way `exportCvDocument` refuses on
+   * `describeCvExportBlockers`. On a successful, validated export, the overlay's `state` becomes
+   * `'artifact_approved'` -- the terminal state, distinct from `'candidate_approved'` (#419: "CV
+   * approval and application/submission readiness are separate states").
+   */
+  exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvExportResult>;
 
   /**
    * The reusable application-answer library (#372). See `schema.ts`'s comment on

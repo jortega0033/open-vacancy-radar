@@ -414,6 +414,9 @@ const workspaceApi: WorkspaceBridge = {
   deleteCvEvidenceOverlay(id) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
   },
+  exportCvEvidenceOverlay(overlayId, format) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:export', { overlayId, format });
+  },
 
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');

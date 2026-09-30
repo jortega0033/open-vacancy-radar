@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -138,6 +138,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
   parseCvEvidenceOverlayLookup,
   parseCvEvidenceOverlayPatch,
@@ -157,6 +158,7 @@ import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportF
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
+import { composeApprovedTailoredResume } from './resume-source.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2865,6 +2867,63 @@ guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input:
     workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),
   ),
 );
+
+/**
+ * #419, slice 4: exports the *candidate-approved* composition, not a persisted CV Library record.
+ * Reuses exactly the rendering/validation/save machinery `workspace:cv-documents:export` (#156)
+ * already established -- the difference is entirely in what builds the `TailoredResume`:
+ * `composeApprovedTailoredResume` (#419) instead of `cvDocumentToTailoredResume` (#274/#156), built
+ * fresh against the CV's *current* reviewed source rather than trusting the overlay's own stored
+ * hash, so a source re-reviewed after the overlay's last save cannot export stale. A blocked
+ * composition refuses the same way `describeCvExportBlockers` already does for the other path --
+ * before anything is rendered, with the reasons, never a silent partial export.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
+  const db = await ensureWorkspaceDb();
+  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
+  const doc = workspace.getCvDocument(db, overlay.cvId);
+  if (!mainWindow) return { saved: false };
+
+  if (!doc.source) {
+    throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+  }
+  const currentSourceCvContentHash = createHash('sha256').update(JSON.stringify(doc.source)).digest('hex');
+  const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);
+  }
+
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export approved CV',
+    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  // The terminal state (#419): "CV approval and application/submission readiness are separate
+  // states" -- candidate_approved says the content is right, artifact_approved says a real,
+  // validated file now exists from it.
+  await applicationDataResetGate.runMutation(async () =>
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' }),
+  );
+  return { saved: true, path: result.filePath };
+});
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 

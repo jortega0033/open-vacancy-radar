@@ -674,6 +674,12 @@ export function parseCvIdEnvelope(value: unknown): string {
   return parseId(asRecord(value, 'payload').cvId);
 }
 
+/** `{ overlayId, format }` envelope for `workspace:cv-evidence-overlays:export` (#419, slice 4). */
+export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: string; format: CvExportFormat } {
+  const input = asRecord(value, 'export request');
+  return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
 // ------------------------------------------------------------------------------- letters
 
 export function parseLetterInput(value: unknown): LetterInput {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { composeApprovedTailoredResume, type ComposedTailoredResume } from '../../../electron/resume-source.js';
-import type { CvEvidenceOverlayRecord, CvProfile, CvSourceDocument } from '../../window.js';
+import type { CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
 import { sha256Hex } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
@@ -25,6 +25,8 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
   const [error, setError] = useState<string>();
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [exporting, setExporting] = useState<CvExportFormat | null>(null);
+  const [exportedPath, setExportedPath] = useState<string>();
 
   const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
 
@@ -73,6 +75,26 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     }
   }, [overlay, composed]);
 
+  const handleExport = useCallback(
+    async (format: CvExportFormat) => {
+      if (!overlay) return;
+      setExporting(format);
+      setError(undefined);
+      setExportedPath(undefined);
+      try {
+        const result = await window.workspace.exportCvEvidenceOverlay(overlay.id, format);
+        if (result.saved && result.path) setExportedPath(result.path);
+      } catch (err) {
+        setError(describeError(err, 'could not export this CV'));
+      } finally {
+        setExporting(null);
+      }
+    },
+    [overlay],
+  );
+
+  const isApproved = approved || overlay?.state === 'candidate_approved' || overlay?.state === 'artifact_approved';
+
   if (!cvId || !vacancy) return null;
 
   return (
@@ -99,17 +121,44 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
               type="button"
               className="btn btn-primary"
               onClick={() => void handleApprove()}
-              disabled={composed.blockers.length > 0 || approving || approved}
+              disabled={composed.blockers.length > 0 || approving || isApproved}
             >
               {approving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-              {approved ? 'Approved' : 'Approve CV'}
+              {isApproved ? 'Approved' : 'Approve CV'}
             </button>
+          )}
+          {isApproved && (
+            <>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => void handleExport('pdf')}
+                disabled={exporting !== null}
+              >
+                {exporting === 'pdf' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                Export as PDF
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => void handleExport('docx')}
+                disabled={exporting !== null}
+              >
+                {exporting === 'docx' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                Export as Word
+              </button>
+            </>
           )}
         </div>
 
         {error && (
           <div className="alert alert-error text-sm" role="alert">
             {error}
+          </div>
+        )}
+        {exportedPath && (
+          <div className="text-sm font-medium" role="status">
+            Saved to {exportedPath}
           </div>
         )}
         {approved && (
