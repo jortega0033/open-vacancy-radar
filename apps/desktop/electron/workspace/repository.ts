@@ -10,8 +10,9 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
-import { asc, desc, eq, inArray, ne } from 'drizzle-orm';
-import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { EMPTY_CV_SOURCE, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
+import { invalidatedOverlayState } from './cv-evidence-schema.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
@@ -24,6 +25,7 @@ import {
   applications,
   automationGrants,
   cvDocuments,
+  cvEvidenceOverlays,
   letters,
   savedJobs,
 } from './schema.js';
@@ -54,6 +56,9 @@ import {
   type CvDocumentInput,
   type CvDocumentPatch,
   type CvDocumentRecord,
+  type CvEvidenceOverlayInput,
+  type CvEvidenceOverlayPatch,
+  type CvEvidenceOverlayRecord,
   type CvProfile,
   type DeleteResult,
   type LetterInput,
@@ -372,6 +377,8 @@ function toCvSource(value: CvSourceDocument | null): CvSourceDocument | null {
     ...EMPTY_CV_SOURCE,
     ...value,
     contact: { ...EMPTY_CV_SOURCE.contact, ...(value.contact ?? {}) },
+    // #419: a row written before experience entries carried an id has none in its stored JSON.
+    experience: withStableExperienceIds(value.experience ?? []),
   };
 }
 
@@ -503,6 +510,145 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
     }
     return { deleted: true };
   });
+}
+
+// -------------------------------------------------------------------- cv evidence overlays (#419)
+
+type CvEvidenceOverlayRow = typeof cvEvidenceOverlays.$inferSelect;
+
+function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord {
+  return {
+    id: row.id,
+    cvId: row.cvId,
+    vacancyKey: row.vacancyKey,
+    sourceCvContentHash: row.sourceCvContentHash,
+    jdSnapshot: row.jdSnapshot,
+    jdSnapshotHash: row.jdSnapshotHash,
+    jdComplete: row.jdComplete,
+    listingStatus: row.listingStatus as CvEvidenceOverlayRecord['listingStatus'],
+    state: row.state as CvEvidenceOverlayRecord['state'],
+    // JSON columns: a row from before a later field was added to these shapes could be missing it,
+    // so entries are defaulted rather than trusted, the same discipline `toCvDocument` already
+    // applies to `profile`.
+    requirements: row.requirements ?? [],
+    facts: row.facts ?? [],
+    wordingVariants: row.wordingVariants ?? [],
+    capturedAt: iso(row.capturedAt),
+    updatedAt: iso(row.updatedAt),
+  };
+}
+
+/** Single-row lookup by id (#419's export action, mirroring `getCvDocument`'s own reasoning): every
+ * other overlay verb so far only needed a list or a (cvId, vacancyKey) pair. Throws
+ * `WorkspaceNotFoundError` for a missing id rather than returning `undefined`. */
+export function getCvEvidenceOverlayById(db: WorkspaceDb, id: string): CvEvidenceOverlayRecord {
+  const row = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
+export function listCvEvidenceOverlays(db: WorkspaceDb, cvId: string): CvEvidenceOverlayRecord[] {
+  return db
+    .select()
+    .from(cvEvidenceOverlays)
+    .where(eq(cvEvidenceOverlays.cvId, cvId))
+    .orderBy(desc(cvEvidenceOverlays.updatedAt))
+    .all()
+    .map(toCvEvidenceOverlay);
+}
+
+/** `null`, not a throw, when no overlay exists yet for this (cvId, vacancyKey) pair -- see the
+ * `WorkspaceBridge` doc comment on this method in `types.ts` for why that is the normal state
+ * rather than an error. */
+export function getCvEvidenceOverlay(db: WorkspaceDb, cvId: string, vacancyKey: string): CvEvidenceOverlayRecord | null {
+  const row = db
+    .select()
+    .from(cvEvidenceOverlays)
+    .where(and(eq(cvEvidenceOverlays.cvId, cvId), eq(cvEvidenceOverlays.vacancyKey, vacancyKey)))
+    .get();
+  return row ? toCvEvidenceOverlay(row) : null;
+}
+
+/**
+ * One overlay per (cvId, vacancyKey): a second `create` call for the same pair returns the
+ * existing row unchanged rather than erroring or duplicating it, so a caller does not have to
+ * `get` before every `create` just to find out whether today is this vacancy's first visit. This
+ * mirrors how `createCvDocument` handles "no explicit isDefault" -- deriving the right behavior
+ * from existing state rather than making the caller ask first.
+ */
+export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverlayInput): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const cv = tx.select({ id: cvDocuments.id }).from(cvDocuments).where(eq(cvDocuments.id, input.cvId)).get();
+    if (!cv) throw new WorkspaceNotFoundError('CV document', input.cvId);
+
+    const existing = tx
+      .select()
+      .from(cvEvidenceOverlays)
+      .where(and(eq(cvEvidenceOverlays.cvId, input.cvId), eq(cvEvidenceOverlays.vacancyKey, input.vacancyKey)))
+      .get();
+    if (existing) return toCvEvidenceOverlay(existing);
+
+    const [row] = tx
+      .insert(cvEvidenceOverlays)
+      .values({
+        cvId: input.cvId,
+        vacancyKey: input.vacancyKey,
+        sourceCvContentHash: input.sourceCvContentHash,
+        jdSnapshot: input.jdSnapshot ?? '',
+        jdSnapshotHash: input.jdSnapshotHash,
+        jdComplete: input.jdComplete ?? true,
+        listingStatus: input.listingStatus ?? 'unknown',
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert CV evidence overlay');
+    return toCvEvidenceOverlay(row);
+  });
+}
+
+export function updateCvEvidenceOverlay(
+  db: WorkspaceDb,
+  id: string,
+  values: CvEvidenceOverlayPatch,
+): CvEvidenceOverlayRecord {
+  const existing = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!existing) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+
+  const set: Partial<CvEvidenceOverlayRow> = { updatedAt: new Date() };
+  if (values.sourceCvContentHash !== undefined) set.sourceCvContentHash = values.sourceCvContentHash;
+  if (values.jdSnapshot !== undefined) set.jdSnapshot = values.jdSnapshot;
+  if (values.jdSnapshotHash !== undefined) set.jdSnapshotHash = values.jdSnapshotHash;
+  if (values.jdComplete !== undefined) set.jdComplete = values.jdComplete;
+  if (values.listingStatus !== undefined) set.listingStatus = values.listingStatus;
+  if (values.requirements !== undefined) set.requirements = values.requirements;
+  if (values.facts !== undefined) set.facts = values.facts;
+  if (values.wordingVariants !== undefined) set.wordingVariants = values.wordingVariants;
+  // An explicit `state` in the patch wins outright -- a caller setting it (the composition/QA gate
+  // slices) knows exactly what state it is asserting. Absent an explicit one, a patch that touches
+  // any input the approval depended on invalidates a prior approval rather than leaving it standing
+  // against inputs that just changed underneath it (#419: "do not silently carry forward an
+  // approval").
+  const touchesInputs =
+    values.sourceCvContentHash !== undefined ||
+    values.jdSnapshot !== undefined ||
+    values.jdSnapshotHash !== undefined ||
+    values.requirements !== undefined ||
+    values.facts !== undefined ||
+    values.wordingVariants !== undefined;
+  if (values.state !== undefined) {
+    set.state = values.state;
+  } else if (touchesInputs) {
+    set.state = invalidatedOverlayState(existing.state as CvEvidenceOverlayRecord['state']);
+  }
+
+  const [row] = db.update(cvEvidenceOverlays).set(set).where(eq(cvEvidenceOverlays.id, id)).returning().all();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
+export function deleteCvEvidenceOverlay(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db.delete(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).returning({ id: cvEvidenceOverlays.id }).all();
+  return { deleted: removed.length > 0 };
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -1596,6 +1742,7 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
         .all().length,
       automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
       applicationAnswers: tx.select({ id: applicationAnswers.id }).from(applicationAnswers).all().length,
+      cvEvidenceOverlays: tx.select({ id: cvEvidenceOverlays.id }).from(cvEvidenceOverlays).all().length,
     };
 
     tx.delete(applicationAttempts).run();
@@ -1603,6 +1750,10 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
     tx.delete(letters).run();
     tx.delete(savedJobs).run();
     tx.delete(appSettings).run();
+    // Explicit, not left to the `cvId` foreign key's `on delete cascade`: this loop already counts
+    // every table it empties, and a cascade delete would remove these rows without ever appearing
+    // in `deleted` above.
+    tx.delete(cvEvidenceOverlays).run();
     tx.delete(cvDocuments).run();
     tx.delete(automationGrants).run();
     tx.delete(applicationAnswers).run();

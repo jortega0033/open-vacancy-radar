@@ -464,7 +464,7 @@ const SOURCE_CV: CvSourceDocument = {
   },
   summary: 'Synthetic summary for a synthetic candidate.',
   experience: [
-    { company: 'Redwood Software', title: 'Senior Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
+    { id: 'experience-1', company: 'Redwood Software', title: 'Senior Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
   ],
   education: [],
   projects: [],

@@ -22,7 +22,11 @@ import { MAX_SOURCE_CV_PROMPT_CHARS, wasCvTextTruncated } from './prompts.js';
  * and is refused an export, instead of a shortened one that exports looking finished.
  */
 
-function stringField(value: unknown, limit: number): string {
+/** Exported for `requirement-mapping-response.ts`, which needs exactly this shape (always a
+ * string, empty rather than `undefined` for anything else) -- not `cv-ai-parse.ts`'s differently-
+ * shaped private helper of the same name, which returns `string | undefined` for a different
+ * coercion contract and stays local to that file. */
+export function stringField(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : '';
 }
 
@@ -35,7 +39,7 @@ function stringArray(value: unknown, itemLimit: number, maxItems: number): strin
     .slice(0, maxItems);
 }
 
-function toExperienceEntry(value: unknown): CvSourceExperienceEntry | undefined {
+function toExperienceEntry(value: unknown, index: number): CvSourceExperienceEntry | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
   const company = stringField(record.company, CV_SOURCE_LIMITS.shortField);
@@ -43,6 +47,8 @@ function toExperienceEntry(value: unknown): CvSourceExperienceEntry | undefined 
   if (!company && !title) return undefined;
   const engagement = record.engagement === 'client_engagement' ? 'client_engagement' : 'employment';
   return {
+    // App-assigned, never read from the answer -- same reasoning as `toProjectEntry`'s own `id`.
+    id: `experience-${index + 1}`,
     company,
     title,
     dates: stringField(record.dates, CV_SOURCE_LIMITS.shortField),

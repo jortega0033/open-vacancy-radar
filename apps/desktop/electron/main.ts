@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -128,7 +128,7 @@ import {
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
-import type { CvExportResult } from './workspace/types.js';
+import type { CvExportFormat, CvExportResult } from './workspace/types.js';
 import {
   parseApplicationAnswerInput,
   parseApplicationAnswerPatch,
@@ -138,7 +138,12 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayExportInput,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
   parseCvExportInput,
+  parseCvIdEnvelope,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
@@ -153,6 +158,9 @@ import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportF
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
+import { composeApprovedTailoredResume } from './resume-source.js';
+import type { TailoredResume } from './resume-schema.js';
+import { stableCvSourceJson } from './workspace/cv-source-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2773,22 +2781,63 @@ guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: un
 );
 
 /**
+ * Renders one `TailoredResume` to PDF or DOCX and saves it via the native save dialog -- the one
+ * place either of those two things happens, shared by `workspace:cv-documents:export` (#156, a
+ * persisted CV Library record's own content) and `workspace:cv-evidence-overlays:export` (#419,
+ * the candidate-approved composition). What differs between those two callers is entirely how the
+ * `resume` argument was built; everything from "render it" onward is identical, so it lives here
+ * once instead of twice risking drift (a PDF-validation fix, a new format, a save-dialog option
+ * applied to one caller and missed in the other).
+ *
+ * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
+ * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
+ * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
+ * `BrowserWindow` that only this process has. Returns `{ saved: false }`, not a throw, when there
+ * is no window to show the dialog on or when the user cancels it -- neither is a failure.
+ */
+async function renderTailoredResumeToFile(
+  resume: TailoredResume,
+  format: CvExportFormat,
+  options: { title: string; defaultFileName: string },
+): Promise<CvExportResult> {
+  if (!mainWindow) return { saved: false };
+
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: options.title,
+    defaultPath: `${options.defaultFileName}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
+}
+
+/**
  * #156: the manual "export my CV as PDF/DOCX with the default app-authored template" action.
  * Reuses the same rendering machinery #199 built for the unattended auto-apply pipeline
  * (`resume-html.ts`/`resume-docx.ts`/`resume-pdf-validation.ts`/`printHtmlToPdf`) rather than a
  * second implementation of either the template or the PDF step, and reads the candidate's name
  * from the Search page's own candidate profile (the one place in this app that is real,
  * user-entered identity data) rather than inventing one -- see `cv-export.ts`'s doc comment.
- *
- * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
- * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
- * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
- * `BrowserWindow` that only this process has.
  */
 guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown): Promise<CvExportResult> => {
   const { id, format } = parseCvExportInput(input);
   const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
-  if (!mainWindow) return { saved: false };
 
   // #274: a CV whose structured source was never read to the end must not produce a document that
   // looks complete. Refused here, before anything is rendered, with the reasons the user needs to
@@ -2807,30 +2856,86 @@ guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown
     candidate = null;
   }
   const resume = cvDocumentToTailoredResume(doc, candidate);
+  return renderTailoredResumeToFile(resume, format, {
+    title: 'Export CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
+  });
+});
 
-  let buffer: Buffer;
-  let filter: { name: string; extensions: string[] };
-  if (format === 'pdf') {
-    buffer = await printHtmlToPdf(renderResumeHtml(resume));
-    const validation = await validateRenderedResumePdf(buffer, resume);
-    if (!validation.ok) {
-      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
-    }
-    filter = { name: 'PDF document', extensions: ['pdf'] };
-  } else {
-    buffer = await renderResumeDocx(resume);
-    filter = { name: 'Word document', extensions: ['docx'] };
+// #419, slice 1: plain CRUD, the same shape every other entity's four/five verbs already follow.
+guardedIpc.handle('workspace:cv-evidence-overlays:list', async (_event, input: unknown) =>
+  workspace.listCvEvidenceOverlays(await ensureWorkspaceDb(), parseCvIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:get', async (_event, input: unknown) => {
+  const { cvId, vacancyKey } = parseCvEvidenceOverlayLookup(input);
+  return workspace.getCvEvidenceOverlay(await ensureWorkspaceDb(), cvId, vacancyKey);
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvEvidenceOverlay(await ensureWorkspaceDb(), parseCvEvidenceOverlayInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvEvidenceOverlay(await ensureWorkspaceDb(), id, parseCvEvidenceOverlayPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+/**
+ * #419, slice 4: exports the *candidate-approved* composition, not a persisted CV Library record.
+ * Reuses exactly the rendering/validation/save machinery `workspace:cv-documents:export` (#156)
+ * already established -- the difference is entirely in what builds the `TailoredResume`:
+ * `composeApprovedTailoredResume` (#419) instead of `cvDocumentToTailoredResume` (#274/#156), built
+ * fresh against the CV's *current* reviewed source rather than trusting the overlay's own stored
+ * hash, so a source re-reviewed after the overlay's last save cannot export stale. A blocked
+ * composition refuses the same way `describeCvExportBlockers` already does for the other path --
+ * before anything is rendered, with the reasons, never a silent partial export.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
+  const db = await ensureWorkspaceDb();
+  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
+  const doc = workspace.getCvDocument(db, overlay.cvId);
+
+  // The renderer only ever offers this action once `overlay.state` reaches `'candidate_approved'`
+  // (`ComposedCvReview.tsx`), but that is a UI gate, not a security boundary -- this channel is the
+  // actual enforcement point, the same reasoning `describeCvExportBlockers` already applies to the
+  // #156 export path.
+  if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+    throw new Error('this CV has not been approved yet: open the Approved CV panel and approve it before exporting');
+  }
+  if (!doc.source) {
+    throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+  }
+  const currentSourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+  const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);
   }
 
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export CV',
-    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
-    filters: [filter],
+  const outcome = await renderTailoredResumeToFile(resume, format, {
+    title: 'Export approved CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
   });
-  if (result.canceled || !result.filePath) return { saved: false };
+  if (!outcome.saved) return outcome;
 
-  await writeFile(result.filePath, buffer);
-  return { saved: true, path: result.filePath };
+  // The terminal state (#419): "CV approval and application/submission readiness are separate
+  // states" -- candidate_approved says the content is right, artifact_approved says a real,
+  // validated file now exists from it.
+  await applicationDataResetGate.runMutation(async () =>
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' }),
+  );
+  return outcome;
 });
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));

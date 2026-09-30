@@ -20,7 +20,7 @@ const cv: CvDocumentRecord = {
   source: {
     contact: { name: 'Jamie Rivera', title: 'Engineer', location: 'Amsterdam', email: 'jamie@example.com', phone: '123', links: [] },
     summary: 'Engineer.',
-    experience: [{ company: 'Redwood Software', title: 'Engineer', dates: '2020 - Present', engagement: 'employment', client: '', bullets: ['Built interfaces.'] }],
+    experience: [{ id: 'experience-1', company: 'Redwood Software', title: 'Engineer', dates: '2020 - Present', engagement: 'employment', client: '', bullets: ['Built interfaces.'] }],
     education: [{ institution: 'Example University', credential: 'BSc Computer Science', dates: '2012 - 2016' }],
     projects: [{ id: 'project-1', name: 'Design System', role: 'Lead', dates: '2023', organization: 'Redwood Software', description: 'Accessible components.', technologies: ['React'], links: [], pinned: true }],
     maxProjects: 1, complete: true, incompleteReason: '', coveredChars: 100, sourceChars: 100,

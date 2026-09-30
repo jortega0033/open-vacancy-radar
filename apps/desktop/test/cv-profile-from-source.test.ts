@@ -37,6 +37,7 @@ function makeSource(overrides: Partial<CvSourceDocument> = {}): CvSourceDocument
     summary: 'Frontend engineer working on design systems and accessibility.',
     experience: [
       {
+        id: 'experience-1',
         company: 'Redwood Software',
         title: 'Lead Frontend Engineer',
         dates: 'Jan 2021 - Present',
@@ -45,6 +46,7 @@ function makeSource(overrides: Partial<CvSourceDocument> = {}): CvSourceDocument
         bullets: [],
       },
       {
+        id: 'experience-2',
         company: 'Harbour Analytics',
         title: 'Frontend Engineer',
         dates: 'Mar 2018 - Dec 2020',
@@ -62,6 +64,7 @@ function sourceWithDates(dates: string, overrides: Partial<CvSourceDocument> = {
   return makeSource({
     experience: [
       {
+        id: 'experience-1',
         company: 'Redwood Software',
         title: 'Frontend Engineer',
         dates,
@@ -165,6 +168,7 @@ describe('experienceMonths', () => {
     const source = makeSource({
       experience: [
         {
+          id: 'experience-1',
           company: 'Redwood Software',
           title: 'Frontend Engineer',
           dates: 'Jan 2020 - Dec 2022',
@@ -173,6 +177,7 @@ describe('experienceMonths', () => {
           bullets: [],
         },
         {
+          id: 'experience-2',
           company: 'Own company',
           title: 'Frontend Consultant',
           dates: 'Jun 2021 - Dec 2022',
@@ -190,6 +195,7 @@ describe('experienceMonths', () => {
     const source = makeSource({
       experience: [
         {
+          id: 'experience-1',
           company: 'Redwood Software',
           title: 'Frontend Engineer',
           dates: 'Jan 2020 - Dec 2021',
@@ -198,6 +204,7 @@ describe('experienceMonths', () => {
           bullets: [],
         },
         {
+          id: 'experience-2',
           company: 'Harbour Analytics',
           title: 'Junior Frontend Engineer',
           dates: 'Jan 2010 - Dec 2011',
@@ -229,6 +236,7 @@ describe('experienceMonths', () => {
       experience: [
         ...makeSource().experience,
         {
+          id: 'experience-3',
           company: 'Beacon Consultancy',
           title: 'Frontend Consultant',
           dates: '',

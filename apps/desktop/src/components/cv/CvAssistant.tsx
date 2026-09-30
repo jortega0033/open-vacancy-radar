@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
+import { ComposedCvReview } from './ComposedCvReview.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
+import { RequirementMapping } from './RequirementMapping.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
 import { ResumeToolkit } from './ResumeToolkit.js';
 import { TailorCv } from './TailorCv.js';
@@ -212,6 +214,20 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
           profile={selectedProfile}
           provider={provider}
           {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+        <RequirementMapping
+          cvId={selectedLibraryCv?.id ?? null}
+          cv={cv}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          provider={provider}
+          {...(effectiveModel ? { model: effectiveModel } : {})}
+        />
+        <ComposedCvReview
+          cvId={selectedLibraryCv?.id ?? null}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          profile={selectedProfile}
         />
         <TailorCv
           cv={cv}
