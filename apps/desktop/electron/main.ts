@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  DAEMON_EXIT_CODE_LOCK_CONFLICT,
   createSessionRequestSchema,
   mcpCredentialInputSchema,
   mcpProviderIdSchema,
@@ -117,6 +118,7 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
+import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
 import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
 import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
@@ -595,10 +597,27 @@ function spawnDaemon(): void {
     rejectOnEarlyExit = reject;
   });
 
+  const earlyExitMessage = (code: number | null, signal: NodeJS.Signals | null): string => {
+    const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
+    return `process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`;
+  };
+
   daemonChild.on('exit', (code, signal) => {
     if (!client) {
-      const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
-      rejectOnEarlyExit(new Error(`process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`));
+      // A lock conflict means another instance of this same app already won the discovery-file
+      // race and is alive and reachable right now (see `discoveryFilePath`'s own comment): attach
+      // to it instead of spending this generation's whole respawn budget losing the same race
+      // again on every retry.
+      if (code === DAEMON_EXIT_CODE_LOCK_CONFLICT) {
+        void attachToDaemonAfterLockConflict(generation).then((attached) => {
+          if (attached) return;
+          // The winning daemon exited, or its discovery file was stale/corrupt, in the time it
+          // took to read it: nothing left to attach to, so this is a genuine failure after all.
+          rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
+        });
+        return;
+      }
+      rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
       return;
     }
     client = undefined;
@@ -610,16 +629,149 @@ function spawnDaemon(): void {
   });
 }
 
+/**
+ * Settled once per `generation` by whichever of `waitForDaemonReady`'s own poll loop or
+ * `attachToDaemonAfterLockConflict` reaches a final outcome first for that generation (adoption via
+ * `finishDaemonAdoption`, or giving up on this generation via `quitAsDuplicateInstance`). Both run
+ * concurrently for the same generation (the lock-conflict exit fires without cancelling the
+ * sibling poll loop already in flight from the same `spawnDaemon()` call), so without this guard
+ * both could independently reach a conclusion for the same generation -- and `waitForDaemonReady`
+ * specifically needs it to recognize that its generation was already settled by the *other* path,
+ * rather than spending its full 15s timeout polling for a file freshness condition that can no
+ * longer be satisfied, then throwing a bogus "timed out" failure after the app already decided to
+ * quit.
+ */
+let adoptedGeneration: number | undefined;
+
+/**
+ * Everything this process's own freshly-spawned daemon child does once it becomes ready (reachable
+ * `baseUrl`/`token`/`daemonInstanceId` in hand). A no-op if `generation` was already adopted or
+ * abandoned by a concurrent lock-conflict outcome for the same generation (see `adoptedGeneration`
+ * and `quitAsDuplicateInstance`).
+ */
+function finishDaemonAdoption(
+  connectedClient: AgentDockClient,
+  baseUrl: string,
+  token: string,
+  daemonInstanceId: string | undefined,
+  generation: number,
+): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  // Reuses the exact client instance the caller already called `.health()` on, rather than
+  // building a fresh one: `AgentDockClient` memoizes its protocol-compatibility check per
+  // instance, so a fresh client here would silently repeat that `/health` round trip on this
+  // client's first real call.
+  client = connectedClient;
+  daemonConnection = { baseUrl, token };
+  // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
+  // different process, so every outstanding approval is void. Done before the status goes
+  // `ready`, so no renderer can consume a stale grant against the new daemon.
+  adoptDaemonInstance(daemonInstanceId);
+  daemonRespawn.resetAttempts();
+  sendStatus({ state: 'ready' });
+  // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
+  // request), there is exactly one application queue and no per-session redaction concern,
+  // so this attaches proactively -- "reopening the window reflects current queue state"
+  // needs the stream live before any renderer even asks.
+  applicationQueueRelay.attach();
+  // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+  // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+  // must not wait on workspace recovery.
+  void recoverApplicationPipelineOnStartup();
+}
+
+/** Reads and parses a discovery file into the `{baseUrl, token}` shape `AgentDockClient` wants.
+ * Shared by `waitForDaemonReady` and `attachToDaemonAfterLockConflict` so the discovery file's
+ * on-disk shape is only decoded in one place. `undefined` for anything that isn't a daemon to
+ * connect to: missing, mid-write, or left behind corrupt. */
+function readDiscoveryFileConnection(file: string): DiscoveredDaemon | undefined {
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
+    return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A `DAEMON_EXIT_CODE_LOCK_CONFLICT` child exit (see `assertNoLiveDaemon` in
+ * `apps/daemon/src/discovery-file.ts`) means another daemon with this same app id is alive right
+ * now -- and by construction that can only exist if a sibling Electron *main process* is also
+ * alive, since this process's own daemon-spawn is gated behind `app.requestSingleInstanceLock()`
+ * already having refused every other instance (see `gotSingleInstanceLock`'s call site). In other
+ * words, reaching this function at all means that guard was already defeated for this launch --
+ * Electron's own single-instance lock has a narrow, OS-level race on an ungraceful kill-and-
+ * relaunch (observed via vite-plugin-electron's dev-server hot restart, which force-kills the old
+ * main process rather than letting it quit cleanly) that can let two live instances both pass it.
+ * This process is the half of that pair that lost the daemon-spawn race too, so rather than try to
+ * recover and run on as a second full instance -- its own window, tray icon, background-scan/
+ * auto-apply/application-pipeline timers, and SQLite connections to workspace.db/vacancy-engine.db
+ * alongside the sibling's -- it quits (`quitAsDuplicateInstance`) once it confirms the sibling's
+ * daemon is actually reachable. Returns `false` when there is nothing valid to confirm (the
+ * sibling's discovery file is stale or its daemon isn't actually there), so the caller falls back
+ * to treating the exit as an ordinary failure instead of quitting over a false alarm.
+ */
+async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
+  if (isQuitting) return false; // already shutting down; nothing left to confirm or act on
+  const attached = await tryAttachToWinningDaemon({
+    readDiscoveryFile: () => readDiscoveryFileConnection(discoveryFilePath()),
+    checkHealth: async (daemon) => {
+      try {
+        // health() also verifies protocol compatibility (see @agent-dock/client).
+        return await new AgentDockClient(daemon).health();
+      } catch {
+        return undefined; // stale file from a daemon that already exited, or not listening yet
+      }
+    },
+  });
+  if (!attached) return false;
+  if (isQuitting || !daemonRespawn.isCurrentGeneration(generation)) {
+    // Superseded, or the app started quitting while the check was in flight: either way this
+    // generation has nothing left to retry, so report "handled" without taking further action.
+    console.warn('[daemon] ignoring stale lock-conflict result from a superseded or quitting spawn attempt');
+    return true;
+  }
+  quitAsDuplicateInstance(generation);
+  return true;
+}
+
+/**
+ * Called once `attachToDaemonAfterLockConflict` confirms a sibling instance's daemon is alive and
+ * reachable: this process is a duplicate Electron instance that should never have started
+ * alongside it (see that function's own comment for how `app.requestSingleInstanceLock()` can
+ * still let this happen). `app.quit()` routes through the existing quit handlers further down this
+ * file: a `before-quit` listener sets `isQuitting` before any window's `close` handler can
+ * intercept it into hiding to the tray instead of actually closing, and another `before-quit`
+ * listener runs `killDaemon()` against this process's own (already-exited) `daemonChild` -- safe,
+ * since `client` was never assigned here and `killDaemon`'s session-cancel call is gated on it.
+ */
+function quitAsDuplicateInstance(generation: number): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  console.warn(
+    '[daemon] lost a discovery-file lock conflict to a sibling instance\'s already-running daemon -- ' +
+      'quitting this duplicate instance rather than running alongside it',
+  );
+  app.quit();
+}
+
 async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const file = discoveryFilePath();
 
   while (Date.now() < deadline) {
+    // The daemon-exit handler's lock-conflict path (`attachToDaemonAfterLockConflict`) runs
+    // concurrently with this same loop, for this same generation, without cancelling it: if that
+    // path already settled this generation, stop polling for a freshness condition it may never
+    // satisfy instead of spending the rest of the timeout only to throw a bogus failure below.
+    if (adoptedGeneration === generation) return;
     if (existsSync(file) && statSync(file).mtimeMs >= spawnedAt - 1000) {
       try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        const baseUrl = `http://127.0.0.1:${parsed.port}`;
-        const candidate = new AgentDockClient({ baseUrl, token: parsed.token });
+        const daemon = readDiscoveryFileConnection(file);
+        if (!daemon) throw new Error('discovery file mid-write'); // caught below; keep polling
+        const candidate = new AgentDockClient(daemon);
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
         const health = await candidate.health();
@@ -629,23 +781,7 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
           return;
         }
-        client = candidate;
-        daemonConnection = { baseUrl, token: parsed.token };
-        // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
-        // different process, so every outstanding approval is void. Done before the status goes
-        // `ready`, so no renderer can consume a stale grant against the new daemon.
-        adoptDaemonInstance(health.daemonInstanceId);
-        daemonRespawn.resetAttempts();
-        sendStatus({ state: 'ready' });
-        // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
-        // request), there is exactly one application queue and no per-session redaction concern,
-        // so this attaches proactively -- "reopening the window reflects current queue state"
-        // needs the stream live before any renderer even asks.
-        applicationQueueRelay.attach();
-        // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
-        // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
-        // must not wait on workspace recovery.
-        void recoverApplicationPipelineOnStartup();
+        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -654,6 +790,10 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // One last check: the lock-conflict path may have settled this generation during the final
+  // 200ms sleep above, after the loop's own condition check but before the deadline formally
+  // elapsed.
+  if (adoptedGeneration === generation) return;
   throw new Error('timed out waiting for daemon to become ready');
 }
 
