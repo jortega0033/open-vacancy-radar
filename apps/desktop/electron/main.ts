@@ -624,9 +624,24 @@ function spawnDaemon(): void {
     scheduleDaemonRespawn(`daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
   });
 
-  Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit]).catch((err: Error) => {
-    scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
-  });
+  Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit])
+    .catch(() =>
+      // One retry before spending a respawn attempt: `waitForDaemonReady`'s 15s timeout only
+      // fires while the process is still alive (a real crash already rejected `earlyExit` above,
+      // independently and usually first) -- so a first-attempt timeout means "still starting,"
+      // not "failed." A slow-but-healthy boot (first-run module resolution, AV-scanned fresh
+      // build, a loaded machine) can legitimately take a little over 15s; giving it one more full
+      // window here, before `scheduleDaemonRespawn` reports a status change and spends part of
+      // the bounded respawn budget, avoids flashing (or on a consistently slow machine,
+      // eventually exhausting that budget over) a daemon that goes on to start correctly.
+      daemonRespawn.isCurrentGeneration(generation)
+        ? Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit])
+        : Promise.resolve(),
+    )
+    .catch((err: Error) => {
+      if (!daemonRespawn.isCurrentGeneration(generation)) return; // a later attempt reports for itself
+      scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
+    });
 }
 
 /**
