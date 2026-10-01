@@ -10,7 +10,7 @@ import { cvArtifactStatus } from '../electron/workspace/cv-artifact-status.js';
 import { CV_RENDER_CONTRACT_VERSION, type CvArtifactFormat } from '../electron/workspace/cv-evidence-schema.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import * as workspace from '../electron/workspace/repository.js';
-import { cvEvidenceOverlays } from '../electron/workspace/schema.js';
+import { cvDocuments, cvEvidenceOverlays } from '../electron/workspace/schema.js';
 import { makeFact, makeVariant } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
 
@@ -46,18 +46,30 @@ const SOURCE: CvSourceDocument = {
 const hashOf = (source: CvSourceDocument) => createHash('sha256').update(stableCvSourceJson(source)).digest('hex');
 const read = (id: string) => workspace.getCvEvidenceOverlayById(db, id);
 
+/** Rewrites the stored source behind the repository's back, as a legacy row or a failed extraction
+ * would leave it: `createCvDocument` always stamps `reviewedAt`, so an unreviewed source needs this. */
+function forceSource(cvId: string, patch: Partial<CvSourceDocument>) {
+  const current = workspace.getCvDocument(db, cvId).source!;
+  db.update(cvDocuments).set({ sourceCv: { ...current, ...patch } }).where(eq(cvDocuments.id, cvId)).run();
+}
+
 /** An approved case with facts, wording and an approved project selection. */
 function approvedCase(source: CvSourceDocument = SOURCE) {
+  return preparedCase(source, { approve: true }) as { cv: ReturnType<typeof workspace.createCvDocument>; overlay: ReturnType<typeof read> };
+}
+
+function preparedCase(source: CvSourceDocument = SOURCE, options: { approve: boolean; sourcePatch?: Partial<CvSourceDocument> } = { approve: true }) {
   const cv = workspace.createCvDocument(db, {
     name: 'Resume',
     kind: 'manual',
     profile: { title: '', years: '', location: '', languages: '', skills: ['TypeScript'], summary: '', auth: '' },
     source,
   });
+  if (options.sourcePatch) forceSource(cv.id, options.sourcePatch);
   const overlay = workspace.createCvEvidenceOverlay(db, {
     cvId: cv.id,
     vacancyKey: 'url:https://jobs.example.invalid/1',
-    sourceCvContentHash: hashOf(cv.source!),
+    sourceCvContentHash: hashOf(workspace.getCvDocument(db, cv.id).source!),
     jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),
   });
@@ -70,6 +82,7 @@ function approvedCase(source: CvSourceDocument = SOURCE) {
       makeVariant({ variantId: 'v-1', targetField: 'experience_bullet', parentId: 'experience-1', factIds: ['fact-1'], text: 'Built the booking screens, using Angular', approvedAt: '', sourceRevision: '' }),
     ],
   });
+  if (!options.approve) return { cv, overlay: read(overlay.id) };
   if (source.projects.length > 0) workspace.approveCvProjectSelection(db, overlay.id, read(overlay.id).caseRevision);
   const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, read(overlay.id).caseRevision);
   return { cv, overlay: approved };
@@ -321,5 +334,47 @@ describe('a case an earlier version marked artifact_approved', () => {
     const changed = workspace.updateCvEvidenceOverlay(db, other.id, { requirementCoverage: { status: 'partial', batches: 1 } });
     expect(changed.state).toBe('draft');
     expect(changed.legacyUnverifiedExport).toBe(false);
+  });
+});
+
+describe('the reviewed-source gate in the main process', () => {
+  it('refuses to approve the case or its projects against an unreviewed source', () => {
+    const { overlay } = preparedCase(SOURCE, { approve: false, sourcePatch: { reviewedAt: '' } });
+    const revision = read(overlay.id).caseRevision;
+    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/has not been reviewed and confirmed/);
+    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/has not been reviewed and confirmed/);
+    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/CV Library/);
+    expect(read(overlay.id).state).not.toBe('candidate_approved');
+    expect(read(overlay.id).projectSelection).toBeNull();
+  });
+
+  it('refuses a source flagged as truncated, naming how much was read', () => {
+    const { overlay } = preparedCase(SOURCE, {
+      approve: false,
+      sourcePatch: { complete: false, incompleteReason: '', coveredChars: 4000, sourceChars: 9000 },
+    });
+    const revision = read(overlay.id).caseRevision;
+    expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, revision)).toThrow(/incomplete: only 4,000 of 9,000 characters/);
+    expect(() => workspace.approveCvProjectSelection(db, overlay.id, revision)).toThrow(/incomplete/);
+  });
+
+  it('still approves and exports a reviewed, complete source', () => {
+    const { overlay } = approvedCase();
+    expect(overlay.state).toBe('candidate_approved');
+    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers).toEqual([]);
+  });
+
+  it('blocks export of an already approved case whose source is now incomplete, without throwing', () => {
+    const { cv, overlay } = approvedCase();
+    forceSource(cv.id, { complete: false, incompleteReason: 'the last page was never read' });
+    const readiness = workspace.checkCvCaseExportReadiness(db, overlay.id);
+    expect(readiness.blockers.join(' ')).toMatch(/the last page was never read/);
+    expect(readiness.blockers.join(' ')).toMatch(/Review the source CV in the CV Library/);
+  });
+
+  it('blocks export of an already approved case whose source is no longer reviewed', () => {
+    const { cv, overlay } = approvedCase();
+    forceSource(cv.id, { reviewedAt: '' });
+    expect(workspace.checkCvCaseExportReadiness(db, overlay.id).blockers.join(' ')).toMatch(/has not been reviewed and confirmed/);
   });
 });
