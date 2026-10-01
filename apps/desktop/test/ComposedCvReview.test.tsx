@@ -18,6 +18,7 @@ const VACANCY: VacancyLead = {
 
 const SOURCE: CvSourceDocument = {
   ...EMPTY_CV_SOURCE,
+  reviewedAt: '2026-09-30T00:00:00.000Z',
   summary: 'Original summary.',
   experience: [
     { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
@@ -82,6 +83,8 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     id: 'overlay-1',
     cvId: 'cv-1',
     vacancyKey: `url:${VACANCY.url}`,
+    caseTitle: '',
+    caseCompany: '',
     sourceCvContentHash: '', // filled by the test to match the real hash of SOURCE
     jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),
@@ -188,6 +191,35 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     expect(screen.queryByRole('button', { name: /export as pdf/i })).not.toBeInTheDocument();
     await clickPreview();
     expect(await screen.findByRole('button', { name: /^approve again$/i })).toBeEnabled();
+  });
+
+  it('says why approval is blocked when the source CV is unreviewed, and points to the CV Library', async () => {
+    const unreviewed: CvSourceDocument = { ...SOURCE, reviewedAt: '' };
+    const hash = await hashOf(unreviewed);
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={unreviewed} />);
+
+    const notice = await screen.findByLabelText('Source CV not ready');
+    expect(notice).toHaveTextContent('has not been reviewed and confirmed');
+    expect(notice).toHaveTextContent('CV Library');
+    await clickPreview();
+    await screen.findByLabelText('Composed CV preview');
+    expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
+  });
+
+  it('names a truncated source and blocks export of an already approved case', async () => {
+    const truncated: CvSourceDocument = { ...SOURCE, complete: false, incompleteReason: 'the last two pages were never read' };
+    const hash = await hashOf(truncated);
+    const workspace = installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved', approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION) }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={truncated} />);
+
+    const blocked = await screen.findByLabelText('Export blocked by the source CV');
+    expect(blocked).toHaveTextContent('the last two pages were never read');
+    expect(screen.getByRole('button', { name: /export as pdf/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /export as word/i })).toBeDisabled();
+    expect(workspace.exportCvEvidenceOverlay).not.toHaveBeenCalled();
   });
 
   it('offers no export action before the CV has been approved', async () => {

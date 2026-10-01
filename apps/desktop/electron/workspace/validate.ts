@@ -682,6 +682,8 @@ export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayIn
   return {
     cvId: parseId(input.cvId),
     vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    caseTitle: input.caseTitle === undefined ? '' : str(input.caseTitle, 'caseTitle', LIMITS.short),
+    caseCompany: input.caseCompany === undefined ? '' : str(input.caseCompany, 'caseCompany', LIMITS.short),
     sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
     jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
     jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),

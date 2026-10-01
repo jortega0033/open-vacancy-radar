@@ -135,6 +135,10 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
    * report's `key`, not a URL, so the same vacancy is always the same row regardless of how it was
    * reached. */
   vacancyKey: text('vacancy_key').notNull(),
+  /** The role and company the case was opened for, so a case can be listed and reopened with its
+   * own label (#419). A manual case's key carries neither. Empty on a case that predates them. */
+  caseTitle: text('case_title').notNull().default(''),
+  caseCompany: text('case_company').notNull().default(''),
   /** SHA-256 hex of the `CvSourceDocument` this overlay was built from -- see this module's own
    * doc comment on `CvEvidenceOverlay.sourceCvContentHash` in `cv-evidence-schema.ts`. */
   sourceCvContentHash: text('source_cv_content_hash').notNull(),

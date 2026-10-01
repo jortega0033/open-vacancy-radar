@@ -34,6 +34,8 @@ function installStatefulOverlayBridge() {
         id: `overlay-${nextId++}`,
         cvId: input.cvId,
         vacancyKey: input.vacancyKey,
+        caseTitle: input.caseTitle ?? '',
+        caseCompany: input.caseCompany ?? '',
         sourceCvContentHash: input.sourceCvContentHash,
         jdSnapshot: input.jdSnapshot ?? '',
         jdSnapshotHash: input.jdSnapshotHash,

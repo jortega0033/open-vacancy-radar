@@ -639,6 +639,8 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     id: row.id,
     cvId: row.cvId,
     vacancyKey: row.vacancyKey,
+    caseTitle: row.caseTitle ?? '',
+    caseCompany: row.caseCompany ?? '',
     sourceCvContentHash: row.sourceCvContentHash,
     jdSnapshot: row.jdSnapshot,
     jdSnapshotHash: row.jdSnapshotHash,
@@ -760,6 +762,8 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
       .values({
         cvId: input.cvId,
         vacancyKey: input.vacancyKey,
+        caseTitle: input.caseTitle ?? '',
+        caseCompany: input.caseCompany ?? '',
         sourceCvContentHash: input.sourceCvContentHash,
         jdSnapshot,
         jdSnapshotHash,

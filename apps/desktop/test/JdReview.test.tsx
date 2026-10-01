@@ -26,6 +26,8 @@ function overlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidenceOver
     id: 'overlay-1',
     cvId: 'cv-1',
     vacancyKey: `url:${FOUND.url}`,
+    caseTitle: '',
+    caseCompany: '',
     sourceCvContentHash: 'a'.repeat(64),
     jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),

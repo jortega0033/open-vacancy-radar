@@ -89,6 +89,8 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
           : await window.workspace.createCvEvidenceOverlay({
               cvId,
               vacancyKey: caseKey,
+              caseTitle: vacancy.title,
+              caseCompany: vacancy.company,
               sourceCvContentHash: await sha256HexOfSource(sourceCv ?? null),
               jdSnapshot: nextText,
               jdSnapshotHash,

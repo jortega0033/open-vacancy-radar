@@ -70,6 +70,8 @@ async function getOrCreateOverlay(
   return window.workspace.createCvEvidenceOverlay({
     cvId,
     vacancyKey,
+    caseTitle: vacancy.title,
+    caseCompany: vacancy.company,
     sourceCvContentHash,
     jdSnapshotHash,
     jdSnapshot: jobDescriptionBody(vacancy),

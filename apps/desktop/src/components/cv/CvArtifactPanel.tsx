@@ -10,6 +10,9 @@ import { describeError } from './useAgentRun.js';
 export interface CvArtifactPanelProps {
   overlay: CvEvidenceOverlayRecord;
   onOverlayChange: (overlay: CvEvidenceOverlayRecord) => void;
+  /** Why the CV's source cannot back an export right now (#419). Empty when it can. The main
+   * process refuses the export for the same reasons; this explains it before the click. */
+  sourceGaps?: readonly string[];
 }
 
 const FORMATS: { format: CvExportFormat; label: string; exportLabel: string }[] = [
@@ -46,7 +49,8 @@ function shortHash(hash: string): string {
  * page; a Word file is looked at in the candidate's own editor, because pagination depends on the
  * editor and no page fit is claimed. Nothing here says the vacancy is ready to apply.
  */
-export function CvArtifactPanel({ overlay, onOverlayChange }: CvArtifactPanelProps) {
+export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: CvArtifactPanelProps) {
+  const exportBlocked = sourceGaps.length > 0;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -119,6 +123,20 @@ export function CvArtifactPanel({ overlay, onOverlayChange }: CvArtifactPanelPro
         when to apply, is checked elsewhere in the app.
       </p>
 
+      {exportBlocked && (
+        <div className="alert alert-warning text-sm" role="alert" aria-label="Export blocked by the source CV">
+          <div>
+            <div className="font-medium">These files cannot be exported until your source CV is reviewed</div>
+            <ul className="list-disc pl-4">
+              {sourceGaps.map((gap) => (
+                <li key={gap}>{gap}</li>
+              ))}
+            </ul>
+            <p className="mt-1">Open this CV in the CV Library, review its source, then approve this CV again.</p>
+          </div>
+        </div>
+      )}
+
       {FORMATS.map(({ format, label, exportLabel }) => {
         const status = cvArtifactStatus(overlay, format);
         const latest = latestArtifactOfFormat(overlay, format);
@@ -158,7 +176,7 @@ export function CvArtifactPanel({ overlay, onOverlayChange }: CvArtifactPanelPro
             )}
 
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="btn btn-outline" onClick={() => void exportFile(format)} disabled={busy !== null}>
+              <button type="button" className="btn btn-outline" onClick={() => void exportFile(format)} disabled={busy !== null || exportBlocked}>
                 {busy === `export-${format}` && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
                 {status === 'not_exported' || status === 'legacy_unverified' ? exportLabel : `Export ${label} again`}
               </button>
