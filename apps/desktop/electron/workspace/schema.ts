@@ -11,8 +11,10 @@ import {
   type CvEvidenceFact,
   type CvJdIncompleteReason,
   type CvJdRevision,
+  type CvProjectSelection,
   type CvRequirementCoverage,
   type CvRequirementMapping,
+  type CvSourceBaseline,
 } from './cv-evidence-schema.js';
 import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
@@ -173,6 +175,12 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
   approvedResumeSnapshot: text('approved_resume_snapshot', { mode: 'json' })
     .$type<CvApprovedResumeSnapshot | null>()
     .default(null),
+  /** #419 step 8: the projects the candidate approved for this case's CV. `null` until approved,
+   * and for every case that predates the column. */
+  projectSelection: text('project_selection', { mode: 'json' }).$type<CvProjectSelection | null>().default(null),
+  /** #419: the CV inputs this case was started or last rebased from, so a later change can be shown
+   * as a diff. `null` for a case that predates the column. */
+  sourceBaseline: text('source_baseline', { mode: 'json' }).$type<CvSourceBaseline | null>().default(null),
   capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });

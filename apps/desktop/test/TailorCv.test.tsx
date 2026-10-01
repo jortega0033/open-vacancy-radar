@@ -18,6 +18,28 @@ afterEach(() => {
 });
 
 describe('TailorCv', () => {
+  it('labels the free-text draft as a Draft that is never approved, and copying it writes no approval', async () => {
+    const bridges = installBridges();
+    const workspace = installWorkspaceBridge();
+    stubClipboard();
+    render(<TailorCv cv={CV} vacancy={TEST_VACANCY} />);
+
+    expect(screen.getByText('Draft', { selector: '.badge' })).toBeInTheDocument();
+    expect(screen.getByText(/never approved, and copying it does not approve it/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /draft tailored cv/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Angular architect, tailored.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+    await screen.findByRole('log', { name: /tailored cv draft/i });
+    fireEvent.click(screen.getByRole('button', { name: /copy to clipboard/i }));
+    await screen.findByText('Copied');
+
+    expect(workspace.approveCvEvidenceOverlay).not.toHaveBeenCalled();
+    expect(workspace.updateCvEvidenceOverlay).not.toHaveBeenCalled();
+    expect(workspace.approveCvProjectSelection).not.toHaveBeenCalled();
+  });
+
   it('generates a tailored draft from the CV and vacancy and streams it in', async () => {
     const bridges = installBridges();
     stubClipboard();

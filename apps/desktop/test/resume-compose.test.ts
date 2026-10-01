@@ -70,7 +70,10 @@ describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
   it('an approved project_description variant replaces that project\'s description outright', () => {
     const { resume } = composeApprovedTailoredResume(
       SOURCE,
-      overlay({ wordingVariants: [wording({ targetField: 'project_description', parentId: 'project-1', text: 'Rebuilt description.' })] }),
+      overlay({
+        facts: [makeFact({ factId: 'fact-p1', parentId: 'project-1', parentType: 'project' })],
+        wordingVariants: [wording({ targetField: 'project_description', parentId: 'project-1', factIds: ['fact-p1'], text: 'Rebuilt description.' })],
+      }),
       HASH,
       [],
     );
@@ -139,7 +142,10 @@ describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
     };
     const { resume, blockers } = composeApprovedTailoredResume(
       twoProjects,
-      overlay({ wordingVariants: [wording({ targetField: 'project_description', parentId: 'project-2', text: 'New.' })] }),
+      overlay({
+        facts: [makeFact({ factId: 'fact-p2', parentId: 'project-2', parentType: 'project' })],
+        wordingVariants: [wording({ targetField: 'project_description', parentId: 'project-2', factIds: ['fact-p2'], text: 'New.' })],
+      }),
       HASH,
       [],
     );

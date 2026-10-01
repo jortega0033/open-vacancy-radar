@@ -290,6 +290,8 @@ export type {
   CvKind,
   CvListingStatus,
   CvProfile,
+  CvProjectSelection,
+  CvRebasePlan,
   CvEngagementType,
   CvRequirementClassification,
   CvRequirementMapping,

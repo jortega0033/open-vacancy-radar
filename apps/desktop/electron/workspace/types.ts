@@ -24,9 +24,12 @@ import type {
   CvJdOrigin,
   CvJdRevision,
   CvListingStatus,
+  CvProjectSelection,
   CvRequirementCoverage,
   CvRequirementMapping,
+  CvSourceBaseline,
 } from './cv-evidence-schema.js';
+import type { CvRebasePlan } from './cv-case-rebase.js';
 import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
 import type { CvProposalPayload, CvProposalStatus } from './cv-proposal-schema.js';
 
@@ -103,11 +106,14 @@ export type {
   CvJdOrigin,
   CvJdRevision,
   CvListingStatus,
+  CvProjectSelection,
   CvRequirementClassification,
   CvRequirementCoverage,
   CvRequirementMapping,
+  CvSourceBaseline,
   CvWordingApprovalStatus,
 } from './cv-evidence-schema.js';
+export type { CvCurrentInputs, CvDroppedWording, CvInputChange, CvRebasePlan } from './cv-case-rebase.js';
 
 /** #421's MCP client grants and audit trail, re-exported for the same reason the CV-tailoring
  * types above are. */
@@ -302,6 +308,10 @@ export interface CvEvidenceOverlayRecord {
   caseRevision: string;
   /** #421's case contract: `null` until the first approval. See `CvApprovedResumeSnapshot`. */
   approvedResumeSnapshot: CvApprovedResumeSnapshot | null;
+  /** #419 step 8: the projects the candidate approved for this case's CV, `null` until approved. */
+  projectSelection: CvProjectSelection | null;
+  /** #419: the CV inputs this case was started or last rebased from, used to show what changed. */
+  sourceBaseline: CvSourceBaseline | null;
   /** ISO-8601 */
   capturedAt: string;
   /** ISO-8601 */
@@ -1072,6 +1082,22 @@ export interface WorkspaceBridge {
    * rejects with a conflict naming the actual current revision, never a partial apply.
    */
   approveCvEvidenceOverlay(id: string, expectedCaseRevision: string): Promise<CvEvidenceOverlayRecord>;
+  /**
+   * #419 step 8: records the candidate's approval of the projects the CV will show (the source's
+   * pinned projects plus the unpinned ones its limit allows, computed in the main process, never
+   * taken from the caller). Required before whole-CV approval when the source has projects. Any
+   * change to that selection later makes the stored one stale.
+   */
+  approveCvProjectSelection(id: string, expectedCaseRevision: string): Promise<CvEvidenceOverlayRecord>;
+  /** #419: what changed in the CV since this case was started, and what a rebase would keep and
+   * drop. Read only. */
+  previewCvEvidenceRebase(id: string): Promise<CvRebasePlan>;
+  /**
+   * #419: the candidate's explicit "use my current CV" action. Keeps facts and wording that still
+   * fit the current CV, drops wording whose role, project or source text changed, clears the project
+   * selection approval and leaves the case a draft that must be approved again.
+   */
+  rebaseCvEvidenceOverlay(id: string, expectedCaseRevision: string): Promise<CvEvidenceOverlayRecord>;
   deleteCvEvidenceOverlay(id: string): Promise<DeleteResult>;
   /**
    * #419, slice 4: renders the *candidate-approved* composition (`composeApprovedTailoredResume`,
