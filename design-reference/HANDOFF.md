@@ -1,16 +1,16 @@
-# Open Vacancy Radar — implementation handoff
+# Open Vacancy Radar: implementation handoff
 
 Prototype: `Open Vacancy Radar.dc.html` (canonical UX reference). Previous iteration kept at `IND Job Radar.dc.html`.
 
 ## Pages / routes
-- `/search` (default, unless Settings → Start page changes it) — market-agnostic search, master/detail
-- `/saved` — Saved Jobs table, full CRUD via right drawer
-- `/applications` — pipeline table (Active/Archived/All), full CRUD, inline status select
-- `/cv` — CV library (upload PDF/DOCX, manual profiles), parsed-profile inspection & editing
-- `/letters/new` — generator (job + CV + type/tone/length + instructions → editable document)
-- `/letters` — letters library (open/duplicate/delete)
-- `/runtime` — AgentDock provider cards (Claude Code / Codex), verify CLI
-- `/settings` — fully functional, auto-saved with toasts
+- `/search` (default, unless Settings → Start page changes it): market-agnostic search, master/detail
+- `/saved`: Saved Jobs table, full CRUD via right drawer
+- `/applications`: pipeline table (Active/Archived/All), full CRUD, inline status select
+- `/cv`: CV library (upload PDF/DOCX, manual profiles), parsed-profile inspection & editing
+- `/letters/new`: generator (job + CV + type/tone/length + instructions → editable document)
+- `/letters`: letters library (open/duplicate/delete)
+- `/runtime`: AgentDock provider cards (Claude Code / Codex), verify CLI
+- `/settings`: fully functional, auto-saved with toasts
 
 ## Shell
 - Sidebar: expanded 236px, collapsed 64px; collapsed nav buttons 44×44 with aria-label + title tooltip + active state; toggle persists (localStorage), Settings can force start state.

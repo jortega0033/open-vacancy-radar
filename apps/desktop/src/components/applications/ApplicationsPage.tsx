@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ApplicationAttemptRecord,
   ApplicationFilter,
   ApplicationInput,
   ApplicationRecord,
@@ -9,16 +10,34 @@ import type {
   SavedJobRecord,
 } from '../../window.js';
 import emptyApplicationsIllustration from '../../../assets/illustrations/empty-applications.svg?no-inline';
-import { ConfirmDialog, EmptyState, UndoToast } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
+import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
+import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
+import { ApplicationReviewSession } from './ApplicationReviewSession.js';
 import { ApplicationDrawer } from './ApplicationDrawer.js';
 import { ApplicationsTable } from './ApplicationsTable.js';
+import { InterviewPrepDrawer } from './InterviewPrepDrawer.js';
 import { APPLICATIONS_FILTER_TABS, emptyStateTitle, sortApplications, toApplicationInput } from './application-status.js';
+import { sortAttempts } from './attempt-status.js';
+import type { SelectedVacancy } from '../letters/types.js';
 
 type DrawerState = { mode: 'create' } | { mode: 'edit'; record: ApplicationRecord };
+type PageTab = ApplicationFilter | 'in_progress';
+type AttemptView = 'review' | 'preparing' | 'history';
+
+const REVIEW_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>(['ready', 'needs_user']);
+const PREPARING_CHECKPOINTS = new Set<ApplicationAttemptRecord['checkpoint']>([
+  'queued',
+  'reading_jd',
+  'tailoring',
+  'rendering',
+  'filling',
+  'submitting',
+]);
 
 interface PendingUndo {
   message: string;
-  /** Precomputed by `toApplicationInput` at delete time — undo is a fresh `createApplication`
+  /** Precomputed by `toApplicationInput` at delete time: undo is a fresh `createApplication`
    * call with the same field values, not a soft-delete restore, so the record this recreates
    * gets a new id. */
   input: ApplicationInput;
@@ -28,33 +47,71 @@ function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+export interface ApplicationsPageProps {
+  /**
+   * Fired after any mutation that can change `activeApplications` (create, delete, archive/
+   * restore, and undoing a delete) so the caller (App.tsx) can refresh the sidebar badge and the
+   * header's "N active" subtitle without waiting for the user to navigate away and back.
+   *
+   * Plain status changes and edits are not wired to this: neither one touches the `archived` flag
+   * `activeApplications` is keyed on (see electron/workspace/repository.ts `getCounts`), so firing
+   * on them would just be an extra no-op IPC round trip.
+   */
+  onApplicationsChanged?: () => void;
+  focusAttemptId?: string | null;
+  onFocusAttemptConsumed?: () => void;
+  onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+}
+
 /**
  * Top-level "Applications" screen: an Active/Archived/All tab switch backed by
  * `listApplications({ filter })`, a pipeline table with inline status changes, add/edit through
  * `ApplicationDrawer`, and delete through `ConfirmDialog` with a short undo window.
  *
  * Owns the whole lifecycle against `window.workspace`, in the same shape as `SavedJobsPage`.
- * Deliberately not wired into `App.tsx` here — exported standalone via `index.ts` so the shell's
- * router can pick it up once every page agent's work has landed.
  */
-export function ApplicationsPage() {
-  const [filter, setFilter] = useState<ApplicationFilter>('active');
+export function ApplicationsPage({
+  onApplicationsChanged,
+  focusAttemptId = null,
+  onFocusAttemptConsumed,
+  onGenerateLetter,
+}: ApplicationsPageProps) {
+  const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string>();
+
+  const [attempts, setAttempts] = useState<ApplicationAttemptRecord[] | null>(null);
+  const [attemptsError, setAttemptsError] = useState<string>();
+  const [attemptView, setAttemptView] = useState<AttemptView>('review');
+  const [focusedAttemptId, setFocusedAttemptId] = useState<string | null>(null);
+  const [openAttempt, setOpenAttempt] = useState<ApplicationAttemptRecord | null>(null);
+  const [reviewingAttempt, setReviewingAttempt] = useState<ApplicationAttemptRecord | null>(null);
 
   const [savedJobs, setSavedJobs] = useState<readonly SavedJobRecord[]>([]);
   const [cvDocuments, setCvDocuments] = useState<readonly CvDocumentRecord[]>([]);
   const [letters, setLetters] = useState<readonly LetterRecord[]>([]);
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
+  const [interviewPrepTarget, setInterviewPrepTarget] = useState<ApplicationRecord | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<ApplicationRecord | null>(null);
   const [actionError, setActionError] = useState<string>();
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
+  const dismissedReviewAttempt = useRef<string | null>(null);
+
+  const refreshAttempts = useCallback(async () => {
+    try {
+      const rows = await window.workspace.listApplicationAttempts();
+      setAttempts(rows);
+      setAttemptsError(undefined);
+    } catch (err) {
+      setAttemptsError(describeError(err, 'could not load application attempts'));
+    }
+  }, []);
 
   // Linked-record dropdowns (saved job / CV / letter) load once, independently of the
-  // applications list itself — a failure here must never block the pipeline table from showing.
+  // applications list itself. A failure here must never block the pipeline table from showing.
   useEffect(() => {
     let cancelled = false;
     async function loadLinkedRecords() {
@@ -79,11 +136,12 @@ export function ApplicationsPage() {
   }, []);
 
   useEffect(() => {
+    if (activeTab === 'in_progress') return;
     let cancelled = false;
     setLoadError(undefined);
     async function load() {
       try {
-        const rows = await window.workspace.listApplications(filter);
+        const rows = await window.workspace.listApplications(activeTab as ApplicationFilter);
         if (!cancelled) setApplications(rows);
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'could not load applications'));
@@ -93,13 +151,126 @@ export function ApplicationsPage() {
     return () => {
       cancelled = true;
     };
-  }, [filter]);
+  }, [activeTab]);
+
+  // Attempt checkpoints advance in Electron main while this page is open. Polling is bounded to
+  // this tab so a queued row becomes its review card without a manual refresh or another click.
+  useEffect(() => {
+    if (activeTab !== 'in_progress') return;
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const rows = await window.workspace.listApplicationAttempts();
+        if (!cancelled) {
+          setAttempts(rows);
+          setAttemptsError(undefined);
+        }
+      } catch (err) {
+        if (!cancelled) setAttemptsError(describeError(err, 'could not load in-progress applications'));
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!focusAttemptId) return;
+    setActiveTab('in_progress');
+    setFocusedAttemptId(focusAttemptId);
+    dismissedReviewAttempt.current = null;
+    setAttempts(null);
+    onFocusAttemptConsumed?.();
+  }, [focusAttemptId, onFocusAttemptConsumed]);
 
   const sortedApplications = useMemo(() => sortApplications(applications ?? []), [applications]);
+  const sortedAttempts = useMemo(() => sortAttempts(attempts ?? []), [attempts]);
+  const reviewAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => REVIEW_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const preparingAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => PREPARING_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const historyAttempts = useMemo(
+    () => sortedAttempts.filter((attempt) => !REVIEW_CHECKPOINTS.has(attempt.checkpoint) && !PREPARING_CHECKPOINTS.has(attempt.checkpoint)),
+    [sortedAttempts],
+  );
+  const visibleAttempts = attemptView === 'review' ? reviewAttempts : attemptView === 'preparing' ? preparingAttempts : historyAttempts;
+  const reviewPosition = reviewingAttempt
+    ? reviewAttempts.findIndex((attempt) => attempt.id === reviewingAttempt.id) + 1
+    : 0;
+
+  // A `ready` attempt opens straight into the review-and-submit flow (issue #202) rather than the
+  // plain read-only drawer -- that's the one checkpoint where there's actually a decision for a
+  // person to make; every other checkpoint is still just informational.
+  const openAttemptRow = useCallback((attempt: ApplicationAttemptRecord) => {
+    setFocusedAttemptId(attempt.id);
+    dismissedReviewAttempt.current = null;
+    if (REVIEW_CHECKPOINTS.has(attempt.checkpoint)) {
+      setOpenAttempt(null);
+      setReviewingAttempt(attempt);
+    } else {
+      setReviewingAttempt(null);
+      setOpenAttempt(attempt);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!focusedAttemptId || !attempts) return;
+    const focused = attempts.find((attempt) => attempt.id === focusedAttemptId);
+    if (!focused) return;
+    if (REVIEW_CHECKPOINTS.has(focused.checkpoint)) {
+      setAttemptView('review');
+      setOpenAttempt(null);
+      if (dismissedReviewAttempt.current !== focused.id) setReviewingAttempt(focused);
+    } else {
+      setAttemptView(PREPARING_CHECKPOINTS.has(focused.checkpoint) ? 'preparing' : 'history');
+      setReviewingAttempt(null);
+      setOpenAttempt((current) => (current?.id === focused.id ? focused : current ?? focused));
+    }
+  }, [attempts, focusedAttemptId]);
+
+  useEffect(() => {
+    if (activeTab !== 'in_progress' || attemptView !== 'review' || reviewingAttempt || openAttempt) return;
+    const next = reviewAttempts.find((attempt) => !attempt.scheduledAutomaticSubmitAt);
+    if (!next || dismissedReviewAttempt.current === next.id) return;
+    setFocusedAttemptId(next.id);
+    setReviewingAttempt(next);
+  }, [activeTab, attemptView, openAttempt, reviewAttempts, reviewingAttempt]);
+
+  const closeReviewSession = useCallback((outcome: 'dismissed' | 'resolved' = 'dismissed') => {
+    const currentId = reviewingAttempt?.id ?? null;
+    dismissedReviewAttempt.current = currentId;
+    if (outcome === 'dismissed') {
+      setReviewingAttempt(null);
+      return;
+    }
+    const next = reviewAttempts.find((attempt) => attempt.id !== currentId);
+    setAttempts((current) => current?.filter((attempt) => attempt.id !== currentId) ?? current);
+    setReviewingAttempt(next ?? null);
+    setFocusedAttemptId(next?.id ?? null);
+    if (next) dismissedReviewAttempt.current = null;
+  }, [reviewAttempts, reviewingAttempt?.id]);
+
+  const cancelScheduledAutomaticSubmission = useCallback(async (attempt: ApplicationAttemptRecord) => {
+    try {
+      await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
+      await refreshAttempts();
+    } catch (err) {
+      setAttemptsError(describeError(err, 'could not cancel the scheduled automatic submission'));
+    }
+  }, [refreshAttempts]);
 
   const openCreateDrawer = useCallback(() => setDrawerState({ mode: 'create' }), []);
   const openEditDrawer = useCallback((record: ApplicationRecord) => setDrawerState({ mode: 'edit', record }), []);
   const closeDrawer = useCallback(() => setDrawerState(null), []);
+  const openInterviewPrepDrawer = useCallback((record: ApplicationRecord) => setInterviewPrepTarget(record), []);
+  const closeInterviewPrepDrawer = useCallback(() => setInterviewPrepTarget(null), []);
 
   const handleDrawerSubmit = useCallback(
     async (input: ApplicationInput) => {
@@ -107,6 +278,8 @@ export function ApplicationsPage() {
       if (drawerState.mode === 'create') {
         const created = await window.workspace.createApplication(input);
         setApplications((prev) => [...(prev ?? []), created]);
+        // A newly created application is always active, so `activeApplications` just changed.
+        onApplicationsChanged?.();
       } else {
         const updated = await window.workspace.updateApplication(drawerState.record.id, input);
         setApplications((prev) => (prev ?? []).map((row) => (row.id === updated.id ? updated : row)));
@@ -115,7 +288,7 @@ export function ApplicationsPage() {
       // inline without closing itself, so a failed save leaves the drawer open with the message.
       setDrawerState(null);
     },
-    [drawerState],
+    [drawerState, onApplicationsChanged],
   );
 
   const handleStatusChange = useCallback(async (record: ApplicationRecord, status: ApplicationStatus) => {
@@ -138,15 +311,17 @@ export function ApplicationsPage() {
           // The active/archived tabs are server-filtered by `listApplications({ filter })`; if
           // this toggle moved the row out of the tab currently on screen, drop it locally rather
           // than leaving a stale row visible until the next reload.
-          const belongsToCurrentTab = filter === 'all' || updated.archived === (filter === 'archived');
+          const belongsToCurrentTab = activeTab === 'all' || updated.archived === (activeTab === 'archived');
           if (!belongsToCurrentTab) return rows.filter((row) => row.id !== updated.id);
           return rows.map((row) => (row.id === updated.id ? updated : row));
         });
+        // Archiving/restoring moves the row in or out of `activeApplications`.
+        onApplicationsChanged?.();
       } catch (err) {
         setActionError(describeError(err, 'could not update this application'));
       }
     },
-    [filter],
+    [activeTab, onApplicationsChanged],
   );
 
   const requestDelete = useCallback((record: ApplicationRecord) => {
@@ -170,11 +345,13 @@ export function ApplicationsPage() {
           message: `Deleted "${record.role}" at ${record.company}.`,
           input: toApplicationInput(record),
         });
+        // A deleted row may have been active, so `activeApplications` may just have changed.
+        onApplicationsChanged?.();
       }
     } catch (err) {
       setActionError(describeError(err, 'could not delete this application'));
     }
-  }, [deleteTarget]);
+  }, [deleteTarget, onApplicationsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -184,76 +361,146 @@ export function ApplicationsPage() {
     try {
       const recreated = await window.workspace.createApplication(undo.input);
       setApplications((prev) => [...(prev ?? []), recreated]);
+      onApplicationsChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not undo the delete'));
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, onApplicationsChanged]);
 
+  const isInProgressTab = activeTab === 'in_progress';
   const isLoading = applications === null;
   const isEmpty = !isLoading && sortedApplications.length === 0;
+  const isAttemptsLoading = attempts === null;
 
   return (
     <div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Applications</h2>
-        <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
-          Add application
-        </button>
-      </div>
+      {!isInProgressTab && (
+        <div className="flex justify-end">
+          <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
+            Add application
+          </button>
+        </div>
+      )}
 
-      <div role="tablist" className="tabs tabs-border mt-4">
+      <div role="tablist" className="tabs tabs-box mt-4">
         {APPLICATIONS_FILTER_TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
             role="tab"
-            aria-selected={filter === tab.key}
-            className={`tab ${filter === tab.key ? 'tab-active' : ''}`}
-            onClick={() => setFilter(tab.key)}
+            aria-selected={activeTab === tab.key}
+            className={`tab ${activeTab === tab.key ? 'tab-active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
           >
             {tab.label}
           </button>
         ))}
+        <button
+          type="button"
+          role="tab"
+          aria-label="Review queue"
+          aria-selected={isInProgressTab}
+          className={`tab ${isInProgressTab ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('in_progress')}
+        >
+          Review queue{attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}
+        </button>
       </div>
 
-      {loadError && (
-        <div className="alert alert-error mt-4" role="alert">
-          {loadError}
-        </div>
-      )}
-      {actionError && (
-        <div className="alert alert-error mt-4" role="alert">
-          {actionError}
-        </div>
+      {!isInProgressTab && (
+        <>
+          {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
+          {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
+
+          {isLoading && !loadError && <PageLoading label="Loading applications…" />}
+
+          {isEmpty && (
+            <EmptyState
+              illustration={emptyApplicationsIllustration}
+              title={emptyStateTitle(activeTab)}
+              description="Track roles you're preparing for, applying to, or already hearing back from."
+              action={
+                activeTab !== 'archived' ? (
+                  <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
+                    Add your first application
+                  </button>
+                ) : undefined
+              }
+            />
+          )}
+
+          {!isLoading && sortedApplications.length > 0 && (
+            <div className="mt-4">
+              <ApplicationsTable
+                applications={sortedApplications}
+                onStatusChange={handleStatusChange}
+                onEdit={openEditDrawer}
+                onToggleArchive={handleToggleArchive}
+                onDelete={requestDelete}
+                onPrepareInterview={openInterviewPrepDrawer}
+              />
+            </div>
+          )}
+        </>
       )}
 
-      {isLoading && !loadError && <div className="alert alert-info mt-4">Loading applications…</div>}
+      {isInProgressTab && (
+        <>
+          <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Review queue view">
+            <button type="button" className={`btn btn-sm ${attemptView === 'review' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('review')}>
+              Review ({reviewAttempts.length})
+            </button>
+            <button type="button" className={`btn btn-sm ${attemptView === 'preparing' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('preparing')}>
+              Preparing ({preparingAttempts.length})
+            </button>
+            <button type="button" className={`btn btn-sm ${attemptView === 'history' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setAttemptView('history')}>
+              History ({historyAttempts.length})
+            </button>
+          </div>
+          {attemptsError && <ErrorBanner className="mt-4">{attemptsError}</ErrorBanner>}
 
-      {isEmpty && (
-        <EmptyState
-          illustration={emptyApplicationsIllustration}
-          title={emptyStateTitle(filter)}
-          description="Track roles you're preparing for, applying to, or already hearing back from."
-          action={
-            filter !== 'archived' ? (
-              <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
-                Add your first application
-              </button>
-            ) : undefined
-          }
+          {isAttemptsLoading && !attemptsError && <PageLoading label="Loading…" />}
+
+          {!isAttemptsLoading && visibleAttempts.length === 0 && (
+            <EmptyState
+              illustration={emptyApplicationsIllustration}
+              title={attemptView === 'review' ? 'Nothing to review' : attemptView === 'preparing' ? 'Nothing preparing' : 'No attempt history'}
+              description="Prepared applications move here automatically as their status changes."
+            />
+          )}
+
+          {!isAttemptsLoading && visibleAttempts.length > 0 && (
+            <div className="mt-4">
+              <ApplicationAttemptsTable
+                attempts={visibleAttempts}
+                onOpen={openAttemptRow}
+                onCancelScheduledAutomaticSubmission={cancelScheduledAutomaticSubmission}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
+
+      {interviewPrepTarget && (
+        <InterviewPrepDrawer
+          application={interviewPrepTarget}
+          savedJobs={savedJobs}
+          cvDocuments={cvDocuments}
+          letters={letters}
+          onClose={closeInterviewPrepDrawer}
         />
       )}
 
-      {!isLoading && sortedApplications.length > 0 && (
-        <div className="mt-4">
-          <ApplicationsTable
-            applications={sortedApplications}
-            onStatusChange={handleStatusChange}
-            onEdit={openEditDrawer}
-            onToggleArchive={handleToggleArchive}
-            onDelete={requestDelete}
-          />
-        </div>
+      {reviewingAttempt && (
+        <ApplicationReviewSession
+          attempt={reviewingAttempt}
+          position={reviewPosition}
+          total={reviewAttempts.length}
+          onClose={closeReviewSession}
+          onGenerateLetter={onGenerateLetter}
+        />
       )}
 
       {drawerState && (

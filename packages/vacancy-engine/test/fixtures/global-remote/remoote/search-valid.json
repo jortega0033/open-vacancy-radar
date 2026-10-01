@@ -1,0 +1,65 @@
+{
+  "status": "ok",
+  "data": {
+    "jobs": [
+      {
+        "id": 12345,
+        "title": "Senior Frontend Engineer",
+        "company": {
+          "id": 501,
+          "title": "Example Systems",
+          "categories": ["Software"]
+        },
+        "salary": {
+          "raw": "120,000 - 150,000 USD per year",
+          "min": 120000,
+          "max": 150000,
+          "currency": "USD",
+          "period": "year"
+        },
+        "location": {
+          "geo_raw": "Europe, including Netherlands",
+          "timezones_raw": "European working hours",
+          "languages_raw": null
+        },
+        "skills": ["TypeScript", "React"],
+        "seniority_level": "senior",
+        "employment_type": "full-time",
+        "posted_at": "2026-08-28T12:00:00Z",
+        "updated_or_last_seen_at": "2026-08-30T12:00:00Z",
+        "remoote_url": "https://remoote.app/jobs/12345-senior-frontend-engineer",
+        "summary": null,
+        "requirements_excerpt": "Build accessible frontend applications.",
+        "responsibilities_excerpt": "Own TypeScript user interfaces.",
+        "apply_action": {
+          "type": "open_remoote_job",
+          "url": "https://remoote.app/jobs/12345-senior-frontend-engineer",
+          "requires_user_confirmation": true
+        },
+        "employer_apply_url": "https://employer.invalid/apply/12345"
+      },
+      {
+        "id": 12346,
+        "title": "Frontend Developer",
+        "company": null,
+        "salary": null,
+        "location": {
+          "geo_raw": "Worldwide"
+        },
+        "employment_type": "contract",
+        "remoote_url": "https://remoote.app/jobs/12346-frontend-developer"
+      }
+    ],
+    "result_count": 2,
+    "total_available": 2,
+    "search_url": "https://remoote.app/remote-working?query=frontend"
+  },
+  "next_action": "Open returned Remoote URLs to review current job details.",
+  "limits": {
+    "requested_limit": 10,
+    "applied_limit": 10,
+    "max_public_results": 10
+  },
+  "payment": null,
+  "result_note": null
+}

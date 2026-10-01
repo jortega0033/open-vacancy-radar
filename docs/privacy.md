@@ -1,0 +1,296 @@
+# Privacy and data handling
+
+Open Vacancy Radar is a local-first desktop app. This page states plainly what data it stores,
+where, what leaves your computer and to whom, and what you can do about it. It describes the
+current, shipped behavior of this codebase, not aspirations.
+
+## What is stored, and where
+
+Everything the app stores lives in Electron's per-user application-data directory
+(`app.getPath('userData')` — on Windows, `%APPDATA%\Open Vacancy Radar\`):
+
+- **`workspace.db`** (SQLite): your saved jobs, applications, CV library entries (including any CV
+  text you upload or type in), generated letters, any gap analysis you chose to keep, and app
+  settings. This is the personal data this app exists to manage.
+- **`vacancy-engine.db`** (SQLite): the local cache of vacancies discovered from public sources
+  (see [the job source policy](job-source-policy.md)) — job postings, not data about you.
+- **`ai-workspace/`**: an empty scratch directory handed to AI CLI sessions as their working
+  directory. The app doesn't write your data into it; a CLI invoked with a prompt referencing your
+  CV text could, in principle, choose to (see "What leaves your computer" below).
+- **`.cache/http`**: a local HTTP response cache for the vacancy-discovery pipeline, to avoid
+  re-fetching the same public pages repeatedly. Contains fetched public job-listing pages, not
+  personal data.
+- **`agentdock-state/`**: the runtime's durable record of AI CLI *sessions* — see the next section
+  for exactly what it does and does not contain.
+- **Application attempts and artifacts** (`workspace.db`, `application_attempts` /
+  `application_artifacts` tables — #198): as the eventual auto-apply feature is built out in
+  stages, this durable record tracks each attempt at applying to a vacancy — the full job
+  description text read for that attempt, a hash of the CV content it was generated from, which
+  stage the attempt has reached, and records of the tailored CV/cover-letter files staged for it.
+  This is the same category of personal/third-party data `workspace.db` already holds (your CV
+  content, in this case a full third-party job posting's text), stored so a crash or a closed
+  window doesn't silently duplicate or lose an in-progress application. Real employer URLs stop
+  at explicit human review and continue on the employer site. Automated form filling and
+  submission are enabled only for the bundled test fixture; no production target policy permits
+  them in this release.
+
+  Since #275 each attempt also stores a derived *requisition identity* — the employer and job id
+  read out of the apply URL, plus that URL reduced to the parts that identify the posting — so the
+  app can recognise a vacancy you have already applied to when it turns up again from another
+  source, and refuse to queue a second application for it. These are derived from the job link and
+  the employer name that are already stored on the row next to them; they add no new category of
+  data. Alongside them it stores how a completion is known (you told the app, or a receipt was
+  observed) and, when you deliberately apply again to the same opening, the reason you gave for
+  doing so. That reason is free text you write, kept on the attempt row for as long as the attempt
+  is kept, and it is retained under the same rules as the rest of this table.
+- **Submission receipts** (`workspace.db`, `application_submission_receipts` table — #271): one
+  row per observation of what actually happened after a submit action, so a claim that an
+  application was delivered can be checked afterwards rather than taken on trust. Each row holds
+  the attempt it belongs to, the URL it was submitted to, when the observation happened, and a
+  short excerpt of the evidence itself — a matched confirmation sentence, a receipt reference the
+  employer's page printed, or your own note if you told the app you completed the application by
+  hand. The excerpt is bounded in size and is third-party page text: the app displays it and never
+  acts on it. Rows are added, never rewritten, so a later reconciliation is visible as a second
+  record rather than as a silently changed first one.
+- **Saved application answers** (`workspace.db`, `application_answers` table — #372): a small,
+  optional library of answers you explicitly choose to save for reuse on recurring application-form
+  questions. A row is created only when you click a "Save for future applications" action after
+  typing an answer, or explicitly edit one later — never from your CV, your search profile, model
+  output, or a value the app merely observed on a page. Each row holds the question's own label and
+  control type, the answer text you wrote, and which employer/role you first saved it from (for
+  context only). Reusing a saved answer on a later application is always a separate, explicit "Use
+  this answer" action; nothing here is ever filled into a form without you clicking it. See
+  "Retention and deletion" below for what deleting one of these does and does not affect.
+- **`application-artifacts/`** (#199): the actual generated PDF files the record above tracks —
+  a tailored CV and/or cover letter, rendered locally through the app's own default template.
+  Rendering never opens a Save dialog for this unattended path (the existing manual "Copy to
+  clipboard" / export actions elsewhere in the app are unaffected); only this app's own main
+  process ever resolves a path into this directory, and no path is ever accepted from the
+  renderer. Content: your CV data, reordered and re-emphasized for one vacancy, plus that
+  vacancy's own name/role/basic details as printed on the document. No third-party job-posting
+  text is embedded in the rendered file itself beyond what a normal application would already
+  contain (e.g. quoting the role title).
+
+### `agentdock-state/`: session history without session content
+
+When the app runs an AI CLI session (gap analysis, letter drafting), the local runtime daemon keeps
+a small durable record of that session so it can answer one specific question after a crash or
+restart: **had the CLI already been handed your prompt?** Without that record, a session interrupted
+by a restart is indistinguishable from one that never started, and an automatic retry could run the
+same work twice in your working directory.
+
+What it holds, per session: the session id, which provider and model ran, the working directory, the
+start and end timestamps, the final status, and a per-event line recording the event's *type*, its
+sequence number, its timestamp, and — for any event that carried content — the content's **byte
+length and SHA-256 hash**.
+
+What it never holds: your prompt text, the assistant's replies, reasoning text, tool inputs or
+outputs, or error messages. Those fields are replaced by the length-and-hash pair before anything is
+written, structurally rather than by convention — the on-disk record has no field they could be
+stored in, and the daemon's own tests fail the build if any event type is added without a redaction
+rule for it. A SHA-256 hash cannot be reversed into the text it came from; it exists so two reports
+of the same unexplained output can be recognized as the same one.
+
+It lives in its own subdirectory, deliberately separate from `workspace.db` and `vacancy-engine.db`,
+and the daemon refuses to start its store in any directory that overlaps them — so a backup, a
+database migration, or a workspace reset can never take it along by accident.
+
+### The workspace trust and security log
+
+Alongside the session record, `agentdock-state/` holds two small files covering folder access:
+`workspace-trust/trust.json` (which folders you have approved for an AI agent to work in) and
+`workspace-audit/audit.jsonl` (an append-only record of each approval, use, and withdrawal).
+
+Neither file contains a folder path or a folder name. A folder is recorded as a pair of SHA-256
+digests derived from the filesystem's own identifiers for it — the values the operating system uses
+internally to tell one directory from another — never from its name or location. Everything else in
+a log line is a fixed keyword from a short list (what happened, why, and whether it was you or a
+policy that caused it), a random line id, and a timestamp. There is no free-text field, no folder
+name, and no Git branch name in either file, so there is nowhere for a project, client, or employer
+name to end up. The app's own tests run a full approve-use-withdraw cycle and then search every byte
+of both files for anything path-shaped.
+
+The security log is capped at 64 MB and, unlike the session history, it **never** discards old
+entries to make room: if it filled up, the app would refuse to approve new folder access rather than
+allow access it could not record. In normal use that cap is tens of thousands of approvals away.
+
+Approving a folder always requires you to pick it in a system folder picker and then confirm a
+dialog that spells out what the agent will be able to do in it. The app's interface cannot name a
+folder on your behalf and cannot approve one without that dialog.
+
+### The application queue
+
+A third small store, `application-queue-v1/`, lives alongside the two above (#200, part of the
+same eventual auto-apply feature the `application_attempts`/`application_artifacts` entry near the
+top of this page describes). It exists purely so the app can tell "which application attempt, if
+any, is currently being worked on" without losing that information if the app crashes or is
+restarted — the daemon-owned counterpart to `workspace.db`'s own attempt records.
+
+It is exactly as content-free as the security log above, for the same reason: it holds an opaque
+attempt id and a scheduling state (queued, active, paused, done, and so on), a timestamp, and
+nothing else. No job description, no CV text, no company or role name, no rendered file, ever
+reaches this store — that data lives only in `workspace.db`, which this daemon process never
+opens (see [SECURITY.md](../SECURITY.md) for that boundary). Deleting the `application-queue-v1/`
+directory yourself, with the app closed, is safe at any time: the app rebuilds an empty queue on
+next launch, the same way deleting `agentdock-state/` itself is safe.
+
+### Tool-output attachments: the one deliberate exception to "session history without content"
+
+`attachments-v1/`, alongside the stores above, is the one place under `agentdock-state/` that is
+**not** content-free — a deliberate, bounded exception to the rule the session-history section above
+states, not an accidental gap in it.
+
+Every AI tool call the app runs (reading a file, running a command) produces a result, and the
+session-history record above keeps only that result's byte length and hash, by design. That is
+right for the durable crash-recovery record, but it means a result too long to fit in the app's
+own bounded on-screen preview is otherwise gone for good — there is nowhere for its full text to
+have been kept. `attachments-v1/` exists to hold that one thing: the complete text of a tool
+result that exceeded the inline preview, so it can still be retrieved after the fact instead of
+being permanently lost.
+
+What makes this a *bounded* exception rather than an open-ended one:
+
+- **Size-capped, three ways.** One attachment is capped at 1 MB; one AI session can accumulate at
+  most 20 of them; the whole store is capped at 64 MB in total. A write that would exceed any of
+  the three is refused outright — never silently truncated, and never made room for by deleting an
+  older attachment, the same "refuse rather than discard" choice the security log above makes at
+  its own capacity limit.
+- **Narrow content type.** Only plain text and JSON are accepted; nothing else is retained
+  regardless of size.
+- **Session-scoped.** An attachment can only ever be retrieved by the session that produced it —
+  there is no cross-session listing and no "browse everything this daemon has kept" surface.
+- **Time-bounded.** An attachment older than 7 days is removed automatically the next time the
+  daemon starts, whether or not anything else asked for it to be cleaned up.
+- **Same filesystem discipline as every other store here**: private (`0700`) directories and private
+  (`0600`) files on macOS and Linux, where the OS enforces those permission bits; on Windows the app
+  relies on the same inherited folder ACL every other file under your user profile already has,
+  since Windows does not treat these bits as an access restriction the way POSIX does. Plus the
+  same path-containment and symlink-safety checks this page's other stores already use.
+
+A `tool.completed` result over 8 KB (the same size the AI Workspace's own activity timeline already
+keeps inline for other entries) is what actually writes an attachment; a session's own daemon-side
+log line still only ever records that result's byte length and hash, per the section above -- an
+attachment id alongside it is the only new thing that record carries, an opaque id, never the content
+itself.
+
+None of this is encrypted at rest beyond whatever your OS disk encryption already provides — it's a
+plain SQLite file on your own disk, readable by anything running as your OS user, same as any other
+desktop app's local data.
+
+## What leaves your computer, and to whom
+
+- **Vacancy discovery**: the app makes outbound HTTP requests to the public job sources listed in
+  [the job source policy](job-source-policy.md) (ATS APIs, RSS feeds, official registries) to find
+  vacancies. These requests carry no personal data — they're the same requests any visitor to those
+  public pages would trigger.
+- **AI features (gap analysis, letter drafting)**: when you use these, the relevant CV text and
+  vacancy details are sent as a prompt to whichever AI CLI you've selected (`claude` or `codex`),
+  run as a subprocess this app spawns. From there, that data is subject to **that CLI's own
+  provider's terms and privacy policy** — Anthropic's for Claude Code, OpenAI's for Codex — not
+  this project's. This app has no visibility into what that provider does with the prompt after the
+  CLI sends it, and no control over it. See [What this is not](../README.md#what-this-is-not) for
+  why this project itself never makes a direct API call or holds an API key.
+- **AI transcription fallback for scanned/image-only PDF CVs**: uploading a CV normally never sends
+  the original file anywhere, only text extracted locally on your machine. If a PDF has no
+  selectable text (a scan or a print-to-image export), the app can instead offer to send that
+  **original PDF file** to your configured AI CLI so it can transcribe it. This only ever happens
+  after you explicitly confirm a per-upload prompt naming the CLI it will go to; declining leaves
+  the file exactly where it always was, unsent, with the usual guidance to re-export a text-based
+  PDF or paste the CV as text instead. The transcribed text is shown to you for review before it is
+  saved anywhere, and the saved CV record keeps a note of whether its text came from local
+  extraction or this fallback. The same third-party terms named above apply to this file the same
+  way they apply to any other prompt content sent through that CLI.
+- **MCP job-source providers**: the daemon ships one reviewed MCP provider today, InfoSec Job
+  Board — a public, no-auth vacancy-search server. It is not part of the automatic Search scan and
+  has no screen in the app today. Of the daemon's two routes for it, only search is wired to
+  Electron's typed bridge; a search sends that provider only the search query text and a bounded
+  result limit. The daemon also exposes a single-job detail route (taking only an external job id),
+  but nothing in the app — no bridge method, no code in Electron's main process — calls it today, so
+  no detail lookup can currently happen from the app at all. No CV, letter, application answer, or
+  Claude/Codex CLI credential is ever part of either request path, and InfoSec Job Board needs no
+  credential from you at all — see
+  [SECURITY.md#three-separate-kinds-of-credential-not-one](../SECURITY.md#three-separate-kinds-of-credential-not-one).
+  Results this app receives back are cached for at most five minutes before being discarded; that is
+  this app's own retention bound on its side, not a guarantee about what the InfoSec Job Board
+  service itself retains. Generic credential-bearing/OAuth MCP providers remain a future,
+  separately reviewed integration: if one is ever added, your credential for it would go to that
+  specific provider only, stored through the OS credential store described in SECURITY.md, and no
+  provider is contacted unless you've explicitly connected it.
+- **Everything else** — navigation, saved jobs, applications, settings — never leaves your machine.
+  There is no account, no cloud sync, and no analytics endpoint this app talks to.
+
+## No telemetry
+
+This app sends no usage analytics, crash reports, or telemetry of any kind to this project or
+anyone else. There is no telemetry SDK in the dependency tree and no such endpoint in the daemon or
+renderer code. If that ever changes, it will be opt-in and disclosed here first.
+
+## Retention and deletion
+
+- **Saved jobs, applications, CVs, letters**: retained until you delete them through the app (with
+  confirm-before-delete and a short undo window on most deletes) or delete `workspace.db` directly.
+- **Saved gap analyses**: when you click "Save analysis" on a gap-analysis result, that result — the
+  AI CLI's own text about your CV against that vacancy — is stored in `workspace.db` on the saved
+  job it is about, and is kept there until you delete that saved job. Nothing is stored unless you
+  click that button; running an analysis and navigating away keeps nothing. This is storage only:
+  the prompt behind it already left your machine when the analysis ran (see "What leaves your
+  computer" above), and keeping the answer sends nothing anywhere.
+- **Application attempts and artifacts**: not pruned automatically, deliberately — an attempt
+  record (including a `failed` or `submission_unknown` one) is the honest history of what was
+  actually done, and quietly discarding it would undermine the very durability #198 exists to
+  provide. Deleting the `applications` row an attempt is linked to does not delete the attempt
+  itself (`on delete set null`); deleting `workspace.db` removes the database records, but not the
+  generated files under `application-artifacts/` themselves. Settings > Advanced > Reset
+  application data deletes all attempt rows, submission receipts, automation grants, queue ids,
+  generated files and the search profile together with saved jobs, applications, CVs and letters.
+  Generated artifacts are bounded per attempt by a fixed count/size quota, and orphaned records — a database
+  row whose staged file no longer exists on disk — are surfaced by a reconciliation check the app
+  runs, rather than silently ignored. Submission receipts follow the attempt they belong to: they
+  are bounded per attempt by a fixed count quota, are never pruned on their own, and are deleted
+  with the attempt (`on delete cascade`).
+- **Saved application answers**: retained until you edit or delete them from Settings > Workspace >
+  Saved application answers, or delete `workspace.db` directly; Settings > Advanced > Reset
+  application data removes them too, alongside the other application-related tables listed above.
+  Deleting a saved answer only stops it being suggested on a future application — it is a library
+  entry, not a record of what happened. It does **not** reach into any application attempt that
+  already used that answer: an attempt's own `preparedFields` record (see "Application attempts and
+  artifacts" above) keeps its own independent copy of whatever value was actually committed to that
+  attempt's form, exactly as it does for any other value this app ever filled in, regardless of
+  whether the saved answer it came from still exists.
+- **Vacancy cache**: grows over time; there is currently no automatic pruning. Deleting
+  `vacancy-engine.db` clears it with no loss of your personal tracker data — it will simply
+  re-populate on the next scan.
+- **Uninstalling the app**: see [Uninstall behavior](packaging.md#uninstall-behavior) for exactly
+  what the Windows uninstaller does and does not remove from `%APPDATA%`.
+- **MCP credentials**: removed via the app's own "disconnect provider" action, which calls the same
+  OS-credential-store deletion described in SECURITY.md — not simply left behind by uninstalling.
+- **Session history (`agentdock-state/`)**: pruned automatically, oldest-first, on every daemon
+  start. Three bounds apply and whichever is reached first wins: **30 days**, **500 retained
+  sessions**, or **64 MB**. A session that is still running is never pruned, and pruning removes a
+  session together with any sessions resumed from it rather than leaving a broken chain. Deleting
+  the `agentdock-state/` directory yourself is safe at any time the app is closed: it holds no
+  personal data and nothing in the app reads it except the restart-recovery check described above.
+- **Workspace approvals and the security log (`agentdock-state/workspace-trust/`,
+  `agentdock-state/workspace-audit/`)**: not pruned automatically, deliberately — a security log
+  that quietly discards its own history is not a record of anything. Withdrawing a folder's approval
+  through the app marks it withdrawn and adds a line saying so, rather than erasing the earlier
+  lines. Deleting either file yourself, with the app closed, is safe: every folder simply becomes
+  unapproved again and has to be re-approved through the same dialog.
+- **The application queue (`agentdock-state/application-queue-v1/`)**: not pruned by a separate
+  policy of its own; a completed, failed, or cancelled attempt's queue row is simply replaced the
+  next time that same attempt is genuinely re-queued, and the row otherwise persists until you
+  delete the directory yourself (safe at any time the app is closed, per the note above) or delete
+  `agentdock-state/` entirely.
+
+## What this project cannot promise
+
+- It cannot audit or control what an installed `claude`/`codex` CLI, or an MCP provider you
+  connect, does with data once it leaves this app's process — that's between you and that
+  provider.
+- There is currently no built-in export or backup tool beyond copying the documented files yourself; see
+  [docs/troubleshooting.md#backing-up-and-restoring-your-workspace](troubleshooting.md#backing-up-and-restoring-your-workspace).
+
+## Questions or a data-handling concern
+
+Open an issue on this repository, or see [SECURITY.md](../SECURITY.md#reporting-a-vulnerability)
+if the concern is security-specific rather than a general privacy question.

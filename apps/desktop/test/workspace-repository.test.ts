@@ -1,15 +1,21 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
 import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
+import * as schema from '../electron/workspace/schema.js';
+import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
+import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
+import { MCP_GRANT_LIMITS } from '../electron/workspace/mcp-grant-schema.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
- * testing here — default-CV promotion, foreign-key detachment, archive filtering — are behaviors
+ * testing here (default-CV promotion, foreign-key detachment, archive filtering) are behaviors
  * of the schema plus these functions together, and a stubbed Drizzle would assert nothing about
  * either.
  */
@@ -27,7 +33,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const JOB = { role: 'Frontend Engineer', company: 'Redwood Software', market: 'netherlands' } as const;
+const JOB = { role: 'Frontend Engineer', company: 'Redwood Software' } as const;
 
 describe('settings', () => {
   it('creates the single settings row on first read, with the schema defaults', () => {
@@ -35,11 +41,10 @@ describe('settings', () => {
     expect(settings.startPage).toBe('search');
     expect(settings.theme).toBe('system');
     expect(settings.density).toBe('comfortable');
-    expect(settings.defaultMarket).toBe('netherlands');
     expect(settings.sidebarCollapsed).toBe(false);
   });
 
-  it('is idempotent — reading twice does not create a second row or reset the first', () => {
+  it('is idempotent: reading twice does not create a second row or reset the first', () => {
     workspace.updateSettings(db, { theme: 'dark' });
     expect(workspace.getSettings(db).theme).toBe('dark');
     expect(workspace.getSettings(db).theme).toBe('dark');
@@ -53,9 +58,805 @@ describe('settings', () => {
   });
 
   it('updates cleanly even when the settings row does not exist yet', () => {
-    // First write of the session can arrive before any read — e.g. the user collapses the
-    // sidebar before anything has called getSettings.
+    // First write of the session can arrive before any read (e.g. the user collapses the
+    // sidebar before anything has called getSettings).
     expect(workspace.updateSettings(db, { sidebarCollapsed: true }).sidebarCollapsed).toBe(true);
+  });
+
+  it('resets all personal records and recreates settings from schema defaults', () => {
+    const job = workspace.createSavedJob(db, { ...JOB, location: 'Amsterdam' });
+    const cv = workspace.createCvDocument(db, {
+      name: 'Resume',
+      kind: 'manual',
+      isDefault: true,
+      profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    });
+    const letter = workspace.createLetter(db, {
+      title: 'Letter',
+      company: JOB.company,
+      role: JOB.role,
+      type: 'cover_letter',
+      tone: 'natural',
+      length: 'standard',
+      cvId: cv.id,
+    });
+    workspace.createApplication(db, {
+      savedJobId: job.id,
+      role: JOB.role,
+      company: JOB.company,
+      cvId: cv.id,
+      letterId: letter.id,
+    });
+    const attempt = workspace.createApplicationAttempt(db, {
+      company: JOB.company,
+      role: JOB.role,
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshotHash: 'b'.repeat(64),
+    });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 4,
+      contentHash: 'c'.repeat(64),
+    });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'user_reported',
+      source: 'user_reported',
+      destination: 'https://example.invalid/apply',
+      evidenceKind: 'user_statement',
+      evidenceReference: 'submitted manually',
+    });
+    workspace.createAutomationGrant(db, {
+      policyId: 'fixture-policy',
+      expiresAt: '2026-12-01T00:00:00.000Z',
+    });
+    workspace.updateSettings(db, { theme: 'dark', defaultCvId: cv.id });
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'fixture-vacancy',
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshotHash: 'b'.repeat(64),
+    });
+    const { grant } = workspace.createMcpClientGrant(db, {
+      name: 'Fixture client',
+      scopeType: 'source_cv',
+      sourceCvId: cv.id,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+    });
+    workspace.appendMcpAuditLogEntry(db, { grantId: grant.id, toolName: '', outcome: 'success' });
+    workspace.createCvTailoringProposal(db, {
+      caseId: overlay.id,
+      grantId: grant.id,
+      payload: { kind: 'requirement', data: { text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } },
+    });
+
+    const result = workspace.resetApplicationData(db);
+
+    expect(result.deleted).toEqual({
+      savedJobs: 1,
+      applications: 1,
+      cvDocuments: 1,
+      letters: 1,
+      applicationAttempts: 1,
+      applicationArtifacts: 1,
+      submissionReceipts: 1,
+      automationGrants: 1,
+      applicationAnswers: 0,
+      cvEvidenceOverlays: 1,
+      mcpClientGrants: 1,
+      mcpAuditLogEntries: 1,
+      cvTailoringProposals: 1,
+    });
+    expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null, mcpEndpointEnabled: false });
+    expect(workspace.listSavedJobs(db)).toEqual([]);
+    expect(workspace.listApplications(db)).toEqual([]);
+    expect(workspace.listCvDocuments(db)).toEqual([]);
+    expect(workspace.listLetters(db)).toEqual([]);
+    expect(workspace.listApplicationAttempts(db)).toEqual([]);
+    expect(workspace.listAutomationGrants(db)).toEqual([]);
+    expect(db.select().from(schema.applicationArtifacts).all()).toEqual([]);
+    expect(db.select().from(schema.applicationSubmissionReceipts).all()).toEqual([]);
+    expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
+    expect(workspace.listMcpClientGrants(db)).toEqual([]);
+    expect(workspace.listMcpAuditLogEntries(db)).toEqual([]);
+    expect(db.select().from(schema.cvTailoringProposals).all()).toEqual([]);
+  });
+
+  it('toggles mcpEndpointEnabled like any other settings field (#421)', () => {
+    expect(workspace.getSettings(db).mcpEndpointEnabled).toBe(false);
+    expect(workspace.updateSettings(db, { mcpEndpointEnabled: true }).mcpEndpointEnabled).toBe(true);
+  });
+});
+
+describe('cv evidence overlays (#419)', () => {
+  const CV = {
+    name: 'Resume',
+    kind: 'manual' as const,
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  };
+  const HASH_A = 'a'.repeat(64);
+  const HASH_B = 'b'.repeat(64);
+
+  it('returns null, not a throw, when no overlay exists yet for a (cvId, vacancyKey) pair', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toBeNull();
+  });
+
+  it('getCvEvidenceOverlayById reads back by id (#419 slice 4) and throws for a missing one', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(workspace.getCvEvidenceOverlayById(db, created.id)).toEqual(created);
+    expect(() => workspace.getCvEvidenceOverlayById(db, 'missing-overlay')).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('creates an overlay with schema defaults and reads it back by (cvId, vacancyKey)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(created).toMatchObject({
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdComplete: true,
+      jdRevisions: [],
+      listingStatus: 'unknown',
+      state: 'needs_input',
+      requirements: [],
+      facts: [],
+      wordingVariants: [],
+      origin: 'vacancy',
+      caseRevision: '1',
+      approvedResumeSnapshot: null,
+    });
+    expect(workspace.getCvEvidenceOverlay(db, cv.id, 'vacancy-1')).toEqual(created);
+  });
+
+  it('seeds jdRevisions with the initial JD text when one is given at creation (#421)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const created = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshot: 'We need a frontend engineer.',
+      jdSnapshotHash: HASH_B,
+    });
+    expect(created.jdRevisions).toHaveLength(1);
+    expect(created.jdRevisions[0]).toMatchObject({ text: 'We need a frontend engineer.', textHash: HASH_B, complete: true });
+  });
+
+  it('creates a manual-origin overlay when asked, defaulting to vacancy otherwise (#421)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const manual = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'manual:case-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      origin: 'manual',
+    });
+    expect(manual.origin).toBe('manual');
+  });
+
+  it('is idempotent: a second create for the same (cvId, vacancyKey) returns the existing row unchanged', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const first = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    const second = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_B, // a different hash on the second call is ignored, not applied
+      jdSnapshotHash: HASH_B,
+    });
+    expect(second).toEqual(first);
+    expect(workspace.listCvEvidenceOverlays(db, cv.id)).toHaveLength(1);
+  });
+
+  it('lets the same CV hold a separate overlay per vacancy', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-2', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    expect(workspace.listCvEvidenceOverlays(db, cv.id)).toHaveLength(2);
+  });
+
+  it('throws WorkspaceNotFoundError creating an overlay for a CV that does not exist', () => {
+    expect(() =>
+      workspace.createCvEvidenceOverlay(db, {
+        cvId: 'missing-cv',
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshotHash: HASH_B,
+      }),
+    ).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('patches facts/requirements/wordingVariants and an explicit state together', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    const fact = {
+      factId: 'fact-1',
+      parentId: 'experience-1',
+      parentType: 'experience' as const,
+      client: '',
+      activity: 'Rebuilt the checkout flow',
+      mechanism: 'React, Stripe Elements',
+      result: 'reduced drop-off',
+      ownership: 'sole' as const,
+      sourceKind: 'candidate_testimony' as const,
+      sourceReference: '',
+      verification: 'self_reported' as const,
+      metricValue: '',
+      metricUnit: '',
+      metricBasis: '',
+      supersedes: '',
+      createdAt: '2026-09-30T00:00:00.000Z',
+    };
+    const updated = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      facts: [fact],
+      state: 'draft',
+    });
+    expect(updated.facts).toEqual([fact]);
+    expect(updated.state).toBe('draft');
+  });
+
+  it('invalidates an approved state back to draft when an input changes without an explicit new state', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    // 'candidate_approved' is seeded via 'artifact_approved' rather than the real approval flow --
+    // `updateCvEvidenceOverlay`'s patch no longer accepts 'candidate_approved' at all (#421: only
+    // `approveCvEvidenceOverlay` may set it), and `invalidatedOverlayState` treats both the same
+    // way, which is exactly the behavior this test is about.
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+    // The source CV was re-reviewed (a new content hash) after approval, and this patch does not
+    // itself assert a new state -- the approval must not silently survive that.
+    const afterDrift = workspace.updateCvEvidenceOverlay(db, overlay.id, { sourceCvContentHash: HASH_B });
+    expect(afterDrift.state).toBe('draft');
+  });
+
+  it('leaves state untouched when a patch does not touch any input the approval depended on', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+    const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
+    expect(after.state).toBe('artifact_approved');
+  });
+
+  it('deletes an overlay, and deletes every overlay when its CV is deleted (cascade)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const overlay = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(workspace.deleteCvEvidenceOverlay(db, overlay.id)).toEqual({ deleted: true });
+    expect(workspace.deleteCvEvidenceOverlay(db, overlay.id)).toEqual({ deleted: false });
+
+    const second = workspace.createCvEvidenceOverlay(db, {
+      cvId: cv.id,
+      vacancyKey: 'vacancy-2',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(second).toBeTruthy();
+    workspace.deleteCvDocument(db, cv.id);
+    expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
+  });
+
+  describe('caseRevision and jdRevisions (#421)', () => {
+    it('bumps caseRevision on every update, regardless of which field changed', () => {
+      const cv = workspace.createCvDocument(db, CV);
+      const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'vacancy-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+      expect(overlay.caseRevision).toBe('1');
+      const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
+      expect(after.caseRevision).toBe('2');
+      const afterAgain = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'open' });
+      expect(afterAgain.caseRevision).toBe('3');
+    });
+
+    it('appends a jdRevisions entry only when the JD text, hash or completeness actually changes', () => {
+      const cv = workspace.createCvDocument(db, CV);
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshot: 'v1',
+        jdSnapshotHash: HASH_B,
+      });
+      expect(overlay.jdRevisions).toHaveLength(1);
+
+      // Re-sending the exact same JD fields pads nothing.
+      const resent = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdSnapshot: 'v1', jdSnapshotHash: HASH_B });
+      expect(resent.jdRevisions).toHaveLength(1);
+
+      // A genuinely new JD text appends, and the old text is still there.
+      const HASH_C = 'c'.repeat(64);
+      const changed = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdSnapshot: 'v2', jdSnapshotHash: HASH_C });
+      expect(changed.jdRevisions).toHaveLength(2);
+      expect(changed.jdRevisions[0]).toMatchObject({ text: 'v1' });
+      expect(changed.jdRevisions[1]).toMatchObject({ text: 'v2' });
+      expect(changed.jdSnapshot).toBe('v2');
+    });
+  });
+
+  describe('approveCvEvidenceOverlay (#421)', () => {
+    const SOURCE: CvSourceDocument = {
+      ...EMPTY_CV_SOURCE,
+      summary: 'Original summary.',
+      experience: [
+        { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
+      ],
+    };
+
+    const FACT = {
+      factId: 'fact-1',
+      parentId: 'experience-1',
+      parentType: 'experience' as const,
+      client: '',
+      activity: 'Designed the GraphQL schema',
+      mechanism: 'Apollo Server, schema-first',
+      result: 'cut client-side overfetching',
+      ownership: 'unknown' as const,
+      sourceKind: 'candidate_testimony' as const,
+      sourceReference: '',
+      verification: 'self_reported' as const,
+      metricValue: '',
+      metricUnit: '',
+      metricBasis: '',
+      supersedes: '',
+      createdAt: '2026-09-30T00:00:00.000Z',
+    };
+
+    // `createCvDocument` stamps `reviewedAt` onto the source it stores (`stampReviewed`), so the
+    // hash an overlay must match is the *stored* source's hash, not a hash of `SOURCE` computed
+    // before that stamp was applied.
+    function cvWithSource() {
+      const cv = workspace.createCvDocument(db, { ...CV, source: SOURCE });
+      const sourceHash = createHash('sha256').update(stableCvSourceJson(cv.source!)).digest('hex');
+      return { cv, sourceHash };
+    }
+
+    it('re-derives wording from facts server-side, freezes an approved-resume snapshot, and bumps caseRevision', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [FACT] });
+
+      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, '2');
+
+      expect(approved.state).toBe('candidate_approved');
+      expect(approved.wordingVariants).toHaveLength(1);
+      expect(approved.wordingVariants[0]).toMatchObject({ status: 'candidate_approved', factIds: ['fact-1'] });
+      expect(approved.approvedResumeSnapshot).not.toBeNull();
+      expect(approved.approvedResumeSnapshot?.caseRevision).toBe(approved.caseRevision);
+      expect(approved.approvedResumeSnapshot?.resume.experience[0]?.bullets).toContain(
+        'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching',
+      );
+      expect(approved.caseRevision).toBe('3');
+    });
+
+    it('rejects a stale expectedCaseRevision without applying anything, naming the real current revision', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, '999')).toThrow(workspace.CvEvidenceOverlayRevisionConflictError);
+      try {
+        workspace.approveCvEvidenceOverlay(db, overlay.id, '999');
+      } catch (err) {
+        expect((err as InstanceType<typeof workspace.CvEvidenceOverlayRevisionConflictError>).currentRevision).toBe('1');
+      }
+      // Nothing was applied: still the pre-approval state.
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).state).toBe('needs_input');
+    });
+
+    it('refuses to approve while a gap remains, and applies nothing', () => {
+      const { cv, sourceHash } = cvWithSource();
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: sourceHash,
+        jdSnapshotHash: HASH_B,
+      });
+      const withGap = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+        requirements: [
+          { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
+        ],
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, withGap.caseRevision)).toThrow(/cannot be approved/);
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).state).not.toBe('candidate_approved');
+    });
+
+    it('refuses to approve a CV with no reviewed source yet', () => {
+      const cv = workspace.createCvDocument(db, CV); // no `source`
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: cv.id,
+        vacancyKey: 'vacancy-1',
+        sourceCvContentHash: HASH_A,
+        jdSnapshotHash: HASH_B,
+      });
+      expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, overlay.caseRevision)).toThrow(/no reviewed source/);
+    });
+  });
+});
+
+describe('mcp client grants and audit trail (#421)', () => {
+  const CV = {
+    name: 'Resume',
+    kind: 'manual' as const,
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  };
+  const FUTURE = '2099-01-01T00:00:00.000Z';
+
+  it('mints a one-time credential that only this return value ever carries', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const { grant, credential } = workspace.createMcpClientGrant(db, {
+      name: 'My Claude Desktop',
+      scopeType: 'source_cv',
+      sourceCvId: cv.id,
+      expiresAt: FUTURE,
+    });
+    expect(credential).toHaveLength(64); // 32 random bytes, hex-encoded
+    expect(grant).not.toHaveProperty('credential');
+    expect(grant).not.toHaveProperty('credentialVerifierHash');
+    expect(grant).toMatchObject({ name: 'My Claude Desktop', scopeType: 'source_cv', sourceCvId: cv.id, caseIds: [], revokedAt: '' });
+    // The same credential authenticates the grant; `listMcpClientGrants` never carries it either.
+    expect(workspace.findMcpClientGrantByCredential(db, credential)?.id).toBe(grant.id);
+    expect(workspace.listMcpClientGrants(db)).toEqual([grant]);
+  });
+
+  it('rejects a source_cv grant for a CV that does not exist', () => {
+    expect(() =>
+      workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: 'missing-cv', expiresAt: FUTURE }),
+    ).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('a case_ids grant starts with exactly the ids the candidate named, never a source_cv', () => {
+    const { grant } = workspace.createMcpClientGrant(db, {
+      name: 'Narrow client',
+      scopeType: 'case_ids',
+      caseIds: ['overlay-1', 'overlay-2'],
+      expiresAt: FUTURE,
+    });
+    expect(grant).toMatchObject({ scopeType: 'case_ids', sourceCvId: '', caseIds: ['overlay-1', 'overlay-2'] });
+  });
+
+  it('never authenticates a wrong or unknown credential', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    expect(workspace.findMcpClientGrantByCredential(db, 'not-a-real-credential')).toBeNull();
+  });
+
+  it('revoking is idempotent and durable: the record stays, stamped with when it was actually revoked', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    const revoked = workspace.revokeMcpClientGrant(db, grant.id);
+    expect(revoked.revokedAt).not.toBe('');
+    const revokedAgain = workspace.revokeMcpClientGrant(db, grant.id);
+    expect(revokedAgain.revokedAt).toBe(revoked.revokedAt);
+  });
+
+  it('throws WorkspaceNotFoundError revoking a grant that does not exist', () => {
+    expect(() => workspace.revokeMcpClientGrant(db, 'missing-grant')).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('records every audit entry, including one with no matching grant, newest first', () => {
+    workspace.appendMcpAuditLogEntry(db, { grantId: '', toolName: '', outcome: 'denied' });
+    workspace.appendMcpAuditLogEntry(db, { grantId: '', toolName: 'get_tailoring_case', caseId: 'case-1', outcome: 'success', revision: '3' });
+    const entries = workspace.listMcpAuditLogEntries(db);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ toolName: 'get_tailoring_case', caseId: 'case-1', outcome: 'success', revision: '3' });
+    expect(entries[1]).toMatchObject({ grantId: '', toolName: '', caseId: '', outcome: 'denied', revision: '' });
+  });
+
+  describe('appendMcpClientGrantCaseId', () => {
+    it('appends a case id a source_cv grant has newly earned, idempotently', () => {
+      const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
+      const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: '2099-01-01T00:00:00.000Z' });
+      expect(grant.caseIds).toEqual([]);
+      const once = workspace.appendMcpClientGrantCaseId(db, grant.id, 'case-1');
+      expect(once.caseIds).toEqual(['case-1']);
+      const twice = workspace.appendMcpClientGrantCaseId(db, grant.id, 'case-1');
+      expect(twice.caseIds).toEqual(['case-1']); // not duplicated
+    });
+
+    it('throws WorkspaceNotFoundError for a missing grant', () => {
+      expect(() => workspace.appendMcpClientGrantCaseId(db, 'missing-grant', 'case-1')).toThrow(workspace.WorkspaceNotFoundError);
+    });
+
+    it('refuses to grow a grant\'s caseIds past the documented cap', () => {
+      const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
+      const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: '2099-01-01T00:00:00.000Z' });
+      for (let i = 0; i < MCP_GRANT_LIMITS.caseIdsPerGrant; i += 1) {
+        workspace.appendMcpClientGrantCaseId(db, grant.id, `case-${i}`);
+      }
+      expect(() => workspace.appendMcpClientGrantCaseId(db, grant.id, 'one-too-many')).toThrow();
+    });
+  });
+});
+
+describe('cv tailoring proposals (#421)', () => {
+  const SOURCE: CvSourceDocument = {
+    ...EMPTY_CV_SOURCE,
+    experience: [
+      { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '', engagement: 'employment', client: '', bullets: [] },
+    ],
+  };
+
+  function caseWithRequirementAndFact() {
+    const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, source: SOURCE, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
+    const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'v-1', sourceCvContentHash: 'a'.repeat(64), jdSnapshotHash: 'b'.repeat(64) });
+    const withReqAndFact = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      requirements: [
+        { requirementId: 'req-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
+      ],
+      facts: [
+        {
+          factId: 'fact-1', parentId: 'experience-1', parentType: 'experience', client: '', activity: 'Built things', mechanism: '', result: '',
+          ownership: 'sole', sourceKind: 'candidate_testimony', sourceReference: '', verification: 'self_reported', metricValue: '', metricUnit: '', metricBasis: '', supersedes: '', createdAt: '2026-09-30T00:00:00.000Z',
+        },
+      ],
+    });
+    return { cv, overlay: withReqAndFact };
+  }
+
+  describe('createCvTailoringProposal', () => {
+    it('throws WorkspaceNotFoundError for a missing case', () => {
+      expect(() =>
+        workspace.createCvTailoringProposal(db, { caseId: 'missing-case', grantId: '', payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } } }),
+      ).toThrow(workspace.WorkspaceNotFoundError);
+    });
+
+    it('accepts a requirement proposal with no anchor, rejects one anchored to a nonexistent entry', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const ok = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'requirement', data: { text: 'Node.js', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } },
+      });
+      expect(ok.status).toBe('pending');
+      expect(() =>
+        workspace.createCvTailoringProposal(db, {
+          caseId: overlay.id,
+          grantId: '',
+          payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'direct', anchorParentId: 'missing-entry' } },
+        }),
+      ).toThrow(/does not exist in the reviewed source/);
+    });
+
+    it('rejects an evidence_link proposal naming a requirement that does not exist', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      expect(() =>
+        workspace.createCvTailoringProposal(db, {
+          caseId: overlay.id,
+          grantId: '',
+          payload: { kind: 'evidence_link', data: { requirementId: 'missing-req', anchorParentId: '', evidenceClass: 'direct' } },
+        }),
+      ).toThrow(/requirement that does not exist/);
+    });
+
+    it('accepts an evidence_link proposal for a real requirement', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'evidence_link', data: { requirementId: 'req-1', anchorParentId: 'experience-1', evidenceClass: 'direct' } },
+      });
+      expect(proposal.payload).toEqual({ kind: 'evidence_link', data: { requirementId: 'req-1', anchorParentId: 'experience-1', evidenceClass: 'direct' } });
+    });
+
+    it('rejects a wording proposal citing a fact id that does not exist', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      expect(() =>
+        workspace.createCvTailoringProposal(db, {
+          caseId: overlay.id,
+          grantId: '',
+          payload: { kind: 'wording', data: { targetField: 'experience_bullet', parentId: 'experience-1', text: 'x', factIds: ['invented-fact'] } },
+        }),
+      ).toThrow(/fact id that does not exist/);
+    });
+
+    it('rejects a fact proposal anchored to a nonexistent entry', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      expect(() =>
+        workspace.createCvTailoringProposal(db, {
+          caseId: overlay.id,
+          grantId: '',
+          payload: { kind: 'fact', data: { parentId: 'missing-entry', parentType: 'experience', client: '', activity: 'x', mechanism: '', result: '', ownership: 'unknown', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
+        }),
+      ).toThrow(/does not exist in the reviewed source/);
+    });
+
+    it('rejects a selection proposal naming an entry that does not exist', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      expect(() =>
+        workspace.createCvTailoringProposal(db, {
+          caseId: overlay.id,
+          grantId: '',
+          payload: { kind: 'selection', data: { includedEntryIds: ['experience-1', 'missing-entry'] } },
+        }),
+      ).toThrow(/does not exist in the reviewed source/);
+    });
+  });
+
+  describe('listCvTailoringProposals', () => {
+    it('lists only this case\'s proposals, newest first', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const a = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const b = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const list = workspace.listCvTailoringProposals(db, overlay.id);
+      expect(list.map((p) => p.id)).toEqual([b.id, a.id]);
+    });
+  });
+
+  describe('acceptCvTailoringProposal', () => {
+    it('promotes a requirement proposal into the case, candidateAdded and unreviewed, and bumps caseRevision', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'requirement', data: { text: 'Node.js', jdAnchor: 'Node.js experience', classification: 'preferred', evidenceClass: 'needs_verification', anchorParentId: '' } },
+      });
+      const { proposal: decided, overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(decided.status).toBe('accepted');
+      expect(decided.decidedAt).not.toBe('');
+      expect(updated.requirements).toHaveLength(2);
+      expect(updated.requirements[1]).toMatchObject({ text: 'Node.js', candidateAdded: true, reviewed: false });
+      expect(updated.caseRevision).not.toBe(overlay.caseRevision);
+    });
+
+    it('promotes an evidence_link proposal by patching the existing requirement', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'evidence_link', data: { requirementId: 'req-1', anchorParentId: 'experience-1', evidenceClass: 'direct' } },
+      });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.requirements).toEqual([{ ...overlay.requirements[0], anchorParentId: 'experience-1', evidenceClass: 'direct' }]);
+    });
+
+    it('promotes a clarification_question proposal by flagging the requirement for review', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you personally build this?' } },
+      });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.requirements[0]).toMatchObject({ evidenceClass: 'needs_verification', reviewed: false });
+    });
+
+    it('promotes a fact proposal into a real self_reported, candidate_testimony fact', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'fact', data: { parentId: 'experience-1', parentType: 'experience', client: '', activity: 'Shipped the thing', mechanism: 'React', result: 'faster', ownership: 'sole', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
+      });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.facts).toHaveLength(2);
+      expect(updated.facts[1]).toMatchObject({ activity: 'Shipped the thing', verification: 'self_reported', sourceKind: 'candidate_testimony' });
+    });
+
+    it('promotes a wording proposal into a candidate_approved variant', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'wording', data: { targetField: 'experience_bullet', parentId: 'experience-1', text: 'Built things, using nothing special', factIds: ['fact-1'] } },
+      });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.wordingVariants).toHaveLength(1);
+      expect(updated.wordingVariants[0]).toMatchObject({ status: 'candidate_approved', factIds: ['fact-1'] });
+    });
+
+    it('accepting a selection proposal still bumps caseRevision even though nothing on the overlay changes yet', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: ['experience-1'] } } });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.caseRevision).not.toBe(overlay.caseRevision);
+      expect(updated.requirements).toEqual(overlay.requirements);
+    });
+
+    it('invalidates a standing candidate_approved state back to draft, the same rule updateCvEvidenceOverlay applies', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } } });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(updated.state).toBe('draft');
+    });
+
+    it('refuses to re-accept a proposal that was already decided, and applies nothing', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(() => workspace.acceptCvTailoringProposal(db, proposal.id)).toThrow(/already accepted/);
+    });
+
+    it('throws WorkspaceNotFoundError for a missing proposal', () => {
+      expect(() => workspace.acceptCvTailoringProposal(db, 'missing-proposal')).toThrow(workspace.WorkspaceNotFoundError);
+    });
+
+    it('re-validates every anchor against the case\'s current state, not the state at proposal time', () => {
+      const { cv, overlay } = caseWithRequirementAndFact();
+      const requirement = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'direct', anchorParentId: 'experience-1' } },
+      });
+      const fact = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'fact', data: { parentId: 'experience-1', parentType: 'experience', client: '', activity: 'x', mechanism: '', result: '', ownership: 'unknown', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
+      });
+      const selection = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: ['experience-1'] } } });
+
+      // The candidate removes the entry the proposals above anchored to, in between proposal and
+      // acceptance -- the exact gap `acceptCvTailoringProposal`'s own doc comment calls out.
+      workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, experience: [] } });
+
+      expect(() => workspace.acceptCvTailoringProposal(db, requirement.id)).toThrow(/no longer exists in this case/);
+      expect(() => workspace.acceptCvTailoringProposal(db, fact.id)).toThrow(/no longer exists in this case/);
+      expect(() => workspace.acceptCvTailoringProposal(db, selection.id)).toThrow(/no longer exists in this case/);
+    });
+  });
+
+  describe('rejectCvTailoringProposal', () => {
+    it('rejects a pending proposal, leaving the overlay untouched', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const rejected = workspace.rejectCvTailoringProposal(db, proposal.id);
+      expect(rejected.status).toBe('rejected');
+      expect(rejected.decidedAt).not.toBe('');
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).caseRevision).toBe(overlay.caseRevision);
+    });
+
+    it('refuses to re-decide an already-rejected proposal', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      workspace.rejectCvTailoringProposal(db, proposal.id);
+      expect(() => workspace.rejectCvTailoringProposal(db, proposal.id)).toThrow(/already rejected/);
+    });
+
+    it('throws WorkspaceNotFoundError for a missing proposal', () => {
+      expect(() => workspace.rejectCvTailoringProposal(db, 'missing-proposal')).toThrow(workspace.WorkspaceNotFoundError);
+    });
   });
 });
 
@@ -119,7 +920,7 @@ describe('applications', () => {
 });
 
 describe('CV documents', () => {
-  const CV = { name: 'Jake — frontend', kind: 'uploaded' } as const;
+  const CV = { name: 'Jake: frontend', kind: 'uploaded' } as const;
 
   it('makes the first CV the default even when the caller did not ask', () => {
     const first = workspace.createCvDocument(db, CV);
@@ -128,7 +929,7 @@ describe('CV documents', () => {
 
   it('does not make a later CV the default unless asked', () => {
     workspace.createCvDocument(db, CV);
-    const second = workspace.createCvDocument(db, { ...CV, name: 'Jake — architect' });
+    const second = workspace.createCvDocument(db, { ...CV, name: 'Jake: architect' });
     expect(second.isDefault).toBe(false);
   });
 
@@ -201,6 +1002,28 @@ describe('CV documents', () => {
     expect(workspace.listCvDocuments(db)[0]?.text).toBe('Angular. TypeScript. 8 years.');
     expect(cv.kind).toBe('uploaded');
   });
+
+  it('defaults textSource to text_layer when the caller omits it (issue #396)', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    expect(cv.textSource).toBe('text_layer');
+    expect(workspace.getCvDocument(db, cv.id).textSource).toBe('text_layer');
+  });
+
+  it('persists an explicit ai_transcription textSource and round-trips it through list/get', () => {
+    const cv = workspace.createCvDocument(db, { ...CV, textSource: 'ai_transcription' });
+    expect(cv.textSource).toBe('ai_transcription');
+    expect(workspace.getCvDocument(db, cv.id).textSource).toBe('ai_transcription');
+    expect(workspace.listCvDocuments(db)[0]?.textSource).toBe('ai_transcription');
+  });
+
+  it('getCvDocument (#156) reads back a single row by id', () => {
+    const cv = workspace.createCvDocument(db, { ...CV, targetRole: 'Frontend Engineer' });
+    expect(workspace.getCvDocument(db, cv.id)).toEqual(cv);
+  });
+
+  it('getCvDocument throws WorkspaceNotFoundError for a missing id, the same as update/delete', () => {
+    expect(() => workspace.getCvDocument(db, 'no-such-id')).toThrow(WorkspaceNotFoundError);
+  });
 });
 
 describe('letters', () => {
@@ -243,11 +1066,760 @@ describe('counts', () => {
     workspace.createApplication(db, { ...JOB, archived: true });
     workspace.createLetter(db, { title: 'L' });
 
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 2, activeApplications: 1, letters: 1 });
+    expect(workspace.getCounts(db)).toEqual({ savedJobs: 2, activeApplications: 1, letters: 1, cvDocuments: 0 });
   });
 
   it('is all zeros on a fresh database', () => {
-    expect(workspace.getCounts(db)).toEqual({ savedJobs: 0, activeApplications: 0, letters: 0 });
+    expect(workspace.getCounts(db)).toEqual({ savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 });
+  });
+});
+
+// A stand-in SHA-256 hex digest: the repository only checks shape at the validate.ts boundary,
+// never here, so any 64-char hex string exercises these functions correctly.
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+const HASH_C = 'c'.repeat(64);
+
+const ATTEMPT = {
+  company: 'Redwood Software',
+  role: 'Frontend Engineer',
+  sourceCvContentHash: HASH_A,
+  jdSnapshotHash: HASH_B,
+} as const;
+
+describe('application attempts (#198)', () => {
+  it('creates and reads back an attempt with the queued default', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(created.checkpoint).toBe('queued');
+    expect(created.jdComplete).toBe(true);
+
+    const fetched = workspace.getApplicationAttempt(db, created.id);
+    expect(fetched).toEqual(created);
+  });
+
+  it('refuses a second concurrent attempt at the same vacancy (dedup by vacancyKey)', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAttemptDuplicateError,
+    );
+    // The refusal names which attempt is already in progress, not just that one exists.
+    try {
+      workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    } catch (error) {
+      expect(error).toBeInstanceOf(workspace.ApplicationAttemptDuplicateError);
+      expect((error as InstanceType<typeof workspace.ApplicationAttemptDuplicateError>).existingAttemptId).toBe(
+        first.id,
+      );
+    }
+  });
+
+  it('dedups by canonicalUrl when there is no vacancyKey', () => {
+    workspace.createApplicationAttempt(db, { ...ATTEMPT, canonicalUrl: 'https://example.invalid/jobs/1' });
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...ATTEMPT, canonicalUrl: 'https://example.invalid/jobs/1' }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+  });
+
+  it('allows an explicit force:true to bypass the dedup refusal', () => {
+    workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const second = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1', force: true });
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+    expect(second.checkpoint).toBe('queued');
+  });
+
+  it('does not refuse a new attempt once the prior one reached a terminal checkpoint that never submitted', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'failed' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).not.toThrow();
+  });
+
+  it('DOES refuse a new attempt once the prior one reached submitted -- that is #275, not the concurrency guard', () => {
+    // This test used to assert the opposite. A `submitted` attempt is terminal for the concurrency
+    // guard (nothing is still running) but is exactly the case the completed-application lookup
+    // exists to catch, so the refusal now comes from the other guard and names the other error.
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submitted', completionEvidence: 'user_reported' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
+  });
+
+  it('still refuses while the prior attempt is submission_unknown -- a real submission may already have gone through', () => {
+    const first = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submission_unknown' });
+    expect(() => workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' })).toThrow(
+      workspace.ApplicationAttemptDuplicateError,
+    );
+  });
+
+  /**
+   * The gap the September-2026 architecture audit found: this guard used to compare raw
+   * `vacancyKey`/`canonicalUrl` equality, exactly the source-identity comparison #275's own header
+   * comment (`application-identity.ts:4-8`) names as insufficient -- a real requisition re-imported
+   * from a second board, or the same board with different tracking parameters, gets a different
+   * `vacancyKey` and a different URL string, so neither raw check could tell it was the same job
+   * already mid-preparation. That let a second, independent attempt start while the first was still
+   * non-terminal (`ready`, `needs_user`, ...) -- neither #198's old raw check nor #275's
+   * completed-application guard (scoped to terminal checkpoints only) caught it, and nothing
+   * downstream re-checks vacancy identity before submission. This pins the fix: the in-progress
+   * guard now compares the same normalized requisition identity #275 already uses.
+   */
+  it('catches a re-imported posting while the first attempt is still in progress, not just once it completes', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'ready' });
+
+    // Re-discovered via a second source: a different report key, a differently spelled company,
+    // and a pile of tracking parameters -- none of which changes the real requisition.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        company: 'Northwind Labs B.V.',
+        vacancyKey: 'sheet-import-77',
+        canonicalUrl: `${GREENHOUSE_JOB}?utm_source=weekly-digest&gh_src=abc123`,
+      }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+
+    // A genuinely different requisition at the same employer must stay eligible -- the fix must not
+    // start merging distinct openings the way `employerKey` alone deliberately never does.
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-43', canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).not.toThrow();
+  });
+
+  it('updates the checkpoint and bumps updatedAt, leaving provenance fields untouched', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const updated = workspace.updateApplicationAttempt(db, created.id, {
+      checkpoint: 'needs_user',
+      checkpointDetail: 'CAPTCHA on the application form',
+    });
+    expect(updated.checkpoint).toBe('needs_user');
+    expect(updated.checkpointDetail).toBe('CAPTCHA on the application form');
+    expect(updated.sourceCvContentHash).toBe(ATTEMPT.sourceCvContentHash);
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(created.updatedAt).getTime());
+  });
+
+  it('records submittedAt only when the patch sets it, and clears it back to null on an explicit null', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(created.submittedAt).toBeNull();
+
+    const submitted = workspace.updateApplicationAttempt(db, created.id, {
+      checkpoint: 'submitted',
+      submittedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+    });
+    expect(submitted.submittedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    const cleared = workspace.updateApplicationAttempt(db, submitted.id, { submittedAt: null });
+    expect(cleared.submittedAt).toBeNull();
+  });
+
+  it('throws WorkspaceNotFoundError for an unknown id', () => {
+    expect(() => workspace.getApplicationAttempt(db, 'nope')).toThrow(WorkspaceNotFoundError);
+    expect(() => workspace.updateApplicationAttempt(db, 'nope', { checkpoint: 'failed' })).toThrow(
+      WorkspaceNotFoundError,
+    );
+  });
+
+  it('survives a real close-and-reopen mid-checkpoint (crash recovery)', () => {
+    const created = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.updateApplicationAttempt(db, created.id, { checkpoint: 'filling' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: created.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 2048,
+      contentHash: HASH_C,
+    });
+    close();
+
+    const reopened = createWorkspaceDb(dir);
+    try {
+      const attempt = workspace.getApplicationAttempt(reopened.db, created.id);
+      expect(attempt.checkpoint).toBe('filling');
+      expect(workspace.listApplicationArtifacts(reopened.db, created.id)).toHaveLength(1);
+    } finally {
+      reopened.close();
+    }
+    close = () => {};
+  });
+});
+
+/**
+ * #275: a completed application must not silently re-enter the queue.
+ *
+ * Every fixture here is synthetic. "Northwind Labs" is a made-up employer and the requisition ids
+ * are invented; only the *host shapes* are real, because the whole point of the requisition
+ * identity is that it is read out of a real ATS apply URL.
+ */
+const GREENHOUSE_JOB = 'https://boards.greenhouse.io/northwindlabs/jobs/4012345';
+const GREENHOUSE_OTHER_JOB = 'https://boards.greenhouse.io/northwindlabs/jobs/4012999';
+
+const NORTHWIND = {
+  company: 'Northwind Labs',
+  role: 'Platform Engineer',
+  sourceCvContentHash: HASH_A,
+  jdSnapshotHash: HASH_B,
+} as const;
+
+/** Takes an attempt all the way to a completed application with the given evidence. */
+/**
+ * Completes an attempt the way the app really completes one, which since #271 depends on *how* it
+ * was completed:
+ *
+ *  - `receipt_confirmed` lands on `submitted`, which now means "this app observed a receipt" and is
+ *    written only by the post-click observer in `application-review-session.ts`;
+ *  - `user_reported` lands on the `user_reported` checkpoint, because a person's own statement is
+ *    deliberately not `submitted` -- that is #271's fourth acceptance case.
+ *
+ * #275 was written against a codebase with no `user_reported` checkpoint, so this helper originally
+ * put both on `submitted`. Keeping it that way would have made #275's third acceptance case pass
+ * without ever exercising the checkpoint a user-reported completion actually lands on, hiding
+ * whether `COMPLETED_ATTEMPT_CHECKPOINTS` covers it -- which is the one thing that case is for.
+ */
+function completeAttempt(
+  attemptId: string,
+  completionEvidence: 'user_reported' | 'receipt_confirmed',
+): void {
+  workspace.updateApplicationAttempt(db, attemptId, {
+    checkpoint: completionEvidence === 'user_reported' ? 'user_reported' : 'submitted',
+    submittedAt: '2026-09-01T09:00:00.000Z',
+    submissionMode: 'manual',
+    completionEvidence,
+  });
+}
+
+function completedRefusal(input: Parameters<typeof workspace.createApplicationAttempt>[1]): workspace.ApplicationAlreadyCompletedError {
+  try {
+    workspace.createApplicationAttempt(db, input);
+  } catch (error) {
+    expect(error).toBeInstanceOf(workspace.ApplicationAlreadyCompletedError);
+    return error as workspace.ApplicationAlreadyCompletedError;
+  }
+  throw new Error('expected the attempt to be refused as an already-completed application');
+}
+
+describe('completed-application dedup (#275)', () => {
+  it('acceptance 1: re-importing an already-submitted vacancy from another source does not create an ordinary new attempt', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    completeAttempt(first.id, 'receipt_confirmed');
+
+    // A second import of the same real requisition: a different report key, a differently spelled
+    // company, an http scheme, a trailing slash and a pile of tracking parameters. Every one of
+    // those defeats #198's `vacancyKey`/raw-URL dedup; none of them changes the requisition.
+    const refusal = completedRefusal({
+      ...NORTHWIND,
+      company: 'Northwind Labs B.V.',
+      vacancyKey: 'sheet-import-77',
+      canonicalUrl: 'http://www.boards.greenhouse.io/northwindlabs/jobs/4012345/?utm_source=weekly-digest&gh_src=abc123',
+    });
+
+    expect(refusal.match.attemptId).toBe(first.id);
+    expect(refusal.match.matchedOn).toBe('requisition');
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+  });
+
+  it('acceptance 1 (fallback): the same posting with no recognisable ATS requisition is still caught by its canonical URL', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: 'https://careers.northwind.invalid/openings/platform-engineer',
+    });
+    completeAttempt(first.id, 'user_reported');
+
+    const refusal = completedRefusal({
+      ...NORTHWIND,
+      vacancyKey: 'sheet-import-77',
+      canonicalUrl: 'https://careers.northwind.invalid/openings/platform-engineer?utm_campaign=jobboard#apply',
+    });
+    expect(refusal.match.matchedOn).toBe('canonical_url');
+  });
+
+  it('acceptance 2: another requisition at the same company stays eligible', () => {
+    const first = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+    });
+    completeAttempt(first.id, 'receipt_confirmed');
+
+    const second = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      role: 'Staff Platform Engineer',
+      vacancyKey: 'scan-43',
+      canonicalUrl: GREENHOUSE_OTHER_JOB,
+    });
+
+    // Same employer, deliberately distinct requisitions -- exactly what must not be merged.
+    expect(second.employerKey).toBe('greenhouse:northwindlabs');
+    expect(first.employerKey).toBe(second.employerKey);
+    expect(first.requisitionId).toBe('4012345');
+    expect(second.requisitionId).toBe('4012999');
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 3: user-reported and receipt-confirmed completion both suppress duplicates, and each keeps its own evidence type', () => {
+    const reported = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(reported.id, 'user_reported');
+    const confirmed = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB });
+    completeAttempt(confirmed.id, 'receipt_confirmed');
+
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }).match).toMatchObject({
+      attemptId: reported.id,
+      completionEvidence: 'user_reported',
+    });
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }).match).toMatchObject({
+      attemptId: confirmed.id,
+      completionEvidence: 'receipt_confirmed',
+    });
+
+    // Stored, not merely reported through the error: the distinction survives on the row.
+    expect(workspace.getApplicationAttempt(db, reported.id).completionEvidence).toBe('user_reported');
+    expect(workspace.getApplicationAttempt(db, confirmed.id).completionEvidence).toBe('receipt_confirmed');
+
+    // The two completions really do sit on different checkpoints since #271 -- which is the whole
+    // reason this case needs `COMPLETED_ATTEMPT_CHECKPOINTS` to cover both.
+    expect(workspace.getApplicationAttempt(db, reported.id).checkpoint).toBe('user_reported');
+    expect(workspace.getApplicationAttempt(db, confirmed.id).checkpoint).toBe('submitted');
+  });
+
+  /**
+   * The #271/#275 reconciliation invariant, pinned on its own rather than left implicit in the
+   * cases above.
+   *
+   * #271 and #275 were built independently against the same master. #271 moved a person's
+   * self-reported completion off `submitted` onto a new `user_reported` checkpoint; #275's
+   * completed-application lookup keys off a set of checkpoints that, as written, listed only
+   * `submitted` and `submission_unknown`. Merging the two without noticing leaves the single most
+   * common completion path -- a person saying "I already applied to this one" -- matching neither
+   * guard, and the vacancy silently re-queueable. That is precisely the bug #275 exists to fix,
+   * reintroduced by the merge rather than by either change.
+   *
+   * `force` must not get past it either: #198's escape hatch is for work that did not land.
+   */
+  it('#271 + #275: a user_reported completion is a completed application, and force does not get past it', () => {
+    const reported = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(reported.id, 'user_reported');
+    expect(workspace.getApplicationAttempt(db, reported.id).checkpoint).toBe('user_reported');
+
+    // The set itself, so a future edit that drops the value fails here and says why.
+    expect(COMPLETED_ATTEMPT_CHECKPOINTS).toContain('user_reported');
+    // ...and it stays out of the concurrency guard, which is a different question (#271).
+    expect(NON_TERMINAL_ATTEMPT_CHECKPOINTS).not.toContain('user_reported');
+
+    // Re-importing the same posting is refused...
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
+    // ...including from a different source, with different tracking parameters...
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        vacancyKey: 'a-different-scan-entirely',
+        canonicalUrl: `${GREENHOUSE_JOB}?utm_source=newsletter`,
+      }),
+    ).toThrow(workspace.ApplicationAlreadyCompletedError);
+    // ...and `force: true` is not the way past a completed application.
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB, force: true })).toThrow(
+      workspace.ApplicationAlreadyCompletedError,
+    );
+
+    // Only the explicit, recorded reapply path gets through.
+    const reapplied = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      canonicalUrl: GREENHOUSE_JOB,
+      reapply: { supersedesAttemptId: reported.id, reason: 'The employer asked me to resend with a corrected CV' },
+    });
+    expect(reapplied.supersedesAttemptId).toBe(reported.id);
+
+    // A different opening at the same employer was never in scope and stays eligible.
+    expect(() => workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB })).not.toThrow();
+  });
+
+  it('acceptance 4: an explicit reapply records its predecessor, its reason and both document versions', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+
+    const reapplied = workspace.createApplicationAttempt(db, {
+      ...NORTHWIND,
+      canonicalUrl: GREENHOUSE_JOB,
+      sourceCvContentHash: HASH_C,
+      reapply: { supersedesAttemptId: first.id, reason: 'Corrected CV: the attached file was the wrong version' },
+    });
+
+    expect(reapplied.supersedesAttemptId).toBe(first.id);
+    expect(reapplied.reapplyReason).toBe('Corrected CV: the attached file was the wrong version');
+    // Both document versions readable off the one row: what the superseded attempt carried...
+    expect(reapplied.reapplyPreviousCvContentHash).toBe(HASH_A);
+    // ...and what this one carries.
+    expect(reapplied.sourceCvContentHash).toBe(HASH_C);
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 4: a reapply is refused unless it names a real completed attempt at this requisition, with a reason', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+    const elsewhere = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB });
+    completeAttempt(elsewhere.id, 'user_reported');
+
+    // An empty reason is not a record of anything.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: GREENHOUSE_JOB,
+        reapply: { supersedesAttemptId: first.id, reason: '   ' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    // Naming some other completed attempt must not work as a generic bypass.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: GREENHOUSE_JOB,
+        reapply: { supersedesAttemptId: elsewhere.id, reason: 'Corrected CV' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    // Neither must reapplying against a requisition that has no completed application at all.
+    expect(() =>
+      workspace.createApplicationAttempt(db, {
+        ...NORTHWIND,
+        canonicalUrl: 'https://boards.greenhouse.io/northwindlabs/jobs/4013111',
+        reapply: { supersedesAttemptId: first.id, reason: 'Corrected CV' },
+      }),
+    ).toThrow(workspace.ApplicationReapplyError);
+
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(2);
+  });
+
+  it('acceptance 5: submission_unknown is not free to re-queue, and force:true does not get past it', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-42', canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: 'navigation lost after the submit click',
+      submittedAt: '2026-09-01T09:00:00.000Z',
+    });
+
+    // The concurrency guard catches the plain case, as it did before #275.
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, vacancyKey: 'scan-42', canonicalUrl: GREENHOUSE_JOB }),
+    ).toThrow(workspace.ApplicationAttemptDuplicateError);
+
+    // ...and `force`, which exists to get past *that* guard, no longer walks straight into a
+    // possible second real submission: the completed-application lookup refuses it separately.
+    const forced = completedRefusal({
+      ...NORTHWIND,
+      vacancyKey: 'scan-42',
+      canonicalUrl: GREENHOUSE_JOB,
+      force: true,
+    });
+    expect(forced.match.checkpoint).toBe('submission_unknown');
+    expect(forced.match.completionEvidence).toBeNull();
+    expect(workspace.listApplicationAttempts(db)).toHaveLength(1);
+  });
+
+  it('acceptance 5: resolving submission_unknown takes reconciliation or a recorded decision, never a bare patch', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submission_unknown',
+      checkpointDetail: 'the tab closed before a receipt was seen',
+    });
+
+    // Silently downgrading it to `failed` would drop the protection with nothing on the record.
+    expect(() => workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'failed' })).toThrow(
+      workspace.ApplicationCompletionDecisionError,
+    );
+    expect(workspace.getApplicationAttempt(db, first.id).checkpoint).toBe('submission_unknown');
+
+    // The same move with the decision recorded is allowed, and only then is the requisition free.
+    workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'failed',
+      checkpointDetail: 'user confirmed the employer has no record of an application',
+    });
+    expect(() =>
+      workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }),
+    ).not.toThrow();
+  });
+
+  it('acceptance 5: reconciling submission_unknown INTO submitted needs no reason and keeps the protection', () => {
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    workspace.updateApplicationAttempt(db, first.id, { checkpoint: 'submission_unknown', checkpointDetail: 'timed out' });
+
+    // A receipt turning up later resolves the ambiguity in the direction that protects nothing new.
+    const reconciled = workspace.updateApplicationAttempt(db, first.id, {
+      checkpoint: 'submitted',
+      completionEvidence: 'receipt_confirmed',
+    });
+    expect(reconciled.checkpoint).toBe('submitted');
+    expect(completedRefusal({ ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB }).match.completionEvidence).toBe(
+      'receipt_confirmed',
+    );
+  });
+
+  it('exposes the lookup on its own, so a caller can skip a posting instead of catching a refusal', () => {
+    expect(workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toBeUndefined();
+
+    const first = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(first.id, 'user_reported');
+
+    expect(workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB })).toMatchObject({
+      attemptId: first.id,
+      matchedOn: 'requisition',
+      completionEvidence: 'user_reported',
+      submittedAt: '2026-09-01T09:00:00.000Z',
+    });
+    // A different requisition at the same employer is not a match, through this entry point either.
+    expect(
+      workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).toBeUndefined();
+  });
+
+  it('keeps an attempt created before the identity columns existed from matching everything', () => {
+    // Migration 0012 backfills '' / null, which is what a row with no derivable identity also
+    // looks like. Neither may be treated as "matches any posting".
+    const legacy = workspace.createApplicationAttempt(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_JOB });
+    completeAttempt(legacy.id, 'user_reported');
+    db.update(schema.applicationAttempts)
+      .set({ employerKey: '', requisitionId: null, canonicalUrlKey: '' })
+      .where(eq(schema.applicationAttempts.id, legacy.id))
+      .run();
+
+    expect(
+      workspace.findCompletedApplication(db, { ...NORTHWIND, canonicalUrl: GREENHOUSE_OTHER_JOB }),
+    ).toBeUndefined();
+  });
+});
+
+describe('application artifacts (#198)', () => {
+  it('creates and lists artifacts for an attempt, oldest first', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cover_letter_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_B,
+    });
+
+    const artifacts = workspace.listApplicationArtifacts(db, attempt.id);
+    expect(artifacts.map((a) => a.kind)).toEqual(['cv_pdf', 'cover_letter_pdf']);
+  });
+
+  it('refuses an artifact for a nonexistent attempt', () => {
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: 'nope',
+        kind: 'cv_pdf',
+        mimeType: 'application/pdf',
+        byteSize: 1000,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(WorkspaceNotFoundError);
+  });
+
+  it('enforces the per-attempt artifact count quota', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    for (let i = 0; i < workspace.APPLICATION_ARTIFACT_QUOTA.maxPerAttempt; i++) {
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: 1,
+        contentHash: HASH_A,
+      });
+    }
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: 1,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(workspace.ApplicationArtifactQuotaError);
+  });
+
+  it('enforces the per-attempt total byte-size quota', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationArtifact(db, {
+        attemptId: attempt.id,
+        kind: 'other',
+        mimeType: 'application/pdf',
+        byteSize: workspace.APPLICATION_ARTIFACT_QUOTA.maxTotalBytesPerAttempt + 1,
+        contentHash: HASH_A,
+      }),
+    ).toThrow(workspace.ApplicationArtifactQuotaError);
+  });
+
+  it('deletes an artifact independently of its attempt', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const artifact = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    expect(workspace.deleteApplicationArtifact(db, artifact.id)).toEqual({ deleted: true });
+    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(0);
+  });
+
+  it('cascades: deleting the attempt deletes its artifacts', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    workspace.deleteApplicationAttempt(db, attempt.id);
+    expect(workspace.listApplicationArtifacts(db, attempt.id)).toHaveLength(0);
+  });
+
+  it('reconciles the manifest against disk, reporting only artifacts whose file is actually missing', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    // Never staged: empty storagePath, correctly excluded (there is nothing to check on disk yet).
+    workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cv_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 1000,
+      contentHash: HASH_A,
+    });
+    // Staged and present.
+    const present = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'cover_letter_pdf',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_B,
+      storagePath: '/staged/present.pdf',
+    });
+    // Staged but missing -- the case reconciliation exists to catch.
+    const missing = workspace.createApplicationArtifact(db, {
+      attemptId: attempt.id,
+      kind: 'other',
+      mimeType: 'application/pdf',
+      byteSize: 500,
+      contentHash: HASH_C,
+      storagePath: '/staged/missing.pdf',
+    });
+
+    const orphaned = workspace.reconcileApplicationArtifacts(db, (path) => path === present.storagePath);
+    expect(orphaned.map((a) => a.id)).toEqual([missing.id]);
+  });
+});
+
+describe('application submission receipts (#271)', () => {
+  const DESTINATION = 'https://fixture.example.invalid/apply';
+
+  it('records an observed submission with its attempt, destination, timestamp and evidence reference', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    const receipt = workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      source: 'page_observation',
+      destination: DESTINATION,
+      evidenceKind: 'confirmation_page',
+      evidenceReference: 'Your application has been submitted',
+      detail: 'the page replaced the form with a confirmation',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+
+    expect(receipt).toMatchObject({
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      destination: DESTINATION,
+      evidenceReference: 'Your application has been submitted',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+    expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toEqual([receipt]);
+  });
+
+  it('refuses a "submitted" receipt with no evidence behind it -- the whole point of the table', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'page_observation',
+        evidenceKind: 'none',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'page_observation',
+        evidenceKind: 'confirmation_page',
+        evidenceReference: '   ',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+    expect(workspace.listApplicationSubmissionReceipts(db, attempt.id)).toEqual([]);
+  });
+
+  it('never lets a person\'s own statement be recorded as an observed outcome', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: attempt.id,
+        outcome: 'submitted',
+        source: 'user_reported',
+        evidenceKind: 'user_statement',
+        evidenceReference: 'I applied myself',
+      }),
+    ).toThrow(workspace.ApplicationSubmissionReceiptError);
+  });
+
+  it('keeps an unresolved observation and a later reconciliation as two rows, oldest first', () => {
+    const attempt = workspace.createApplicationAttempt(db, { ...ATTEMPT, vacancyKey: 'vac-1' });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'unknown',
+      source: 'page_observation',
+      destination: DESTINATION,
+      evidenceKind: 'none',
+      observedAt: '2026-09-11T10:00:00.000Z',
+    });
+    workspace.createApplicationSubmissionReceipt(db, {
+      attemptId: attempt.id,
+      outcome: 'submitted',
+      source: 'delayed_receipt',
+      destination: DESTINATION,
+      evidenceKind: 'delivery_receipt',
+      evidenceReference: 'confirmationNumber: FIXTURE-9001',
+      observedAt: '2026-09-12T08:00:00.000Z',
+    });
+
+    const timeline = workspace.listApplicationSubmissionReceipts(db, attempt.id);
+    expect(timeline.map((r) => r.outcome)).toEqual(['unknown', 'submitted']);
+  });
+
+  it('refuses a receipt for an attempt that does not exist', () => {
+    expect(() =>
+      workspace.createApplicationSubmissionReceipt(db, {
+        attemptId: 'nope',
+        outcome: 'unknown',
+        source: 'page_observation',
+        evidenceKind: 'none',
+      }),
+    ).toThrow(WorkspaceNotFoundError);
   });
 });
 

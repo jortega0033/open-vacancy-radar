@@ -1,17 +1,8 @@
+import { memo, useLayoutEffect, useRef } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
+import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
-import { formatDate, orNotStated, type SearchResult } from './results.js';
-
-/** Status dot for a verification outcome. Never rendered for a market with no verification step. */
-function VerificationDot({ tone }: { tone: 'success' | 'warning' | null }) {
-  if (tone === null) return null;
-  return (
-    <span
-      className={`size-1.5 rounded-full ${tone === 'success' ? 'bg-success' : 'bg-warning'}`}
-      aria-hidden="true"
-    />
-  );
-}
+import { descriptionExcerpt, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
 
 export interface SearchResultRowProps {
   result: SearchResult;
@@ -20,47 +11,99 @@ export interface SearchResultRowProps {
   saved: boolean;
 }
 
-export function SearchResultRow({ result, selected, onSelect, saved }: SearchResultRowProps) {
-  const meta = [result.company, orNotStated(result.location), result.arrangement]
-    .filter((part): part is string => !!part)
-    .join(' · ');
+export const SearchResultRow = memo(function SearchResultRow({
+  result,
+  selected,
+  onSelect,
+  saved,
+}: SearchResultRowProps) {
+  const stale = isStalePosting(result.postedAt);
+  const excerpt = descriptionExcerpt(result.description);
+  // Verification has the identical "not available" tone on almost every row (the pipeline has no
+  // per-employer verification step for most vacancies), so the badge would carry zero per-row
+  // information there -- it is already explained once, correctly, in the detail pane. Only a real
+  // per-row outcome (a possible sponsor match) earns a badge here.
+  //
+  // `decision` (the pipeline's internal `DiscoveryDecision`, e.g. `role_mismatch`) deliberately does
+  // NOT get a badge here. QA audit finding: in every populated screenshot reviewed, this read as
+  // "role mismatch" on essentially every card, which looks exactly like "this job doesn't match you"
+  // on 100% of listings to a candidate -- it is a pipeline classification, not a per-candidate match
+  // rejection, and styling it identically to the salary/employment-type chips actively misled. It
+  // already has an accurate home, unchanged, in the detail pane's Overview section ("Discovery
+  // decision" -- see `VacancyDetail.tsx`).
+  const badges = [
+    // Always first: a provisional row (issue #364's live view) must never read as an ordinary,
+    // fully-final result -- it has no score and no official-source cross-reference yet.
+    result.provisional ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
+    result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
+    result.employmentType ? { text: result.employmentType, tone: null } : null,
+    result.salary ? { text: result.salary, tone: null } : null,
+  ].filter((badge): badge is { text: string; tone: 'success' | 'warning' | null } => badge !== null);
 
   return (
     <button
       type="button"
       aria-current={selected}
       onClick={() => onSelect(result)}
-      className={`ovr-row w-full border-b border-base-300 px-4 text-left hover:bg-base-200 ${
+      className={`ovr-row flex w-full gap-2.5 border-b border-base-300 px-4 text-left hover:bg-base-200 ${
         selected ? 'bg-base-200' : ''
       }`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold">{result.title}</span>
-        {result.profileScore != null && (
-          <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
-            {result.profileScore}
-          </span>
-        )}
+      <div className="avatar avatar-placeholder flex-none pt-0.5" aria-hidden="true">
+        <div className="w-8 rounded-full bg-neutral text-neutral-content">
+          <span className="text-xs">{result.company.charAt(0).toUpperCase() || '?'}</span>
+        </div>
       </div>
 
-      <div className="mt-0.5 text-xs text-base-content/60">{meta}</div>
-      <div className="mt-0.5 text-xs text-base-content/70">{result.salary ?? 'Salary not published'}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-sm font-semibold">{result.title}</span>
+          {result.profileScore != null && (
+            <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
+              {result.profileScore}
+            </span>
+          )}
+        </div>
+        <div className="truncate text-xs font-medium text-base-content/70">
+          {result.company} · {orNotStated(result.location)}
+        </div>
 
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span className="badge badge-outline badge-sm gap-1.5 font-normal">
-          <VerificationDot tone={result.verification.tone} />
-          {result.verification.label}
-        </span>
-        <span className="flex-none text-xs text-base-content/50">
-          {saved ? 'Saved · ' : ''}
-          {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'} · {result.provider}
-        </span>
+        {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60">{excerpt}</p>}
+
+        {badges.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {badges.map((badge) => (
+              <span
+                key={badge.text}
+                className={`badge badge-xs font-normal ${
+                  badge.tone === 'success'
+                    ? 'badge-success badge-soft'
+                    : badge.tone === 'warning'
+                      ? 'badge-warning badge-soft'
+                      : 'badge-ghost'
+                }`}
+              >
+                {badge.text}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <span className={`flex-none text-xs ${stale ? 'text-warning' : 'text-base-content/50'}`}>
+            {saved ? 'Saved · ' : ''}
+            {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
+            {stale ? ' (over a month old)' : ''}
+          </span>
+          <span className="flex-none text-xs text-base-content/50">{discoveryProviderLabel(result.provider)}</span>
+        </div>
       </div>
     </button>
   );
-}
+});
 
 export interface SearchResultListProps {
+  /** Already sliced to the current page: `page * pageSize` .. `(page + 1) * pageSize`. */
   results: SearchResult[];
   /** How many rows the loaded report had before the client-side filters ran. */
   totalCount: number;
@@ -69,43 +112,100 @@ export interface SearchResultListProps {
   /** `vacancyKey`s already in the workspace database, so a saved row can say so. */
   savedKeys: ReadonlySet<string>;
   summary: string;
+  /** 0-indexed. */
+  page: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
+  scrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
 }
 
-export function SearchResultList({
+export const SearchResultList = memo(function SearchResultList({
   results,
   totalCount,
   selectedKey,
   onSelect,
   savedKeys,
   summary,
+  page,
+  pageCount,
+  onPageChange,
+  scrollTop = 0,
+  onScrollTopChange,
 }: SearchResultListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (scrollRef.current && scrollRef.current.scrollTop !== scrollTop) scrollRef.current.scrollTop = scrollTop;
+  }, [scrollTop]);
+  // `flex-1` below `lg`, `flex-none` from `lg` up. `SearchPage` stacks this pane above
+  // `VacancyDetail` in a column flex below `lg` -- and the app's own default window is 1000px wide,
+  // narrower than `lg`'s 1024px, so that stacked layout is what a user gets out of the box.
+  // `VacancyDetail` is `flex-1`, i.e. `flex: 1 1 0%` (a flex basis of zero), while this pane used to
+  // be `flex: 0 1 auto`, basing itself on its own page-of-25-rows-tall content. That left the column
+  // with no free space to distribute, so the detail pane stayed at its zero basis: it rendered at
+  // zero height, below the bottom of a `<main>` that does not itself scroll, which made the entire
+  // detail view -- "Save job", "Generate Letter", the verification cards -- invisible and
+  // unclickable. Matching `VacancyDetail`'s `flex-1` gives the two panes an even split of the column
+  // instead, each scrolling internally. `lg:flex-none` restores `flex: 0 0 auto` from `lg` up, so
+  // the side-by-side layout's `lg:w-2/5`/`lg:min-w-80`/`lg:max-w-md` sizing is entirely unchanged.
   return (
-    <div className="min-h-0 overflow-y-auto border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:border-r">
+    <div className="flex min-h-0 flex-1 flex-col border-base-300 lg:w-2/5 lg:min-w-80 lg:max-w-md lg:flex-none lg:border-r">
       <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 px-4 py-2 text-xs text-base-content/60">
         {summary}
       </div>
 
-      {results.length === 0 ? (
-        <EmptyState
-          illustration={noResultsIllustration}
-          title="No vacancies found"
-          description={
-            totalCount > 0
-              ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
-              : 'The latest report for this market contains no vacancies.'
-          }
-        />
-      ) : (
-        results.map((result) => (
-          <SearchResultRow
-            key={result.key}
-            result={result}
-            selected={result.key === selectedKey}
-            onSelect={onSelect}
-            saved={savedKeys.has(result.key)}
+      <div
+        ref={scrollRef}
+        aria-label="Vacancy results"
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => onScrollTopChange?.(event.currentTarget.scrollTop)}
+      >
+        {results.length === 0 ? (
+          <EmptyState
+            illustration={noResultsIllustration}
+            title="No vacancies found"
+            description={
+              totalCount > 0
+                ? 'No vacancy in the loaded report matches these filters. Widen the role, location or filter chips.'
+                : 'The latest report contains no vacancies.'
+            }
           />
-        ))
+        ) : (
+          results.map((result) => (
+            <SearchResultRow
+              key={result.key}
+              result={result}
+              selected={result.key === selectedKey}
+              onSelect={onSelect}
+              saved={savedKeys.has(result.key)}
+            />
+          ))
+        )}
+      </div>
+
+      {pageCount > 1 && (
+        <div className="flex flex-none items-center justify-between gap-2 border-t border-base-300 bg-base-100 px-4 py-2 text-xs">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => onPageChange(page - 1)}
+            disabled={page <= 0}
+          >
+            Previous
+          </button>
+          <span className="text-base-content/60">
+            Page {page + 1} of {pageCount}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => onPageChange(page + 1)}
+            disabled={page >= pageCount - 1}
+          >
+            Next
+          </button>
+        </div>
       )}
     </div>
   );
-}
+});

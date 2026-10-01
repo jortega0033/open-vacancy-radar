@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { assertNoLiveDaemon, discoveryFilePath, removeDiscoveryFile, writeDiscoveryFile } from '../src/discovery-file.js';
+import {
+  DaemonLockConflictError,
+  assertNoLiveDaemon,
+  discoveryFilePath,
+  removeDiscoveryFile,
+  writeDiscoveryFile,
+} from '../src/discovery-file.js';
 
 const discoveryDir = join(tmpdir(), 'agent-dock');
 
@@ -22,7 +28,7 @@ describe('assertNoLiveDaemon', () => {
 
   it('does not throw when the discovery file references a pid that is no longer running', () => {
     // A pid this large is extremely unlikely to be a real, currently-running process on any
-    // platform this test runs on — standing in for "the daemon that wrote this crashed".
+    // platform this test runs on: standing in for "the daemon that wrote this crashed".
     writeDiscoveryFile({ port: 9999, token: 'x', pid: 999_999_999, startedAt: new Date().toISOString() });
     expect(() => assertNoLiveDaemon()).not.toThrow();
   });
@@ -32,9 +38,28 @@ describe('assertNoLiveDaemon', () => {
     expect(() => assertNoLiveDaemon()).toThrow(/already running/);
   });
 
+  // index.ts's top-level catch tells this apart from every other startup failure by type, mapping
+  // it onto its own dedicated exit code (DAEMON_EXIT_CODE_LOCK_CONFLICT) so the parent process can
+  // attach to the daemon that won the race instead of burning its respawn budget. A plain `Error`
+  // here would silently fall back to the generic exit code and break that handoff.
+  it('throws specifically a DaemonLockConflictError, not a plain Error', () => {
+    writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
+    expect(() => assertNoLiveDaemon()).toThrow(DaemonLockConflictError);
+  });
+
+  it('names the error DaemonLockConflictError, not the inherited "Error"', () => {
+    writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
+    try {
+      assertNoLiveDaemon();
+      expect.unreachable('assertNoLiveDaemon should have thrown');
+    } catch (err) {
+      expect((err as Error).name).toBe('DaemonLockConflictError');
+    }
+  });
+
   it('does not throw when the discovery file is corrupt/partially written', () => {
-    // Created 0700 to match what writeDiscoveryFile's own ensureSecureRuntimeDir would produce —
-    // otherwise a later test in this file that calls writeDiscoveryFile() would find this
+    // Created 0700 to match what writeDiscoveryFile's own ensureSecureRuntimeDir would produce.
+    // Otherwise a later test in this file that calls writeDiscoveryFile() would find this
     // directory already existing with an insecure default mode and refuse to use it.
     mkdirSync(discoveryDir, { recursive: true, mode: 0o700 });
     writeFileSync(discoveryFilePath(), '{not valid json', { mode: 0o600 });
@@ -57,7 +82,7 @@ describe('per-app-id namespacing (AD-02)', () => {
     expect(existsSync(discoveryFilePath('other-app'))).toBe(true);
   });
 
-  it('two daemons with the SAME app id still collide — the single-instance guarantee is per app id, not removed', () => {
+  it('two daemons with the SAME app id still collide: the single-instance guarantee is per app id, not removed', () => {
     writeDiscoveryFile({ port: 1111, token: 'a', pid: process.pid, startedAt: new Date().toISOString() }, 'my-app');
     expect(() => assertNoLiveDaemon('my-app')).toThrow(/already running/);
   });
@@ -107,7 +132,7 @@ describe('per-app-id namespacing (AD-02)', () => {
 
 describe('runtime directory permissions (AD-19)', () => {
   it('creates the discovery directory with mode 0700 on POSIX', () => {
-    if (process.platform === 'win32') return; // no meaningful POSIX mode on Windows — see discovery-file.ts
+    if (process.platform === 'win32') return; // no meaningful POSIX mode on Windows: see discovery-file.ts
     rmSync(discoveryDir, { recursive: true, force: true });
     writeDiscoveryFile({ port: 1111, token: 'a', pid: process.pid, startedAt: new Date().toISOString() }, 'perm-test-app');
     const mode = statSync(discoveryDir).mode & 0o777;
@@ -118,7 +143,7 @@ describe('runtime directory permissions (AD-19)', () => {
   it('refuses to use a pre-existing discovery directory with an insecure mode on POSIX', () => {
     if (process.platform === 'win32') return;
     rmSync(discoveryDir, { recursive: true, force: true });
-    mkdirSync(discoveryDir, { recursive: true, mode: 0o777 }); // world-writable — exactly the AD-19 risk
+    mkdirSync(discoveryDir, { recursive: true, mode: 0o777 }); // world-writable: exactly the AD-19 risk
     expect(() =>
       writeDiscoveryFile({ port: 1111, token: 'a', pid: process.pid, startedAt: new Date().toISOString() }, 'perm-test-app'),
     ).toThrow(/refusing to use/);

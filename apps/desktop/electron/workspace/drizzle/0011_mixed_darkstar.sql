@@ -1,0 +1,1 @@
+ALTER TABLE `application_attempts` ADD `submission_mode` text;

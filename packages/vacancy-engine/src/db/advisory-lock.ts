@@ -47,7 +47,7 @@ function createInProcessScanLock(): ScanLock {
  * `locking_mode = exclusive`. The first writer holds an operating-system file
  * lock for the lifetime of its connection, a second process fails immediately
  * with `SQLITE_BUSY` (the lock connection uses a zero busy timeout), and the
- * operating system releases the lock even if the holder crashes — the same
+ * operating system releases the lock even if the holder crashes, the same
  * failure semantics a dropped PostgreSQL session had.
  *
  * In-memory databases are per-process by definition, so they fall back to a

@@ -2,7 +2,7 @@
 
 ## Where they live
 
-All design tokens live in **`src/styles/tokens.css`** — the app's only stylesheet entry
+All design tokens live in **`src/styles/tokens.css`**, the app's only stylesheet entry
 (imported first in `src/main.tsx`). It loads Tailwind CSS v4, registers daisyUI 5 with all
 built-in themes disabled, and defines the app's two themes: **`openvacancyradar`** (light,
 default) and **`openvacancyradar-dark`**.
@@ -13,7 +13,7 @@ default) and **`openvacancyradar-dark`**.
   small set of neutral grays for borders, hover and selected rows, and a single near-black
   (inverted to near-white in dark) "brand" color for primary actions. Emphasis comes from
   contrast steps, not from hue.
-- **`success`, `warning` and `error` carry real hue** — green, amber, red, in a light and a
+- **`success`, `warning` and `error` carry real hue**: green, amber, red, in a light and a
   dark variant. This is a deliberate change from the original all-monochrome rule. The app now
   reports employer verification outcomes, scan results and application statuses, and a
   grayscale badge cannot honestly distinguish "IND-recognised sponsor" from "not verified", or
@@ -41,7 +41,7 @@ Both are attributes on `<html>`, written **only** by `src/theme.ts`:
 
 The "system follows the OS" behavior comes from daisyUI's `prefersdark: true` option on the dark
 theme block, which emits `@media (prefers-color-scheme: dark) { :root:not([data-theme]) { … } }`.
-Density is a plain custom property rather than a theme, because it is orthogonal to color —
+Density is a plain custom property rather than a theme, because it is orthogonal to color:
 folding it into daisyUI's theme system would mean four themes instead of two.
 
 Consume density through the `ovr-row` utility, not by reading the variable directly.
@@ -64,7 +64,7 @@ Approved vocabulary:
   `textarea`, `card`, `card-border`, `alert`, `alert-error`, `alert-soft`, `badge`,
   `badge-neutral`, …
 - Semantic color utilities: `bg-base-100/200/300`, `text-base-content`, `text-base-content/60`,
-  `border-base-300`, `bg-neutral`, and — for state only — `text-success`, `bg-warning`,
+  `border-base-300`, `bg-neutral`, and (for state only) `text-success`, `bg-warning`,
   `text-error`, `bg-success`, …
 - Token-backed utilities: `font-sans`, `font-mono`, `text-sm`, `rounded-box`, spacing utilities.
 - App utilities from `tokens.css`: `ovr-row`, `ovr-sidebar`, `ovr-sidebar-collapsed`,

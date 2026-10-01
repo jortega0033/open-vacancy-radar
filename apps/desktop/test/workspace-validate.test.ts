@@ -1,25 +1,40 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { CV_PROFILE_LIMITS } from '../electron/workspace/cv-profile-schema.js';
+import { CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from '../electron/workspace/cv-source-schema.js';
+import { CV_EVIDENCE_LIMITS } from '../electron/workspace/cv-evidence-schema.js';
 import {
   LIMITS,
+  parseCvSource,
+  parseApplicationArtifactInput,
+  parseApplicationAttemptInput,
+  parseApplicationAttemptPatch,
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
+  parseCvEvidenceOverlayExportInput,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
+  parseCvExportInput,
+  parseCvIdEnvelope,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
 } from '../electron/workspace/validate.js';
 
-const VALID_SAVED_JOB = { role: 'Frontend Engineer', company: 'Redwood Software', market: 'netherlands' };
+const VALID_SAVED_JOB = { role: 'Frontend Engineer', company: 'Redwood Software' };
 
-describe('workspace input validation — allow-listing', () => {
+describe('workspace input validation: allow-listing', () => {
   it('drops properties the caller was never granted, rather than passing them through to Drizzle', () => {
     const parsed = parseSavedJobInput({
       ...VALID_SAVED_JOB,
@@ -36,7 +51,6 @@ describe('workspace input validation — allow-listing', () => {
       [
         'role',
         'company',
-        'market',
         'location',
         'vacancyKey',
         'salary',
@@ -46,11 +60,31 @@ describe('workspace input validation — allow-listing', () => {
         'sourceUrl',
         'notes',
         'status',
+        'gapAnalysis',
       ].sort(),
     );
   });
 
-  it('refuses to let a patch set isDefault on a CV — promotion must go through set-default', () => {
+  it('lets a caller keep a gap analysis, but never date one: gapAnalysisAt is the main process’s', () => {
+    // The text is the renderer's to send; the timestamp is derived in `repository.ts` from this
+    // process's clock. A renderer that could set it could claim an analysis was kept at a time it
+    // was not, which is the kind of thing the retention disclosure in docs/privacy.md relies on.
+    const parsed = parseSavedJobPatch({
+      gapAnalysis: '## Strengths\nEight years of Angular.',
+      gapAnalysisAt: '1999-01-01T00:00:00.000Z',
+    });
+    expect(parsed).toEqual({ gapAnalysis: '## Strengths\nEight years of Angular.' });
+    expect(parsed).not.toHaveProperty('gapAnalysisAt');
+
+    // An explicit null clears it; an absent key leaves the stored analysis alone.
+    expect(parseSavedJobPatch({ gapAnalysis: null })).toEqual({ gapAnalysis: null });
+    expect(parseSavedJobPatch({ notes: 'unrelated edit' })).not.toHaveProperty('gapAnalysis');
+
+    // And it is bounded, like every other free-text field on this boundary.
+    expect(() => parseSavedJobPatch({ gapAnalysis: 'x'.repeat(200_001) })).toThrow(/at most/i);
+  });
+
+  it('refuses to let a patch set isDefault on a CV: promotion must go through set-default', () => {
     // Two rows claiming `isDefault` (or none claiming it) is a corrupt library. The only writer
     // of that column is `setDefaultCvDocument`, which demotes and promotes in one transaction.
     const parsed = parseCvDocumentPatch({ name: 'Renamed', isDefault: true });
@@ -68,22 +102,15 @@ describe('workspace input validation — allow-listing', () => {
   });
 });
 
-describe('workspace input validation — required fields and enums', () => {
+describe('workspace input validation: required fields and enums', () => {
   it('rejects a missing or blank required field', () => {
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '' })).toThrow(/"role" is required/);
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: '   ' })).toThrow(/"role" is required/);
-    expect(() => parseSavedJobInput({ company: 'X', market: 'worldwide' })).toThrow(/"role" must be a string/);
+    expect(() => parseSavedJobInput({ company: 'X' })).toThrow(/"role" must be a string/);
   });
 
   it('trims required text so a whitespace-padded value cannot masquerade as content', () => {
     expect(parseSavedJobInput({ ...VALID_SAVED_JOB, role: '  Frontend Engineer  ' }).role).toBe('Frontend Engineer');
-  });
-
-  it('accepts only the two markets the app can actually search', () => {
-    expect(parseSavedJobInput({ ...VALID_SAVED_JOB, market: 'worldwide' }).market).toBe('worldwide');
-    for (const invented of ['germany', 'uk', 'us', 'belgium', 'other', 'Netherlands']) {
-      expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, market: invented })).toThrow(/"market" must be one of/);
-    }
   });
 
   it('rejects an unknown status instead of writing it to a CHECK-constrained column', () => {
@@ -98,7 +125,7 @@ describe('workspace input validation — required fields and enums', () => {
   });
 });
 
-describe('workspace input validation — bounds', () => {
+describe('workspace input validation: bounds', () => {
   it('bounds every free-text field, so one create call cannot write the disk full', () => {
     expect(() => parseSavedJobInput({ ...VALID_SAVED_JOB, role: 'a'.repeat(LIMITS.short + 1) })).toThrow(
       /at most 512 characters/,
@@ -116,8 +143,12 @@ describe('workspace input validation — bounds', () => {
 
   it('bounds the skills array both in length and per entry', () => {
     expect(() =>
-      parseCvDocumentInput({ name: 'CV', kind: 'manual', profile: { skills: new Array(LIMITS.skills + 1).fill('x') } }),
-    ).toThrow(/at most 200 entries/);
+      parseCvDocumentInput({
+        name: 'CV',
+        kind: 'manual',
+        profile: { skills: new Array(CV_PROFILE_LIMITS.skills + 1).fill('x') },
+      }),
+    ).toThrow(new RegExp(`at most ${CV_PROFILE_LIMITS.skills} entries`));
     expect(() => parseCvDocumentInput({ name: 'CV', kind: 'manual', profile: { skills: [{ not: 'a string' }] } })).toThrow(
       /profile\.skills\[0\]" must be a string/,
     );
@@ -143,7 +174,7 @@ describe('workspace input validation — bounds', () => {
   });
 });
 
-describe('workspace input validation — dates and envelopes', () => {
+describe('workspace input validation: dates and envelopes', () => {
   it('normalizes appliedAt to an ISO instant and rejects an unparseable one', () => {
     expect(parseApplicationInput({ ...VALID_SAVED_JOB, appliedAt: '2026-08-29' }).appliedAt).toBe(
       new Date('2026-08-29').toISOString(),
@@ -190,7 +221,7 @@ describe('workspace settings patch', () => {
 
   it('accepts only real nav pages for lastOpenedPage', () => {
     expect(parseSettingsPatch({ lastOpenedPage: 'letters' })).toEqual({ lastOpenedPage: 'letters' });
-    // 'last_opened' is a startPage instruction, not a destination — storing it here would make
+    // 'last_opened' is a startPage instruction, not a destination: storing it here would make
     // "restore the last page" resolve to itself.
     expect(() => parseSettingsPatch({ lastOpenedPage: 'last_opened' })).toThrow(/must be one of/);
     expect(() => parseSettingsPatch({ lastOpenedPage: 'admin' })).toThrow(/must be one of/);
@@ -203,6 +234,58 @@ describe('workspace settings patch', () => {
 
   it('ignores keys that are not settings at all', () => {
     expect(parseSettingsPatch({ id: 2, theme: 'light', databasePath: '/etc/passwd' })).toEqual({ theme: 'light' });
+  });
+
+  it('accepts mcpEndpointEnabled -- the candidate\'s own on/off switch, unlike autoApplyEnabled (#421)', () => {
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+    expect(() => parseSettingsPatch({ mcpEndpointEnabled: 'yes' })).toThrow(/"mcpEndpointEnabled" must be a boolean/);
+    // Still refuses the kill switch even sent alongside a legitimate field.
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true, autoApplyEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+  });
+});
+
+describe('workspace mcp client grant input (#421)', () => {
+  const FUTURE = '2099-01-01T00:00:00.000Z';
+
+  it('parses a source_cv grant, defaulting canReadFinalSnapshot to false', () => {
+    expect(parseMcpClientGrantInput({ name: 'Claude Desktop', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toEqual({
+      name: 'Claude Desktop',
+      scopeType: 'source_cv',
+      sourceCvId: 'cv-1',
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('parses a case_ids grant with its caseIds list', () => {
+    expect(parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a', 'b'], expiresAt: FUTURE })).toEqual({
+      name: 'x',
+      scopeType: 'case_ids',
+      caseIds: ['a', 'b'],
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('rejects mixing the two scopes\' fields', () => {
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', caseIds: ['a'], expiresAt: FUTURE }),
+    ).toThrow(/"caseIds" must not be set for a "source_cv" grant/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a'], sourceCvId: 'cv-1', expiresAt: FUTURE }),
+    ).toThrow(/"sourceCvId" must not be set for a "case_ids" grant/);
+  });
+
+  it('requires a name and a well-formed expiresAt', () => {
+    expect(() => parseMcpClientGrantInput({ scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" must be a string/);
+    expect(() => parseMcpClientGrantInput({ name: '   ', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" is required/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: 'not-a-date' }),
+    ).toThrow(/"expiresAt" must be an ISO-8601 date-time/);
+  });
+
+  it('rejects an unknown scopeType', () => {
+    expect(() => parseMcpClientGrantInput({ name: 'x', scopeType: 'everything', expiresAt: FUTURE })).toThrow(/"scopeType" must be one of/);
   });
 });
 
@@ -220,8 +303,514 @@ describe('workspace letter/CV patches', () => {
     });
   });
 
-  it('requires an explicit CV kind — there is no sensible default between uploaded and manual', () => {
+  it('requires an explicit CV kind: there is no sensible default between uploaded and manual', () => {
     expect(() => parseCvDocumentInput({ name: 'CV' })).toThrow(/"kind" must be one of/);
     expect(parseCvDocumentInput({ name: 'CV', kind: 'uploaded' }).kind).toBe('uploaded');
+  });
+});
+
+describe('workspace CV export request (#156)', () => {
+  it('accepts a valid { id, format } export request for each supported format', () => {
+    expect(parseCvExportInput({ id: 'cv-1', format: 'pdf' })).toEqual({ id: 'cv-1', format: 'pdf' });
+    expect(parseCvExportInput({ id: 'cv-1', format: 'docx' })).toEqual({ id: 'cv-1', format: 'docx' });
+  });
+
+  it('rejects a format outside the supported set, dropping neither markdown nor a bogus value silently', () => {
+    expect(() => parseCvExportInput({ id: 'cv-1', format: 'md' })).toThrow(/"format" must be one of/);
+    expect(() => parseCvExportInput({ id: 'cv-1', format: 'exe' })).toThrow(/"format" must be one of/);
+  });
+
+  it('requires a non-empty id, the same as every other id-taking verb', () => {
+    expect(() => parseCvExportInput({ format: 'pdf' })).toThrow(/"id" must be a string/);
+    expect(() => parseCvExportInput({ id: '', format: 'pdf' })).toThrow(/"id" is required/);
+  });
+});
+
+const HASH = 'a'.repeat(64);
+
+describe('workspace application attempts (#198)', () => {
+  it('accepts a minimal valid attempt with sensible defaults', () => {
+    const parsed = parseApplicationAttemptInput({
+      company: 'Acme',
+      role: 'Engineer',
+      sourceCvContentHash: HASH,
+      jdSnapshotHash: HASH,
+    });
+    expect(parsed).toMatchObject({
+      company: 'Acme',
+      role: 'Engineer',
+      canonicalUrl: '',
+      jdSnapshot: '',
+      jdComplete: true,
+      workflowVersion: '',
+      checkpoint: 'queued',
+      checkpointDetail: '',
+      force: false,
+    });
+  });
+
+  it('rejects a hash that is not a 64-char lowercase hex digest', () => {
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: 'not-a-hash',
+        jdSnapshotHash: HASH,
+      }),
+    ).toThrow(/"sourceCvContentHash" must be a lowercase SHA-256 hex digest/);
+    // Uppercase hex is rejected too -- the stored form is always lowercase.
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH.toUpperCase(),
+        jdSnapshotHash: HASH,
+      }),
+    ).toThrow(/must be a lowercase SHA-256 hex digest/);
+  });
+
+  it('rejects an unrecognized checkpoint', () => {
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH,
+        jdSnapshotHash: HASH,
+        checkpoint: 'sent_carrier_pigeon',
+      }),
+    ).toThrow(/"checkpoint" must be one of/);
+  });
+
+  it('drops fields the patch verb does not own -- provenance is not patchable', () => {
+    expect(
+      parseApplicationAttemptPatch({
+        checkpoint: 'ready',
+        company: 'Attacker Corp',
+        sourceCvContentHash: 'x'.repeat(64),
+        jdSnapshotHash: 'y'.repeat(64),
+      }),
+    ).toEqual({ checkpoint: 'ready' });
+  });
+
+  it('accepts an explicit null to clear submittedAt', () => {
+    expect(parseApplicationAttemptPatch({ submittedAt: null })).toEqual({ submittedAt: null });
+  });
+
+  it('#275: a renderer-reported completion is user_reported, and cannot claim a receipt', () => {
+    // The renderer is the user. Moving an attempt to `submitted` from this side is a person saying
+    // the application is done, which is exactly `user_reported` and nothing stronger.
+    expect(parseApplicationAttemptPatch({ checkpoint: 'submitted' })).toEqual({
+      checkpoint: 'submitted',
+      completionEvidence: 'user_reported',
+    });
+    expect(parseApplicationAttemptPatch({ checkpoint: 'submitted', completionEvidence: 'user_reported' })).toEqual({
+      checkpoint: 'submitted',
+      completionEvidence: 'user_reported',
+    });
+    expect(() =>
+      parseApplicationAttemptPatch({ checkpoint: 'submitted', completionEvidence: 'receipt_confirmed' }),
+    ).toThrow(/"completionEvidence" must be one of/);
+  });
+
+  it('#271 + #275: the user_reported checkpoint carries the same evidence default, and still cannot claim a receipt', () => {
+    // #271 gave a person's own "I applied to this myself" its own checkpoint, so this -- not
+    // `submitted` -- is where a renderer-side completion now lands. It has to default its evidence
+    // the same way: #275's lookup suppresses a duplicate for it, and an attempt that suppressed a
+    // duplicate with no recorded evidence type is indistinguishable from a pre-migration row.
+    expect(parseApplicationAttemptPatch({ checkpoint: 'user_reported' })).toEqual({
+      checkpoint: 'user_reported',
+      completionEvidence: 'user_reported',
+    });
+    // The boundary restriction is unchanged: the renderer cannot observe a receipt, on any checkpoint.
+    expect(() =>
+      parseApplicationAttemptPatch({ checkpoint: 'user_reported', completionEvidence: 'receipt_confirmed' }),
+    ).toThrow(/"completionEvidence" must be one of/);
+  });
+
+  it('#275: does not invent completion evidence for a patch that is not a completion', () => {
+    expect(parseApplicationAttemptPatch({ checkpoint: 'skipped' })).toEqual({ checkpoint: 'skipped' });
+    expect(parseApplicationAttemptPatch({ completionEvidence: null })).toEqual({ completionEvidence: null });
+  });
+
+  it('#275: a reapply must name a predecessor and a non-empty reason', () => {
+    const parsed = parseApplicationAttemptInput({
+      company: 'Acme',
+      role: 'Engineer',
+      sourceCvContentHash: HASH,
+      jdSnapshotHash: HASH,
+      reapply: { supersedesAttemptId: 'attempt-1', reason: 'Corrected CV' },
+    });
+    expect(parsed.reapply).toEqual({ supersedesAttemptId: 'attempt-1', reason: 'Corrected CV' });
+
+    expect(() =>
+      parseApplicationAttemptInput({
+        company: 'Acme',
+        role: 'Engineer',
+        sourceCvContentHash: HASH,
+        jdSnapshotHash: HASH,
+        reapply: { supersedesAttemptId: 'attempt-1', reason: '' },
+      }),
+    ).toThrow(/"reason"/);
+  });
+});
+
+describe('workspace application artifacts (#198)', () => {
+  const VALID_ARTIFACT = {
+    attemptId: 'attempt-1',
+    kind: 'cv_pdf',
+    mimeType: 'application/pdf',
+    byteSize: 1024,
+    contentHash: HASH,
+  };
+
+  it('accepts a minimal valid artifact', () => {
+    expect(parseApplicationArtifactInput(VALID_ARTIFACT)).toEqual({
+      attemptId: 'attempt-1',
+      kind: 'cv_pdf',
+      fileName: '',
+      mimeType: 'application/pdf',
+      byteSize: 1024,
+      contentHash: HASH,
+      storagePath: '',
+    });
+  });
+
+  it('rejects a negative or non-integer byteSize', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: -1 })).toThrow(
+      /"byteSize" must be a non-negative integer/,
+    );
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: 1.5 })).toThrow(
+      /"byteSize" must be a non-negative integer/,
+    );
+  });
+
+  it('rejects a byteSize past the hard cap', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, byteSize: 50_000_001 })).toThrow(
+      /"byteSize" must be at most 50000000 bytes/,
+    );
+  });
+
+  it('rejects an unrecognized artifact kind', () => {
+    expect(() => parseApplicationArtifactInput({ ...VALID_ARTIFACT, kind: 'video' })).toThrow(
+      /"kind" must be one of/,
+    );
+  });
+});
+
+
+describe('workspace structured source CV (#274)', () => {
+  it('returns null for an absent source rather than an empty-but-present record', () => {
+    expect(parseCvSource(null)).toBeNull();
+    expect(parseCvSource(undefined)).toBeNull();
+  });
+
+  it('drops properties the caller was never granted', () => {
+    const parsed = parseCvSource({
+      contact: { name: 'Jamie Rivera', nickname: 'JR' },
+      summary: 'Eight years of frontend work.',
+      id: 'cv-9',
+      isDefault: true,
+    });
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed?.contact ?? {})).toEqual([
+      'name',
+      'title',
+      'location',
+      'email',
+      'phone',
+      'links',
+    ]);
+    expect('id' in (parsed ?? {})).toBe(false);
+    expect('isDefault' in (parsed ?? {})).toBe(false);
+  });
+
+  it('never takes a review timestamp from the caller: the main process stamps that itself', () => {
+    expect(parseCvSource({ reviewedAt: '2020-01-01T00:00:00.000Z' })?.reviewedAt).toBe('');
+  });
+
+  it('blanks the end client on a direct-employment record', () => {
+    const parsed = parseCvSource({
+      experience: [{ company: 'Redwood Software', title: 'Engineer', engagement: 'employment', client: 'Northwind Retail' }],
+    });
+    expect(parsed?.experience[0]?.client).toBe('');
+  });
+
+  it('keeps the end client on a client engagement', () => {
+    const parsed = parseCvSource({
+      experience: [
+        { company: 'Beacon Consultancy', title: 'Consultant', engagement: 'client_engagement', client: 'Northwind Retail' },
+      ],
+    });
+    expect(parsed?.experience[0]?.engagement).toBe('client_engagement');
+    expect(parsed?.experience[0]?.client).toBe('Northwind Retail');
+  });
+
+  it('rejects an engagement value that is neither', () => {
+    expect(() => parseCvSource({ experience: [{ company: 'X', title: 'Y', engagement: 'freelance' }] })).toThrow(
+      /"source.experience\[0\].engagement" must be one of/,
+    );
+  });
+
+  it('drops a stale incompleteness reason once the record says it is complete', () => {
+    const parsed = parseCvSource({ complete: true, incompleteReason: 'only the first 200,000 characters were read' });
+    expect(parsed?.incompleteReason).toBe('');
+  });
+
+  it('keeps the reason while the record is incomplete', () => {
+    const parsed = parseCvSource({ complete: false, incompleteReason: 'the CV was cut short' });
+    expect(parsed?.complete).toBe(false);
+    expect(parsed?.incompleteReason).toBe('the CV was cut short');
+  });
+
+  it('bounds every array', () => {
+    expect(() =>
+      parseCvSource({ projects: Array.from({ length: CV_SOURCE_LIMITS.projectEntries + 1 }, () => ({ name: 'p' })) }),
+    ).toThrow(/"source.projects" must have at most/);
+    expect(() =>
+      parseCvSource({ experience: Array.from({ length: CV_SOURCE_LIMITS.experienceEntries + 1 }, () => ({ company: 'c' })) }),
+    ).toThrow(/"source.experience" must have at most/);
+    expect(() =>
+      parseCvSource({ contact: { links: Array.from({ length: CV_SOURCE_LIMITS.links + 1 }, () => 'l') } }),
+    ).toThrow(/"source.contact.links" must have at most/);
+  });
+
+  it('bounds every string', () => {
+    expect(() => parseCvSource({ summary: 'x'.repeat(CV_SOURCE_LIMITS.summary + 1) })).toThrow(
+      /"source.summary" must be at most/,
+    );
+    expect(() => parseCvSource({ projects: [{ name: 'x'.repeat(CV_SOURCE_LIMITS.shortField + 1) }] })).toThrow(
+      /"source.projects\[0\].name" must be at most/,
+    );
+  });
+
+  it('defaults the project count to no cap at all', () => {
+    expect(parseCvSource({})?.maxProjects).toBe(PROJECTS_UNLIMITED);
+  });
+
+  it('rejects a project count that is not a sane non-negative integer', () => {
+    expect(() => parseCvSource({ maxProjects: -1 })).toThrow(/"source.maxProjects" must be a non-negative integer/);
+    expect(() => parseCvSource({ maxProjects: 1.5 })).toThrow(/"source.maxProjects" must be a non-negative integer/);
+    expect(() => parseCvSource({ maxProjects: CV_SOURCE_LIMITS.maxProjectsSetting + 1 })).toThrow(
+      /"source.maxProjects" must be at most/,
+    );
+  });
+
+  it('assigns a project id when the caller supplies none, so a pin has something stable to hang on', () => {
+    expect(parseCvSource({ projects: [{ name: 'Aurora Design System' }] })?.projects[0]?.id).toBe('project-1');
+  });
+
+  it('assigns an experience id when the caller supplies none (#419), keyed by position', () => {
+    const parsed = parseCvSource({
+      experience: [{ company: 'Redwood Software' }, { company: 'Harbour Analytics' }],
+    });
+    expect(parsed?.experience[0]?.id).toBe('experience-1');
+    expect(parsed?.experience[1]?.id).toBe('experience-2');
+  });
+
+  it('keeps an explicit experience id rather than overwriting it', () => {
+    expect(parseCvSource({ experience: [{ id: 'stable-id', company: 'Redwood Software' }] })?.experience[0]?.id).toBe(
+      'stable-id',
+    );
+  });
+
+  it('reaches the CV document parsers, in both create and patch form', () => {
+    const created = parseCvDocumentInput({
+      name: 'Frontend CV',
+      kind: 'uploaded',
+      source: { contact: { name: 'Jamie Rivera' } },
+    });
+    expect(created.source?.contact.name).toBe('Jamie Rivera');
+    expect(parseCvDocumentPatch({ source: null }).source).toBeNull();
+    expect('source' in parseCvDocumentPatch({ name: 'Frontend CV' })).toBe(false);
+  });
+});
+
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+
+describe('workspace cv evidence overlays (#419)', () => {
+  it('requires a well-formed sha256 hex digest for both hashes', () => {
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: 'not-a-hash', jdSnapshotHash: HASH_B }),
+    ).toThrow(/"sourceCvContentHash" must be a lowercase SHA-256 hex digest/);
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: 'UPPERCASE' + 'a'.repeat(54) }),
+    ).toThrow(/"jdSnapshotHash" must be a lowercase SHA-256 hex digest/);
+  });
+
+  it('defaults jdComplete, listingStatus and the JSON arrays', () => {
+    const parsed = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'v-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+    });
+    expect(parsed).toMatchObject({ jdSnapshot: '', jdComplete: true, listingStatus: 'unknown' });
+  });
+
+  it('drops properties the caller was never granted, on both input and patch', () => {
+    const parsed = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'v-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      id: 'overlay-9',
+      state: 'artifact_approved',
+    });
+    expect('id' in parsed).toBe(false);
+    expect('state' in parsed).toBe(false);
+  });
+
+  it('parses a fact, defaulting ownership/sourceKind/verification and rejecting a metric with no stated basis', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        facts: [
+          {
+            factId: 'fact-1',
+            parentId: 'experience-1',
+            parentType: 'experience',
+            activity: 'Rebuilt the checkout flow',
+            metricValue: '30%',
+          },
+        ],
+      }),
+    ).toThrow(/"facts\[0\].metricBasis" is required when metricValue is set/);
+
+    const patch = parseCvEvidenceOverlayPatch({
+      facts: [
+        {
+          factId: 'fact-1',
+          parentId: 'experience-1',
+          parentType: 'experience',
+          activity: 'Rebuilt the checkout flow',
+          metricValue: '30%',
+          metricBasis: 'candidate-confirmed figure',
+        },
+      ],
+    });
+    expect(patch.facts?.[0]).toMatchObject({
+      ownership: 'unknown',
+      sourceKind: 'candidate_testimony',
+      verification: 'self_reported',
+      metricValue: '30%',
+      metricUnit: '',
+      metricBasis: 'candidate-confirmed figure',
+    });
+  });
+
+  it('preserves a fact createdAt / a wording approvedAt the caller sends, and defaults both to empty', () => {
+    const withTimestamps = parseCvEvidenceOverlayPatch({
+      facts: [
+        {
+          factId: 'fact-1',
+          parentId: 'experience-1',
+          parentType: 'experience',
+          createdAt: '2026-09-30T00:00:00.000Z',
+        },
+      ],
+      wordingVariants: [
+        {
+          variantId: 'variant-1',
+          targetField: 'summary',
+          text: 'Approved wording.',
+          approvedAt: '2026-09-30T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(withTimestamps.facts?.[0]?.createdAt).toBe('2026-09-30T00:00:00.000Z');
+    expect(withTimestamps.wordingVariants?.[0]?.approvedAt).toBe('2026-09-30T00:00:00.000Z');
+
+    const withoutTimestamps = parseCvEvidenceOverlayPatch({
+      facts: [{ factId: 'fact-1', parentId: 'experience-1', parentType: 'experience' }],
+      wordingVariants: [{ variantId: 'variant-1', targetField: 'summary', text: 'x' }],
+    });
+    expect(withoutTimestamps.facts?.[0]?.createdAt).toBe('');
+    expect(withoutTimestamps.wordingVariants?.[0]?.approvedAt).toBe('');
+  });
+
+  it('allows a fact with no parentId (#419: a "not my work" answer with no anchor to name)', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      facts: [{ factId: 'fact-1', parentType: 'experience' }],
+    });
+    expect(patch.facts?.[0]?.parentId).toBe('');
+  });
+
+  it('rejects a targetField or classification/evidenceClass outside the known set', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({ wordingVariants: [{ variantId: 'v-1', targetField: 'headline', text: 'x' }] }),
+    ).toThrow(/"wordingVariants\[0\].targetField" must be one of/);
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        requirements: [{ requirementId: 'r-1', text: 'React', classification: 'optional', evidenceClass: 'direct' }],
+      }),
+    ).toThrow(/"requirements\[0\].classification" must be one of/);
+  });
+
+  it('bounds the facts/requirements/wordingVariants arrays', () => {
+    expect(() =>
+      parseCvEvidenceOverlayPatch({
+        facts: Array.from({ length: CV_EVIDENCE_LIMITS.facts + 1 }, (_, i) => ({
+          factId: `fact-${i}`,
+          parentId: 'experience-1',
+          parentType: 'experience',
+        })),
+      }),
+    ).toThrow(/"facts" must have at most/);
+  });
+
+  it('parses the (cvId, vacancyKey) lookup and cvId list envelopes', () => {
+    expect(parseCvEvidenceOverlayLookup({ cvId: 'cv-1', vacancyKey: 'v-1' })).toEqual({ cvId: 'cv-1', vacancyKey: 'v-1' });
+    expect(parseCvIdEnvelope({ cvId: 'cv-1' })).toBe('cv-1');
+  });
+
+  it('defaults origin to "vacancy" and accepts an explicit "manual" (#421)', () => {
+    const vacancyOrigin = parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    expect(vacancyOrigin.origin).toBe('vacancy');
+    const manualOrigin = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'manual:case-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      origin: 'manual',
+    });
+    expect(manualOrigin.origin).toBe('manual');
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B, origin: 'ai' }),
+    ).toThrow(/"origin" must be one of/);
+  });
+
+  it('never accepts "candidate_approved" through the generic patch (#421: only approveCvEvidenceOverlay may set it)', () => {
+    expect(() => parseCvEvidenceOverlayPatch({ state: 'candidate_approved' })).toThrow(/"state" must be one of/);
+    // Every other state is still a plain patch value.
+    expect(parseCvEvidenceOverlayPatch({ state: 'artifact_approved' }).state).toBe('artifact_approved');
+  });
+
+  it('never accepts caseRevision, jdRevisions or approvedResumeSnapshot through the generic patch (#421)', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      caseRevision: '999',
+      jdRevisions: [{ revisionId: 'r-1', text: 'x', textHash: HASH_A, complete: true, capturedAt: '2026-10-01T00:00:00.000Z' }],
+      approvedResumeSnapshot: { resume: {}, digest: HASH_A, approvedAt: '2026-10-01T00:00:00.000Z', caseRevision: '999' },
+    });
+    expect('caseRevision' in patch).toBe(false);
+    expect('jdRevisions' in patch).toBe(false);
+    expect('approvedResumeSnapshot' in patch).toBe(false);
+  });
+
+  it('parses the { id, expectedCaseRevision } approve envelope (#421)', () => {
+    expect(parseCvEvidenceOverlayApproveInput({ id: 'overlay-1', expectedCaseRevision: '3' })).toEqual({
+      id: 'overlay-1',
+      expectedCaseRevision: '3',
+    });
+    expect(() => parseCvEvidenceOverlayApproveInput({ id: 'overlay-1' })).toThrow();
+  });
+
+  it('parses the export request (#419 slice 4) and rejects an unknown format', () => {
+    expect(parseCvEvidenceOverlayExportInput({ overlayId: 'overlay-1', format: 'pdf' })).toEqual({
+      overlayId: 'overlay-1',
+      format: 'pdf',
+    });
+    expect(() => parseCvEvidenceOverlayExportInput({ overlayId: 'overlay-1', format: 'markdown' })).toThrow(
+      /"format" must be one of/,
+    );
   });
 });

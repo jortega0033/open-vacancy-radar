@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -221,6 +221,169 @@ describe('POST /sessions', () => {
     expect(res.statusCode).toBe(201);
     expect(provider.startedOptions.at(-1)?.resumeProviderSessionId).toBe('prior-thread');
   });
+
+  it('passes a model field in the request body through to the provider, over the real HTTP route', async () => {
+    const { app, registry } = setup('success');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/sessions',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { provider: 'claude', cwd, prompt: 'hi', model: 'claude-opus-5' },
+    });
+    expect(res.statusCode).toBe(201);
+    const provider = registry.get('claude') as FakeProvider;
+    expect(provider.startedOptions.at(-1)?.model).toBe('claude-opus-5');
+  });
+
+  describe('attachments (port of agentdock#152/#153)', () => {
+    function attachmentFixture(mimeType = 'application/pdf'): { path: string; mimeType: string } {
+      const path = join(cwd, 'attachment.bin');
+      writeFileSync(path, 'fake attachment bytes');
+      return { path, mimeType };
+    }
+
+    it('rejects attachments for a provider whose capabilities.attachments is falsy', async () => {
+      // The default setup() FakeProvider uses FAKE_PROVIDER_CAPABILITIES, which has no
+      // `attachments` key at all -- absent must be treated the same as false.
+      const { app } = setup();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { provider: 'claude', cwd, prompt: 'hi', attachments: [attachmentFixture()] },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/does not support attachments/);
+    });
+
+    it('rejects an attachment MIME type the provider does not accept', async () => {
+      const registry = new ProviderRegistry();
+      const provider = new FakeProvider('claude', {
+        id: 'claude',
+        name: 'Claude Code',
+        installed: true,
+        authenticated: 'authenticated',
+        capabilities: { ...FAKE_PROVIDER_CAPABILITIES, attachments: true },
+      });
+      registry.register(provider);
+      const sessionManager = new SessionManager(registry, noopLogger);
+      const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          provider: 'claude',
+          cwd,
+          prompt: 'hi',
+          attachments: [attachmentFixture('application/x-msdownload')],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/does not accept attachment MIME type/);
+      expect(provider.startedOptions).toHaveLength(0);
+    });
+
+    it('rejects an attachment whose file does not exist on disk', async () => {
+      const registry = new ProviderRegistry();
+      const provider = new FakeProvider('claude', {
+        id: 'claude',
+        name: 'Claude Code',
+        installed: true,
+        authenticated: 'authenticated',
+        capabilities: { ...FAKE_PROVIDER_CAPABILITIES, attachments: true },
+      });
+      registry.register(provider);
+      const sessionManager = new SessionManager(registry, noopLogger);
+      const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          provider: 'claude',
+          cwd,
+          prompt: 'hi',
+          attachments: [{ path: join(cwd, 'does-not-exist.pdf'), mimeType: 'application/pdf' }],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/attachment file does not exist/);
+    });
+
+    it("rejects an attachment whose path resolves outside the session's cwd", async () => {
+      const registry = new ProviderRegistry();
+      const provider = new FakeProvider('claude', {
+        id: 'claude',
+        name: 'Claude Code',
+        installed: true,
+        authenticated: 'authenticated',
+        capabilities: { ...FAKE_PROVIDER_CAPABILITIES, attachments: true },
+      });
+      registry.register(provider);
+      const sessionManager = new SessionManager(registry, noopLogger);
+      const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
+
+      const outsideDir = mkdtempSync(join(tmpdir(), 'agent-dock-outside-cwd-'));
+      const outsidePath = join(outsideDir, 'secret.pdf');
+      writeFileSync(outsidePath, 'contents that must never leave the machine via this route');
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/sessions',
+          headers: { authorization: `Bearer ${TOKEN}` },
+          payload: {
+            provider: 'claude',
+            cwd,
+            prompt: 'hi',
+            attachments: [{ path: outsidePath, mimeType: 'application/pdf' }],
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error).toMatch(/must be inside the session's working directory/);
+        expect(provider.startedOptions).toHaveLength(0);
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it('accepts a supported attachment and threads it through to the provider', async () => {
+      const registry = new ProviderRegistry();
+      const provider = new FakeProvider('claude', {
+        id: 'claude',
+        name: 'Claude Code',
+        installed: true,
+        authenticated: 'authenticated',
+        capabilities: { ...FAKE_PROVIDER_CAPABILITIES, attachments: true },
+      });
+      registry.register(provider);
+      const sessionManager = new SessionManager(registry, noopLogger);
+      const app = buildServer({ registry, sessionManager, token: TOKEN, logger: noopLogger });
+      const attachment = attachmentFixture();
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { provider: 'claude', cwd, prompt: 'hi', attachments: [attachment] },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(provider.startedOptions.at(-1)?.attachments).toEqual([attachment]);
+    });
+
+    it('does not reject or require attachments for a request that omits the field entirely', async () => {
+      const { app } = setup();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/sessions',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { provider: 'claude', cwd, prompt: 'hi' },
+      });
+      expect(res.statusCode).toBe(201);
+    });
+  });
 });
 
 describe('SSE events + cancellation', () => {
@@ -299,7 +462,7 @@ describe('SSE events + cancellation', () => {
         });
     }
 
-    // A full, fresh subscription — this is what "the client saw sequence N" is based on.
+    // A full, fresh subscription: this is what "the client saw sequence N" is based on.
     const fullRes = await app.inject({
       method: 'GET',
       url: `/sessions/${sessionId}/events`,
@@ -310,7 +473,7 @@ describe('SSE events + cancellation', () => {
 
     const n = fullFrames[0]!.sequence; // pretend the client got disconnected right after the first event
 
-    // Reconnect with Last-Event-ID: n — must receive n+1 onward, not the full replay again.
+    // Reconnect with Last-Event-ID: n. Must receive n+1 onward, not the full replay again.
     const resumedRes = await app.inject({
       method: 'GET',
       url: `/sessions/${sessionId}/events`,
@@ -321,6 +484,43 @@ describe('SSE events + cancellation', () => {
     expect(resumedFrames.map((f) => f.sequence)).toEqual(fullFrames.slice(1).map((f) => f.sequence));
     expect(resumedFrames.every((f) => f.sequence > n)).toBe(true);
     expect(resumedFrames.map((f) => f.event.type)).toEqual(fullFrames.slice(1).map((f) => f.event.type));
+  });
+
+  it('ends the SSE response instead of hanging forever when reconnecting with Last-Event-ID past the terminal event (ADI-17)', async () => {
+    const { app } = setup('success');
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/sessions',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { provider: 'claude', cwd, prompt: 'hello' },
+    });
+    const sessionId = createRes.json().id;
+    await new Promise((resolve) => setTimeout(resolve, 30)); // let the fake session actually complete
+
+    const fullRes = await app.inject({
+      method: 'GET',
+      url: `/sessions/${sessionId}/events`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const lastId = fullRes.payload
+      .trim()
+      .split('\n\n')
+      .filter((frame) => frame.startsWith('id: '))
+      .map((frame) => Number(frame.split('\n')[0]?.slice('id: '.length)))
+      .at(-1)!;
+
+    // Reconnects claiming it already has the terminal event -- nothing left to replay. Before
+    // ADI-17 this left the response hijacked and open forever, since the writer never saw a
+    // terminal frame to close on. The key assertion is that inject() resolves at all.
+    const res = await app.inject({
+      method: 'GET',
+      url: `/sessions/${sessionId}/events`,
+      headers: { authorization: `Bearer ${TOKEN}`, 'last-event-id': String(lastId) },
+    });
+    expect(res.statusCode).toBe(200);
+    // Only the opening ":ok" comment line every stream starts with -- no replayed frame, since
+    // there was nothing left to replay. The response still ends on its own rather than hanging.
+    expect(res.payload.trim()).toBe(':ok');
   });
 
   it('ends the SSE response cleanly instead of hanging forever if the session is removed between the existence check and subscribe() (AD-11 race)', async () => {
@@ -344,7 +544,7 @@ describe('SSE events + cancellation', () => {
     });
 
     // The key assertion is that inject() resolved at all (didn't time out) with a real ended
-    // response — before the fix, this exact scenario left an already-200'd stream open forever.
+    // response. Before the fix, this exact scenario left an already-200'd stream open forever.
     expect(res.statusCode).toBe(200);
     subscribeSpy.mockRestore();
   });
@@ -484,7 +684,7 @@ describe('adversarial input handling', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('rejects a chrome-extension:// Origin even with a valid token — the exact gap the old http(s)-only check missed (AD-04)', async () => {
+  it('rejects a chrome-extension:// Origin even with a valid token: the exact gap the old http(s)-only check missed (AD-04)', async () => {
     const { app } = setup();
     const res = await app.inject({
       method: 'GET',
@@ -504,7 +704,7 @@ describe('adversarial input handling', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('rejects a missing token independently of Origin — omitting Origin does not bypass auth', async () => {
+  it('rejects a missing token independently of Origin: omitting Origin does not bypass auth', async () => {
     const { app } = setup();
     const res = await app.inject({ method: 'GET', url: '/providers' });
     expect(res.statusCode).toBe(401);
@@ -518,7 +718,7 @@ describe('adversarial input handling', () => {
       headers: { origin: 'http://evil.example', 'content-type': 'text/plain' },
       payload: JSON.stringify({ provider: 'claude', cwd, prompt: 'pwned' }),
     });
-    // Must fail closed regardless of *why* — Origin check and/or auth check, either is correct —
+    // Must fail closed regardless of *why* (Origin check and/or auth check, either is correct),
     // but it must never reach session creation.
     expect(res.statusCode).not.toBe(201);
     expect([401, 403]).toContain(res.statusCode);

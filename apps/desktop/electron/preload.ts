@@ -1,28 +1,88 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentEvent, AgentSession, ProviderId, ProviderStatus } from '@agent-dock/shared';
-import type { GlobalRemoteReport, JobRadarReport } from '@open-vacancy-radar/vacancy-engine';
+import {
+  mcpConnectionStatusSchema,
+  mcpVacancyResultSchema,
+  type AgentEvent,
+  type AgentSession,
+  type McpConnectionStatus,
+  type McpCredentialInput,
+  type McpProviderId,
+  type McpSearchRequest,
+  type McpVacancyResult,
+  type ProviderId,
+  type ProviderStatus,
+} from '@agent-dock/shared';
+import type {
+  AtsRosterImportResult,
+  AtsRosterStatus,
+  CandidateProfile,
+  GlobalRemoteReport,
+  ScanProgressEvent,
+} from '@open-vacancy-radar/vacancy-engine';
+import type { CandidateProfilePatch } from './vacancy-profile-validate.js';
 import type { WorkspaceBridge } from './workspace/types.js';
+import type {
+  ApplicationQueueBridge,
+  ApplicationQueueEntry,
+  ApplicationQueueEvent,
+  ApplicationQueueEventType,
+  ApplicationQueueStatus,
+} from './application-queue-types.js';
+import type {
+  ApplicationAttachmentResult,
+  ApplicationExecutorBridge,
+  ApplicationManualHandoff,
+  ApplyApplicationFieldMapResult,
+  ConfirmApplicationAnswerResult,
+  OpenApplicationReviewResult,
+  RequestAutomationGrantResult,
+  ScheduleAutomaticSubmissionResult,
+  ShowApplicationHandoffResult,
+  SubmitApplicationReviewResult,
+} from './application-executor-types.js';
+import type {
+  ApplicationPipelineBridge,
+  RestartApplicationTailoringResult,
+  StartApplicationFromVacancyResult,
+  StartApplicationAttemptRefusal,
+  StartApplicationAttemptResult,
+} from './application-pipeline-types.js';
+import type { FormReadiness } from '@agent-dock/application-executor';
 
 /**
  * The only surface the renderer has onto Node/Electron. Every function here is a narrow,
- * single-purpose capability — never a generic "invoke this IPC channel with this payload" tunnel
+ * single-purpose capability: never a generic "invoke this IPC channel with this payload" tunnel
  * and never the daemon's connection info (base URL + bearer token stay in the main process; see
  * electron/main.ts and SECURITY.md). The renderer cannot run a shell command, read/write an
  * arbitrary file, or reach any daemon route this bridge doesn't explicitly expose.
  */
 export type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'unavailable'; error: string };
 
+/**
+ * `cwd` is deliberately absent (issue #175): `daemon:create-session`'s main-process handler pins
+ * every v1 session to its own app-owned scratch directory and never reads a renderer-supplied one.
+ */
 export interface CreateSessionInput {
   provider: ProviderId;
-  cwd: string;
   prompt: string;
   model?: string;
+  /**
+   * Issue #396: an opaque, single-use handle from a `cv:select-and-read` `'scanned-pdf'` result --
+   * never a path. `main.ts`'s `daemon:create-session` handler resolves it to the real, already-
+   * staged PDF this process copied into its own AI-workspace scratch directory; the daemon-facing
+   * `attachments` field (which does take a path) is never read from what the renderer sends here.
+   */
+  attachmentCandidateId?: string;
 }
 
 export interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
+  listMcpProviders(): Promise<McpConnectionStatus[]>;
+  searchMcp(input: McpSearchRequest): Promise<McpVacancyResult[]>;
+  setMcpCredential(input: McpCredentialInput): Promise<void>;
+  removeMcpProvider(providerId: McpProviderId): Promise<void>;
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   cancelSession(sessionId: string): Promise<void>;
   onSessionEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
@@ -30,10 +90,23 @@ export interface AgentDockBridge {
 }
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
+export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
+export type VacancyScanRequest =
+  | string
+  | {
+      mode: 'query';
+      query: string;
+      country?: string;
+      employment?: string;
+      salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
+      /** Issue #398 Phase 1: opt in to an on-demand AI-web-search discovery pass for this run only. */
+      aiWebDiscovery?: boolean;
+    }
+  | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
 /**
  * A second, independent bridge namespace (rather than folding these onto `AgentDockBridge`)
- * because it talks to the embedded vacancy-discovery engine in the main process directly — no
+ * because it talks to the embedded vacancy-discovery engine in the main process directly: no
  * daemon, no bearer token, nothing shared with the AgentDock session machinery above. Keeping it
  * separate means a fork that drops the vacancy-lead feature can delete this namespace without
  * touching the AgentDock bridge at all, and vice versa.
@@ -42,15 +115,44 @@ export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
   /** Global-remote (worldwide) pipeline. */
   getReport(): Promise<GlobalRemoteReport | null>;
-  runScan(): Promise<GlobalRemoteReport>;
+  getReportSummary(): Promise<VacancyReportSummary | null>;
   /**
-   * Netherlands pipeline — the IND recognised-sponsor scan. A separate pair of methods rather
-   * than a `market` argument on the two above, because the two pipelines return genuinely
-   * different report shapes (`GlobalRemoteReport` vs `JobRadarReport`) and a union-typed return
-   * would push a discriminator check into every caller for no gain.
+   * `query` scopes each source's own server-side search parameter for this run (see
+   * `GlobalRemoteScanOptions.query` in the engine) instead of always harvesting the same static
+   * default and filtering everything client-side afterward. Blank input is rejected before any
+   * discovery request, so the renderer cannot accidentally trigger the checked-in fallback query.
    */
-  getNetherlandsReport(): Promise<JobRadarReport | null>;
-  runNetherlandsScan(): Promise<JobRadarReport>;
+  runScan(request: VacancyScanRequest): Promise<GlobalRemoteReport>;
+  /** Whether a scan is currently running -- possibly one this window started before the user
+   * navigated away from Search and back, since the scan itself outlives the page's own state. */
+  getScanStatus(): Promise<{ scanning: boolean }>;
+  /**
+   * Subscribes to `vacancy:scan-progress` (issue #252): each event is one discovery sub-source's
+   * own freshly discovered rows, pushed the moment that source resolves rather than only once the
+   * whole scan finishes -- mirroring `agentDock.onSessionEvent`'s push pattern. Fires for *any* scan
+   * in this process, not just one this window started, the same as `getScanStatus` already reflects
+   * a scan the page did not itself start. Returns an unsubscribe function; call it on unmount so a
+   * remounted Search page (navigate away and back) ends up with exactly one live listener, never
+   * zero or two.
+   */
+  onScanProgress(callback: (event: ScanProgressEvent) => void): () => void;
+  /** The candidate profile deterministic scoring matches results against. */
+  getSearchProfile(): Promise<CandidateProfile>;
+  saveSearchProfile(patch: CandidateProfilePatch): Promise<CandidateProfile>;
+  /**
+   * Company-roster (Greenhouse/Lever/Ashby/Recruitee/Personio) import status (issue #251/#264):
+   * `null` when the import has never run yet against this data directory, so a scan will find zero
+   * companies on these five providers until `refreshAtsRoster` below runs at least once.
+   */
+  getAtsRosterStatus(): Promise<AtsRosterStatus>;
+  /**
+   * Runs the roster import now: fetches each provider's CSV, re-verifies every row through this
+   * repo's own ATS URL detectors, and writes the local roster file the next vacancy scan reads.
+   * Deliberately never called automatically -- see `main.ts#runAtsRosterRefresh` for why this is a
+   * manual action, not a background timer. Mutually exclusive with a running vacancy scan (the same
+   * advisory lock the `ats-roster:import` CLI command already takes).
+   */
+  refreshAtsRoster(): Promise<AtsRosterImportResult>;
 }
 
 /**
@@ -67,17 +169,37 @@ export interface CvFile {
 }
 
 /**
+ * `cv:select-and-read`'s result (issue #396). `'scanned-pdf'` means main already showed the native
+ * transcription-consent dialog and the user approved it: `candidateId` is an opaque handle to a
+ * copy of that PDF's bytes `main.ts` already staged into its own AI-workspace scratch directory --
+ * never a path. Pass it back unchanged as `CreateSessionInput.attachmentCandidateId` to run the
+ * transcription; anything else about it is opaque to the renderer. `'scanned-pdf-unavailable'`
+ * covers every other outcome (too many pages, no capable provider, or the user declining the
+ * dialog) and never carries an id, because nothing was ever staged for it.
+ */
+export type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
+
+/**
  * A third independent namespace, for the same reason `vacancyRadar` is separate from `agentDock`:
  * it is the only part of the bridge that touches the user's own documents, so it stays isolated
- * and auditable on its own terms. Note what is deliberately *not* here — no `readFile(path)`, no
- * path argument of any kind. `selectAndRead()` returns already-extracted text for a file **the
- * user picked in a native dialog**; the renderer never names a file and never sees a filesystem
- * path, so a compromised renderer cannot turn this into an arbitrary-file-read primitive.
- * `getWorkspaceDir()` returns one app-owned scratch directory (main.ts creates it) purely so the
- * AI features have a valid `cwd` for `createSession` — it grants no access to that directory.
+ * and auditable on its own terms. Note what is deliberately *not* here: no `readFile(path)`, no
+ * path argument of any kind. `selectAndRead()` returns already-extracted text (or, for a scanned
+ * PDF, an opaque staged-attachment handle -- never a path) for a file **the user picked in a native
+ * dialog**; the renderer never names a file and never receives a filesystem path, so a compromised
+ * renderer cannot turn this into an arbitrary-file-read primitive. `getWorkspaceDir()` returns one
+ * app-owned scratch directory (main.ts creates it) purely so the AI features have a valid `cwd` for
+ * `createSession`. It grants no access to that directory.
  */
 export interface CvBridge {
-  selectAndRead(): Promise<CvFile | null>;
+  selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
 }
 
@@ -85,7 +207,7 @@ export interface CvBridge {
  * Reconstructs a clean `DaemonStatus` from whatever main sent, rather than validating its shape
  * and then passing the original object through unchanged (AD-07). The difference matters: the
  * previous `isDaemonStatus` type guard only checked that `state` was one of the three known
- * values and then returned the raw object as-is — so an extra field on that object (a token, a
+ * values and then returned the raw object as-is. So an extra field on that object (a token, a
  * base URL, anything) would have crossed into the renderer completely untouched. Building a fresh
  * object with only the fields each variant is actually supposed to carry means an accidental
  * extra property on the main-process side can never reach here, structurally, regardless of what
@@ -114,6 +236,20 @@ const api: AgentDockBridge = {
   },
   listProviders() {
     return ipcRenderer.invoke('daemon:list-providers');
+  },
+  async listMcpProviders() {
+    const value: unknown = await ipcRenderer.invoke('daemon:mcp-statuses');
+    return Array.isArray(value) ? value.map((item) => mcpConnectionStatusSchema.parse(item)) : [];
+  },
+  async searchMcp(input) {
+    const value: unknown = await ipcRenderer.invoke('daemon:mcp-search', input);
+    return Array.isArray(value) ? value.map((item) => mcpVacancyResultSchema.parse(item)) : [];
+  },
+  setMcpCredential(input) {
+    return ipcRenderer.invoke('daemon:mcp-set-credential', input);
+  },
+  removeMcpProvider(providerId) {
+    return ipcRenderer.invoke('daemon:mcp-remove', providerId);
   },
   createSession(input) {
     return ipcRenderer.invoke('daemon:create-session', input);
@@ -146,14 +282,36 @@ const vacancyApi: VacancyRadarBridge = {
   getReport() {
     return ipcRenderer.invoke('vacancy:get-report');
   },
-  runScan() {
-    return ipcRenderer.invoke('vacancy:run-scan');
+  getReportSummary() {
+    return ipcRenderer.invoke('vacancy:get-report-summary');
   },
-  getNetherlandsReport() {
-    return ipcRenderer.invoke('vacancy:get-nl-report');
+  runScan(request) {
+    return ipcRenderer.invoke('vacancy:run-scan', request);
   },
-  runNetherlandsScan() {
-    return ipcRenderer.invoke('vacancy:run-nl-scan');
+  getScanStatus() {
+    return ipcRenderer.invoke('vacancy:get-scan-status');
+  },
+  onScanProgress(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const p = payload as { sourceId?: unknown; vacancies?: unknown } | null;
+      if (p && typeof p.sourceId === 'string' && Array.isArray(p.vacancies)) {
+        callback({ sourceId: p.sourceId, vacancies: p.vacancies as ScanProgressEvent['vacancies'] });
+      }
+    };
+    ipcRenderer.on('vacancy:scan-progress', listener);
+    return () => ipcRenderer.removeListener('vacancy:scan-progress', listener);
+  },
+  getSearchProfile() {
+    return ipcRenderer.invoke('vacancy:get-search-profile');
+  },
+  saveSearchProfile(patch) {
+    return ipcRenderer.invoke('vacancy:save-search-profile', patch);
+  },
+  getAtsRosterStatus() {
+    return ipcRenderer.invoke('vacancy:ats-roster:get-status');
+  },
+  refreshAtsRoster() {
+    return ipcRenderer.invoke('vacancy:ats-roster:refresh');
   },
 };
 
@@ -161,7 +319,7 @@ contextBridge.exposeInMainWorld('vacancyRadar', vacancyApi);
 
 /**
  * Each function names its own channel literally and forwards only the arguments that channel is
- * documented to take — there is no `channel` parameter anywhere, so a compromised renderer cannot
+ * documented to take: there is no `channel` parameter anywhere, so a compromised renderer cannot
  * reach a `workspace:*` channel this list does not already grant, let alone a `daemon:*` one.
  * Main validates every payload again on arrival (electron/workspace/validate.ts); this side is
  * about the shape of the capability, not about trusting the renderer.
@@ -176,6 +334,9 @@ const workspaceApi: WorkspaceBridge = {
   getCounts() {
     return ipcRenderer.invoke('workspace:counts:get');
   },
+  resetApplicationData() {
+    return ipcRenderer.invoke('workspace:data:reset');
+  },
 
   listSavedJobs() {
     return ipcRenderer.invoke('workspace:saved-jobs:list');
@@ -188,6 +349,22 @@ const workspaceApi: WorkspaceBridge = {
   },
   deleteSavedJob(id) {
     return ipcRenderer.invoke('workspace:saved-jobs:delete', { id });
+  },
+
+  listApplicationAnswers() {
+    return ipcRenderer.invoke('workspace:application-answers:list');
+  },
+  saveApplicationAnswer(input) {
+    return ipcRenderer.invoke('workspace:application-answers:save', input);
+  },
+  updateApplicationAnswer(id, patch) {
+    return ipcRenderer.invoke('workspace:application-answers:update', { id, patch });
+  },
+  recordApplicationAnswerUsed(id) {
+    return ipcRenderer.invoke('workspace:application-answers:record-used', { id });
+  },
+  deleteApplicationAnswer(id) {
+    return ipcRenderer.invoke('workspace:application-answers:delete', { id });
   },
 
   listApplications(filter) {
@@ -218,6 +395,53 @@ const workspaceApi: WorkspaceBridge = {
   setDefaultCvDocument(id) {
     return ipcRenderer.invoke('workspace:cv-documents:set-default', { id });
   },
+  exportCvDocument(id, format) {
+    return ipcRenderer.invoke('workspace:cv-documents:export', { id, format });
+  },
+
+  listCvEvidenceOverlays(cvId) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:list', { cvId });
+  },
+  getCvEvidenceOverlay(cvId, vacancyKey) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:get', { cvId, vacancyKey });
+  },
+  createCvEvidenceOverlay(input) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:create', input);
+  },
+  updateCvEvidenceOverlay(id, patch) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:update', { id, patch });
+  },
+  approveCvEvidenceOverlay(id, expectedCaseRevision) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:approve', { id, expectedCaseRevision });
+  },
+  deleteCvEvidenceOverlay(id) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
+  },
+  exportCvEvidenceOverlay(overlayId, format) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:export', { overlayId, format });
+  },
+
+  listMcpClientGrants() {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:list');
+  },
+  createMcpClientGrant(input) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:create', input);
+  },
+  revokeMcpClientGrant(id) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:revoke', { id });
+  },
+  getMcpServerStatus() {
+    return ipcRenderer.invoke('workspace:mcp-server:status');
+  },
+  listCvTailoringProposals(caseId) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:list', { caseId });
+  },
+  acceptCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:accept', { id });
+  },
+  rejectCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:reject', { id });
+  },
 
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');
@@ -234,25 +458,88 @@ const workspaceApi: WorkspaceBridge = {
   duplicateLetter(id) {
     return ipcRenderer.invoke('workspace:letters:duplicate', { id });
   },
+
+  listApplicationAttempts() {
+    return ipcRenderer.invoke('workspace:application-attempts:list');
+  },
+  getApplicationAttempt(id) {
+    return ipcRenderer.invoke('workspace:application-attempts:get', { id });
+  },
+  updateApplicationAttempt(id, patch) {
+    return ipcRenderer.invoke('workspace:application-attempts:update', { id, patch });
+  },
+  async listApplicationArtifacts(attemptId) {
+    const result: unknown = await ipcRenderer.invoke('workspace:application-artifacts:list', { attemptId });
+    if (!Array.isArray(result)) throw new Error('the workspace returned unexpected application artifacts');
+    return result.map((entry) => {
+      const source = asRecord(entry);
+      if (!source) throw new Error('the workspace returned an unexpected application artifact');
+      const kind = requiredString(source, 'kind');
+      return {
+        id: requiredString(source, 'id'),
+        attemptId: requiredString(source, 'attemptId'),
+        kind: kind === 'cv_pdf' || kind === 'cover_letter_pdf' || kind === 'combined_pdf' ? kind : 'other',
+        fileName: requiredString(source, 'fileName'),
+        mimeType: requiredString(source, 'mimeType'),
+        byteSize: nonNegativeInt(source.byteSize),
+        contentHash: requiredString(source, 'contentHash'),
+        createdAt: requiredString(source, 'createdAt'),
+      };
+    });
+  },
+  listAutomationGrants() {
+    return ipcRenderer.invoke('workspace:automation-grants:list');
+  },
+  revokeAutomationGrant(id) {
+    return ipcRenderer.invoke('workspace:automation-grants:revoke', { id });
+  },
 };
 
 contextBridge.exposeInMainWorld('workspace', workspaceApi);
 
 /**
  * Rebuilt field by field rather than passed through, on the same principle as `toDaemonStatus`:
- * whatever `cv:select-and-read` sends, only `fileName` and `text` can ever reach the renderer — an
- * absolute path accidentally added to that payload later could not cross this boundary.
+ * whatever `cv:select-and-read` sends, only these named fields can ever reach the renderer -- in
+ * particular, `candidateId` is opaque data this function copies as a string if present, never a
+ * path, and nothing else main.ts might one day add to that payload can cross this boundary by
+ * accident.
  */
-function toCvFile(value: unknown): CvFile | null {
+const SCANNED_PDF_UNAVAILABLE_REASONS = ['too-many-pages', 'no-provider', 'declined'] as const;
+
+function toCvSelectResult(value: unknown): CvSelectResult | null {
   if (!value || typeof value !== 'object') return null;
-  const { fileName, text } = value as { fileName?: unknown; text?: unknown };
-  if (typeof fileName !== 'string' || typeof text !== 'string') return null;
-  return { fileName, text };
+  const v = value as Record<string, unknown>;
+  if (v.status === 'ok') {
+    if (typeof v.fileName !== 'string' || typeof v.text !== 'string') return null;
+    return { status: 'ok', fileName: v.fileName, text: v.text };
+  }
+  if (v.status === 'scanned-pdf') {
+    if (typeof v.fileName !== 'string' || typeof v.pageCount !== 'number' || typeof v.candidateId !== 'string') {
+      return null;
+    }
+    return { status: 'scanned-pdf', fileName: v.fileName, pageCount: v.pageCount, candidateId: v.candidateId };
+  }
+  if (v.status === 'scanned-pdf-unavailable') {
+    if (
+      typeof v.fileName !== 'string' ||
+      typeof v.pageCount !== 'number' ||
+      !SCANNED_PDF_UNAVAILABLE_REASONS.includes(v.reason as (typeof SCANNED_PDF_UNAVAILABLE_REASONS)[number])
+    ) {
+      return null;
+    }
+    return {
+      status: 'scanned-pdf-unavailable',
+      fileName: v.fileName,
+      pageCount: v.pageCount,
+      reason: v.reason as (typeof SCANNED_PDF_UNAVAILABLE_REASONS)[number],
+    };
+  }
+  return null;
 }
 
 const cvApi: CvBridge = {
   async selectAndRead() {
-    return toCvFile(await ipcRenderer.invoke('cv:select-and-read'));
+    return toCvSelectResult(await ipcRenderer.invoke('cv:select-and-read'));
   },
   async getWorkspaceDir() {
     const result: unknown = await ipcRenderer.invoke('cv:get-workspace-dir');
@@ -270,17 +557,1295 @@ contextBridge.exposeInMainWorld('cv', cvApi);
  * `WorkspaceBridge` on purpose: that bridge is the SQLite workspace contract (asserted
  * exhaustively in tests as "exactly these functions"), while this one call is OS integration with
  * no database involvement. The boolean is coerced with `=== true` so nothing but a literal
- * boolean ever reaches the channel, and the promise resolves to void — main returns nothing worth
+ * boolean ever reaches the channel, and the promise resolves to void. Main returns nothing worth
  * forwarding.
  */
+export interface SaveFileFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface SaveFileInput {
+  suggestedName: string;
+  data: string;
+  encoding: 'utf8' | 'base64';
+  filters: SaveFileFilter[];
+}
+
+export interface SaveFileResult {
+  saved: boolean;
+  path?: string;
+}
+
 export interface SystemBridge {
   setLaunchAtLogin(enabled: boolean): Promise<void>;
+  getAppVersion(): Promise<string>;
+  /** Writes renderer-built file bytes (a real export, not a stub) to a user-chosen path via the
+   * native save dialog. `{ saved: false }` means the user cancelled the dialog, not a failure. */
+  saveFile(input: SaveFileInput): Promise<SaveFileResult>;
 }
 
 const systemApi: SystemBridge = {
   async setLaunchAtLogin(enabled) {
     await ipcRenderer.invoke('system:set-login-item', enabled === true);
   },
+  async getAppVersion() {
+    return (await ipcRenderer.invoke('system:get-app-version')) as string;
+  },
+  async saveFile(input) {
+    return (await ipcRenderer.invoke('system:save-file', input)) as SaveFileResult;
+  },
 };
 
 contextBridge.exposeInMainWorld('system', systemApi);
+
+/**
+ * A sixth namespace, for workspace grants (ADI-06).
+ *
+ * Its own namespace rather than three more methods on `agentDock`, for the reason the other
+ * separations exist: this is the app's filesystem-trust boundary, and keeping it isolated means it
+ * can be reviewed, tested, and (in a fork that does not want agent workspaces) deleted on its own
+ * terms. The five pre-existing namespaces (`agentDock`, `vacancyRadar`, `workspace`, `cv`, and
+ * `system`) are untouched by this ticket, and `preload.test.ts`
+ * asserts that key-for-key.
+ *
+ * Note what is missing, because the omissions are the design:
+ *
+ * - **no path argument anywhere.** `requestGrant` takes a provider id. The folder is chosen by the
+ *   user in a native picker that main opens; the renderer never names it and never learns it.
+ * - **no path in any response.** A grant offer carries an opaque handle and a `display` object
+ *   rebuilt field by field below, so a path accidentally added to the IPC payload later still could
+ *   not cross this boundary.
+ * - **no `workspaceId` or `incarnation`.** Those are the daemon's trust keys. A renderer holding
+ *   them could describe a workspace it was never granted, so they stay in the main process.
+ * - **no way to set trust.** There is no `trust()` here, and no daemon route that would accept one
+ *   (see apps/daemon/src/routes/v2-workspaces.ts).
+ */
+export type WorkspaceGrantEffects = 'unbounded_cli';
+
+export interface WorkspaceGrantDisplay {
+  name: string;
+  branch?: string;
+  dirty: boolean;
+  effects: WorkspaceGrantEffects;
+}
+
+export interface WorkspaceGrantOffer {
+  grantHandle: string;
+  display: WorkspaceGrantDisplay;
+}
+
+/**
+ * A successful consumption now also carries an opaque **workspace session ref** (ADI-13): the handle
+ * `startSession` below addresses a trusted workspace by. Optional, so a refusal's shape is unchanged
+ * and a main process that did not mint one still produces a valid result.
+ */
+export type WorkspaceGrantConsumeResult =
+  | { ok: true; workspaceSessionRef?: string }
+  | { ok: false; reason: string };
+
+export type WorkspaceGrantStatus =
+  | { state: 'active'; expiresInMs: number }
+  | { state: 'gone'; reason: string };
+
+/**
+ * What the renderer learns about a session it started (ADI-13).
+ *
+ * Note the absence of `cwd`. The daemon's own v2 session view has one, and main strips it before
+ * this bridge ever sees a response -- so even a future daemon change that added more path-shaped
+ * fields could not reach here, because this object is rebuilt field by field below.
+ */
+export interface WorkspaceSessionStarted {
+  sessionId: string;
+  provider: string;
+  status: string;
+  model?: string;
+}
+
+export type WorkspaceStartSessionResult =
+  | { ok: true; session: WorkspaceSessionStarted }
+  | { ok: false; reason: string };
+
+/** What the renderer may ask for when starting a session. No path, no workspace id, no incarnation. */
+export interface WorkspaceStartSessionInput {
+  workspaceSessionRef: string;
+  prompt: string;
+  resumeProviderSessionId?: string;
+  capabilities?: unknown;
+}
+
+export interface WorkspaceGrantBridge {
+  /** Opens the native picker and confirmation dialog. Takes a provider id and nothing else. */
+  requestGrant(provider: ProviderId): Promise<WorkspaceGrantOffer | null>;
+  /** Spends a grant, once. Bound in main to the WebContents the grant was issued to. */
+  consumeGrant(grantHandle: string): Promise<WorkspaceGrantConsumeResult>;
+  /** Whether a handle is still usable, and if not, why. Reason strings only, never paths. */
+  getGrantStatus(grantHandle: string): Promise<WorkspaceGrantStatus>;
+  /**
+   * Starts an agent session in a workspace the user already approved (ADI-13).
+   *
+   * Addressed by the opaque ref `consumeGrant` returned, never by a location: the signature has
+   * nowhere to put a path, a `workspaceId`, or an `incarnation`, and the four fields it does forward
+   * are copied out explicitly below so an object carrying extras cannot put them on the wire.
+   */
+  startSession(input: WorkspaceStartSessionInput): Promise<WorkspaceStartSessionResult>;
+}
+
+/** Rebuilds the offer field by field, on the same principle as `toDaemonStatus` and `toCvFile`. */
+function toGrantOffer(value: unknown): WorkspaceGrantOffer | null {
+  if (!value || typeof value !== 'object') return null;
+  const { grantHandle, display } = value as { grantHandle?: unknown; display?: unknown };
+  if (typeof grantHandle !== 'string' || !display || typeof display !== 'object') return null;
+  const { name, branch, dirty } = display as { name?: unknown; branch?: unknown; dirty?: unknown };
+  if (typeof name !== 'string') return null;
+  return {
+    grantHandle,
+    display: {
+      name,
+      ...(typeof branch === 'string' ? { branch } : {}),
+      dirty: dirty === true,
+      // Never read from the payload: the literal is what this build knows how to describe, and
+      // echoing back an effects value main sent would let a future widening reach the UI silently.
+      effects: 'unbounded_cli',
+    },
+  };
+}
+
+const workspaceGrantApi: WorkspaceGrantBridge = {
+  async requestGrant(provider) {
+    // Exactly one field is forwarded, and it is coerced to a string here rather than passed
+    // through: a caller that hands this an OBJECT carrying `{ provider, path }` would otherwise
+    // put that whole object (path included) on the wire, and rely on main's schema parse to reject
+    // it. Rejection after transmission is not the same as never transmitting, so the coercion is
+    // done at the boundary. Main validates the value against `providerIdSchema` regardless.
+    return toGrantOffer(
+      await ipcRenderer.invoke('workspace-grant:request', {
+        provider: typeof provider === 'string' ? provider : '',
+      }),
+    );
+  },
+  async consumeGrant(grantHandle) {
+    const result: unknown = await ipcRenderer.invoke('workspace-grant:consume', {
+      grantHandle: typeof grantHandle === 'string' ? grantHandle : '',
+    });
+    if (result && typeof result === 'object' && (result as { ok?: unknown }).ok === true) {
+      // Rebuilt, not spread: a success payload that grew a `canonicalPath` would otherwise cross.
+      const ref = (result as { workspaceSessionRef?: unknown }).workspaceSessionRef;
+      return { ok: true, ...(typeof ref === 'string' ? { workspaceSessionRef: ref } : {}) };
+    }
+    const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
+    return { ok: false, reason: typeof reason === 'string' ? reason : 'unknown_handle' };
+  },
+  async getGrantStatus(grantHandle) {
+    const result: unknown = await ipcRenderer.invoke('workspace-grant:status', {
+      grantHandle: typeof grantHandle === 'string' ? grantHandle : '',
+    });
+    const state = result && typeof result === 'object' ? (result as { state?: unknown }).state : undefined;
+    if (state === 'active') {
+      const expiresInMs = (result as { expiresInMs?: unknown }).expiresInMs;
+      return { state: 'active', expiresInMs: typeof expiresInMs === 'number' ? expiresInMs : 0 };
+    }
+    const reason = result && typeof result === 'object' ? (result as { reason?: unknown }).reason : undefined;
+    return { state: 'gone', reason: typeof reason === 'string' ? reason : 'unknown_handle' };
+  },
+  async startSession(input) {
+    // Exactly four fields are read off the argument and put on the wire, each coerced here rather
+    // than passed through. A caller that hands this `{ workspaceSessionRef, prompt, cwd, path }`
+    // has the last two dropped at this boundary, not merely rejected after transmission -- the same
+    // reasoning `requestGrant` above applies to its single field.
+    const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+    const resume = source.resumeProviderSessionId;
+    const result: unknown = await ipcRenderer.invoke('workspace:start-session', {
+      workspaceSessionRef: typeof source.workspaceSessionRef === 'string' ? source.workspaceSessionRef : '',
+      prompt: typeof source.prompt === 'string' ? source.prompt : '',
+      ...(typeof resume === 'string' ? { resumeProviderSessionId: resume } : {}),
+      ...(Array.isArray(source.capabilities) ? { capabilities: source.capabilities } : {}),
+    });
+
+    const payload = result && typeof result === 'object' ? (result as Record<string, unknown>) : undefined;
+    const session = payload?.session as Record<string, unknown> | undefined;
+    if (payload?.ok === true && session && typeof session.sessionId === 'string') {
+      // Rebuilt field by field, like `toGrantOffer`: the daemon's own session view carries a `cwd`,
+      // and main already strips it -- this is the second, independent place that cannot pass one on.
+      return {
+        ok: true,
+        session: {
+          sessionId: session.sessionId,
+          provider: typeof session.provider === 'string' ? session.provider : '',
+          status: typeof session.status === 'string' ? session.status : 'starting',
+          ...(typeof session.model === 'string' ? { model: session.model } : {}),
+        },
+      };
+    }
+    const reason = payload?.reason;
+    // Fail-closed: anything this build cannot interpret is a refusal, never a success.
+    return { ok: false, reason: typeof reason === 'string' ? reason : 'refused' };
+  },
+};
+
+contextBridge.exposeInMainWorld('workspaceGrant', workspaceGrantApi);
+
+/**
+ * A seventh namespace, for the AI Workspace (ADI-07).
+ *
+ * Its own namespace rather than four more methods on `workspaceGrant`, and that separation is the
+ * security decision this ticket makes at this boundary. `workspaceGrant` is the app's filesystem
+ * *trust* surface: four capabilities, each individually reviewed, whose key set `preload.test.ts`
+ * pins exactly. Reading a session list is not a trust decision, and widening the trust namespace to
+ * hold it would mean every future review of "what can the renderer do about folders?" has to first
+ * separate the two concerns again. So `workspaceGrant` is left key-for-key unchanged, and this
+ * sits beside it.
+ *
+ * Note the omissions, which are the design:
+ *
+ * - **no path argument, and no path in any response.** A v2 session's `cwd` has exactly one source
+ *   in this system -- the canonical path behind a grant ref, held in main -- and it is not this.
+ *   Every response is rebuilt field by field below, so a `cwd` main somehow forwarded still could
+ *   not cross.
+ * - **no provider session id and no native tool-call id.** Main drops the first and replaces the
+ *   second with a local alias; this rebuild drops both again.
+ * - **no generic invoke.** Every function names its own channel literally. There is no `channel`
+ *   parameter, so a compromised renderer cannot reach an `agent-workspace:*` channel this list does
+ *   not already grant, let alone a `workspace-grant:*` or `daemon:*` one.
+ * - **no cancel.** Cancelling a session goes through v1's existing `agentDock.cancelSession`, which
+ *   already works on a v2 session (both live in the same `SessionManager`). A second cancel verb
+ *   would be a second thing to keep in agreement with it for no capability gained.
+ */
+export type {
+  ActivityCloseReason,
+  ActivityDigest,
+  ActivityEntry,
+  ActivityPush,
+  AgentWorkspaceBridge,
+  AttachmentContent,
+  AttachResult,
+  HistoryEntry,
+  PageRequest,
+  SessionCapacity,
+  SessionEventsPage,
+  SessionListPage,
+  SessionSearchMatch,
+  SessionSearchPage,
+  SessionSummary,
+} from './agent-workspace-types.js';
+
+import type {
+  ActivityDigest as ActivityDigestType,
+  ActivityEntry as ActivityEntryType,
+  ActivityPush as ActivityPushType,
+  AgentWorkspaceBridge as AgentWorkspaceBridgeType,
+  AttachmentContent as AttachmentContentType,
+  AttachResult as AttachResultType,
+  HistoryEntry as HistoryEntryType,
+  PageRequest as PageRequestType,
+  SessionCapacity as SessionCapacityType,
+  SessionSearchMatch as SessionSearchMatchType,
+  SessionSearchPage as SessionSearchPageType,
+  SessionSummary as SessionSummaryType,
+} from './agent-workspace-types.js';
+
+/** Copies a string field only when it really is one. Every rebuild below goes through this. */
+function optionalString(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function requiredString(source: Record<string, unknown>, key: string, fallback = ''): string {
+  return optionalString(source, key) ?? fallback;
+}
+
+function optionalFiniteNumber(source: Record<string, unknown>, key: string): number | undefined {
+  const value = source[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegativeInt(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** A missing/NaN/Infinity `usedPercent` drops the whole window rather than faking `0` (ADI-26). */
+function readRateLimitWindow(
+  value: unknown,
+): { usedPercent: number; windowDurationMins?: number; resetsAt?: number } | undefined {
+  const window = asRecord(value);
+  if (!window) return undefined;
+  const usedPercent = optionalFiniteNumber(window, 'usedPercent');
+  if (usedPercent === undefined) return undefined;
+  const windowDurationMins = optionalFiniteNumber(window, 'windowDurationMins');
+  const resetsAt = optionalFiniteNumber(window, 'resetsAt');
+  return {
+    usedPercent,
+    ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+  };
+}
+
+function toDigest(value: unknown): ActivityDigestType | undefined {
+  const source = asRecord(value);
+  if (!source) return undefined;
+  const bytes = optionalFiniteNumber(source, 'bytes');
+  const sha256 = optionalString(source, 'sha256');
+  if (bytes === undefined || sha256 === undefined) return undefined;
+  return { bytes, sha256 };
+}
+
+/**
+ * The **second, independent** rebuild of a session summary.
+ *
+ * Main already built this object field by field in `agent-workspace-view.ts`. Doing it again here
+ * is not redundancy: it is the same double-rebuild discipline ADI-13 established for
+ * `startSession`, and it exists because preload should not trust main blindly. If a future change
+ * to main leaks a `cwd` into this payload, the failure has to be in *two* files, in two different
+ * processes, for it to reach the renderer.
+ */
+function toSessionSummary(value: unknown): SessionSummaryType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const id = optionalString(source, 'id');
+  if (id === undefined || id.length === 0) return null;
+
+  const scopeSource = asRecord(source.scope) ?? {};
+  const providerVersion = optionalString(scopeSource, 'providerVersion');
+  const model = optionalString(source, 'model');
+  const terminalReason = optionalString(source, 'terminalReason');
+  const parentSessionId = optionalString(source, 'parentSessionId');
+  const completedAt = optionalString(source, 'completedAt');
+
+  return {
+    id,
+    provider: requiredString(source, 'provider'),
+    protocolVersion: nonNegativeInt(source.protocolVersion),
+    transportId: requiredString(source, 'transportId', 'legacy-one-shot'),
+    ...(model === undefined ? {} : { model }),
+    status: requiredString(source, 'status', 'starting'),
+    ...(terminalReason === undefined ? {} : { terminalReason }),
+    acceptedWork: requiredString(source, 'acceptedWork', 'unknown'),
+    rootSessionId: requiredString(source, 'rootSessionId', id),
+    ...(parentSessionId === undefined ? {} : { parentSessionId }),
+    continuationKind: requiredString(source, 'continuationKind', 'fresh'),
+    startedAt: requiredString(source, 'startedAt'),
+    ...(completedAt === undefined ? {} : { completedAt }),
+    earliestSequence: nonNegativeInt(source.earliestSequence),
+    eventCount: nonNegativeInt(source.eventCount),
+    eventsTruncated: source.eventsTruncated === true,
+    scope: {
+      ...(providerVersion === undefined ? {} : { providerVersion }),
+      authenticated: requiredString(scopeSource, 'authenticated', 'unknown'),
+      platform: requiredString(scopeSource, 'platform', 'unknown'),
+      // Never echoed, for the reason `toGrantOffer` never echoes `effects`: this literal is a
+      // documented limitation marker, and a stronger value main sent must not reach the UI.
+      accountEvidence: 'cli_owned',
+    },
+    unknownFrameCount: nonNegativeInt(source.unknownFrameCount),
+  };
+}
+
+/**
+ * The second, independent rebuild of one activity entry.
+ *
+ * Rebuilt per `kind` rather than spread, so the fields main is required to have dropped
+ * (`providerSessionId`, a native `toolCallId`, a `status` detail, an error `message`) have no
+ * copier here even if they were present on the payload.
+ */
+function toActivityEntry(value: unknown): ActivityEntryType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const seq = source.seq;
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null;
+  const origin = source.origin === 'history' ? 'history' : 'live';
+  const base = { seq, at: requiredString(source, 'at'), origin } as const;
+
+  switch (source.kind) {
+    case 'session.started':
+      return { ...base, kind: 'session.started', provider: requiredString(source, 'provider') };
+    case 'status':
+      return { ...base, kind: 'status', status: requiredString(source, 'status') };
+    case 'assistant.message':
+    case 'thinking.delta': {
+      const text = optionalString(source, 'text');
+      const digest = toDigest(source.digest);
+      const body = {
+        ...(text === undefined ? {} : { text }),
+        ...(source.textTruncated === true ? { textTruncated: true } : {}),
+        ...(source.textOmitted === true ? { textOmitted: true } : {}),
+        ...(digest === undefined ? {} : { digest }),
+      };
+      return source.kind === 'assistant.message'
+        ? { ...base, kind: 'assistant.message', ...body }
+        : { ...base, kind: 'thinking.delta', ...body };
+    }
+    case 'tool.started': {
+      const toolAlias = optionalString(source, 'toolAlias');
+      const input = toDigest(source.input);
+      return {
+        ...base,
+        kind: 'tool.started',
+        toolName: requiredString(source, 'toolName'),
+        ...(toolAlias === undefined ? {} : { toolAlias }),
+        ...(input === undefined ? {} : { input }),
+      };
+    }
+    case 'tool.completed': {
+      const toolName = optionalString(source, 'toolName');
+      const toolAlias = optionalString(source, 'toolAlias');
+      const result = toDigest(source.result);
+      const resultPreview = optionalString(source, 'resultPreview');
+      const attachmentId = optionalString(source, 'resultAttachmentId');
+      return {
+        ...base,
+        kind: 'tool.completed',
+        ...(toolName === undefined ? {} : { toolName }),
+        ...(toolAlias === undefined ? {} : { toolAlias }),
+        ...(typeof source.isError === 'boolean' ? { isError: source.isError } : {}),
+        ...(result === undefined ? {} : { result }),
+        ...(resultPreview === undefined ? {} : { resultPreview }),
+        ...(typeof source.resultPreviewTruncated === 'boolean' ? { resultPreviewTruncated: source.resultPreviewTruncated } : {}),
+        // Re-checked against the identifier charset here too, same reason `error.code` is: this
+        // value selects a retrieval target, and a value that is not a UUID has nothing to select.
+        ...(attachmentId !== undefined && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(attachmentId)
+          ? { resultAttachmentId: attachmentId }
+          : {}),
+      };
+    }
+    case 'usage': {
+      const inputTokens = optionalFiniteNumber(source, 'inputTokens');
+      const outputTokens = optionalFiniteNumber(source, 'outputTokens');
+      const cachedInputTokens = optionalFiniteNumber(source, 'cachedInputTokens');
+      const cost = optionalFiniteNumber(source, 'cost');
+      const contextTokens = optionalFiniteNumber(source, 'contextTokens');
+      const contextWindowTokens = optionalFiniteNumber(source, 'contextWindowTokens');
+      return {
+        ...base,
+        kind: 'usage',
+        ...(inputTokens === undefined ? {} : { inputTokens }),
+        ...(outputTokens === undefined ? {} : { outputTokens }),
+        ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+        ...(cost === undefined ? {} : { cost }),
+        ...(contextTokens === undefined ? {} : { contextTokens }),
+        ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+      };
+    }
+    case 'usage.rate_limits': {
+      const limitId = optionalString(source, 'limitId');
+      const limitName = optionalString(source, 'limitName');
+      const primary = readRateLimitWindow(source.primary);
+      const secondary = readRateLimitWindow(source.secondary);
+      return {
+        ...base,
+        kind: 'usage.rate_limits',
+        ...(limitId === undefined ? {} : { limitId }),
+        ...(limitName === undefined ? {} : { limitName }),
+        ...(primary === undefined ? {} : { primary }),
+        ...(secondary === undefined ? {} : { secondary }),
+      };
+    }
+    case 'error': {
+      const code = optionalString(source, 'code');
+      return {
+        ...base,
+        kind: 'error',
+        // Re-checked against the identifier charset here too: this value selects a row in a closed
+        // renderer-side copy table, and a value that is not an identifier has no row to select.
+        ...(code !== undefined && /^[A-Za-z0-9._-]{1,64}$/.test(code) ? { code } : {}),
+        recoverable: source.recoverable === true,
+      };
+    }
+    case 'session.completed':
+      return { ...base, kind: 'session.completed' };
+    case 'session.failed':
+      return { ...base, kind: 'session.failed' };
+    case 'session.cancelled':
+      return { ...base, kind: 'session.cancelled' };
+    case 'session.interrupted':
+      return { ...base, kind: 'session.interrupted' };
+    default:
+      // Fail-closed: an entry kind this build cannot rebuild is dropped, never passed through.
+      return null;
+  }
+}
+
+function toCapacityBucket(value: unknown): { active: number; limit: number } {
+  const source = asRecord(value) ?? {};
+  return { active: nonNegativeInt(source.active), limit: nonNegativeInt(source.limit) };
+}
+
+function toCapacity(value: unknown): SessionCapacityType {
+  const source = asRecord(value) ?? {};
+  return { global: toCapacityBucket(source.global), provider: toCapacityBucket(source.provider) };
+}
+
+/** Copies exactly the two paging fields onto the wire, coerced, never the caller's whole object. */
+function toPagePayload(page: PageRequestType | undefined): Record<string, unknown> {
+  const source = asRecord(page) ?? {};
+  const cursor = optionalString(source, 'cursor');
+  const limit = optionalFiniteNumber(source, 'limit');
+  return {
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
+/** Rebuilds one search match field by field (ADI-28), the same fail-closed discipline every other
+ * daemon-supplied shape in this file gets: `null` for anything this build cannot interpret, never a
+ * half-built row passed through. */
+function toSearchMatch(value: unknown): SessionSearchMatchType | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const sessionId = optionalString(source, 'sessionId');
+  const sequence = optionalFiniteNumber(source, 'sequence');
+  const eventType = optionalString(source, 'eventType');
+  const field = optionalString(source, 'field');
+  const excerpt = optionalString(source, 'excerpt');
+  if (
+    sessionId === undefined ||
+    sequence === undefined ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    eventType === undefined ||
+    field === undefined ||
+    excerpt === undefined
+  ) {
+    return null;
+  }
+  return { sessionId, sequence, eventType, field, excerpt };
+}
+
+const agentWorkspaceApi: AgentWorkspaceBridgeType = {
+  async listSessions(page) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:list', toPagePayload(page));
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.sessions) ? source.sessions : [];
+    const sessions: SessionSummaryType[] = [];
+    for (const view of raw) {
+      const summary = toSessionSummary(view);
+      if (summary !== null) sessions.push(summary);
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return {
+      sessions,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      capacity: toCapacity(source?.capacity),
+    };
+  },
+
+  async getSession(sessionId) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:get', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+    });
+    return toSessionSummary(result);
+  },
+
+  async getSessionEvents(sessionId, page) {
+    const id = typeof sessionId === 'string' ? sessionId : '';
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:events', {
+      sessionId: id,
+      ...toPagePayload(page),
+    });
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.events) ? source.events : [];
+    const events: HistoryEntryType[] = [];
+    for (const record of raw) {
+      const entry = toActivityEntry(record);
+      // A history page's entries are history entries by definition: the origin is asserted here
+      // rather than read from the payload, so a mislabelled `origin: 'live'` cannot make a
+      // digest-only entry win the timeline merge against real prose.
+      if (entry !== null) events.push({ ...entry, origin: 'history' });
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return { sessionId: id, events, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  },
+
+  async searchSessions(query, page) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:search', {
+      query: typeof query === 'string' ? query : '',
+      ...toPagePayload(page),
+    });
+    const source = asRecord(result);
+    const raw = Array.isArray(source?.matches) ? source.matches : [];
+    const matches: SessionSearchPageType['matches'] = [];
+    for (const record of raw) {
+      const match = toSearchMatch(record);
+      if (match !== null) matches.push(match);
+    }
+    const nextCursor = source ? optionalString(source, 'nextCursor') : undefined;
+    return { matches, ...(nextCursor === undefined ? {} : { nextCursor }) };
+  },
+
+  async getAttachment(sessionId, attachmentId) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:attachment', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+      attachmentId: typeof attachmentId === 'string' ? attachmentId : '',
+    });
+    const source = asRecord(result);
+    if (!source) return null;
+    const mimeType = optionalString(source, 'mimeType');
+    const bytes = optionalFiniteNumber(source, 'bytes');
+    const content = optionalString(source, 'content');
+    if (mimeType === undefined || bytes === undefined || content === undefined) return null;
+    const known: AttachmentContentType = { mimeType, bytes, content };
+    return known;
+  },
+
+  async attachActivity(sessionId, lastSeq) {
+    const result: unknown = await ipcRenderer.invoke('agent-workspace:attach', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+      ...(typeof lastSeq === 'number' && Number.isInteger(lastSeq) && lastSeq >= 0 ? { lastSeq } : {}),
+    });
+    const source = asRecord(result);
+    if (source?.ok === true) return { ok: true };
+    const reason = source ? optionalString(source, 'reason') : undefined;
+    // Fail-closed: anything this build cannot interpret is a refusal, never a live attachment.
+    const known: AttachResultType = {
+      ok: false,
+      reason:
+        reason === 'attach_limit' || reason === 'daemon_unavailable' || reason === 'invalid_session_id'
+          ? reason
+          : 'daemon_unavailable',
+    };
+    return known;
+  },
+
+  async detachActivity(sessionId) {
+    await ipcRenderer.invoke('agent-workspace:detach', {
+      sessionId: typeof sessionId === 'string' ? sessionId : '',
+    });
+  },
+
+  onActivity(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      const sessionId = source ? optionalString(source, 'sessionId') : undefined;
+      if (sessionId === undefined || sessionId.length === 0) return;
+
+      const closed = asRecord(source?.closed);
+      if (closed) {
+        const reason = optionalString(closed, 'reason');
+        callback({
+          sessionId,
+          closed: { reason: reason === 'stream_ended' ? 'stream_ended' : 'stream_unavailable' },
+        });
+        return;
+      }
+
+      const entry = toActivityEntry(source?.entry);
+      if (entry !== null) callback({ sessionId, entry } satisfies ActivityPushType);
+    };
+    ipcRenderer.on('agent-workspace:activity', listener);
+    return () => ipcRenderer.removeListener('agent-workspace:activity', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('agentWorkspace', agentWorkspaceApi);
+
+const APPLICATION_QUEUE_ENTRY_STATES = ['queued', 'active', 'paused', 'cancelled', 'done', 'failed'] as const;
+const APPLICATION_QUEUE_EVENT_TYPES = [
+  'enqueued',
+  'lease_acquired',
+  'paused',
+  'resumed',
+  'skipped',
+  'cancelled',
+  'released',
+] as const;
+
+/** Fail-closed the way every other bridge coercion here does: a response shape this build cannot
+ * interpret produces `null`/is dropped, never a fabricated entry. */
+function toApplicationQueueEntry(value: unknown): ApplicationQueueEntry | null {
+  const source = asRecord(value);
+  if (!source) return null;
+  const attemptId = optionalString(source, 'attemptId');
+  const state = optionalString(source, 'state');
+  const queuedAt = optionalString(source, 'queuedAt');
+  const updatedAt = optionalString(source, 'updatedAt');
+  if (!attemptId || !state || !queuedAt || !updatedAt) return null;
+  if (!(APPLICATION_QUEUE_ENTRY_STATES as readonly string[]).includes(state)) return null;
+  return { attemptId, state: state as ApplicationQueueEntry['state'], queuedAt, updatedAt };
+}
+
+const applicationQueueApi: ApplicationQueueBridge = {
+  async enqueue(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:enqueue', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async pause(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:pause', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async resume(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:resume', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async skip(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:skip', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async cancel(attemptId) {
+    const result = await ipcRenderer.invoke('application-queue:cancel', attemptId);
+    const entry = toApplicationQueueEntry(result);
+    if (!entry) throw new Error('the application queue returned an unexpected response');
+    return entry;
+  },
+
+  async getStatus(): Promise<ApplicationQueueStatus> {
+    const result: unknown = await ipcRenderer.invoke('application-queue:get-status');
+    const source = asRecord(result);
+    const rawEntries = Array.isArray(source?.entries) ? source.entries : [];
+    const entries: ApplicationQueueEntry[] = [];
+    for (const raw of rawEntries) {
+      const entry = toApplicationQueueEntry(raw);
+      if (entry) entries.push(entry);
+    }
+    const leaseSource = asRecord(source?.lease);
+    const leaseId = leaseSource ? optionalString(leaseSource, 'leaseId') : undefined;
+    const leaseAttemptId = leaseSource ? optionalString(leaseSource, 'attemptId') : undefined;
+    const acquiredAt = leaseSource ? optionalString(leaseSource, 'acquiredAt') : undefined;
+    const lease = leaseId && leaseAttemptId && acquiredAt ? { leaseId, attemptId: leaseAttemptId, acquiredAt } : null;
+    return { entries, lease };
+  },
+
+  onActivity(callback) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const source = asRecord(payload);
+      if (!source) return;
+      const seq = source.seq;
+      const at = optionalString(source, 'at');
+      const type = optionalString(source, 'type');
+      const attemptId = optionalString(source, 'attemptId');
+      if (typeof seq !== 'number' || !at || !type || !attemptId) return;
+      if (!(APPLICATION_QUEUE_EVENT_TYPES as readonly string[]).includes(type)) return;
+      callback({ seq, at, type: type as ApplicationQueueEventType, attemptId } satisfies ApplicationQueueEvent);
+    };
+    ipcRenderer.on('application-queue:activity', listener);
+    return () => ipcRenderer.removeListener('application-queue:activity', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationQueue', applicationQueueApi);
+
+const FIELD_CONTROL_TYPES = ['text', 'textarea', 'select', 'checkbox', 'radio', 'file', 'unknown'] as const;
+const FIELD_CLASSIFICATIONS = ['credential_field', 'consent_field'] as const;
+
+/** Fail-closed the way `toApplicationQueueEntry` does: a shape this build cannot interpret throws
+ * rather than handing the renderer a snapshot with silently-missing or fabricated fields -- a
+ * dropped field here is a field the field-map generation session never gets to see or fill,
+ * exactly the fail-closed direction #196's design calls for. */
+function toOpenApplicationReviewResult(value: unknown): OpenApplicationReviewResult {
+  const source = asRecord(value);
+  const snapshotSource = source ? asRecord(source.snapshot) : undefined;
+  const screenshotBase64 = source ? optionalString(source, 'screenshotBase64') : undefined;
+  const generation = snapshotSource?.generation;
+  const capturedAt = snapshotSource ? optionalString(snapshotSource, 'capturedAt') : undefined;
+  const rawFields = snapshotSource?.fields;
+  const rawSubmitControls = snapshotSource?.submitControls;
+  const challengeDetected = snapshotSource?.challengeDetected;
+  const activeFrameId = snapshotSource?.activeFrameId;
+  const pageStateFingerprint = snapshotSource ? optionalString(snapshotSource, 'pageStateFingerprint') : undefined;
+  const activeFormScope = snapshotSource?.activeFormScope;
+  // The baseline every field's `frameOrigin` below is judged against (`form-snapshot.ts`'s own
+  // doc comment on `topFrameOrigin`). Optional for the same reason it is on the executor side: a
+  // read that established no origin at all still produces a usable snapshot.
+  const topFrameOrigin = snapshotSource ? optionalString(snapshotSource, 'topFrameOrigin') : undefined;
+  const handoffShown = source?.handoffShown;
+  if (
+    typeof generation !== 'number' ||
+    !capturedAt ||
+    !Array.isArray(rawFields) ||
+    !Array.isArray(rawSubmitControls) ||
+    typeof challengeDetected !== 'boolean' ||
+    typeof activeFrameId !== 'number' ||
+    !pageStateFingerprint ||
+    typeof handoffShown !== 'boolean' ||
+    !screenshotBase64
+  ) {
+    throw new Error('the application executor returned an unexpected response');
+  }
+
+  const submitControls = rawSubmitControls.map((rawControl, index) => {
+    const controlSource = asRecord(rawControl);
+    const controlRef = controlSource ? optionalString(controlSource, 'controlRef') : undefined;
+    const label = controlSource ? optionalString(controlSource, 'label') : undefined;
+    if (!controlRef || label === undefined) {
+      throw new Error(`the application executor returned an unexpected submit control shape at index ${index}`);
+    }
+    return { controlRef, label };
+  });
+
+  const fields = rawFields.map((rawField, index) => {
+    const fieldSource = asRecord(rawField);
+    const fieldRef = fieldSource ? optionalString(fieldSource, 'fieldRef') : undefined;
+    const label = fieldSource ? optionalString(fieldSource, 'label') : undefined;
+    const controlType = fieldSource ? optionalString(fieldSource, 'controlType') : undefined;
+    const required = fieldSource?.required;
+    const frameId = fieldSource?.frameId;
+    const active = fieldSource?.active;
+    if (
+      !fieldRef ||
+      label === undefined ||
+      !controlType ||
+      typeof required !== 'boolean' ||
+      typeof frameId !== 'number' ||
+      typeof active !== 'boolean'
+    ) {
+      throw new Error(`the application executor returned an unexpected field shape at index ${index}`);
+    }
+    if (!(FIELD_CONTROL_TYPES as readonly string[]).includes(controlType)) {
+      throw new Error(`the application executor returned an unrecognized control type at index ${index}`);
+    }
+    const rawOptions = fieldSource?.options;
+    const options = Array.isArray(rawOptions)
+      ? rawOptions.map((rawOption) => {
+          const optionSource = asRecord(rawOption);
+          const optionRef = optionSource ? optionalString(optionSource, 'optionRef') : undefined;
+          const optionLabel = optionSource ? optionalString(optionSource, 'label') : undefined;
+          if (!optionRef || optionLabel === undefined) {
+            throw new Error('the application executor returned an unexpected option shape');
+          }
+          return { optionRef, label: optionLabel };
+        })
+      : undefined;
+    const classification = fieldSource ? optionalString(fieldSource, 'classification') : undefined;
+    if (classification !== undefined && !(FIELD_CLASSIFICATIONS as readonly string[]).includes(classification)) {
+      throw new Error(`the application executor returned an unrecognized classification at index ${index}`);
+    }
+    const formScope = fieldSource?.formScope;
+    const rendered = fieldSource?.rendered;
+    const invalid = fieldSource?.invalid;
+    const name = fieldSource ? optionalString(fieldSource, 'name') : undefined;
+    // Untrusted third-party page text, carried across verbatim as a plain string for a person to
+    // read. Nothing on either side of this bridge interprets it.
+    const validationMessage = fieldSource ? optionalString(fieldSource, 'validationMessage') : undefined;
+    // The security origin of the frame this field was extracted from, when the read established
+    // one (see `form-snapshot.ts`'s `SnapshotField.frameOrigin`). Carried across the bridge for
+    // the same reason `frameId` already was: a review UI or a field-map generation session that
+    // cannot see which document a field lives in cannot tell an employer's own control from one
+    // inside a third-party embed the executor has already refused to write into.
+    const frameOrigin = fieldSource ? optionalString(fieldSource, 'frameOrigin') : undefined;
+    return {
+      fieldRef,
+      label,
+      controlType: controlType as OpenApplicationReviewResult['snapshot']['fields'][number]['controlType'],
+      required,
+      frameId,
+      active,
+      ...(name ? { name } : {}),
+      ...(typeof formScope === 'number' ? { formScope } : {}),
+      ...(typeof rendered === 'boolean' ? { rendered } : {}),
+      ...(typeof invalid === 'boolean' ? { invalid } : {}),
+      ...(validationMessage ? { validationMessage } : {}),
+      ...(frameOrigin ? { frameOrigin } : {}),
+      ...(options ? { options } : {}),
+      ...(classification ? { classification: classification as 'credential_field' | 'consent_field' } : {}),
+    };
+  });
+
+  return {
+    snapshot: {
+      generation,
+      fields,
+      submitControls,
+      capturedAt,
+      challengeDetected,
+      activeFrameId,
+      pageStateFingerprint,
+      ...(typeof activeFormScope === 'number' ? { activeFormScope } : {}),
+      ...(topFrameOrigin ? { topFrameOrigin } : {}),
+    },
+    screenshotBase64,
+    readiness: toFormReadiness(source?.readiness),
+    handoffShown,
+  };
+}
+
+const READINESS_BLOCKER_KINDS = [
+  'required_field_empty',
+  'validation_error',
+  'value_mismatch',
+  'unverified_write',
+  'attachment_missing',
+  'stale_page_state',
+  'challenge_detected',
+] as const;
+
+/** Fail-closed like every other converter here: a readiness reading this build cannot interpret
+ * throws rather than being silently downgraded to an empty one, which would read as "ready" and is
+ * the single worst direction for this particular value to fail in (#277). */
+function toFormReadiness(value: unknown): FormReadiness {
+  const source = asRecord(value);
+  const ready = source?.ready;
+  const verifiedFilledCount = source?.verifiedFilledCount;
+  const discoveredFieldCount = source?.discoveredFieldCount;
+  const requiredFieldCount = source?.requiredFieldCount;
+  const requiredFieldsSatisfied = source?.requiredFieldsSatisfied;
+  const rawBlockers = source?.blockers;
+  if (
+    typeof ready !== 'boolean' ||
+    typeof verifiedFilledCount !== 'number' ||
+    typeof discoveredFieldCount !== 'number' ||
+    typeof requiredFieldCount !== 'number' ||
+    typeof requiredFieldsSatisfied !== 'number' ||
+    !Array.isArray(rawBlockers)
+  ) {
+    throw new Error('the application executor returned an unexpected readiness response');
+  }
+
+  const blockers = rawBlockers.map((rawBlocker, index) => {
+    const blockerSource = asRecord(rawBlocker);
+    const kind = blockerSource ? optionalString(blockerSource, 'kind') : undefined;
+    if (!kind || !(READINESS_BLOCKER_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(`the application executor returned an unrecognized readiness blocker at index ${index}`);
+    }
+    return {
+      kind,
+      ...(blockerSource ? { fieldRef: optionalString(blockerSource, 'fieldRef') } : {}),
+      ...(blockerSource ? { label: optionalString(blockerSource, 'label') } : {}),
+      ...(blockerSource ? { message: optionalString(blockerSource, 'message') } : {}),
+      ...(blockerSource ? { detail: optionalString(blockerSource, 'detail') } : {}),
+      // The discriminated union on the other side of this bridge is narrower than what arrives over
+      // IPC (each blocker kind carries only its own fields). This asserts the shape the union
+      // describes after the `kind` above has already been checked against the closed set, which is
+      // the one fact the structural check cannot express to the compiler on its own.
+    } as unknown as FormReadiness['blockers'][number];
+  });
+
+  return { ready, verifiedFilledCount, discoveredFieldCount, requiredFieldCount, requiredFieldsSatisfied, blockers };
+}
+
+const SHOW_HANDOFF_REFUSAL_REASONS = ['no_open_review', 'no_window', 'already_submitting'] as const;
+
+function toShowApplicationHandoffResult(value: unknown): ShowApplicationHandoffResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  if (reason !== undefined && !(SHOW_HANDOFF_REFUSAL_REASONS as readonly string[]).includes(reason)) {
+    throw new Error('the application executor returned an unrecognized handoff refusal reason');
+  }
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const company = source ? optionalString(source, 'company') : undefined;
+  const role = source ? optionalString(source, 'role') : undefined;
+  const bannerHeightPx = source?.bannerHeightPx;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ShowApplicationHandoffResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(company ? { company } : {}),
+    ...(role ? { role } : {}),
+    ...(typeof bannerHeightPx === 'number' && Number.isFinite(bannerHeightPx) ? { bannerHeightPx } : {}),
+  };
+}
+
+/** Rebuilt field by field, like every other converter here: only the four metadata strings an
+ * attachment result is defined to carry cross this bridge, so a future main-process change that
+ * added a path-shaped field to that object could not leak it into the renderer by accident. */
+function toApplicationAttachments(value: unknown): ApplicationAttachmentResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const attachments = value.flatMap((entry) => {
+    const source = asRecord(entry);
+    if (!source) return [];
+    return [
+      {
+        artifactId: requiredString(source, 'artifactId'),
+        fieldRef: requiredString(source, 'fieldRef'),
+        fileName: requiredString(source, 'fileName'),
+        attachedFileName: requiredString(source, 'attachedFileName'),
+      },
+    ];
+  });
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+function toApplicationManualHandoff(value: unknown): ApplicationManualHandoff | undefined {
+  const source = asRecord(value);
+  if (!source) return undefined;
+  return {
+    fieldRef: requiredString(source, 'fieldRef'),
+    artifactId: requiredString(source, 'artifactId'),
+    fileName: requiredString(source, 'fileName'),
+    reason: requiredString(source, 'reason', 'unsupported_control') as ApplicationManualHandoff['reason'],
+  };
+}
+
+function toApplyApplicationFieldMapResult(value: unknown): ApplyApplicationFieldMapResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const appliedCount = source?.appliedCount;
+  const verifiedCount = source?.verifiedCount;
+  const attachments = source ? toApplicationAttachments(source.attachments) : undefined;
+  const manualHandoff = source ? toApplicationManualHandoff(source.manualHandoff) : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ApplyApplicationFieldMapResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(typeof appliedCount === 'number' ? { appliedCount } : {}),
+    ...(typeof verifiedCount === 'number' ? { verifiedCount } : {}),
+    ...(source?.readiness !== undefined ? { readiness: toFormReadiness(source.readiness) } : {}),
+    ...(attachments ? { attachments } : {}),
+    ...(manualHandoff ? { manualHandoff } : {}),
+  };
+}
+
+function toConfirmApplicationAnswerResult(value: unknown): ConfirmApplicationAnswerResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ConfirmApplicationAnswerResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(source?.readiness !== undefined ? { readiness: toFormReadiness(source.readiness) } : {}),
+    // Passed through as main's own typed return, the same trust boundary `getApplicationAttempt`
+    // already applies to this exact shape -- see that bridge method in this same file.
+    ...(source?.preparedFields !== undefined ? { preparedFields: source.preparedFields as ConfirmApplicationAnswerResult['preparedFields'] } : {}),
+  };
+}
+
+function toSubmitApplicationReviewResult(value: unknown): SubmitApplicationReviewResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<SubmitApplicationReviewResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function toRequestAutomationGrantResult(value: unknown): RequestAutomationGrantResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const expiresAt = source ? optionalString(source, 'expiresAt') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<RequestAutomationGrantResult['reason']> } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+function toScheduleAutomaticSubmissionResult(value: unknown): ScheduleAutomaticSubmissionResult {
+  const source = asRecord(value);
+  const ok = source?.ok;
+  if (typeof ok !== 'boolean') {
+    throw new Error('the application executor returned an unexpected response');
+  }
+  const reason = source ? optionalString(source, 'reason') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  const scheduledAutomaticSubmitAt = source ? optionalString(source, 'scheduledAutomaticSubmitAt') : undefined;
+  return {
+    ok,
+    ...(reason ? { reason: reason as NonNullable<ScheduleAutomaticSubmissionResult['reason']> } : {}),
+    ...(detail ? { detail } : {}),
+    ...(scheduledAutomaticSubmitAt ? { scheduledAutomaticSubmitAt } : {}),
+  };
+}
+
+const applicationExecutorApi: ApplicationExecutorBridge = {
+  async openReview(input) {
+    const result = await ipcRenderer.invoke('application-executor:open-review', input);
+    return toOpenApplicationReviewResult(result);
+  },
+
+  async applyFieldMap(input) {
+    const result = await ipcRenderer.invoke('application-executor:apply-field-map', input);
+    return toApplyApplicationFieldMapResult(result);
+  },
+
+  async confirmApplicationAnswer(input) {
+    const result = await ipcRenderer.invoke('application-executor:confirm-answer', input);
+    return toConfirmApplicationAnswerResult(result);
+  },
+
+  async submitReview(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:submit-review', attemptId);
+    return toSubmitApplicationReviewResult(result);
+  },
+
+  async closeReview(attemptId) {
+    await ipcRenderer.invoke('application-executor:close-review', attemptId);
+  },
+
+  async showHandoff(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:show-handoff', attemptId);
+    return toShowApplicationHandoffResult(result);
+  },
+
+  async hideHandoff(attemptId) {
+    await ipcRenderer.invoke('application-executor:hide-handoff', attemptId);
+  },
+
+  async resolveTargetPolicyId(canonicalUrl) {
+    const result = await ipcRenderer.invoke('application-executor:resolve-target-policy', canonicalUrl);
+    return typeof result === 'string' ? result : null;
+  },
+
+  async requestAutomationGrant(input) {
+    const result = await ipcRenderer.invoke('application-executor:request-automation-grant', input);
+    return toRequestAutomationGrantResult(result);
+  },
+
+  async scheduleAutomaticSubmission(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:schedule-automatic-submission', attemptId);
+    return toScheduleAutomaticSubmissionResult(result);
+  },
+
+  async cancelScheduledAutomaticSubmission(attemptId) {
+    await ipcRenderer.invoke('application-executor:cancel-scheduled-automatic-submission', attemptId);
+  },
+
+  async recordUserReportedSubmission(attemptId) {
+    const result = await ipcRenderer.invoke('application-executor:record-user-reported-submission', attemptId);
+    const source = asRecord(result);
+    const ok = source?.ok;
+    if (typeof ok !== 'boolean') throw new Error('the application executor returned an unexpected response');
+    const reason = source ? optionalString(source, 'reason') : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(reason ? { reason: reason as 'already_observed' | 'attempt_not_found' } : {}),
+      ...(detail ? { detail } : {}),
+    };
+  },
+
+  async saveArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:save-artifact', artifactId);
+    const source = asRecord(result);
+    return { saved: source?.saved === true };
+  },
+
+  async openArtifact(artifactId) {
+    const result = await ipcRenderer.invoke('application-executor:open-artifact', artifactId);
+    const source = asRecord(result);
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      opened: source?.opened === true,
+      ...(detail ? { detail } : {}),
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('applicationExecutor', applicationExecutorApi);
+
+const START_APPLICATION_REFUSALS: readonly StartApplicationAttemptRefusal[] = [
+  'no_apply_url',
+  'no_cv_available',
+  'attempt_already_in_progress',
+];
+
+/**
+ * #272's preparation pipeline. Rebuilt field by field on the way back, the same fail-closed
+ * discipline every other bridge here uses: an `ok` this build cannot interpret becomes a refusal
+ * with no reason rather than a success, and nothing beyond the four documented fields crosses even
+ * if main sent it.
+ */
+const applicationPipelineApi: ApplicationPipelineBridge = {
+  async start(savedJobId): Promise<StartApplicationAttemptResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start', { savedJobId });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+  async startFromVacancy(vacancyKey): Promise<StartApplicationFromVacancyResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:start-from-vacancy', { vacancyKey });
+    const source = asRecord(result);
+    const ok = source?.ok === true;
+    const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+    const savedJobId = source ? optionalString(source, 'savedJobId') : undefined;
+    const rawReason = source ? optionalString(source, 'reason') : undefined;
+    const reason = rawReason && (START_APPLICATION_REFUSALS as readonly string[]).includes(rawReason)
+      ? (rawReason as StartApplicationAttemptRefusal)
+      : undefined;
+    const detail = source ? optionalString(source, 'detail') : undefined;
+    return {
+      ok,
+      ...(attemptId === undefined ? {} : { attemptId }),
+      ...(savedJobId === undefined ? {} : { savedJobId }),
+      ...(source?.created === true || source?.created === false ? { created: source.created } : {}),
+      ...(reason === undefined ? {} : { reason }),
+      ...(detail === undefined ? {} : { detail }),
+    };
+  },
+  async retryTailoring(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:retry-tailoring', { attemptId }),
+      attemptId,
+      'ai',
+    );
+  },
+  async useOriginalCv(attemptId): Promise<RestartApplicationTailoringResult> {
+    return parseRestartTailoringResult(
+      await ipcRenderer.invoke('application-pipeline:use-original-cv', { attemptId }),
+      attemptId,
+      'original',
+    );
+  },
+  async resume(attemptId): Promise<RestartApplicationTailoringResult> {
+    const result: unknown = await ipcRenderer.invoke('application-pipeline:resume', { attemptId });
+    const source = asRecord(result);
+    const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+    return parseRestartTailoringResult(result, attemptId, mode === 'original' ? 'original' : 'ai');
+  },
+};
+
+function parseRestartTailoringResult(
+  result: unknown,
+  requestedAttemptId: string,
+  requestedMode: RestartApplicationTailoringResult['tailoringMode'],
+): RestartApplicationTailoringResult {
+  const source = asRecord(result);
+  const attemptId = source ? optionalString(source, 'attemptId') : undefined;
+  const mode = source ? optionalString(source, 'tailoringMode') : undefined;
+  const detail = source ? optionalString(source, 'detail') : undefined;
+  return {
+    ok: source?.ok === true && attemptId === requestedAttemptId && mode === requestedMode,
+    attemptId: attemptId ?? requestedAttemptId,
+    tailoringMode: mode === 'original' ? 'original' : 'ai',
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
+
+contextBridge.exposeInMainWorld('applicationPipeline', applicationPipelineApi);

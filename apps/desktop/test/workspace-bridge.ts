@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type {
   AppSettingsRecord,
   SystemBridge,
@@ -13,7 +14,7 @@ import type {
  * test overrides only the one it is about.
  *
  * `DEFAULT_SETTINGS` intentionally mirrors the column defaults in
- * `electron/workspace/schema.ts` — if the two ever drift, a shell test asserting "opens on Search
+ * `electron/workspace/schema.ts`. If the two ever drift, a shell test asserting "opens on Search
  * with the sidebar expanded" is the thing that should notice.
  */
 export const DEFAULT_SETTINGS: AppSettingsRecord = {
@@ -24,10 +25,15 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   sidebarStart: 'remember_last',
   sidebarCollapsed: false,
   lastOpenedPage: 'search',
-  defaultMarket: 'netherlands',
+  minimizeToTrayOnClose: false,
+  // The one deliberate divergence from the schema defaults: `welcome_seen` really does ship as
+  // `false`, but leaving it false here would put the first-launch welcome modal on top of every
+  // unrelated shell test (they all stub an empty CV library too). Tests about the modal set it
+  // back to false explicitly -- see `test/components/WelcomeModal.test.tsx`.
+  welcomeSeen: true,
+  autoScanEnabled: false,
+  autoApplyEnabled: false,
   defaultLocation: '',
-  sponsorOnlyDefault: true,
-  indVerificationEnabled: true,
   defaultCvId: null,
   defaultLetterType: 'motivation_letter',
   defaultLetterTone: 'natural',
@@ -35,15 +41,55 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   defaultApplicationStatus: 'preparing',
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
+  defaultProvider: 'claude',
+  mcpEndpointEnabled: false,
+  agentSelectedSessionId: null,
+  agentArchivedSessionIds: [],
+  agentUnreadCounts: {},
 };
 
-export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0 };
+export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 };
+
+/** Mirrors the shipped `config/candidate-profile-v1.json`: empty, not a plausible-looking default. */
+export const DEFAULT_CANDIDATE_PROFILE: CandidateProfile = {
+  profileVersion: 'candidate-profile-test',
+  candidateName: '',
+  currentRole: '',
+  location: '',
+  experienceYears: 0,
+  strongestSkills: [],
+  additionalSkills: [],
+  targetRoles: [],
+  consideredRoles: [],
+  excludedRoleFamilies: [],
+  constraints: {
+    professionalLanguage: 'English',
+    dutchRequired: false,
+    primaryCountry: '',
+    allowRemoteEuSupportingNetherlands: false,
+    minimumMonthlyBaseEur: 0,
+  },
+};
 
 export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {}): WorkspaceBridge {
   const bridge: WorkspaceBridge = {
     getSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     updateSettings: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
     getCounts: vi.fn().mockResolvedValue(DEFAULT_COUNTS),
+    resetApplicationData: vi.fn().mockResolvedValue({
+      settings: DEFAULT_SETTINGS,
+      deleted: {
+        savedJobs: 0,
+        applications: 0,
+        cvDocuments: 0,
+        letters: 0,
+        applicationAttempts: 0,
+        applicationArtifacts: 0,
+        submissionReceipts: 0,
+        automationGrants: 0,
+        applicationAnswers: 0,
+      },
+    }),
 
     listSavedJobs: vi.fn().mockResolvedValue([]),
     createSavedJob: vi.fn(),
@@ -60,22 +106,54 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     updateCvDocument: vi.fn(),
     deleteCvDocument: vi.fn().mockResolvedValue({ deleted: true }),
     setDefaultCvDocument: vi.fn().mockResolvedValue([]),
+    exportCvDocument: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\resume.pdf' }),
+
+    listCvEvidenceOverlays: vi.fn().mockResolvedValue([]),
+    getCvEvidenceOverlay: vi.fn().mockResolvedValue(null),
+    createCvEvidenceOverlay: vi.fn(),
+    updateCvEvidenceOverlay: vi.fn(),
+    approveCvEvidenceOverlay: vi.fn(),
+    deleteCvEvidenceOverlay: vi.fn().mockResolvedValue({ deleted: true }),
+    exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
+
+    listMcpClientGrants: vi.fn().mockResolvedValue([]),
+    createMcpClientGrant: vi.fn(),
+    revokeMcpClientGrant: vi.fn(),
+    getMcpServerStatus: vi.fn().mockResolvedValue({ running: false, port: null }),
+    listCvTailoringProposals: vi.fn().mockResolvedValue([]),
+    acceptCvTailoringProposal: vi.fn(),
+    rejectCvTailoringProposal: vi.fn(),
 
     listLetters: vi.fn().mockResolvedValue([]),
     createLetter: vi.fn(),
     updateLetter: vi.fn(),
     deleteLetter: vi.fn().mockResolvedValue({ deleted: true }),
     duplicateLetter: vi.fn(),
+
+    listApplicationAttempts: vi.fn().mockResolvedValue([]),
+    getApplicationAttempt: vi.fn(),
+    updateApplicationAttempt: vi.fn(),
+    listApplicationArtifacts: vi.fn().mockResolvedValue([]),
+    listAutomationGrants: vi.fn().mockResolvedValue([]),
+    revokeAutomationGrant: vi.fn(),
+
+    listApplicationAnswers: vi.fn().mockResolvedValue([]),
+    saveApplicationAnswer: vi.fn(),
+    updateApplicationAnswer: vi.fn(),
+    recordApplicationAnswerUsed: vi.fn(),
+    deleteApplicationAnswer: vi.fn().mockResolvedValue({ deleted: true }),
     ...overrides,
   };
   (window as unknown as { workspace: WorkspaceBridge }).workspace = bridge;
   return bridge;
 }
 
-/** Stub for the single-capability `window.system` bridge (Settings page's launch-at-login). */
+/** Stub for the `window.system` bridge: OS login-item, app version, and native save-file dialog. */
 export function installSystemBridge(overrides: Partial<SystemBridge> = {}): SystemBridge {
   const bridge: SystemBridge = {
     setLaunchAtLogin: vi.fn().mockResolvedValue(undefined),
+    getAppVersion: vi.fn().mockResolvedValue('0.0.0-test'),
+    saveFile: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\export.txt' }),
     ...overrides,
   };
   (window as unknown as { system: SystemBridge }).system = bridge;
@@ -86,9 +164,19 @@ export function installVacancyRadarBridge(overrides: Partial<VacancyRadarBridge>
   const bridge: VacancyRadarBridge = {
     getStatus: vi.fn().mockResolvedValue({ ready: false, error: 'not configured in this test' }),
     getReport: vi.fn().mockResolvedValue(null),
+    getReportSummary: vi.fn().mockResolvedValue(null),
     runScan: vi.fn(),
-    getNetherlandsReport: vi.fn().mockResolvedValue(null),
-    runNetherlandsScan: vi.fn(),
+    getScanStatus: vi.fn().mockResolvedValue({ scanning: false }),
+    // Default: subscribes to nothing and hands back an already-good unsubscribe. A test that cares
+    // about progress events overrides this with its own `vi.fn()` that captures the callback (the
+    // same "override only the one you're about" pattern every other capability here follows).
+    onScanProgress: vi.fn(() => () => {}),
+    getSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    saveSearchProfile: vi.fn().mockResolvedValue(DEFAULT_CANDIDATE_PROFILE),
+    // Default: not imported yet, mirroring a fresh checkout/userData directory. A test that cares
+    // about a populated roster overrides this with its own resolved status.
+    getAtsRosterStatus: vi.fn().mockResolvedValue(null),
+    refreshAtsRoster: vi.fn(),
     ...overrides,
   };
   (window as unknown as { vacancyRadar: VacancyRadarBridge }).vacancyRadar = bridge;

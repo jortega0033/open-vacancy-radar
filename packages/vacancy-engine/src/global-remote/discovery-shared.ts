@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 
 import type { AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { decodeFeedEntities } from '../ats/shared.js';
+import { resolveApplyUrl, vacancyIdentityFor } from '../vacancies/identity.js';
 import { annualizedMinimumUsd, classifyDiscoveryVacancy } from './evaluation.js';
+import { normalizeSalary } from './salary.js';
 import type {
   DiscoverySourceAudit,
   DiscoveryVacancyAudit,
@@ -14,8 +17,18 @@ export function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/**
+ * Every JSON-based discovery source in this package (and every RSS/XML source's non-XML-parsed
+ * fields) reads its `title`/`company`/`description`/etc. strings through this one function, so
+ * decoding HTML entities here -- rather than in each of the ~15 source files that call it -- is
+ * what keeps this a single shared step instead of an ad-hoc copy per source. See
+ * `decodeFeedEntities` (in `../ats/shared.js`, reused here rather than duplicated) for why this is
+ * needed at all and why it's a targeted entity replacement rather than a full markup parse.
+ */
 export function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  if (typeof value !== 'string') return null;
+  const decoded = decodeFeedEntities(value).trim();
+  return decoded.length === 0 ? null : decoded;
 }
 
 export function numberValue(value: unknown): number | null {
@@ -56,11 +69,33 @@ export function locations(value: unknown, emptyFallback = 'Worldwide'): string {
 export function discoveryAudit(
   input: Omit<
     DiscoveryVacancyAudit,
-    'decision' | 'reasons' | 'annualizedMinimumUsd' | 'contentHash'
+    | 'decision'
+    | 'reasons'
+    | 'annualizedMinimumUsd'
+    | 'normalizedAnnualMinimum'
+    | 'normalizedCurrency'
+    | 'normalizationMethod'
+    | 'assumptionProvenance'
+    | 'salaryProvenance'
+    | 'salaryProvider'
+    | 'salarySourceKey'
+    | 'salarySourceUrl'
+    | 'contentHash'
+    | 'description'
+    | 'postedAt'
+    | 'profileScore'
+    | 'profileMatch'
+    | 'worldwideSponsorMatch'
+    | 'identity'
+    | 'sourceUrl'
+    | 'applyUrl'
+    | 'sources'
   > & {
     raw: unknown;
-    minimumAnnualBaseUsd: number;
+    minimumAnnualBaseUsd: number | null;
     description?: string | null;
+    postedAt?: string | null;
+    salaryProvenance?: import('./salary.js').SalaryProvenance;
   },
 ): DiscoveryVacancyAudit {
   const annualized = annualizedMinimumUsd(
@@ -69,6 +104,12 @@ export function discoveryAudit(
     input.salaryPeriod,
     input.employmentType,
   );
+  const salaryNormalization = normalizeSalary(
+    input.advertisedMinimum,
+    input.currency,
+    input.salaryPeriod,
+    input.salaryProvenance,
+  );
   const classification = classifyDiscoveryVacancy({
     title: input.title,
     location: input.location,
@@ -76,31 +117,92 @@ export function discoveryAudit(
     minimumAnnualBaseUsd: input.minimumAnnualBaseUsd,
     ...(input.description === undefined ? {} : { description: input.description }),
   });
+  // Issue #278: every discovery source computes its canonical identity and apply-URL evidence
+  // through this one shared constructor, rather than each of the ~30 call sites in global-remote/*.ts
+  // doing it themselves -- the same reasoning `annualizedMinimumUsd`/`classifyDiscoveryVacancy`
+  // above already follow.
+  const identity = vacancyIdentityFor({
+    url: input.url,
+    company: input.company,
+    title: input.title,
+    location: input.location,
+  });
+  const applyUrl = resolveApplyUrl(identity, input.url);
   return {
     key: input.key,
     provider: input.provider,
     company: input.company,
     title: input.title,
     url: input.url,
+    sourceUrl: input.url,
+    identity,
+    applyUrl,
+    sources: [{ provider: input.provider, key: input.key, url: input.url }],
     location: input.location,
+    locations: [input.location],
+    searchableText: [`${input.title} ${input.description ?? ''}`.trim()],
+    employmentTypes: input.employmentType ? [input.employmentType] : [],
     employmentType: input.employmentType,
     currency: input.currency,
     salaryPeriod: input.salaryPeriod,
     advertisedMinimum: input.advertisedMinimum,
     annualizedMinimumUsd: annualized,
+    salaryProvider: input.advertisedMinimum === null ? null : input.provider,
+    salarySourceKey: input.advertisedMinimum === null ? null : input.key,
+    salarySourceUrl: input.advertisedMinimum === null ? null : input.url,
+    ...salaryNormalization,
     decision: classification.decision,
     reasons: classification.reasons,
     contentHash: createHash('sha256').update(JSON.stringify(input.raw)).digest('hex'),
+    description: input.description ?? null,
+    postedAt: input.postedAt ?? null,
+    // Always null at discovery time: unlike `description`/`postedAt`, a profile score needs the
+    // candidate profile and the pipeline's own salary floor, neither of which any individual
+    // discovery source has. `applyWorldwideProfileScores` fills this in once, after discovery, in
+    // `runGlobalRemoteScan`.
+    profileScore: null,
+    // Always null at discovery time, for the same reason as `profileScore` above: resolving it
+    // needs a network round trip and a database read, neither of which belongs in a per-source
+    // adapter. `applyWorldwideSponsorMatches` fills this in once, after discovery.
+    worldwideSponsorMatch: null,
   };
 }
 
-export function sourceFailure(error: unknown): Pick<DiscoverySourceAudit, 'status' | 'error'> {
+export function sourceFailure(
+  error: unknown,
+): Pick<DiscoverySourceAudit, 'status' | 'error' | 'complete' | 'completenessReason' | 'continuationCursor'> {
   const status = error instanceof AtsResponseError ? error.status : null;
   const blocked = status !== null && [401, 403, 406, 407, 429, 451].includes(status);
+  const message = error instanceof Error ? error.message : String(error);
   return {
     status: blocked ? 'blocked' : 'error',
-    error: error instanceof Error ? error.message : String(error),
+    error: message,
+    // A failure is never a complete scan of the source, by definition -- the same reason the
+    // failure itself gives (`message`) is the honest answer to "why is coverage incomplete".
+    complete: false,
+    completenessReason: message,
+    continuationCursor: null,
   };
+}
+
+/** For a source's normal end-of-run completion: it reached the end of its available listings with
+ * no cap hit and no error. */
+export function completeAudit(): Pick<
+  DiscoverySourceAudit,
+  'complete' | 'completenessReason' | 'continuationCursor'
+> {
+  return { complete: true, completenessReason: null, continuationCursor: null };
+}
+
+/** For a source that stopped before the end of its available listings -- a configured page/result
+ * cap, most often -- without erroring. `continuationCursor` carries whatever resumable marker the
+ * adapter already tracked at the point it stopped (a next-page URL or page/offset number), or stays
+ * `null` where the source's contract has no such thing to carry. */
+export function incompleteAudit(
+  reason: string,
+  continuationCursor: string | null = null,
+): Pick<DiscoverySourceAudit, 'complete' | 'completenessReason' | 'continuationCursor'> {
+  return { complete: false, completenessReason: reason, continuationCursor };
 }
 
 export type ParsedSalary = {
@@ -108,6 +210,42 @@ export type ParsedSalary = {
   currency: string | null;
   period: string | null;
 };
+
+/**
+ * Every period keyword this function recognizes, each paired with a `g` (global) regex so
+ * `nearestSalaryPeriod` below can find every occurrence, not just the first.
+ */
+const SALARY_PERIOD_PATTERNS: { period: string; pattern: RegExp }[] = [
+  { period: 'hourly', pattern: /\b(?:hour|hourly|hr)\b|\/\s*h\b/giu },
+  { period: 'monthly', pattern: /\b(?:month|monthly|mo)\b/giu },
+  { period: 'weekly', pattern: /\b(?:week|weekly|wk)\b/giu },
+  { period: 'annual', pattern: /\b(?:year|yearly|annual|annually|yr)\b/giu },
+];
+
+/**
+ * QA regression: free text describing a role often mentions a period word for something that is
+ * not the pay frequency -- a real confirmed case had "37.5 hours per week" ahead of "£25,000 -
+ * 35,000 per year" in the same description, and reading the period with a fixed hourly > monthly >
+ * weekly > annual priority order (first match wins) picked "weekly" purely because that check ran
+ * before "annual", regardless of which word actually sat next to the salary figure. Scanning every
+ * period keyword in the text and keeping whichever occurrence sits textually closest to the parsed
+ * salary number fixes that: the word that actually describes the pay almost always sits right next
+ * to the number, while an incidental one (working hours, notice period, etc.) sits further away.
+ */
+function nearestSalaryPeriod(value: string, numberIndex: number): string | null {
+  let closest: string | null = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const { period, pattern } of SALARY_PERIOD_PATTERNS) {
+    for (const periodMatch of value.matchAll(pattern)) {
+      const distance = Math.abs((periodMatch.index ?? 0) - numberIndex);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = period;
+      }
+    }
+  }
+  return closest;
+}
 
 export function parseSalaryText(value: string | null): ParsedSalary {
   if (value === null) return { minimum: null, currency: null, period: null };
@@ -124,16 +262,95 @@ export function parseSalaryText(value: string | null): ParsedSalary {
   const numeric = Number(normalized);
   if (!Number.isFinite(numeric)) return { minimum: null, currency, period: null };
   const minimum = numeric * (match[2] === undefined ? 1 : 1_000);
-  const period = /\b(?:hour|hourly|hr)\b|\/\s*h\b/iu.test(value)
-    ? 'hourly'
-    : /\b(?:month|monthly|mo)\b/iu.test(value)
-      ? 'monthly'
-      : /\b(?:week|weekly|wk)\b/iu.test(value)
-        ? 'weekly'
-        : /\b(?:year|yearly|annual|annually|yr)\b/iu.test(value)
-          ? 'annual'
-          : null;
+  const period = nearestSalaryPeriod(value, match.index);
   return { minimum, currency, period };
+}
+
+/**
+ * Normalizes a source's raw posting-date string to ISO-8601. Handles every format actually seen
+ * across worldwide sources: RFC 822 (`Thu, 27 Aug 2026 14:36:09 GMT`) and offset-bearing ISO parse
+ * correctly as-is; a date-only string (`2026-08-31`) is UTC per spec already. The one real
+ * ambiguity is a date-TIME string with no timezone marker at all (e.g. JobTech Sweden's
+ * `publication_date`), which JS otherwise treats as the *local* machine's timezone -- appending
+ * `Z` pins it to UTC instead, so the same raw value renders the same date for every user
+ * regardless of their machine's timezone. A few sources report their own local time this way
+ * (JobTech Sweden is Europe/Stockholm), so the exact hour can be off by that source's UTC offset;
+ * this only matters for day-level display and a 30-day staleness check, where an hour or two never
+ * changes the answer.
+ */
+export function isoPostedAt(value: string | null): string | null {
+  if (value === null) return null;
+  // A space-separated date-time (e.g. Jooble's `2026-08-31 14:05:00`) is normalized to the
+  // standard `T` separator before the timezone check below, rather than left to whatever a given
+  // JS engine happens to do with the non-standard form.
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/u.test(value) ? value.replace(' ', 'T') : value;
+  const hasTimezoneMarker = /(?:Z|[+-]\d{2}:?\d{2})$/u.test(normalized);
+  const isOffsetlessDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(normalized) && !hasTimezoneMarker;
+  const parsed = new Date(isOffsetlessDateTime ? `${normalized}Z` : normalized);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/**
+ * For sources reporting the posting date as `dd/mm/yyyy` (e.g. Reed) rather than any ISO variant.
+ * Parses the three numeric parts explicitly instead of handing the ambiguous string to `new
+ * Date()`, which would silently read it as the wrong calendar date (US month-first order) on some
+ * inputs rather than failing loudly.
+ */
+export function isoPostedAtFromDdMmYyyy(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/u.exec(value);
+  if (match === null) return null;
+  const [, dayText, monthText, year] = match;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/**
+ * For a source reporting a bare `yyyyMMdd` date with no separators (e.g. Taiwan Jobs' `TRANDATE`
+ * update date and `STOP_DATE` application deadline). Parses the three numeric parts explicitly,
+ * the same way `isoPostedAtFromDdMmYyyy` does, since an unbroken 8-digit run has no separator to
+ * anchor `new Date()`'s parsing to the right field order.
+ */
+export function isoPostedAtFromYyyyMmDd(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{4})(\d{2})(\d{2})$/u.exec(value);
+  if (match === null) return null;
+  const [, year, monthText, dayText] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/** For sources reporting the posting date as a unix timestamp in seconds (e.g. arbeitnow, himalayas). */
+export function isoPostedAtFromUnixSeconds(value: number | null): string | null {
+  if (value === null) return null;
+  const parsed = new Date(value * 1000);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+}
+
+/**
+ * For a source reporting `mm/dd/yyyy` (US month-first order, e.g. UN Careers) at the start of an
+ * otherwise free-text value (UN Careers' "Posted Date" metadata also carries a local time-of-day
+ * and timezone label after the date, e.g. "08/15/2026 10:00:00 AM"). Only the leading date is
+ * used -- the time-of-day is dropped rather than guessed at, since converting a named local
+ * timezone to UTC correctly requires knowing its DST rules for that date, which is unnecessary
+ * precision for a day-level display and a 30-day staleness check.
+ */
+export function isoPostedAtFromMmDdYyyyPrefix(value: string | null): string | null {
+  if (value === null) return null;
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})\b/u.exec(value);
+  if (match === null) return null;
+  const [, monthText, dayText, year] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const parsed = new Date(Date.UTC(Number(year), month - 1, day));
+  return Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
 }
 
 export function httpUrl(value: unknown): string | null {

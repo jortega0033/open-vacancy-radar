@@ -1,0 +1,157 @@
+import { ensureLightTheme, expect, goto, test } from './fixtures.js';
+
+/**
+ * The one flow every other spec depends on being right: the app boots, every destination is
+ * reachable, and the sidebar carries no fake per-user data: the exact regression this suite exists
+ * to catch a repeat of (see AppSidebar.tsx's history: a hardcoded "JO" avatar was shipped and only
+ * caught by manual testing).
+ */
+test.describe('app shell', () => {
+  test('boots to Search and every sidebar destination is reachable', async ({ window }) => {
+    // `WorkspaceHeader`'s title is the one `<h1>` in the shell; a page's own content heading (e.g.
+    // Applications' `<h2>`) can legitimately repeat the same text, so the level distinguishes them
+    // without needing to know which pages happen to duplicate their title and which (Search) don't.
+    const headerTitle = (name: string) =>
+      window.getByRole('heading', { level: 1, name, exact: true });
+    await expect(headerTitle('Search Jobs')).toBeVisible();
+
+    const destinations: Array<[label: string, heading: string]> = [
+      ['Saved Jobs', 'Saved Jobs'],
+      ['Applications', 'Applications'],
+      ['CV', 'CV'],
+      ['Letters', 'Letters'],
+      // ADI-07's eighth destination, "AI Workspace", is deliberately absent from this list: per the
+      // product decision in `.claude/ticket-drafts/draft-agent-workspace-mvp-scope.md` it is hidden
+      // from the sidebar (see `nav.ts`'s `SECONDARY_NAV` comment), so it is no longer one of the
+      // sidebar's reachable destinations. Its own behavior remains covered where it always was --
+      // test/components/agent-workspace/, where the daemon can be stubbed -- and
+      // `test/App.test.tsx` covers the sidebar no longer listing it.
+      ['AI Runtime', 'AI Runtime'],
+      ['Settings', 'Settings'],
+      ['Search', 'Search Jobs'],
+    ];
+    for (const [label, heading] of destinations) {
+      await goto(window, label);
+      await expect(headerTitle(heading)).toBeVisible();
+    }
+  });
+
+  test('the sidebar footer carries no fake identity', async ({ window }) => {
+    // Regression guard for the hardcoded "JO" avatar bug: whatever the sidebar's footer renders,
+    // it must never be literal initials with no real data behind them. The footer itself is the
+    // AI runtime status, not an account/profile (this app has no login or online profile concept).
+    await expect(window.getByText('JO', { exact: true })).toHaveCount(0);
+    await expect(window.getByText('AI runtime', { exact: true })).toBeVisible();
+  });
+
+  test('Search and Settings page visual baselines', async ({ window }) => {
+    await ensureLightTheme(window);
+    // The daemon connects asynchronously after launch (App.tsx's "Connecting to local daemon..."
+    // banner); without waiting for it to settle, a screenshot taken this soon after launch is racing
+    // daemon startup and its content/layout depends on how far that race got, not on the app itself.
+    // Waiting for the connecting banner to disappear isn't enough on its own: App.tsx replaces it
+    // with either nothing (ready) or a "Daemon unavailable" banner (failed) — both hide the
+    // connecting text, so that wait alone could let a failed-to-start daemon through and quietly
+    // lock in a broken-daemon screenshot as the accepted baseline. Asserting the unavailable banner
+    // is absent turns that into a loud test failure instead.
+    await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
+    await expect(window.getByText(/^Daemon unavailable:/)).toHaveCount(0);
+    // Already on Settings. ensureLightTheme just navigated here to click "Light".
+    await expect(window).toHaveScreenshot('settings-page.png');
+
+    await goto(window, 'Search');
+    await expect(window).toHaveScreenshot('search-page.png');
+  });
+
+  test('has no native application menu', async ({ electronApp }) => {
+    // Regression guard: Electron's default File/Edit/View/Window menu is boilerplate this app
+    // never wired any items into. `Menu.setApplicationMenu(null)` in main.ts removes it entirely.
+    const menu = await electronApp.evaluate(({ Menu }) => Menu.getApplicationMenu());
+    expect(menu).toBeNull();
+  });
+
+  test('enforces the minimum supported window size', async ({ electronApp, window }) => {
+    await expect(window.getByRole('heading', { name: 'Search Jobs' })).toBeVisible();
+    const state = await electronApp.evaluate(({ BrowserWindow }) => {
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (!mainWindow) throw new Error('Main window was not created');
+      mainWindow.setBounds({ width: 1000, height: 720 });
+      mainWindow.setBounds({ width: 640, height: 480 });
+      return { bounds: mainWindow.getBounds(), minimumSize: mainWindow.getMinimumSize() };
+    });
+
+    expect(state.minimumSize).toEqual([760, 600]);
+    expect(state.bounds.width).toBeGreaterThanOrEqual(760);
+    expect(state.bounds.height).toBeGreaterThanOrEqual(600);
+
+    await goto(window, 'Applications');
+    await window.getByRole('button', { name: /add application/i }).click();
+    const dialog = window.getByRole('dialog').filter({ hasText: 'New application' });
+    await expect(dialog).toBeVisible();
+    const dialogBounds = await dialog.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        viewportWidth: document.documentElement.clientWidth,
+        viewportHeight: document.documentElement.clientHeight,
+      };
+    });
+    expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.top).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.right).toBeLessThanOrEqual(dialogBounds.viewportWidth);
+    expect(dialogBounds.bottom).toBeLessThanOrEqual(dialogBounds.viewportHeight);
+
+    const screenshotPath = test.info().outputPath('minimum-window-application-dialog.png');
+    await window.screenshot({ animations: 'disabled', path: screenshotPath });
+    await test.info().attach('minimum-window-application-dialog', {
+      path: screenshotPath,
+      contentType: 'image/png',
+    });
+  });
+
+  test('grants only the clipboard-write permission the UI actually uses, denies everything else', async ({
+    window,
+    electronApp,
+  }) => {
+    // See letters.spec.ts for why this is needed under CI's headless-Linux/xvfb runner:
+    // `navigator.clipboard.writeText` requires real document focus, independent of the permission
+    // grant this test is actually checking.
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
+
+    // Positive case: the "Copy to clipboard" features (CoverLetter.tsx, LetterGenerator.tsx,
+    // AboutSection.tsx) all call `navigator.clipboard.writeText`, which requests exactly
+    // `clipboard-sanitized-write`. main.ts's permission handler must keep granting this.
+    await expect(
+      window.evaluate(() => navigator.clipboard.writeText('e2e-permission-check')),
+    ).resolves.toBeUndefined();
+
+    // Negative case: nothing in this app asks for geolocation, so it must still be denied, proving
+    // the fix is a narrow allowlist for the one permission actually used, not a blanket grant.
+    const geolocationResult = await window.evaluate(
+      () =>
+        new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve('granted'),
+            (error) => resolve(`denied: ${error.code}`),
+          );
+        }),
+    );
+    expect(geolocationResult).toMatch(/^denied:/);
+  });
+
+  test('collapsed sidebar visual baseline', async ({ window }) => {
+    // Regression guard for a real bug: NavGroup's collapsed nav buttons carried both
+    // `justify-start` (unconditional) and `justify-center` (collapsed-only) at once, so the icon
+    // sat pinned to the button's start edge inside its 44px `ovr-nav-icon` box instead of centered.
+    // Scoped to the sidebar element alone, not the full window, so this baseline is unaffected by
+    // whatever the main content pane happens to be showing.
+    await ensureLightTheme(window);
+    await window.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(window.getByRole('complementary', { name: 'Main' })).toHaveScreenshot(
+      'sidebar-collapsed.png',
+    );
+  });
+});

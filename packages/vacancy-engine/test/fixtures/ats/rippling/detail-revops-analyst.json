@@ -1,0 +1,18 @@
+{
+  "uuid": "9145705c-c0ee-4d64-b6e5-5441587e7353",
+  "name": "RevOps SF Analyst and Power BI",
+  "description": {
+    "company": "<p>Acme is the global leader in workforce intelligence.</p>",
+    "role": "<p>Own reporting and dashboards across Salesforce and Power BI.</p>"
+  },
+  "workLocations": ["Bengaluru, India"],
+  "department": { "name": "Finance", "base_department": "Finance", "department_tree": ["Finance"] },
+  "employmentType": { "label": "SALARIED_FT", "id": "Salaried, full-time" },
+  "createdOn": "2026-06-02T09:15:00.000000-07:00",
+  "url": "https://ats.rippling.com/acme-careers/jobs/9145705c-c0ee-4d64-b6e5-5441587e7353",
+  "board": { "boardType": "RIPPLING", "slug": "acme-careers", "companyName": "Acme" },
+  "payRangeDetails": [],
+  "companyName": "Acme",
+  "unlistedFromSearch": false,
+  "jsonLd": null
+}

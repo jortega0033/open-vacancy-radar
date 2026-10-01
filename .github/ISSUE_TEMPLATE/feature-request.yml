@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a focused improvement with a clear user problem.
+title: '[Feature]: '
+labels:
+  - enhancement
+  - triage
+body:
+  - type: checkboxes
+    id: existing
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and did not find this request.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Vacancy discovery or crawling
+        - Filtering or scoring
+        - Desktop interface
+        - Saved jobs or applications
+        - CVs or letters
+        - Settings or local data
+        - Packaging or installation
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem exists today? Describe the need before the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What observable result would make this complete?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy, data, and trade-offs
+      description: Note local-data, scraping-policy, compatibility, migration, dependency, or maintenance impact.

@@ -1,17 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import type { CvSourceDocument } from './cv-source-schema.js';
+import {
+  CV_EVIDENCE_OVERLAY_ORIGINS,
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_LISTING_STATUSES,
+  type CvApprovedResumeSnapshot,
+  type CvApprovedWording,
+  type CvEvidenceFact,
+  type CvJdRevision,
+  type CvRequirementMapping,
+} from './cv-evidence-schema.js';
+import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
+import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
+import type { PreparedApplicationFields } from './types.js';
 
 /**
- * Personal workspace data (saved jobs, applications, CV library, generated letters, settings) —
+ * Personal workspace data (saved jobs, applications, CV library, generated letters, settings),
  * deliberately a separate small schema/database from `@open-vacancy-radar/vacancy-engine`'s.
  * The engine's database is scan/discovery state with its own lifecycle (migrations, advisory
  * locks, content-hash reuse); this is plain per-user CRUD the desktop app owns outright. Keeping
  * them apart means neither schema's migration history constrains the other.
  *
- * `market` is deliberately just the two tracks this app can actually search — 'netherlands' (the
- * IND-sponsor pipeline) and 'worldwide' (the global-remote pipeline) — not an invented per-country
- * list. There is no real backend for a UK/DE/US/etc. structured search today; adding fake markets
- * here would be a UI promise the app can't keep.
  */
 
 export const savedJobs = sqliteTable('saved_jobs', {
@@ -21,7 +31,6 @@ export const savedJobs = sqliteTable('saved_jobs', {
   vacancyKey: text('vacancy_key'),
   role: text('role').notNull(),
   company: text('company').notNull(),
-  market: text('market', { enum: ['netherlands', 'worldwide'] }).notNull(),
   location: text('location').notNull(),
   salary: text('salary'),
   arrangement: text('arrangement'),
@@ -31,6 +40,23 @@ export const savedJobs = sqliteTable('saved_jobs', {
   notes: text('notes').notNull().default(''),
   status: text('status', { enum: ['considering', 'preparing', 'applied'] }).notNull().default('considering'),
   savedAt: integer('saved_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /**
+   * The gap-analysis answer the user explicitly chose to keep for this job, exactly as the AI CLI
+   * returned it (plain text). Nullable, and null is the normal state: analysis is on-demand, most
+   * saved jobs never have one, and nothing writes here except the "Save analysis" action.
+   *
+   * It is a column on `saved_jobs` rather than its own table because there is exactly one kept
+   * analysis per job -- clicking "Save analysis" again replaces it -- so a table would be a
+   * one-row-per-job join with no query anyone would ever write against it. This mirrors
+   * `letters.body`, the app's other stored AI output.
+   *
+   * Storing it is disclosed in docs/privacy.md's retention section: the *prompt* already left the
+   * machine before this column existed, but the *output* now stays on disk until the job is
+   * deleted, and that is a separate fact a user is entitled to be told.
+   */
+  gapAnalysis: text('gap_analysis'),
+  /** When `gapAnalysis` was last written. Null exactly when `gapAnalysis` is null. */
+  gapAnalysisAt: integer('gap_analysis_at', { mode: 'timestamp_ms' }),
 });
 
 export const cvDocuments = sqliteTable('cv_documents', {
@@ -38,10 +64,10 @@ export const cvDocuments = sqliteTable('cv_documents', {
   name: text('name').notNull(),
   kind: text('kind', { enum: ['uploaded', 'manual'] }).notNull(),
   targetRole: text('target_role').notNull().default(''),
-  /** Full extracted text for an uploaded CV (PDF/txt/md) — what the AI features actually read.
+  /** Full extracted text for an uploaded CV (PDF/txt/md/docx): what the AI features actually read.
    * Empty for a manual profile, which instead relies entirely on `profile`. */
   text: text('text').notNull().default(''),
-  /** Structured profile fields, editable regardless of kind — { title, years, location,
+  /** Structured profile fields, editable regardless of kind: { title, years, location,
    * languages, skills: string[], summary, auth }. */
   profile: text('profile', { mode: 'json' }).notNull().$type<{
     title: string;
@@ -52,9 +78,150 @@ export const cvDocuments = sqliteTable('cv_documents', {
     summary: string;
     auth: string;
   }>(),
+  /**
+   * #274: the reviewed full structured source CV -- real employers with their own dates and
+   * engagement type, education, the candidate's corrected contact details and links, and project
+   * records with the candidate's pins and configured count limit. See `cv-source-schema.ts` for
+   * the shape and for why each of those is a separate field rather than prose.
+   *
+   * Nullable, and null is the normal state for every row that predates this column: a CV whose
+   * source has never been extracted and reviewed has no structured source, and saying so is the
+   * point. Export falls back to the flat `profile` mapping for those rather than inventing the
+   * sections they do not have.
+   *
+   * A JSON column rather than four join tables (experience/education/projects/links), following
+   * `profile`'s existing precedent: this value is only ever read and written whole, for one CV at a
+   * time, and nothing queries, orders or joins across it in SQL.
+   */
+  sourceCv: text('source_cv', { mode: 'json' }).$type<CvSourceDocument>(),
+  /**
+   * Provenance of `text` (issue #396): `'text_layer'` for pdf.js/mammoth local extraction (every
+   * row before this column existed, via the column default, and every ordinary upload since), or
+   * `'ai_transcription'` for a scanned/image-only PDF whose text came from an AI provider instead.
+   * A vision-capable model can misread dates, employers or technologies, so this is never inferred
+   * after the fact -- `createCvDocument`'s caller states it explicitly, and the renderer can only
+   * ever request `'ai_transcription'` after the user has reviewed and confirmed the transcribed
+   * text (see `useCvPicker.ts`'s transcription-review step): the row simply would not exist yet
+   * otherwise. `text_layer` needs no separate review gate the way transcription does -- pdf.js and
+   * mammoth extract the document's own text characters rather than inferring them, so there is
+   * nothing equivalent to a vision model's misread to confirm.
+   */
+  textSource: text('text_source', { enum: ['text_layer', 'ai_transcription'] }).notNull().default('text_layer'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * #419: one row per (CV, vacancy) tailoring session -- the reviewable requirement/evidence/
+ * approved-wording overlay `cv-evidence-schema.ts` describes. A separate table from `cvDocuments`
+ * rather than another JSON column on it, unlike `sourceCv`: `sourceCv` is 1:1 with its CV, this is
+ * 1:many (the same CV tailored for several vacancies, each with its own JD and its own set of
+ * approved wording), so it needs its own lookup key (`cvId` + `vacancyKey`) a JSON column cannot
+ * offer. `facts`/`requirements`/`wordingVariants` are still JSON columns within this table, for
+ * the same reason `sourceCv` is one: each is only ever read and written whole, for one overlay at
+ * a time, and nothing queries, orders or joins across it in SQL.
+ */
+export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  cvId: text('cv_id').notNull().references(() => cvDocuments.id, { onDelete: 'cascade' }),
+  /** Matches `savedJobs.vacancyKey`/`applicationAttempts`' own vacancy reference: the discovery
+   * report's `key`, not a URL, so the same vacancy is always the same row regardless of how it was
+   * reached. */
+  vacancyKey: text('vacancy_key').notNull(),
+  /** SHA-256 hex of the `CvSourceDocument` this overlay was built from -- see this module's own
+   * doc comment on `CvEvidenceOverlay.sourceCvContentHash` in `cv-evidence-schema.ts`. */
+  sourceCvContentHash: text('source_cv_content_hash').notNull(),
+  jdSnapshot: text('jd_snapshot').notNull().default(''),
+  jdSnapshotHash: text('jd_snapshot_hash').notNull(),
+  jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  /** #421's case contract: every past `jdSnapshot`, oldest first -- see `CvJdRevision`. */
+  jdRevisions: text('jd_revisions', { mode: 'json' }).notNull().$type<CvJdRevision[]>().default([]),
+  listingStatus: text('listing_status', { enum: CV_LISTING_STATUSES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('unknown'),
+  state: text('state', { enum: CV_EVIDENCE_OVERLAY_STATES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('needs_input'),
+  requirements: text('requirements', { mode: 'json' }).notNull().$type<CvRequirementMapping[]>().default([]),
+  facts: text('facts', { mode: 'json' }).notNull().$type<CvEvidenceFact[]>().default([]),
+  wordingVariants: text('wording_variants', { mode: 'json' }).notNull().$type<CvApprovedWording[]>().default([]),
+  /** #421's case contract: how this case began -- see `CvEvidenceOverlayOrigin`. */
+  origin: text('origin', { enum: CV_EVIDENCE_OVERLAY_ORIGINS as unknown as [string, ...string[]] })
+    .notNull()
+    .default('vacancy'),
+  /** #421's case contract: bumped by the repository layer on every write, never caller-supplied.
+   * A plain `text` column (not `integer`), since every reader treats it as an opaque token to
+   * compare for equality -- see `CvEvidenceOverlay.caseRevision`. */
+  caseRevision: text('case_revision').notNull().default('0'),
+  /** #421's case contract: `null` until the first approval -- see `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: text('approved_resume_snapshot', { mode: 'json' })
+    .$type<CvApprovedResumeSnapshot | null>()
+    .default(null),
+  capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421: a named local client's authorization to act on the local MCP endpoint. See
+ * `mcp-grant-schema.ts`'s own header for why this lives in its own module rather than beside
+ * `cvEvidenceOverlays` above. */
+export const mcpClientGrants = sqliteTable('mcp_client_grants', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  name: text('name').notNull(),
+  scopeType: text('scope_type', { enum: MCP_GRANT_SCOPE_TYPES as unknown as [string, ...string[]] }).notNull(),
+  /** Set only when `scopeType === 'source_cv'`; `''` otherwise. */
+  sourceCvId: text('source_cv_id').notNull().default(''),
+  /** Set only when `scopeType === 'case_ids'` at creation, or appended to over time for a
+   * `source_cv` grant -- a JSON column rather than a join table, since nothing ever queries across
+   * it in SQL, the same reasoning `cvEvidenceOverlays.requirements` above already documents. */
+  caseIds: text('case_ids', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  canReadFinalSnapshot: integer('can_read_final_snapshot', { mode: 'boolean' }).notNull().default(false),
+  /** SHA-256 hex of the one-time credential value shown to the candidate at creation and never
+   * itself stored -- this column can verify a presented credential but can never reproduce it, the
+   * same discipline a password hash follows. */
+  credentialVerifierHash: text('credential_verifier_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Null while active. Never deleted once revoked -- the same `automationGrants.revokedAt`
+   * reasoning: a revoked grant is itself part of the record #421's audit trail exists to keep. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+/** #421's audit trail. Every call attempt through the local MCP endpoint writes exactly one row
+ * here, successful or not -- see `mcp-grant-schema.ts`'s own doc comment on why every column here
+ * is structurally incapable of carrying raw CV/JD text or a credential. Append-only: nothing in
+ * this module ever updates or deletes a row here once written. */
+export const mcpAuditLogEntries = sqliteTable('mcp_audit_log_entries', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `null` when no grant could be matched at all. `onDelete: 'set null'`, not `'cascade'`: deleting
+   * a grant record is not a thing this app does (grants are revoked, never deleted -- see above),
+   * but if it ever happened, the audit history of what that client did must outlive the grant row
+   * it once pointed to, not vanish with it. */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  toolName: text('tool_name').notNull(),
+  caseId: text('case_id'),
+  outcome: text('outcome', { enum: MCP_AUDIT_OUTCOMES as unknown as [string, ...string[]] }).notNull(),
+  revision: text('revision'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421's proposal staging layer. See `cv-proposal-schema.ts`'s own header for why nothing an MCP
+ * client sends reaches `cvEvidenceOverlays.requirements`/`facts`/`wordingVariants` directly. */
+export const cvTailoringProposals = sqliteTable('cv_tailoring_proposals', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  caseId: text('case_id').notNull().references(() => cvEvidenceOverlays.id, { onDelete: 'cascade' }),
+  /** `onDelete: 'set null'`, matching `mcpAuditLogEntries.grantId`'s own reasoning: a proposal
+   * already decided stays a record of what was decided even if its grant row somehow stopped
+   * existing (grants are revoked, never deleted, in the app's own flows). */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  kind: text('kind', { enum: CV_PROPOSAL_KINDS as unknown as [string, ...string[]] }).notNull(),
+  status: text('status', { enum: CV_PROPOSAL_STATUSES as unknown as [string, ...string[]] }).notNull().default('pending'),
+  /** The kind-specific payload (`CvProposalPayload`'s `data`, not the `{kind, data}` wrapper --
+   * `kind` above is this same value, already its own column so a query can filter by it in SQL). */
+  payload: text('payload', { mode: 'json' }).notNull(),
+  caseRevisionAtProposal: text('case_revision_at_proposal').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  decidedAt: integer('decided_at', { mode: 'timestamp_ms' }),
 });
 
 export const letters = sqliteTable('letters', {
@@ -68,7 +235,7 @@ export const letters = sqliteTable('letters', {
   status: text('status', { enum: ['draft', 'final', 'sent'] }).notNull().default('draft'),
   vacancyKey: text('vacancy_key'),
   cvId: text('cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
-  /** The generated letter body, as returned by the AI session — plain text, user-editable. */
+  /** The generated letter body, as returned by the AI session: plain text, user-editable. */
   body: text('body').notNull().default(''),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
@@ -76,10 +243,23 @@ export const letters = sqliteTable('letters', {
 export const applications = sqliteTable('applications', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   savedJobId: text('saved_job_id').references(() => savedJobs.id, { onDelete: 'set null' }),
+  /**
+   * `role`, `company`, `location` and `verification` are a frozen snapshot of the vacancy as it
+   * stood when this application was created, copied once from the source `saved_jobs` row and
+   * deliberately never re-read from it afterward -- a later edit in `SavedJobDrawer` does not
+   * propagate here. This is the same "record of what was applied to" semantic `applicationAttempts`
+   * already commits to for `sourceCvContentHash`/`jdSnapshotHash` below: an application is evidence
+   * of what someone actually applied to, not a live view of the saved job.
+   *
+   * The alternative -- re-deriving these from `saved_jobs` whenever `savedJobId` is set -- was
+   * considered and rejected: a saved job's role/company/location/verification can legitimately be
+   * corrected later (a typo fix, a location update) without that correction needing to rewrite
+   * history for an application already created from it. See `deleteSavedJob` in `repository.ts` for
+   * the matching note on the delete side of this relationship.
+   */
   role: text('role').notNull(),
   company: text('company').notNull(),
   location: text('location').notNull().default(''),
-  market: text('market', { enum: ['netherlands', 'worldwide'] }).notNull(),
   verification: text('verification'),
   status: text('status', {
     enum: ['preparing', 'applied', 'recruiter_screen', 'interview', 'offer', 'rejected', 'withdrawn'],
@@ -93,7 +273,326 @@ export const applications = sqliteTable('applications', {
   archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
 });
 
-/** Single fixed row (id fixed at 1) — this is app-wide preference state, not a multi-row table. */
+/**
+ * A single attempt at applying to one vacancy (#198, part of the #193 auto-apply split). This
+ * table is deliberately inert on its own: nothing in this slice fills a form, renders a PDF, or
+ * submits anything -- it exists to give the later slices (#199 artifact staging, #200 the daemon
+ * queue runner, #201 the browser executor) a durable, resumable place to record what stage an
+ * attempt has reached, so a crash or a closed window never loses or duplicates work.
+ *
+ * `sourceCvContentHash` and `jdSnapshotHash` exist for the same reason #196's pre-submit gate
+ * needs them later: a value is only ever trusted if it can be shown to still match what the user
+ * actually reviewed, and a hash is how that gets checked without re-reading the full text.
+ */
+export const applicationAttempts = sqliteTable('application_attempts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** Set once an `applications` row exists to track this attempt's outcome (status, next step,
+   * notes) the way every other application does. Null while the attempt is still in progress and
+   * has not yet reached a state worth surfacing on the Applications page. */
+  applicationId: text('application_id').references(() => applications.id, { onDelete: 'set null' }),
+  /** Links back to a DiscoveryVacancyAudit/report row's `key`, matching `savedJobs.vacancyKey`'s
+   * existing convention -- this attempt's "posting ID". Null for a manually-entered target. */
+  vacancyKey: text('vacancy_key'),
+  /** The actual URL this attempt applies through -- the "canonical job URL" #193 specified,
+   * kept separate from `vacancyKey` because a posting can be re-listed at a new URL. */
+  canonicalUrl: text('canonical_url').notNull().default(''),
+  /**
+   * #275's requisition identity, derived once at creation by `application-identity.ts` and stored
+   * rather than recomputed, so the completed-application lookup is a plain column comparison.
+   *
+   * `employerKey` is `<ats-provider>:<board>` when the apply URL is a recognised ATS job URL, and
+   * a normalized company name otherwise. It is never matched on alone: two different openings at
+   * one employer share an `employerKey` and must both stay eligible, which is why every completed
+   * lookup requires a non-null `requisitionId` alongside it before it will call two attempts the
+   * same application. Empty on every row written before migration 0012.
+   */
+  employerKey: text('employer_key').notNull().default(''),
+  /** The opening's id as the receiving ATS names it, or null when nothing reliable was derivable
+   * -- in which case `canonicalUrlKey` is the only identity the lookup has to work with. */
+  requisitionId: text('requisition_id'),
+  /** `canonicalUrl` reduced to the parts that identify the posting (no scheme, no `www.`, no
+   * fragment, no tracking parameters, remaining query sorted). The fallback identity, and the
+   * reason the same posting arriving with different `utm_*` tags is still the same posting. */
+  canonicalUrlKey: text('canonical_url_key').notNull().default(''),
+  company: text('company').notNull(),
+  role: text('role').notNull(),
+  /** The CV this attempt was generated from. `on delete set null`, not cascade: deleting the
+   * source CV later must not erase the historical record of what was actually submitted. */
+  sourceCvId: text('source_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
+  /** SHA-256 hex of the source CV's text + profile at the moment this attempt was created. This
+   * is the attempt's only durable "CV version" -- `cvDocuments` has no version history of its
+   * own, and the CV can be edited or deleted after an attempt exists. */
+  sourceCvContentHash: text('source_cv_content_hash').notNull(),
+  /** The full job-description text this attempt read, exactly as captured -- not the 6,000
+   * character `formatVacancy` excerpt #193 flagged as insufficient for full-JD coverage. */
+  jdSnapshot: text('jd_snapshot').notNull().default(''),
+  /** SHA-256 hex of `jdSnapshot`, so a later stage can detect the JD changed underneath it
+   * without re-reading and re-comparing the full text every time. */
+  jdSnapshotHash: text('jd_snapshot_hash').notNull(),
+  /** Whether `jdSnapshot` is believed complete, or was truncated by a source-side limit. #193's
+   * own gap: silently dropping requirements past a character limit must never happen unlabeled. */
+  jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  /** Identifies which version of the generation task contract/prompt produced this attempt, so a
+   * later change to that contract cannot silently reinterpret an already-recorded attempt. */
+  workflowVersion: text('workflow_version').notNull().default(''),
+  /** Which document path this attempt records. `original` is set only after the person explicitly
+   * chooses the visible fallback after AI tailoring fails; it is never a silent fallback. */
+  tailoringMode: text('tailoring_mode', { enum: ['ai', 'original'] }).notNull().default('ai'),
+  checkpoint: text('checkpoint', {
+    enum: [
+      'queued',
+      'reading_jd',
+      'tailoring',
+      'rendering',
+      'filling',
+      'ready',
+      'submitting',
+      'submitted',
+      'needs_user',
+      'skipped',
+      'failed',
+      'submission_unknown',
+      /**
+       * A person told the app they completed this application themselves (#271). Deliberately NOT
+       * `submitted`: that checkpoint now means "this app observed a real receipt", and collapsing
+       * the two would make the evidence-backed state unfalsifiable. Equally deliberately not
+       * `failed` -- #271's fourth acceptance case is that the *absence* of a confirmation email is
+       * not evidence of anything, so nothing may ever downgrade this on silence alone.
+       */
+      'user_reported',
+    ],
+  })
+    .notNull()
+    .default('queued'),
+  /** Free-text detail for the current checkpoint -- why it's `needs_user`, what `failed`, or a
+   * short human-readable reason. Never used for control flow; the checkpoint enum alone is. */
+  checkpointDetail: text('checkpoint_detail').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /** Set only on a transition into `submitted` or `submission_unknown` -- the two checkpoints
+   * that mean a real, possibly-irreversible submit action was actually attempted. */
+  submittedAt: integer('submitted_at', { mode: 'timestamp_ms' }),
+  /** A deterministic fingerprint of the filled form's own structure (each field's control type,
+   * label, and required-ness -- never a value), recorded only once this attempt reaches
+   * `submitted`. Issue #203's "an automatic attempt against an already-reviewed employer must use
+   * the same template, same structured fields, no new free-text the user hasn't seen" rule compares
+   * a new attempt's live structure hash against the most recent submitted attempt's stored one for
+   * the same employer -- a mismatch means the page changed since a human last looked at it, which
+   * forces that attempt back to manual review regardless of any active automation grant. Null until
+   * a first submission exists for this attempt (and stays null forever for one that never submits). */
+  formStructureHash: text('form_structure_hash'),
+  /**
+   * Set only while an automatic-mode submit (#203) is queued for this attempt: the real, timed
+   * cancel/undo window between scheduling and the submit action actually firing. A person can
+   * cancel by clearing this (see `ApplicationAttemptPatch`); once real time passes this timestamp
+   * with it still set, the daemon/main-process scheduler is clear to submit. Never set by manual
+   * review (#202) at all -- that path has no window because the human's own click *is* the
+   * confirmation, with nothing further to wait out.
+   */
+  scheduledAutomaticSubmitAt: integer('scheduled_automatic_submit_at', { mode: 'timestamp_ms' }),
+  /** Set alongside `submittedAt`, recording which path actually sent it: #203's rate limits are
+   * scoped to automatic submissions specifically ("a minimum delay between automatic submissions"),
+   * so counting a manually-reviewed submission against that cap would be wrong -- a person's own
+   * review pace is already the rate limit #202 relies on for the manual path. Null until submitted. */
+  submissionMode: text('submission_mode', { enum: ['manual', 'automatic'] }),
+  /**
+   * What backs the claim that this attempt was actually completed (#275). Both values suppress a
+   * duplicate equally -- the column exists to preserve *which* one did it, not to rank them:
+   *
+   *  - `user_reported`: a person told the app this application is done. That is the only kind of
+   *    completion a renderer-originated patch can ever assert (see `validate.ts`), because the
+   *    renderer is the user and cannot observe a receipt.
+   *  - `receipt_confirmed`: the submission itself was observed to land -- a confirmation page or an
+   *    unambiguous receipt. Only main-process submission code may record this, and only #271's
+   *    receipt observer can honestly produce it; until that lands nothing writes this value, and a
+   *    `submitted` attempt with a null evidence type means "completed, evidence not recorded".
+   *
+   * Null is not "not completed": the checkpoint alone decides that. Null means the evidence was
+   * never recorded, which is the state every row written before migration 0012 is in.
+   */
+  completionEvidence: text('completion_evidence', { enum: ['user_reported', 'receipt_confirmed'] }),
+  /**
+   * #275's explicit reapply path: the completed attempt this one deliberately supersedes.
+   *
+   * A plain column, not a foreign key. The point of these three fields is to be a durable record
+   * of a decision, and a `set null` on delete (or worse, a cascade) would erase exactly the
+   * provenance an audit of "why was a second application sent to this requisition?" needs. The
+   * predecessor's own document version is snapshotted here for the same reason the attempt
+   * snapshots `sourceCvContentHash` rather than trusting `cvDocuments` to still hold it.
+   */
+  supersedesAttemptId: text('supersedes_attempt_id'),
+  /** Why the user reapplied (a corrected document, an updated CV, an employer asking again).
+   * Required and non-empty on the reapply path; empty on every ordinary attempt. */
+  reapplyReason: text('reapply_reason').notNull().default(''),
+  /** The superseded attempt's `sourceCvContentHash` as it stood when this reapply was created.
+   * With this row's own `sourceCvContentHash` that is both document versions, before and after,
+   * readable without depending on the predecessor row still existing. */
+  reapplyPreviousCvContentHash: text('reapply_previous_cv_content_hash'),
+  /**
+   * What the preparation pipeline (#272) actually committed to this attempt's form, as JSON --
+   * one entry per field the live snapshot carried, each recording the field's own label, control
+   * type, whether it was committed/left to the person/left blank, and where a committed value came
+   * from (`cv`/`profile`/`user_answer`). Empty string for every attempt no pipeline run has
+   * prepared, which is every attempt created before this column existed.
+   *
+   * Stored on the attempt rather than derived at review time on purpose: it is the record of what
+   * *this* attempt committed, so a review can never show a previous attempt's answers for the same
+   * vacancy, and it survives an app restart exactly as the checkpoint does. It records only what
+   * this app itself applied -- reading the page back to confirm each value is genuinely committed
+   * is #277 (R06)'s work, which is why each entry carries its own `verification` field rather than
+   * this column implying a read-back that has not happened.
+   */
+  preparedFields: text('prepared_fields', { mode: 'json' }).$type<PreparedApplicationFields | null>(),
+});
+
+/**
+ * An explicit grant of automatic-submission authority for one compiled target policy (#203).
+ * Deliberately scoped per-policy, not per-posting: automation's whole point is covering postings
+ * the user hasn't individually looked at yet, so "which postings" cannot be the grant's own scope
+ * the way it would be for a one-off manual authorization. `expiresAt` and `revokedAt` are both
+ * re-checked immediately before every automatic send (issue #203 scope item 2), not only at grant
+ * creation -- a grant that has quietly expired or been revoked since its last use must never let an
+ * automatic submit through on the strength of having once been valid.
+ */
+export const automationGrants = sqliteTable('automation_grants', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `ApplicationTargetPolicy.id` this grant authorizes -- never an origin, selector, or anything
+   * else renderer-suppliable; validated against the compiled policy table at creation time. */
+  policyId: text('policy_id').notNull(),
+  /** ISO-8601, main-process clock, at creation -- when the native confirmation dialog (#203 scope
+   * item 5's auth-boundary hardening) was actually accepted. */
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Null while active. Grants are never deleted -- a revoked grant stays as a durable record of
+   * "automation was authorized for this policy, then explicitly turned off," which the reconciler
+   * and any future audit need to be able to see. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+/**
+ * A generated file belonging to one attempt (#198): a tailored CV PDF, a cover letter PDF, or
+ * anything else a later stage stages for upload. Schema only in this slice -- nothing here writes
+ * a real file to disk yet; that mechanism is #199's. `onDelete: 'cascade'` because an artifact has
+ * no meaning independent of the attempt it belongs to.
+ */
+export const applicationArtifacts = sqliteTable('application_artifacts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['cv_pdf', 'cover_letter_pdf', 'combined_pdf', 'other'] }).notNull(),
+  fileName: text('file_name').notNull().default(''),
+  mimeType: text('mime_type').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  /** SHA-256 hex of the file's bytes -- what #196 §2.4's validator checks an `artifactId` against
+   * before trusting it, and what #196 §5's pre-submit gate re-checks hasn't drifted since review. */
+  contentHash: text('content_hash').notNull(),
+  /** Where the file actually lives on disk once #199 exists. Empty in this slice, since nothing
+   * writes one yet; never a path the renderer supplies (see #196 §6.2's "nothing renderer-supplied"
+   * rule) -- only ever written by the main-process code that staged the file. */
+  storagePath: text('storage_path').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * The durable evidence record behind every submission-outcome claim this app makes (#271).
+ *
+ * Before this table, "submitted" was a single enum value on the attempt with nothing standing
+ * behind it: a click that returned was recorded as a delivered application, and there was no way,
+ * afterwards, to ask *why* the app believed that. Every row here answers exactly that question for
+ * one observation, and rows are append-only in practice -- a later observation adds a row, it never
+ * rewrites an earlier one, so a reconciliation is visible as the second record rather than as a
+ * silently changed first one.
+ *
+ * Deliberately separate from `applicationAttempts.checkpoint`: the checkpoint is the attempt's
+ * current *stage*, this is the *evidence*, and #271's scope explicitly asks for stage, delivery
+ * evidence and hiring outcome to stay separate rather than being collapsed into one status.
+ *
+ * `onDelete: 'cascade'` for the same reason artifacts cascade: a receipt has no meaning
+ * independent of the attempt it belongs to.
+ */
+export const applicationSubmissionReceipts = sqliteTable('application_submission_receipts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  attemptId: text('attempt_id')
+    .notNull()
+    .references(() => applicationAttempts.id, { onDelete: 'cascade' }),
+  /** What this one observation established. `unknown` rows are kept, not discarded: "we looked and
+   * could not tell" is exactly the fact a person needs to see, and is what a later delayed receipt
+   * reconciles against. */
+  outcome: text('outcome', { enum: ['submitted', 'rejected', 'unknown', 'user_reported'] }).notNull(),
+  /** Where the claim came from. `page_observation` is the post-click observer; `delayed_receipt`
+   * is an out-of-band acknowledgement that arrived later; `user_reported` is a person's own
+   * statement, which is never machine evidence of delivery and is recorded as its own source so it
+   * can never be mistaken for one. */
+  source: text('source', { enum: ['page_observation', 'delayed_receipt', 'user_reported'] }).notNull(),
+  /** The URL this attempt was actually submitted to -- #271 requires a `submitted` record to name
+   * its destination, not just its attempt. Recorded for every outcome, not only the successful one. */
+  destination: text('destination').notNull().default(''),
+  /** What kind of proof this row rests on. `none` is the honest answer for a rejection or an
+   * unresolved observation, and is never allowed to coexist with `outcome: 'submitted'` (enforced
+   * in `repository.ts`, which is where every write to this table goes through). */
+  evidenceKind: text('evidence_kind', {
+    enum: ['confirmation_page', 'receipt_reference', 'delivery_receipt', 'user_statement', 'none'],
+  }).notNull(),
+  /** The matched confirmation text, receipt identifier, or the person's own note. Bounded by the
+   * executor package before it ever reaches here. Untrusted third-party page text: display data
+   * only, never parsed for control flow. */
+  evidenceReference: text('evidence_reference').notNull().default(''),
+  /** A short human-readable account of what was observed, for the attempt drawer. */
+  detail: text('detail').notNull().default(''),
+  /** When the observation itself happened -- distinct from `createdAt`, which is when it was
+   * written down. A delayed receipt is observed long after the click but written immediately. */
+  observedAt: integer('observed_at', { mode: 'timestamp_ms' }).notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * A candidate-authored library of reusable application-form answers (#372): a person writes an
+ * answer to a recurring text/textarea question once and can reuse it on a later application
+ * instead of retyping it.
+ *
+ * Populated ONLY by explicit user action -- an answer is saved here because the person chose to
+ * save it, never because it was inferred from a CV/profile, produced by a model, or captured
+ * silently from a value observed on a live page. Looked up by an exact match on normalized label
+ * plus control type (`application-answer-key.ts`'s `applicationAnswerKey`); there is deliberately
+ * no fuzzy or semantic matching, so "why do you want to work here?" and "why do you want to work
+ * with us?" remain two different questions here rather than being guessed at as the same one.
+ *
+ * This table is pure storage: nothing here fills a form. The confirm step that offers a saved
+ * answer back to the user and actually applies it to a live field -- always a deliberate confirm,
+ * never an auto-fill -- lives in `application-review-session.ts`, not in this module.
+ */
+export const applicationAnswers = sqliteTable('application_answers', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /**
+   * The lookup key: `applicationAnswerKey(label, controlType)`, e.g.
+   * `"text::why do you want to work here"`. Not unique-constrained at the DB level -- this schema
+   * declares no indices or unique constraints anywhere else either -- "one answer per key" is
+   * app-level logic enforced by `saveApplicationAnswer`'s upsert-on-save, not a DB constraint.
+   */
+  normalizedKey: text('normalized_key').notNull(),
+  /** The original, unnormalized field label, kept for display in the answer-library management UI. */
+  label: text('label').notNull(),
+  /** V1 covers these two control types only (#372) -- a select/checkbox/radio answer is not a
+   * reusable free-text answer the way a text/textarea one is. */
+  controlType: text('control_type', { enum: ['text', 'textarea'] }).notNull(),
+  /** The saved answer body itself. */
+  answer: text('answer').notNull(),
+  /** Which application this answer was first (and most recently) saved from, for context in the
+   * management UI -- not an identity field, so it is overwritten on every upsert. */
+  originCompany: text('origin_company').notNull().default(''),
+  /** Same idea as `originCompany`, the role title. */
+  originRole: text('origin_role').notNull().default(''),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /** Bumped on every save/update to the answer text itself (an edit from the management UI, or a
+   * re-save from a later application with the same normalized key). */
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  /** Bumped every time this saved answer is actually used ("Use this answer" clicked elsewhere) --
+   * deliberately separate from `updatedAt`, which tracks edits to the answer text, not uses of it. */
+  lastConfirmedAt: integer('last_confirmed_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** Single fixed row (id fixed at 1). This is app-wide preference state, not a multi-row table. */
 export const appSettings = sqliteTable('app_settings', {
   id: integer('id').primaryKey().default(1),
   launchAtLogin: integer('launch_at_login', { mode: 'boolean' }).notNull().default(false),
@@ -105,10 +604,34 @@ export const appSettings = sqliteTable('app_settings', {
   sidebarStart: text('sidebar_start', { enum: ['expanded', 'collapsed', 'remember_last'] }).notNull().default('remember_last'),
   sidebarCollapsed: integer('sidebar_collapsed', { mode: 'boolean' }).notNull().default(false),
   lastOpenedPage: text('last_opened_page').notNull().default('search'),
-  defaultMarket: text('default_market', { enum: ['netherlands', 'worldwide'] }).notNull().default('netherlands'),
+  /** Whether closing the main window hides it to the system tray instead of quitting the app.
+   * Off by default: silently changing "closing the window quits" to "stays running invisibly"
+   * without explicit opt-in would be a surprising, dark-pattern-adjacent change for a local-first
+   * tool. */
+  minimizeToTrayOnClose: integer('minimize_to_tray_on_close', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the user has been shown the Welcome modal. False by default so a truly fresh
+   * app_settings row (a brand-new install) is not skipped by default; the separate "don't
+   * re-show for an upgrading existing user who already has a CV" logic lives in the renderer. */
+  welcomeSeen: integer('welcome_seen', { mode: 'boolean' }).notNull().default(false),
+  /** Whether the app periodically re-scans for vacancies on its own while minimized to the tray
+   * (#195). Off by default -- and a no-op in practice unless `minimizeToTrayOnClose` is also on,
+   * since nothing else keeps the process alive to run the timer. */
+  autoScanEnabled: integer('auto_scan_enabled', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * Whether this app is allowed to treat any site as automated-submission eligible at all -- the
+   * MVP kill switch over #193's auto-apply track. Off by default, and off in every shipped build of
+   * this release: `parseSettingsPatch` deliberately does not accept it, so the renderer cannot turn
+   * it on, and no settings control writes it.
+   *
+   * main.ts reads it alongside the other settings mirrors and hands it to
+   * `application-target-policies.ts`, where it gates `resolvePolicyIdForCanonicalUrl` -- the one
+   * function every caller holding a URL goes through. With it off, no URL resolves to a compiled
+   * policy, so every attempt lands on the manual review card regardless of what the policy table
+   * contains. See that file's own comment for why the switch sits on the resolver rather than on
+   * the table being empty.
+   */
+  autoApplyEnabled: integer('auto_apply_enabled', { mode: 'boolean' }).notNull().default(false),
   defaultLocation: text('default_location').notNull().default(''),
-  sponsorOnlyDefault: integer('sponsor_only_default', { mode: 'boolean' }).notNull().default(true),
-  indVerificationEnabled: integer('ind_verification_enabled', { mode: 'boolean' }).notNull().default(true),
   defaultCvId: text('default_cv_id').references(() => cvDocuments.id, { onDelete: 'set null' }),
   defaultLetterType: text('default_letter_type', {
     enum: ['motivation_letter', 'cover_letter', 'recruiter_message', 'short_application_message'],
@@ -120,4 +643,38 @@ export const appSettings = sqliteTable('app_settings', {
   }).notNull().default('preparing'),
   confirmApplicationDelete: integer('confirm_application_delete', { mode: 'boolean' }).notNull().default(true),
   autoArchiveRejected: integer('auto_archive_rejected', { mode: 'boolean' }).notNull().default(false),
+  defaultProvider: text('default_provider', { enum: ['claude', 'codex'] }).notNull().default('claude'),
+  /** #421: whether the local MCP endpoint listens at all. Off by default, the same reasoning
+   * `autoApplyEnabled` above already states for a feature that expands what an outside actor may
+   * do on the candidate's behalf -- this one is a literal new network listener in Electron main,
+   * so the default-off posture matters even more than usual. Closing the app removes the endpoint
+   * regardless of this setting; it only controls whether one is stood up on the next launch or
+   * settings change. */
+  mcpEndpointEnabled: integer('mcp_endpoint_enabled', { mode: 'boolean' }).notNull().default(false),
+  /*
+   * ADI-07: the AI Workspace's renderer-local view state.
+   *
+   * These are preferences, not data, and they live here for exactly one reason: every other
+   * preference in this app lives here. The alternative considered was `localStorage`, which is
+   * where a browser app would put "which row was selected". This is not a browser app -- a user
+   * who backs up, exports, or resets their workspace database reasonably expects that to carry
+   * their app state, and a second store inside Chromium's profile directory would silently not be
+   * part of any of those operations.
+   *
+   * The two collection-shaped fields are JSON columns, following `cv_documents.profile`'s existing
+   * precedent for a small structured value, rather than join tables: neither is ever queried,
+   * ordered, or joined by SQL, so a table would buy nothing and cost two migrations.
+   */
+  /** The session the AI Workspace reopens on. Nullable: "nothing selected" is a real state. */
+  agentSelectedSessionId: text('agent_selected_session_id'),
+  /** Session ids the user has archived out of the live list. Bounded in validate.ts. */
+  agentArchivedSessionIds: text('agent_archived_session_ids', { mode: 'json' })
+    .notNull()
+    .$type<string[]>()
+    .default([]),
+  /** `sessionId -> unread activity count`, for the list's badges. Bounded in validate.ts. */
+  agentUnreadCounts: text('agent_unread_counts', { mode: 'json' })
+    .notNull()
+    .$type<Record<string, number>>()
+    .default({}),
 });

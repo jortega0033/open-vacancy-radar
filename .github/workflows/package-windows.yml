@@ -1,12 +1,14 @@
 name: Windows Packaging
 
-# Proves the NSIS packaging pipeline (electron-builder) still produces a real installer — the
+# Proves the NSIS packaging pipeline (electron-builder) still produces a real installer: the
 # one thing Core CI's `pnpm build` alone doesn't exercise. See docs/packaging.md for why a
 # packaging-sensitive change needs this and not just a plain build. No signing, no publishing,
-# no release automation — this only verifies packaging still works.
+# no release automation. This only verifies packaging still works.
 
 on:
   push:
+    branches:
+      - master
   pull_request:
 
 permissions:
@@ -19,16 +21,17 @@ concurrency:
 jobs:
   package-win:
     name: Package Windows installer
-    runs-on: windows-latest
+    # node-gyp 11 does not recognize the Visual Studio 18 image currently behind windows-latest.
+    runs-on: windows-2022
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -38,7 +41,7 @@ jobs:
         run: pnpm package:win
 
       # `pnpm package:win` can exit 0 without electron-builder actually having produced an
-      # installer (e.g. a silently-skipped target) — fail the job explicitly rather than trust
+      # installer (e.g. a silently-skipped target), so fail the job explicitly rather than trust
       # the exit code alone.
       - name: Verify installer was produced
         shell: pwsh
@@ -57,8 +60,16 @@ jobs:
           }
           Write-Host "Found unpacked executable: $exePath"
 
+      # ADI-04. Deliberately positioned AFTER packaging: `pnpm package:win` runs `prepackage:win`,
+      # which compiles apps/daemon/dist/agent-dock-job-host.exe. These tests exercise that real
+      # compiled helper — including the negative control proving `taskkill /T /F` cannot reach an
+      # orphan whose intermediate parent already exited, which is the gap the Job Object closes.
+      # Running them before packaging would test a helper this job had not built yet.
+      - name: Windows process-tree termination tests
+        run: pnpm test:windows-process-tree
+
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Open-Vacancy-Radar-Windows-CI
           path: dist-packages/Open Vacancy Radar-Setup-*.exe

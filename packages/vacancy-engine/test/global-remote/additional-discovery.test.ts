@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { runAdditionalDiscovery } from '../../src/global-remote/additional-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import { REMOOTE_SEARCH_URL } from '../../src/global-remote/remoote-discovery.js';
 import { globalRemoteSourceRegistry } from '../../src/global-remote/source-registry.js';
 import { FixtureHttpClient, jsonPostFixtureKey } from '../ats/helpers.js';
 
@@ -13,6 +14,7 @@ function profile(museEnabled = false): GlobalRemoteConfig {
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'NL',
       himalayasMaxPagesPerQuery: 1,
@@ -25,6 +27,11 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       jobRemotelyMaxPages: 1,
       arbeitnowMaxPages: 1,
       diceMaxPages: 1,
+      remooteRoleTitle: 'frontend',
+      remooteCountry: 'Netherlands',
+      remooteLimit: 10,
+      aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -33,6 +40,9 @@ function profile(museEnabled = false): GlobalRemoteConfig {
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
     },
     officialSources: [],
   };
@@ -41,12 +51,12 @@ function profile(museEnabled = false): GlobalRemoteConfig {
 function diceBody(): unknown {
   return {
     jsonrpc: '2.0',
-    id: 'dice-frontend-1',
+    id: 'dice-search-1',
     method: 'tools/call',
     params: {
       name: 'search_jobs',
       arguments: {
-        keyword: 'frontend developer',
+        keyword: 'frontend',
         jobs_per_page: 100,
         page_number: 1,
         sort: 'relevance',
@@ -60,12 +70,29 @@ function diceBody(): unknown {
 function diceSse(data: unknown[]): string {
   return `event: message\ndata: ${JSON.stringify({
     jsonrpc: '2.0',
-    id: 'dice-frontend-1',
+    id: 'dice-search-1',
     result: { structuredContent: { data } },
   })}\n\n`;
 }
 
-describe('MCP and configuration-gated discovery', () => {
+function remooteBody(): unknown {
+  return {
+    role_title: 'frontend',
+    country: 'Netherlands',
+    salary_required: false,
+    limit: 10,
+  };
+}
+
+function emptyRemooteSearch(): string {
+  return JSON.stringify({
+    status: 'ok',
+    data: { jobs: [], result_count: 0, total_available: 0 },
+    limits: { requested_limit: 10, applied_limit: 10, max_public_results: 10 },
+  });
+}
+
+describe('Additional public and configuration-gated discovery', () => {
   it('uses the sanctioned Dice MCP endpoint with explicit MCP headers', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([{
@@ -78,18 +105,25 @@ describe('MCP and configuration-gated discovery', () => {
         jobLocation: { displayName: 'Remote' },
         workplaceTypes: ['Remote'],
         employmentType: ['Full-time'],
+        postedDate: '2026-08-26T11:59:36Z',
       }])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
     ]);
     const http = new FixtureHttpClient(routes);
 
     const result = await runAdditionalDiscovery(http, profile());
 
-    expect(result.sources).toEqual([expect.objectContaining({ provider: 'dice', status: 'success', listings: 1 })]);
+    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'remoote']);
+    expect(result.sources.find((source) => source.provider === 'dice')).toMatchObject({
+      status: 'success',
+      listings: 1,
+    });
     expect(result.vacancies[0]).toMatchObject({
       provider: 'dice',
       company: 'Dice Co',
       title: 'Senior Frontend Developer',
       advertisedMinimum: 150_000,
+      postedAt: '2026-08-26T11:59:36.000Z',
     });
     expect(http.requestedOptions[0]?.headers).toMatchObject({
       Accept: 'application/json, text/event-stream',
@@ -100,6 +134,7 @@ describe('MCP and configuration-gated discovery', () => {
   it('runs The Muse only after the project profile explicitly enables it', async () => {
     const routes = new Map([
       [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
       [MUSE_URL, JSON.stringify({
         page: 1,
         page_count: 1,
@@ -111,21 +146,105 @@ describe('MCP and configuration-gated discovery', () => {
           company: { name: 'Muse Co' },
           locations: [{ name: 'Flexible / Remote' }],
           refs: { landing_page: 'https://www.themuse.com/jobs/muse-co/frontend-engineer' },
+          publication_date: '2026-07-30T00:20:58Z',
         }],
       })],
     ]);
 
     const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
 
-    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'the_muse']);
-    expect(result.vacancies).toEqual([expect.objectContaining({ provider: 'the_muse', company: 'Muse Co' })]);
+    expect(result.sources.map((source) => source.provider)).toEqual(['dice', 'remoote', 'the_muse']);
+    expect(result.vacancies).toEqual([
+      expect.objectContaining({ provider: 'the_muse', company: 'Muse Co', postedAt: '2026-07-30T00:20:58.000Z' }),
+    ]);
+  });
+
+  // QA regression: a real vacancy description read "experienceTwo Microsoft certifications" and
+  // "customer-focused mannerStrong troubleshooting" -- words that used to sit in separate `<p>`
+  // elements running together with no separator once the HTML was stripped to plain text (the old
+  // `decodedText` was `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads every text node
+  // with nothing inserted between them).
+  it('keeps a word boundary between adjacent HTML block elements when stripping a description to plain text', async () => {
+    const routes = new Map([
+      [jsonPostFixtureKey(DICE_URL, diceBody()), diceSse([])],
+      [jsonPostFixtureKey(REMOOTE_SEARCH_URL, remooteBody()), emptyRemooteSearch()],
+      [MUSE_URL, JSON.stringify({
+        page: 1,
+        page_count: 1,
+        total: 1,
+        results: [{
+          id: 43,
+          name: 'Support Engineer',
+          contents: '<p>3+ years experience</p><p>Two Microsoft certifications</p>',
+          company: { name: 'Muse Co' },
+          locations: [{ name: 'Flexible / Remote' }],
+          refs: { landing_page: 'https://www.themuse.com/jobs/muse-co/support-engineer' },
+          publication_date: '2026-07-30T00:20:58Z',
+        }],
+      })],
+    ]);
+
+    const result = await runAdditionalDiscovery(new FixtureHttpClient(routes), profile(true));
+
+    expect(result.vacancies[0]?.description).not.toContain('experienceTwo');
+    expect(result.vacancies[0]?.description).toContain('experience');
+    expect(result.vacancies[0]?.description).toContain('Two Microsoft certifications');
   });
 
   it('keeps every researched source visible without mislabeling gated portals as active', () => {
     const registry = globalRemoteSourceRegistry(profile());
 
     expect(registry.length).toBeGreaterThanOrEqual(30);
-    expect(registry.filter((source) => source.state === 'active')).toHaveLength(21);
+    expect(registry.every((source) =>
+      source.state === 'active'
+        ? source.ingestionMode !== 'disabled'
+        : source.ingestionMode === 'disabled',
+    )).toBe(true);
+    // +5 since issue #251: one active `full_ingestion` registry entry per in-scope ATS roster
+    // provider (greenhouse/lever/ashby/recruitee/personio), on top of the 27 active as of Taiwan
+    // Jobs (#44) and NAV Arbeidsplassen (#42); +1 since issue #398's `ai_web_search` registry
+    // entry, see source-registry.ts.
+    expect(registry.filter((source) => source.state === 'active')).toHaveLength(33);
+    expect(registry.find((source) => source.id === 'remotive')).toMatchObject({
+      transport: 'rss',
+      url: 'https://remotive.com/remote-jobs/feed',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'un_careers')).toMatchObject({
+      state: 'active',
+      transport: 'rss',
+      ingestionMode: 'linked_index',
+    });
+    expect(registry.find((source) => source.id === 'jobtech_sweden')).toMatchObject({
+      state: 'active',
+      url: 'https://jobsearch.api.jobtechdev.se/',
+      transport: 'api',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'workable_global')).toMatchObject({
+      state: 'active',
+      url: 'https://www.workable.com/boards/workable.xml',
+      transport: 'structured',
+      ingestionMode: 'full_ingestion',
+    });
+    expect(registry.find((source) => source.id === 'remoote')).toMatchObject({
+      state: 'active',
+      transport: 'api',
+      ingestionMode: 'linked_index',
+      adapter: 'active',
+    });
+    expect(registry.find((source) => source.id === 'ai_dev_jobs')).toMatchObject({
+      state: 'active',
+      url: 'https://aidevboard.com/docs',
+      transport: 'api',
+      ingestionMode: 'linked_index',
+      adapter: 'active',
+    });
+    expect(registry.find((source) => source.id === 'eures')).toMatchObject({
+      state: 'prohibited',
+      adapter: 'none',
+      ingestionMode: 'disabled',
+    });
     expect(registry.find((source) => source.id === 'the_muse')).toMatchObject({
       state: 'configuration_required',
       adapter: 'ready',

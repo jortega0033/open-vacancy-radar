@@ -97,8 +97,13 @@ export function parseClaudeLine(raw: unknown, logger: Logger): ParsedLine {
       const sessionId = typeof obj.session_id === 'string' ? obj.session_id : undefined;
       return { events, providerSessionId: sessionId };
     }
-    default:
-      logger.debug('claude: unrecognized event type', { eventType: String(obj.type) });
-      return { events: [] };
+    default: {
+      // `events` stays empty exactly as before: an unmodelled Claude event type is tolerated, never
+      // surfaced. `unrecognized` is added purely so a supervisor can tally it (ADI-04); it changes
+      // nothing about what this session emits.
+      const eventType = String(obj.type);
+      logger.debug('claude: unrecognized event type', { eventType });
+      return { events: [], unrecognized: { eventType } };
+    }
   }
 }

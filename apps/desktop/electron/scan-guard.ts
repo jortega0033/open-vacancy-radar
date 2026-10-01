@@ -3,43 +3,55 @@ import { withScanAdvisoryTryLock, type ScanLock } from '@open-vacancy-radar/vaca
 export const SCAN_BUSY_IN_PROCESS = 'a vacancy scan is already running';
 export const SCAN_BUSY_OTHER_PROCESS = 'a vacancy scan is already running in another process';
 
+/**
+ * True for exactly the two errors `runExclusiveScan` throws to mean "another scan already owns
+ * the lock" -- both real, expected outcomes a background-scan timer (#195) must swallow silently
+ * rather than log as a failure, since a manual "Search" click or another process's scan winning
+ * the race is normal, not broken. `createScanGuard` throws plain `Error`s, not a distinguishable
+ * subclass or code, so this compares `error.message` rather than using `instanceof`.
+ */
+export function isExpectedScanBusyError(error: unknown): boolean {
+  return error instanceof Error && (error.message === SCAN_BUSY_IN_PROCESS || error.message === SCAN_BUSY_OTHER_PROCESS);
+}
+
 export interface ExclusiveScanOptions {
-  /**
-   * Whether this guard should take the engine's cross-process advisory lock itself.
-   *
-   * `false` for `runEndToEndScan`, which takes that lock as part of its own contract and reports
-   * `{ status: 'skipped' }` rather than throwing when it cannot get it. Taking it here as well
-   * would deadlock against that acquisition on a platform where the lock is per-handle.
-   */
+  /** Whether this guard should take the engine's cross-process advisory lock itself. */
   takeAdvisoryLock: boolean;
 }
 
 /**
  * Mutual exclusion for vacancy scans, in two layers.
  *
- * **In-process (always).** One flag shared by *every* scan kind, not one per kind: the
- * global-remote and Netherlands pipelines write the same engine database and the same
- * scan-run/content-hash tables, so running them together is exactly as damaging as running two of
- * either. This layer is also the only one that works reliably inside a single process — POSIX
- * `fcntl` locks (what SQLite uses on Linux/macOS) are per-process, so a second connection opened
- * by *this* process is not blocked by the first. The advisory lock alone would therefore be a
- * no-op for precisely the case the renderer can cause: two IPC calls in flight at once.
+ * **In-process (always).** One flag shared across every scan: POSIX `fcntl` locks (what SQLite
+ * uses on Linux/macOS) are per-process, so a second connection opened by *this* process is not
+ * blocked by the first. The advisory lock alone would therefore be a no-op for precisely the case
+ * the renderer can cause: two IPC calls in flight at once.
  *
  * **Cross-process (opt-in).** The engine's `createScanLock` sidecar file lock, which is the only
- * thing that stops a scan started by another process — `pnpm vacancies:scan` pointed at the same
- * userData database, say. This closes the gap flagged in the earlier review, where the desktop
+ * thing that stops a scan started by another process (`pnpm vacancies:scan` pointed at the same
+ * userData database, say). This closes the gap flagged in the earlier review, where the desktop
  * app's global-remote handler guarded with an in-process boolean alone.
  *
  * The lock is read through a getter rather than passed in, because it is created lazily alongside
  * the engine database and a handler can be invoked before that finishes.
  */
-export function createScanGuard(getLock: () => ScanLock | undefined) {
+export interface ScanGuard {
+  runExclusiveScan<T>(run: () => Promise<T>, options: ExclusiveScanOptions): Promise<T>;
+  /**
+   * Whether a scan started through this guard is still running. The renderer's own `scanning`
+   * state is just a piece of component state, gone the moment the Search page unmounts (the user
+   * navigates away); the scan itself runs entirely in this process and keeps going regardless.
+   * This lets a remounted Search page notice that a scan is already in flight -- one it may have
+   * started itself before navigating away -- and reflect that instead of looking idle and then
+   * failing with `SCAN_BUSY_IN_PROCESS` the moment the user clicks Search again.
+   */
+  isScanInFlight(): boolean;
+}
+
+export function createScanGuard(getLock: () => ScanLock | undefined): ScanGuard {
   let inFlight = false;
 
-  return async function runExclusiveScan<T>(
-    run: () => Promise<T>,
-    options: ExclusiveScanOptions,
-  ): Promise<T> {
+  async function runExclusiveScan<T>(run: () => Promise<T>, options: ExclusiveScanOptions): Promise<T> {
     if (inFlight) throw new Error(SCAN_BUSY_IN_PROCESS);
     inFlight = true;
     try {
@@ -51,9 +63,11 @@ export function createScanGuard(getLock: () => ScanLock | undefined) {
       if (!outcome.acquired) throw new Error(SCAN_BUSY_OTHER_PROCESS);
       return outcome.value;
     } finally {
-      // Cleared however the scan ended — a failed scan must not wedge the app into a state where
+      // Cleared however the scan ended. A failed scan must not wedge the app into a state where
       // every later scan is refused as "already running".
       inFlight = false;
     }
-  };
+  }
+
+  return { runExclusiveScan, isScanInFlight: () => inFlight };
 }

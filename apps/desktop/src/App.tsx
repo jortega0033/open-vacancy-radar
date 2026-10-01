@@ -1,73 +1,67 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentEvent, ProviderId, ProviderStatus } from '@agent-dock/shared';
+import type { ProviderId } from '@agent-dock/shared';
 import type { WorkspaceCounts } from './window.js';
-import runtimeUnavailableIllustration from '../assets/illustrations/runtime-unavailable.svg?no-inline';
-import { ProviderPanel } from './components/ProviderPanel.js';
-import { EventLog } from './components/EventLog.js';
-import { SearchPage } from './components/search/index.js';
+import { PROVIDER_LABEL } from './provider-labels.js';
+import { SearchPage, createSearchSessionState } from './components/search/index.js';
 import { SavedJobsPage } from './components/saved/index.js';
 import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
-import { LettersPage } from './components/letters/index.js';
+import { LettersPage, type SelectedVacancy } from './components/letters/index.js';
+import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage } from './components/settings/index.js';
+import { AgentWorkspacePage } from './components/agent-workspace/index.js';
+import { WelcomeModal } from './components/WelcomeModal.js';
 import {
   AppSidebar,
-  EMPTY_COUNTS,
-  EmptyState,
+  ErrorBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
   type NavPage,
+  type RuntimeState,
 } from './components/shell/index.js';
 import { applyDensity, applyTheme } from './theme.js';
 
 type DaemonState = 'connecting' | 'ready' | 'unavailable';
-type RunStatus = 'idle' | 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
-
-// Status styling for a run: monochrome by design. A session that finished is not "good" and a
-// cancelled one is not "bad" — those are lifecycle states, not outcomes, so they are expressed
-// through contrast and weight. The three real state hues in the token set (success/warning/error)
-// are reserved for things that genuinely are good or bad; see DESIGN-TOKENS.md.
-const RUN_STATUS_BADGE_CLASS: Record<RunStatus, string> = {
-  idle: 'badge badge-ghost font-mono align-middle',
-  starting: 'badge badge-outline font-mono align-middle',
-  running: 'badge badge-outline font-mono align-middle',
-  completed: 'badge badge-neutral font-mono align-middle',
-  failed: 'badge badge-outline border-2 font-mono font-bold align-middle',
-  cancelled: 'badge badge-ghost font-mono align-middle opacity-60',
-};
-
-const PROVIDER_LABEL: Record<ProviderId, string> = {
-  claude: 'Claude Code',
-  codex: 'Codex',
-};
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [counts, setCounts] = useState<WorkspaceCounts>(EMPTY_COUNTS);
+  // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
+  // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
+  const [counts, setCounts] = useState<WorkspaceCounts | undefined>(undefined);
+
+  // The one piece of cross-page state this shell carries: a vacancy handed off from the Search
+  // page's "Generate Letter" action, waiting to be picked up by the Letters page. Cleared as soon
+  // as `LettersPage` reports it consumed (see `handleVacancyConsumed`) and, defensively, on every
+  // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
+  // never replays a stale handoff.
+  const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  const [searchSession, setSearchSession] = useState(createSearchSessionState);
+  const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
+  const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
+
+  // The first-launch CV nudge. Off until settings hydration proves both halves of the gate: the
+  // flag has never been set, *and* the CV library is actually empty. Anything less would flash a
+  // "welcome, upload a CV" modal at an upgrading user who has had one in the library for months.
+  const [showWelcome, setShowWelcome] = useState(false);
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
 
-  const [providers, setProviders] = useState<ProviderStatus[]>();
-  const [providersError, setProvidersError] = useState<string>();
+  // The provider AI features (gap analysis, letters) currently run through: a persisted setting
+  // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
+  // and header labels need it; RuntimePage owns the actual read/write of the setting and reports
+  // changes back up via `onDefaultProviderChanged` so this label updates without a re-fetch.
+  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
+  // Whether `defaultProvider`'s CLI is actually installed/authenticated, not just whether the
+  // daemon sidecar is up: the daemon being ready says nothing about the CLI itself (see
+  // `RuntimePage`, which already tracks this separately per-provider). Without this, the shell
+  // status dot claimed "Ready" whenever the daemon started, even with no CLI installed at all.
+  const [providerRuntimeState, setProviderRuntimeState] = useState<RuntimeState>('connecting');
 
-  const [provider, setProvider] = useState<ProviderId>('claude');
-  const [model, setModel] = useState<string>('');
-  const [cwd, setCwd] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [formError, setFormError] = useState<string>();
-
-  const [runStatus, setRunStatus] = useState<RunStatus>('idle');
-  const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [sessionId, setSessionId] = useState<string>();
-  // Mirrors `sessionId` so the onSessionEvent subscription (set up once, below) always filters
-  // against the current session without needing to resubscribe — a stale closure here would
-  // silently drop events for a session started after the initial subscription.
-  const sessionIdRef = useRef<string>();
   // Settings hydration is async, so the user can already have clicked a nav item by the time it
   // lands. Restoring the remembered start page at that point would yank them off the page they
   // deliberately opened, so hydration only ever sets the page if nothing else has.
@@ -86,6 +80,7 @@ export function App() {
 
         applyTheme(settings.theme);
         applyDensity(settings.density);
+        setDefaultProvider(settings.defaultProvider);
 
         if (settings.sidebarStart === 'expanded') setSidebarCollapsed(false);
         else if (settings.sidebarStart === 'collapsed') setSidebarCollapsed(true);
@@ -94,6 +89,17 @@ export function App() {
         const start =
           settings.startPage === 'last_opened' ? settings.lastOpenedPage : settings.startPage;
         if (isNavPage(start) && !hasNavigatedRef.current) setNav(start);
+
+        if (!settings.welcomeSeen) {
+          // A count, not `listCvDocuments()`: this only needs to know whether the library is
+          // empty, not fetch every CV's full extracted text/profile just to read `.length`.
+          const counts = await window.workspace.getCounts();
+          if (cancelled) return;
+          // An existing user who already has a CV has nothing to be welcomed to: retire the flag
+          // silently here so this check happens exactly once for them and the modal never renders.
+          if (counts.cvDocuments > 0) void window.workspace.updateSettings({ welcomeSeen: true }).catch(() => {});
+          else setShowWelcome(true);
+        }
       } catch {
         // defaults already applied by useState
       }
@@ -104,12 +110,23 @@ export function App() {
     };
   }, []);
 
+  // The single exit from the welcome modal, whichever way the user took it (skip, close, backdrop,
+  // or a CV they actually uploaded): closing it and marking it seen are the same act, so there is
+  // no path that dismisses the modal without persisting the flag. Fire and forget, like every other
+  // settings write in this shell -- a failed write costs the user one extra welcome, nothing more.
+  const handleWelcomeClosed = useCallback(() => {
+    setShowWelcome(false);
+    void window.workspace.updateSettings({ welcomeSeen: true }).catch(() => {});
+  }, []);
+
   const refreshCounts = useCallback(async () => {
     try {
       const fresh = await window.workspace.getCounts();
       setCounts(fresh);
     } catch {
-      // badges stay at zero; not worth an error banner over the whole app
+      // Leaves `counts` exactly as it was (undefined if never loaded, otherwise the last successful
+      // fetch) rather than resetting to a fabricated zero -- not worth an error banner over the
+      // whole app, but also not worth lying about a count that just hasn't refreshed.
     }
   }, []);
 
@@ -120,12 +137,68 @@ export function App() {
   const handleNavigate = useCallback((page: NavPage) => {
     hasNavigatedRef.current = true;
     setNav(page);
+    // Any nav through the sidebar is, by definition, not the "Generate Letter" handoff -- including
+    // a manual click on Letters itself. Clearing unconditionally (not just when the destination is
+    // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
+    setPendingVacancy(null);
+    setLetterReturnAttemptId(null);
+    if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
     void window.workspace?.updateSettings({ lastOpenedPage: page }).catch(() => {});
     // Cheap re-sync for the sidebar's badge counts: whichever page the user is leaving may have
     // just changed saved jobs/applications/letters, and there's no per-page mutation callback for
     // three of the five pages, so refreshing on every navigation is simpler than wiring one to each.
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  // The Search page's "Generate Letter" action: distinct from `handleNavigate` because it needs to
+  // set `pendingVacancy` *and* navigate in the same step, without that navigation's own
+  // stale-handoff guard immediately wiping out the vacancy it just set.
+  const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(null);
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setPendingVacancy(vacancy);
+    setLetterReturnAttemptId(attemptId);
+    setNav('letters');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
+    void refreshCounts();
+  }, [refreshCounts]);
+
+  // Passed to `LettersPage`: fired once it has captured its own copy of `pendingVacancy`, so this
+  // state can be cleared immediately rather than waiting for the user to navigate elsewhere.
+  const handleVacancyConsumed = useCallback(() => setPendingVacancy(null), []);
+
+  const handleBackToVacancy = useCallback((vacancy: SelectedVacancy) => {
+    hasNavigatedRef.current = true;
+    if (letterReturnAttemptId) {
+      setApplicationAttemptToOpen(letterReturnAttemptId);
+      setLetterReturnAttemptId(null);
+      setNav('applications');
+      void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
+      void refreshCounts();
+      return;
+    }
+    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
+    setNav('search');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'search' }).catch(() => {});
+    void refreshCounts();
+  }, [letterReturnAttemptId, refreshCounts]);
+
+  const handleViewApplicationAttempt = useCallback((attemptId: string) => {
+    hasNavigatedRef.current = true;
+    setApplicationAttemptToOpen(attemptId);
+    setNav('applications');
+    void window.workspace?.updateSettings({ lastOpenedPage: 'applications' }).catch(() => {});
     void refreshCounts();
   }, [refreshCounts]);
 
@@ -166,74 +239,32 @@ export function App() {
     };
   }, []);
 
+  // Mirrors daemonState directly while the daemon itself isn't ready (there's nothing more
+  // specific to say yet); once it is, checks the actual selected provider's real install/auth
+  // status instead of assuming "daemon up" means "AI features work". Re-runs whenever the
+  // provider changes (RuntimePage can change it without a page reload) so this doesn't go stale.
   useEffect(() => {
-    if (daemonState !== 'ready') return;
+    if (daemonState !== 'ready') {
+      setProviderRuntimeState(daemonState);
+      return;
+    }
+    let cancelled = false;
     window.agentDock
       .listProviders()
-      .then(setProviders)
-      .catch((err: Error) => setProvidersError(err.message));
-  }, [daemonState]);
-
-  // One subscription for the whole component lifetime; events are filtered to the session this
-  // render currently cares about. main.ts only ever streams one session at a time in this demo.
-  useEffect(() => {
-    return window.agentDock.onSessionEvent((eventSessionId, event) => {
-      if (sessionIdRef.current !== eventSessionId) return;
-      setEvents((prev) => [...prev, event]);
-      if (event.type === 'session.completed') setRunStatus('completed');
-      else if (event.type === 'session.failed') setRunStatus('failed');
-      else if (event.type === 'session.cancelled') setRunStatus('cancelled');
-    });
-  }, []);
-
-  const handleRun = useCallback(async () => {
-    setFormError(undefined);
-
-    if (!cwd.trim()) {
-      setFormError('working directory is required');
-      return;
-    }
-    if (!prompt.trim()) {
-      setFormError('prompt is required');
-      return;
-    }
-
-    setEvents([]);
-    setRunStatus('starting');
-
-    try {
-      const session = await window.agentDock.createSession({
-        provider,
-        cwd,
-        prompt,
-        ...(model ? { model } : {}),
+      .then((providers) => {
+        if (cancelled) return;
+        const status = providers.find((p) => p.id === defaultProvider);
+        if (!status?.installed) setProviderRuntimeState('not-installed');
+        else if (status.authenticated !== 'authenticated') setProviderRuntimeState('not-authenticated');
+        else setProviderRuntimeState('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setProviderRuntimeState('unavailable');
       });
-      sessionIdRef.current = session.id;
-      setSessionId(session.id);
-      setRunStatus('running');
-    } catch (err) {
-      setRunStatus('failed');
-      setFormError(err instanceof Error ? err.message : 'failed to start session');
-    }
-  }, [provider, model, cwd, prompt]);
-
-  const handleCancel = useCallback(async () => {
-    if (!sessionId) return;
-    try {
-      await window.agentDock.cancelSession(sessionId);
-    } catch {
-      // the session-event stream will still reflect the true terminal state
-    }
-  }, [sessionId]);
-
-  const isRunning = runStatus === 'starting' || runStatus === 'running';
-  const selectedProviderStatus = providers?.find((p) => p.id === provider);
-  const canRun =
-    daemonState === 'ready' &&
-    !!selectedProviderStatus?.installed &&
-    !isRunning &&
-    cwd.trim().length > 0 &&
-    prompt.trim().length > 0;
+    return () => {
+      cancelled = true;
+    };
+  }, [daemonState, defaultProvider]);
 
   const { title, subtitle } = headerCopy(nav, counts);
 
@@ -245,143 +276,85 @@ export function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapsed={handleToggleSidebar}
         counts={counts}
-        runtimeLabel={PROVIDER_LABEL[provider]}
-        runtimeReady={daemonState === 'ready'}
+        runtimeLabel={PROVIDER_LABEL[defaultProvider]}
+        runtimeState={providerRuntimeState}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <WorkspaceHeader
-          title={title}
-          subtitle={subtitle}
-          runtimeLabel={PROVIDER_LABEL[provider]}
-          runtimeState={daemonState}
-        />
+        <WorkspaceHeader title={title} subtitle={subtitle} />
 
-        <main className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <main
+          className={`min-h-0 flex-1 py-6 ${
+            nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
+          }`}
+        >
           {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
               destination you are on, "the CLI runtime is not running" is worth knowing. */}
-          {daemonState === 'connecting' && <div className="alert alert-info mb-5">Connecting to local daemon…</div>}
-          {daemonState === 'unavailable' && (
-            <div className="alert alert-error alert-soft mb-5">Daemon unavailable: {daemonError ?? 'unknown error'}</div>
-          )}
+          <div className={nav === 'search' ? 'px-6' : undefined}>
+            {daemonState === 'connecting' && (
+              <div className="alert alert-info mb-5">Connecting to local daemon…</div>
+            )}
+            {daemonState === 'unavailable' && (
+              <ErrorBanner className="mb-5">
+                Daemon unavailable: {daemonError ?? 'unknown error'}
+              </ErrorBanner>
+            )}
+          </div>
 
-          {nav === 'search' && <SearchPage />}
-          {nav === 'saved' && <SavedJobsPage />}
-          {nav === 'applications' && <ApplicationsPage />}
+          {nav === 'search' && (
+            <SearchPage
+              onGenerateLetter={handleGenerateLetter}
+              onOpenSearchProfile={() => handleNavigate('settings')}
+              onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
+              session={searchSession}
+              onSessionChange={setSearchSession}
+            />
+          )}
+          {nav === 'saved' && (
+            <SavedJobsPage
+              onSavedJobsChanged={refreshCounts}
+              onViewApplicationAttempt={handleViewApplicationAttempt}
+            />
+          )}
+          {nav === 'applications' && (
+            <ApplicationsPage
+              onApplicationsChanged={refreshCounts}
+              focusAttemptId={applicationAttemptToOpen}
+              onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
+              onGenerateLetter={handleGenerateApplicationLetter}
+            />
+          )}
           {nav === 'cv' && <CvLibraryPage />}
-          {nav === 'letters' && <LettersPage onLettersChanged={refreshCounts} />}
-          {nav === 'settings' && <SettingsPage />}
+          {nav === 'letters' && (
+            <LettersPage
+              vacancy={pendingVacancy}
+              openOnGenerator={pendingVacancy !== null}
+              onVacancyConsumed={handleVacancyConsumed}
+              onLettersChanged={refreshCounts}
+              onBackToVacancy={handleBackToVacancy}
+            />
+          )}
+          {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
+
+          {/* ADI-07. Mounted only while it is the active page, which is what makes the hook's
+              unmount cleanup meaningful: leaving the page detaches every live relay in main rather
+              than leaving SSE streams open behind a screen nobody is looking at. */}
+          {nav === 'agent-workspace' && <AgentWorkspacePage defaultProvider={defaultProvider} />}
 
           {nav === 'runtime' && (
-            <div className="mx-auto max-w-3xl">
-              {daemonState === 'unavailable' && (
-                <EmptyState
-                  illustration={runtimeUnavailableIllustration}
-                  title="AI runtime unavailable"
-                  description="The local runtime is not available. AI-assisted actions remain disabled until it starts."
-                />
-              )}
-              {daemonState === 'ready' && (
-                <>
-                  <section>
-                    <h2 className="text-lg font-semibold">Providers</h2>
-                    {providersError && <div className="alert alert-error mt-3">{providersError}</div>}
-                    {providers && <ProviderPanel providers={providers} />}
-                  </section>
-
-                  <section className="mt-8 border-t border-base-300 pt-5">
-                    <h2 className="text-lg font-semibold">Run</h2>
-                    <label className="mt-4 mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Provider</span>
-                      <select
-                        className="select w-full"
-                        value={provider}
-                        onChange={(e) => {
-                          setProvider(e.target.value as ProviderId);
-                          setModel('');
-                        }}
-                        disabled={isRunning}
-                      >
-                        <option value="claude">Claude Code</option>
-                        <option value="codex">Codex</option>
-                      </select>
-                    </label>
-
-                    {!!selectedProviderStatus?.availableModels?.length && (
-                      <label className="mb-4 block">
-                        <span className="mb-1 block text-sm font-medium">Model</span>
-                        <select className="select w-full" value={model} onChange={(e) => setModel(e.target.value)} disabled={isRunning}>
-                          <option value="">Provider default</option>
-                          {selectedProviderStatus.availableModels.map((id) => (
-                            <option key={id} value={id}>
-                              {id}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    <label className="mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Working directory</span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          className="input flex-1"
-                          type="text"
-                          value={cwd}
-                          onChange={(e) => setCwd(e.target.value)}
-                          placeholder="/path/to/project"
-                          disabled={isRunning}
-                        />
-                        <button
-                          className="btn"
-                          type="button"
-                          disabled={isRunning}
-                          onClick={async () => {
-                            const dir = await window.agentDock.selectDirectory();
-                            if (dir) setCwd(dir);
-                          }}
-                        >
-                          Browse
-                        </button>
-                      </div>
-                    </label>
-
-                    <label className="mb-4 block">
-                      <span className="mb-1 block text-sm font-medium">Prompt</span>
-                      <textarea
-                        className="textarea w-full"
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        rows={4}
-                        disabled={isRunning}
-                      />
-                    </label>
-
-                    {formError && <div className="alert alert-error my-3">{formError}</div>}
-
-                    <div className="mt-2 flex items-center gap-2">
-                      <button className="btn btn-primary" type="button" onClick={handleRun} disabled={!canRun}>
-                        Run
-                      </button>
-                      <button className="btn btn-outline" type="button" onClick={handleCancel} disabled={runStatus !== 'running'}>
-                        Cancel
-                      </button>
-                    </div>
-                  </section>
-
-                  <section className="mt-8 border-t border-base-300 pt-5">
-                    <h2 className="text-lg font-semibold">
-                      Session status: <span className={RUN_STATUS_BADGE_CLASS[runStatus]}>{runStatus}</span>
-                    </h2>
-                    <EventLog events={events} />
-                  </section>
-                </>
-              )}
-            </div>
+            <RuntimePage
+              daemonState={daemonState}
+              {...(daemonError ? { daemonError } : {})}
+              onDefaultProviderChanged={setDefaultProvider}
+            />
           )}
-
         </main>
       </div>
+
+      {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
+          Settings: the gate above decides *whether* it appears, never which page it appears over. */}
+      {showWelcome && <WelcomeModal onClose={handleWelcomeClosed} />}
     </div>
   );
 }

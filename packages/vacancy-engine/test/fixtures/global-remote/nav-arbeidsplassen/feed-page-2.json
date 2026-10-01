@@ -1,0 +1,27 @@
+{
+  "version": "https://jsonfeed.org/version/1",
+  "title": "Arbeidsplassen.no - Stillingsannonser",
+  "home_page_url": "https://arbeidsplassen.nav.no",
+  "feed_url": "https://pam-stilling-feed.nav.no/api/v1/feed/22222222-0000-4000-8000-000000000002",
+  "description": "Offentlig feed av stillingsannonser fra Arbeidsplassen.no",
+  "next_url": null,
+  "id": "22222222-0000-4000-8000-000000000002",
+  "next_id": null,
+  "items": [
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "url": "https://arbeidsplassen.nav.no/stillinger/stilling/44444444-4444-4444-8444-444444444444",
+      "title": "Senior Frontend Engineer",
+      "content_text": "Senior Frontend Engineer at Stavanger Software AS",
+      "date_modified": "2026-08-25T09:00:00Z",
+      "_feed_entry": {
+        "uuid": "44444444-4444-4444-8444-444444444444",
+        "status": "ACTIVE",
+        "title": "Senior Frontend Engineer",
+        "businessName": "Stavanger Software AS",
+        "municipal": "Stavanger",
+        "sistEndret": "2026-08-25T09:00:00Z"
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # electron-builder config for the Open Vacancy Radar desktop shell.
 #
-# appId is a placeholder reverse-DNS identifier, not a claim to own that domain — anyone forking
+# appId is a placeholder reverse-DNS identifier, not a claim to own that domain. Anyone forking
 # this boilerplate for real distribution should change it (and productName) to their own.
 appId: dev.agentdock.desktop
 productName: Open Vacancy Radar
@@ -8,7 +8,7 @@ copyright: Copyright © Open Vacancy Radar contributors
 
 directories:
   # Keep installer/unpacked-app output out of Vite's dist/ and esbuild's dist-electron/, and out
-  # of the repo root's own node_modules — a dedicated top-level folder is unambiguous either way.
+  # of the repo root's own node_modules: a dedicated top-level folder is unambiguous either way.
   output: ../../dist-packages
   buildResources: assets/app-icons
 
@@ -23,21 +23,36 @@ files:
   - package.json
 
 # The daemon is a *separate* process the packaged app spawns (see electron/main.ts), not code the
-# renderer or main bundle import — it has to exist as a real file on disk for `spawn()` to launch,
+# renderer or main bundle import: it has to exist as a real file on disk for `spawn()` to launch,
 # so it can't just live inside main.js. It's shipped as an extraResource (outside app.asar
 # entirely) rather than relying on Electron's asar-aware fs patching, since spawning a *new*
 # process against a path inside an asar archive is exactly the kind of "works by accident"
-# behavior this project avoids — apps/daemon/dist/index.js is already a single self-contained
-# esbuild bundle (see apps/daemon/scripts/build.mjs), so nothing else needs to come with it.
+# behavior this project avoids. apps/daemon/dist contains the esbuild bundle and any native
+# runtime assets (currently the OS credential-store binding), so the directory moves as one unit.
 extraResources:
   - from: ../daemon/dist
     to: daemon
   - from: assets/app-icons/png/icon-256.png
     to: assets/app-icons/png/icon-256.png
+  # 32px system-tray icon (electron/resolve-window-icon.ts's resolveTrayIcon) -- Windows scales it
+  # for high-DPI displays itself, so no separate 16px asset is needed.
+  - from: assets/app-icons/png/icon-32.png
+    to: assets/app-icons/png/icon-32.png
+  # Read-only inputs the vendored vacancy-engine needs at runtime but that live outside its own
+  # compiled dist/ (drizzle-orm migrations are plain SQL, not TypeScript, and config/ is JSON):
+  # migrateDatabase() and the scan pipeline resolve these from process.resourcesPath once packaged
+  # (see vacancyEngineMigrationsFolder/vacancyEngineDataRoot in electron/main.ts). config/ is only
+  # ever read from here to seed each user's own writable copy under app.getPath('userData') on
+  # first run — one of its files (company-domain-candidates-v1.json) gets written back to across
+  # scans, so the packaged copy itself is never mutated in place.
+  - from: ../../packages/vacancy-engine/drizzle
+    to: vacancy-engine/drizzle
+  - from: ../../packages/vacancy-engine/config
+    to: vacancy-engine/config
 
 asar: true
 
-# No auto-update in this boilerplate (out of scope by design — see docs/architecture.md). Without
+# No auto-update in this boilerplate (out of scope by design, see docs/architecture.md). Without
 # this, electron-builder still tries to generate update-feed metadata (latest.yml, .blockmap) and
 # infer a publish target from the git remote, which crashes when there isn't one configured.
 publish: null
@@ -59,5 +74,8 @@ nsis:
   uninstallerIcon: open-vacancy-radar.ico
   artifactName: "${productName}-Setup-${version}.${ext}"
   # A .blockmap is only useful for differential auto-update downloads, which this project doesn't
-  # have — skip generating one rather than ship a file with no purpose.
+  # have. Skip generating one rather than ship a file with no purpose.
   differentialPackage: false
+  # Silently installs the VC++ redistributable if missing (see assets/app-icons/installer.nsh and
+  # scripts/download-vc-redist.mjs, run beforehand by the package:win script) -- see issue #62.
+  include: installer.nsh

@@ -10,7 +10,7 @@ describeProviderContract({
   buildArgs: buildCodexArgs,
   fixtures: {
     // Codex's own parser ignores the one unrecognized system/init-shaped line in this fixture
-    // the same way it ignores any other event kind it doesn't know — reusing it here (rather than
+    // the same way it ignores any other event kind it doesn't know. Reusing it here (rather than
     // adding a near-duplicate) is exactly the "unknown events don't crash the adapter" guarantee
     // this suite checks.
     success: 'fake-codex-success.mjs',
@@ -19,4 +19,10 @@ describeProviderContract({
   },
   expectedAssistantText: 'done',
   expectedProviderSessionId: 'codex-fixture-thread-id',
+  // ADI-04, updated by ADI-14: Codex's adapter now sets `promptViaStdin: true` and buildCodexArgs
+  // emits the `-` stdin placeholder instead of the prompt. The suite cross-checks this claim against
+  // the real argv builder, so it cannot be set here without build-args.ts actually agreeing.
+  // `fixtureSet` mirrors CODEX_LEGACY_COMPATIBILITY in providers/compatibility-manifest.ts.
+  promptViaStdin: true,
+  fixtureSet: 'codex-legacy-0.147.0-v1',
 });

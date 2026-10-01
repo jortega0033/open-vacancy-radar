@@ -1,0 +1,119 @@
+{
+  "_pinned_from": "https://aidevboard.com/openapi.json",
+  "_pinned_at": "2026-09-10",
+  "_note": "Hand-trimmed subset of the published OpenAPI document, limited to the /jobs list endpoint, the /jobs/{id_or_slug} detail endpoint, and the Job schema this adapter actually consumes. Re-pin by re-fetching https://aidevboard.com/openapi.json (it redirects to openapi.yaml) and updating this file plus '_pinned_at' if the real contract changes.",
+  "openapi": "3.0.3",
+  "paths": {
+    "/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "tags", "in": "query", "schema": { "type": "string" } },
+          { "name": "location", "in": "query", "schema": { "type": "string" } },
+          {
+            "name": "workplace",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["remote", "hybrid", "onsite"] }
+          },
+          { "name": "global_remote", "in": "query", "schema": { "type": "boolean" } },
+          {
+            "name": "remote_scope",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["global", "restricted", "unknown", "not_remote"] }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["full-time", "part-time", "contract", "freelance"] }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["junior", "mid", "senior", "lead", "principal"] }
+          },
+          { "name": "salary_min", "in": "query", "schema": { "type": "integer" } },
+          { "name": "salary_max", "in": "query", "schema": { "type": "integer" } },
+          { "name": "salary_floor_min", "in": "query", "schema": { "type": "integer" } },
+          {
+            "name": "posted_within_days",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 90 }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Results per page (default 20, max 50)",
+            "schema": { "type": "integer", "default": 20 }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number (1-indexed, default 1)",
+            "schema": { "type": "integer", "default": 1 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": { "type": "array", "items": { "$ref": "#/components/schemas/Job" } },
+                    "total": { "type": "integer" },
+                    "page": { "type": "integer" },
+                    "per_page": { "type": "integer" },
+                    "total_pages": { "type": "integer" },
+                    "has_next": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{id_or_slug}": {
+      "get": {
+        "operationId": "getJob",
+        "parameters": [
+          { "name": "id_or_slug", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Job" } } } },
+          "404": { "description": "Job not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "company_name": { "type": "string" },
+          "description": { "type": "string" },
+          "requirements": { "type": "string" },
+          "location": { "type": "string" },
+          "workplace": { "type": "string", "enum": ["remote", "hybrid", "onsite"] },
+          "remote_scope": { "type": "string", "enum": ["global", "restricted", "unknown", "not_remote"] },
+          "job_type": { "type": "string" },
+          "experience_level": { "type": "string" },
+          "salary_min": { "type": "integer", "nullable": true },
+          "salary_max": { "type": "integer", "nullable": true },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "apply_url": { "type": "string" },
+          "slug": { "type": "string" },
+          "quality_score": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "securitySchemes": {
+      "apiKey": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+    }
+  }
+}

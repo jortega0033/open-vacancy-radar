@@ -5,7 +5,15 @@ import {
   AtsResponseError,
   GreenhouseAdapter,
   LeverAdapter,
+  PersonioAdapter,
   RecruiteeAdapter,
+  RipplingAdapter,
+  SmartRecruitersAdapter,
+  SuccessFactorsAdapter,
+  TeamtailorAdapter,
+  WorkableAdapter,
+  WorkdayAdapter,
+  detectAtsSource,
   requireSuccessfulResponse,
   type AtsHttpClient,
 } from '../ats/index.js';
@@ -42,20 +50,47 @@ function adapterFor(source: GlobalRemoteSource, http: AtsHttpClient): VacancyAda
       return new GreenhouseAdapter(http);
     case 'lever':
       return new LeverAdapter(http);
+    case 'personio':
+      return new PersonioAdapter(http);
     case 'recruitee':
       return new RecruiteeAdapter(http);
+    case 'rippling':
+      return new RipplingAdapter(http);
+    case 'smartrecruiters':
+      return new SmartRecruitersAdapter(http);
+    case 'successfactors':
+      return new SuccessFactorsAdapter(http);
+    case 'teamtailor':
+      return new TeamtailorAdapter(http);
+    case 'workable':
+      return new WorkableAdapter(http);
+    case 'workday':
+      return new WorkdayAdapter(http);
     case 'html':
       return null;
   }
 }
 
 function descriptor(source: GlobalRemoteSource): CareerSourceDescriptor {
+  const detected = source.provider === 'html' ? null : detectAtsSource(source.url);
+  const reviewedSuccessFactorsOrigin = (() => {
+    if (source.provider !== 'successfactors' || source.boardIdentifier === null) return null;
+    const url = new URL(source.url);
+    return url.protocol === 'https:'
+      && url.username === ''
+      && url.password === ''
+      && url.port === ''
+      && url.hostname.toLowerCase() === source.boardIdentifier.toLowerCase()
+      ? `${url.origin}/`
+      : null;
+  })();
   return {
     id: source.id,
     companyId: source.id,
     companyName: source.company,
     provider: source.provider === 'html' ? 'html' : source.provider,
-    baseUrl: source.url,
+    baseUrl: reviewedSuccessFactorsOrigin
+      ?? (detected?.provider === source.provider ? detected.baseUrl : source.url),
     boardIdentifier: source.boardIdentifier,
     lifecycleAuthoritative: true,
   };
@@ -87,8 +122,9 @@ function auditFromVacancy(
   state: OfficialSourceState,
   requestCount: number,
   httpStatus: number | null,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
   extraEvidence: string[] = [],
+  candidateLanguages: readonly string[] = [],
 ): OfficialVacancyAudit {
   const hash = vacancy === null ? null : createVacancyContentHash(vacancy);
   const evaluation = evaluateOfficialReview({
@@ -97,6 +133,7 @@ function auditFromVacancy(
     currentTitle: vacancy?.title ?? source.expectedTitle,
     contentHash: hash,
     minimumAnnualBaseUsd,
+    candidateLanguages,
   });
   const evidence = [
     ...(vacancy === null ? [] : [
@@ -131,7 +168,8 @@ function errorAudit(
   source: GlobalRemoteSource,
   error: unknown,
   requestCount: number,
-  minimumAnnualBaseUsd: number,
+  minimumAnnualBaseUsd: number | null,
+  candidateLanguages: readonly string[] = [],
 ): OfficialVacancyAudit {
   const failure = errorState(error);
   const audit = auditFromVacancy(
@@ -142,6 +180,7 @@ function errorAudit(
     failure.httpStatus,
     minimumAnnualBaseUsd,
     [failure.reason],
+    candidateLanguages,
   );
   return { ...audit, reasons: [failure.reason] };
 }
@@ -181,6 +220,12 @@ function htmlVacancy(source: GlobalRemoteSource, body: string): { state: Officia
 export async function runOfficialGlobalRemoteSources(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
+  /**
+   * The candidate's own configured languages, so a reviewed `review.mandatoryLanguage` is enforced
+   * on this pipeline too and not only on the discovery one (issue #280). Empty by default, which
+   * routes a reviewed mandatory language to `language_confirmation` rather than excluding anything.
+   */
+  candidateLanguages: readonly string[] = [],
 ): Promise<OfficialRun> {
   const boardScans = new Map<string, Promise<BoardScan>>();
   let requestCount = 0;
@@ -222,16 +267,29 @@ export async function runOfficialGlobalRemoteSources(
           response.status,
           config.minimumAnnualBaseUsd,
           parsed.evidence,
+          candidateLanguages,
         );
       } catch (error) {
-        return errorAudit(source, error, 1, config.minimumAnnualBaseUsd);
+        return errorAudit(source, error, 1, config.minimumAnnualBaseUsd, candidateLanguages);
       }
     }
     const scan = await boardScan(source);
     if (scan.error !== null || scan.result === null) {
-      return errorAudit(source, scan.error, 1, config.minimumAnnualBaseUsd);
+      return errorAudit(source, scan.error, 1, config.minimumAnnualBaseUsd, candidateLanguages);
     }
     const vacancy = scan.result.vacancies.find((item) => item.externalId === source.externalId) ?? null;
+    if (vacancy === null && !scan.result.complete) {
+      return auditFromVacancy(
+        source,
+        null,
+        'error',
+        0,
+        200,
+        config.minimumAnnualBaseUsd,
+        ['Board scan was incomplete, so absence cannot prove this vacancy is inactive.'],
+        candidateLanguages,
+      );
+    }
     return auditFromVacancy(
       source,
       vacancy,
@@ -239,6 +297,8 @@ export async function runOfficialGlobalRemoteSources(
       0,
       200,
       config.minimumAnnualBaseUsd,
+      [],
+      candidateLanguages,
     );
   }));
   return { audits, requestCount };

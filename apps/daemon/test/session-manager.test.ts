@@ -1,13 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, AgentEventEnvelope, ProviderId, ProviderStatus } from '@agent-dock/shared';
 import { ProviderRegistry, noopLogger } from '@agent-dock/agent-runtime';
 import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '@agent-dock/agent-runtime';
+import { ActiveSessionLimiter } from '../src/active-session-limiter.js';
+import { ATTACHMENT_WORTHY_RESULT_BYTES, AttachmentStore, MAX_ATTACHMENT_BYTES } from '../src/attachment-store.js';
+import { SessionLineageStore } from '../src/session-lineage-store.js';
 import { SessionManager } from '../src/session-manager.js';
+import { makeRecord, readAllText, seedManifest, seedRecord } from './support/lineage-fixtures.js';
 
 const TERMINAL_TYPES = new Set(['session.completed', 'session.failed', 'session.cancelled']);
 
 /**
- * A hand-rolled controllable event source — deliberately not the real `FakeProvider` (its
+ * A hand-rolled controllable event source: deliberately not the real `FakeProvider` (its
  * scenarios are fixed, short sequences and can't be driven event-by-event, which every test here
  * needs: pushing an exact count past the cap, holding a session open until explicitly cancelled,
  * asserting nothing arrives after a terminal push). Same push/pull shape as the real
@@ -93,6 +101,49 @@ function setup() {
   return { provider, sessionManager };
 }
 
+/** Temp state roots created by the durable-store tests below, torn down after each of them. */
+const stateRoots: string[] = [];
+
+function makeStateRoot(): string {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'agent-dock-session-manager-'));
+  stateRoots.push(stateRoot);
+  seedManifest(stateRoot, { schemaVersion: 1 });
+  return stateRoot;
+}
+
+/** The same wiring `index.ts` uses when a durable store opened successfully. */
+function setupDurable(stateRoot: string) {
+  const provider = new TestProvider();
+  const registry = new ProviderRegistry();
+  registry.register(provider);
+  const store = new SessionLineageStore({ stateRoot });
+  const sessionManager = new SessionManager(registry, noopLogger, undefined, new ActiveSessionLimiter(), store);
+  return { provider, sessionManager, store };
+}
+
+/** The same wiring `index.ts` uses when the attachment store opened successfully (ADI-29). */
+function setupWithAttachments(stateRoot: string) {
+  const provider = new TestProvider();
+  const registry = new ProviderRegistry();
+  registry.register(provider);
+  const attachments = new AttachmentStore({ stateRoot });
+  const sessionManager = new SessionManager(
+    registry,
+    noopLogger,
+    undefined,
+    new ActiveSessionLimiter(),
+    undefined,
+    undefined,
+    undefined,
+    attachments,
+  );
+  return { provider, sessionManager, attachments };
+}
+
+afterEach(() => {
+  for (const stateRoot of stateRoots.splice(0)) rmSync(stateRoot, { recursive: true, force: true });
+});
+
 /** Lets any already-queued microtask/macrotask chain (push -> waiter -> for-await -> listener) settle. */
 function tick(ms = 0): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,7 +162,7 @@ function collectUntilTerminal(sessionManager: SessionManager, id: string): Promi
   });
 }
 
-describe('SessionManager — normal lifecycle', () => {
+describe('SessionManager: normal lifecycle', () => {
   it('starts a session with status "starting", moving to "running" before create() even returns', () => {
     const { sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -173,7 +224,160 @@ describe('SessionManager — normal lifecycle', () => {
   });
 });
 
-describe('SessionManager — model selection', () => {
+describe('SessionManager: tool result attachments (ADI-29)', () => {
+  it('attaches a result over the "worth it" threshold, retrievable by session id and the same content', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500);
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const fetched = attachments.get(session.id, completed.resultAttachmentId!);
+    expect(fetched?.content).toBe(JSON.stringify({ output }));
+  });
+
+  it('attaches a plain-string result as readable text/plain, not JSON-quoted-and-escaped application/json', async () => {
+    // Every other test in this block uses an object result, which is exactly the shape that hid
+    // the JSON-escaping bug this covers: a plain string (a Bash tool's typical stdout shape) has to
+    // be previewed and attached as itself, not as `"line1\nline2\n"` with literal escapes.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = `line1\n${'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500)}\nline3\n`;
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: output });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const fetched = attachments.get(session.id, completed.resultAttachmentId!);
+    expect(fetched?.metadata.mimeType).toBe('text/plain');
+    expect(fetched?.content).toBe(output);
+  });
+
+  it('does not attach a result under the threshold, and the live event carries no attachment id', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { exitCode: 0 } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+  });
+
+  it('leaves the original result on the live envelope unchanged, whether or not it was attached', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    const output = 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500);
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { result?: unknown };
+    // Attaching only ever *adds* a retrieval path -- the envelope's own result is never rewritten,
+    // truncated, or removed as a side effect of writing an attachment.
+    expect((completed.result as { output: string }).output).toBe(output);
+  });
+
+  it('does not attach a result at exactly MAX_ATTACHMENT_BYTES\'s encoded size or beyond it, and the whole-envelope ceiling still governs a truly oversized event', async () => {
+    // MAX_ATTACHMENT_BYTES and the pre-existing MAX_EVENT_ENVELOPE_BYTES ceiling are both 1 MiB
+    // today, so a result too large for an attachment is -- at present -- also too large for the
+    // envelope itself and fails the whole session (unchanged, pre-existing ADI-17 behavior). This
+    // proves attaching never interferes with that existing ceiling, whichever of the two constants
+    // a future change makes the tighter one.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output: 'x'.repeat(MAX_ATTACHMENT_BYTES + 1) } });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    expect(events.at(-1)?.type).toBe('session.failed');
+  });
+
+  it('skips attaching, rather than orphaning a file, when adding the id would tip the envelope over the ceiling', async () => {
+    // A result whose own encoded size fits MAX_ATTACHMENT_BYTES, but whose envelope (result plus
+    // toolName/sequence/timestamp overhead) is already close enough to MAX_EVENT_ENVELOPE_BYTES that
+    // adding a `resultAttachmentId` field would push it over. Attaching first and only checking the
+    // final envelope size afterward would write a real file to disk for an event that then gets
+    // discarded by the oversized-envelope path -- an attachment no surviving envelope references.
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash', result: { output: 'x'.repeat(1_048_399) } });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    // The session completes normally -- the base envelope (without an attachment id) fits under
+    // MAX_EVENT_ENVELOPE_BYTES on its own, so this is not the whole-envelope-ceiling failure case.
+    expect(events.at(-1)?.type).toBe('session.completed');
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+    // And nothing was left behind on disk for an id nothing ever referenced.
+    expect(attachments.listMetadata(session.id)).toEqual([]);
+  });
+
+  it('never attaches anything when no attachment store was injected, exactly as before this feature existed', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({
+      type: 'tool.completed',
+      toolName: 'Bash',
+      result: { output: 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500) },
+    });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collectUntilTerminal(sessionManager, session.id);
+    const completed = events.find((e) => e.type === 'tool.completed') as { resultAttachmentId?: string };
+    expect(completed.resultAttachmentId).toBeUndefined();
+  });
+
+  it('is best-effort: a session with no result at all, or a non-tool.completed event, never touches the attachment store', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, attachments } = setupWithAttachments(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    testSession.push({ type: 'tool.completed', toolName: 'Bash' }); // no result at all
+    testSession.push({ type: 'assistant.message', text: 'x'.repeat(ATTACHMENT_WORTHY_RESULT_BYTES + 500) });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await collectUntilTerminal(sessionManager, session.id);
+
+    expect(attachments.listMetadata(session.id)).toEqual([]);
+  });
+});
+
+describe('SessionManager: model selection', () => {
   it('is absent from the session record and never reaches the provider when not given', () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -189,7 +393,7 @@ describe('SessionManager — model selection', () => {
   });
 });
 
-describe('SessionManager — terminal guarantees', () => {
+describe('SessionManager: terminal guarantees', () => {
   it('delivers exactly one terminal event, and it is last', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -221,7 +425,7 @@ describe('SessionManager — terminal guarantees', () => {
   });
 });
 
-describe('SessionManager — past the history cap (AD-01)', () => {
+describe('SessionManager: past the history cap (AD-01)', () => {
   it('still delivers every event live, including the terminal event, past MAX_STORED_EVENTS_PER_SESSION, with sequence staying monotonic', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -251,7 +455,7 @@ describe('SessionManager — past the history cap (AD-01)', () => {
 
     const received: AgentEventEnvelope[] = [];
     const unsubscribe = sessionManager.subscribe(session.id, 0, (_i, event) => received.push(event));
-    expect(unsubscribe).toBeDefined(); // session still exists — replay just has nothing past the cap to offer
+    expect(unsubscribe).toBeDefined(); // session still exists: replay just has nothing past the cap to offer
     expect(received.length).toBe(5_000); // exactly MAX_STORED_EVENTS_PER_SESSION replayed
 
     testSession.push({ type: 'session.completed' });
@@ -262,7 +466,132 @@ describe('SessionManager — past the history cap (AD-01)', () => {
   }, 15_000);
 });
 
-describe('SessionManager — replay', () => {
+describe('SessionManager: the per-envelope byte ceiling fails the session (ADI-17)', () => {
+  it('synthesizes session.failed at the SAME sequence (no gap), reaps the provider, and stops consuming further raw events', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    const received: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => received.push(event));
+
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) }); // over the 1 MiB ceiling
+    testSession.push({ type: 'assistant.message', text: 'must never be delivered' });
+    testSession.push({ type: 'session.completed' }); // must never be delivered either
+    await tick(20);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ type: 'session.failed', sequence: 0 });
+    expect(sessionManager.get(session.id)?.status).toBe('failed');
+    expect(testSession.isCancelled()).toBe(true);
+  });
+
+  it('replays the synthesized failure to a later subscriber at index 0, same as any other stored terminal event', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) });
+    await tick(20);
+
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed).toEqual([{ type: 'session.failed', message: expect.any(String), sequence: 0, timestamp: replayed[0]?.timestamp }]);
+  });
+
+  it('awaits cancellation before flipping session status, so a concurrent cancelAll() cannot see this session as already-inactive before termination was even attempted', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    let resolveCancel: () => void = () => {};
+    let cancelCalled = false;
+    testSession.handle.cancel = () =>
+      new Promise<void>((resolve) => {
+        cancelCalled = true;
+        resolveCancel = resolve;
+      });
+
+    testSession.push({ type: 'assistant.message', text: 'a'.repeat(1_100_000) });
+    await tick(20);
+
+    // cancel() has been called and is still pending -- status must not have flipped yet. Before
+    // this fix, cancel() was fire-and-forget and status flipped (and the workspace lease/limiter
+    // reservation released) immediately, regardless of whether termination had even begun.
+    expect(cancelCalled).toBe(true);
+    expect(sessionManager.get(session.id)?.status).toBe('running');
+
+    resolveCancel();
+    await tick(20);
+    expect(sessionManager.get(session.id)?.status).toBe('failed');
+  });
+});
+
+describe('SessionManager: byte-bounded replay history (ADI-17)', () => {
+  it('stops retaining replay history once the 16 MiB session byte cap is hit, well before the 5,000-event count cap', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+    const collected = collectUntilTerminal(sessionManager, session.id);
+
+    // Each event is ~200 KB of payload -- comfortably under the 1 MiB per-envelope ceiling on its
+    // own, but ~84 of them cross the 16 MiB session-wide replay cap, long before 90 would ever
+    // approach the 5,000-event count cap.
+    const CHUNK = 'x'.repeat(200_000);
+    const PUSHED = 90;
+    for (let i = 0; i < PUSHED; i++) testSession.push({ type: 'assistant.message', text: CHUNK });
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+
+    const events = await collected;
+    expect(events.length).toBe(PUSHED + 1); // every event still delivered live, byte cap or not
+    expect(events.at(-1)?.type).toBe('session.completed');
+
+    // A subscriber connecting fresh (nothing live left to receive) only ever gets what replay
+    // storage actually retained -- proving the byte dimension, not just the much higher event-count
+    // cap, is what bounded retention here.
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed.length).toBeGreaterThan(0);
+    expect(replayed.length).toBeLessThan(PUSHED);
+  }, 15_000);
+
+  it('once history is full, a later SMALL event is not stored either, even though its bytes alone would fit -- the byte cap latches, it does not un-trip', async () => {
+    const { provider, sessionManager } = setup();
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(session.id)!;
+
+    // Push large-but-under-the-1-MiB-per-envelope-ceiling chunks until the 16 MiB replay cap is
+    // exceeded and storage latches shut -- detected by two consecutive pushes producing the same
+    // stored count.
+    const LARGE = 'x'.repeat(900_000);
+    let storedCount = -1;
+    for (let i = 0; i < 40; i++) {
+      testSession.push({ type: 'assistant.message', text: LARGE });
+      await tick(5);
+      const replayed: AgentEventEnvelope[] = [];
+      sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+      if (replayed.length === storedCount) break;
+      storedCount = replayed.length;
+    }
+    expect(storedCount).toBeGreaterThan(0);
+    expect(storedCount).toBeLessThan(40); // the cap genuinely latched before the loop ran out
+
+    // A single tiny event now. Before the fix, `replayBytes` was only ever incremented on a
+    // successful push -- never on a skip -- so this could still satisfy `replayBytes + 10 <= cap`
+    // even with a large skipped event sitting between it and the last stored one, landing at the
+    // next array index with a `.sequence` far higher than that index. That silently breaks
+    // `subscribe()`'s replay contract, which serves `events[i]` as if `i` always equals that
+    // event's own `sequence`.
+    testSession.push({ type: 'assistant.message', text: 'tiny' });
+    await tick(20);
+
+    const replayed: AgentEventEnvelope[] = [];
+    sessionManager.subscribe(session.id, 0, (_i, event) => replayed.push(event));
+    expect(replayed.length).toBe(storedCount); // the tiny event was NOT stored either
+    replayed.forEach((event, index) => expect(event.sequence).toBe(index)); // index == sequence, always
+  }, 15_000);
+});
+
+describe('SessionManager: replay', () => {
   it('a subscriber connecting after events were already emitted receives them via replay, in order', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -316,7 +645,7 @@ describe('SessionManager — replay', () => {
   });
 });
 
-describe('SessionManager — cancellation', () => {
+describe('SessionManager: cancellation', () => {
   it('cancel() on a running session calls the handle and returns true', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -357,7 +686,7 @@ describe('SessionManager — cancellation', () => {
   });
 });
 
-describe('SessionManager — removal', () => {
+describe('SessionManager: removal', () => {
   it('remove() on a running session cancels it first, then deletes the record', async () => {
     const { provider, sessionManager } = setup();
     const session = sessionManager.create('claude', '/tmp', 'hi');
@@ -399,7 +728,7 @@ describe('SessionManager — removal', () => {
   });
 });
 
-describe('SessionManager — bounded retention of completed sessions (AD-11)', () => {
+describe('SessionManager: bounded retention of completed sessions (AD-11)', () => {
   it('evicts the oldest completed session once more than the retention cap have finished', async () => {
     const { provider, sessionManager } = setup();
     const RETENTION_CAP = 50; // MAX_RETAINED_COMPLETED_SESSIONS in session-manager.ts
@@ -441,6 +770,137 @@ describe('SessionManager — bounded retention of completed sessions (AD-11)', (
 
     expect(sessionManager.get(running.id)?.status).toBe('cancelled');
     expect(runningSession.isCancelled()).toBe(true);
-    expect(completedSession.isCancelled()).toBe(false); // never touched — it was already terminal
+    expect(completedSession.isCancelled()).toBe(false); // never touched, it was already terminal
   }, 10_000);
+
+  it('cancelAll() tolerates one session\'s handle.cancel() rejecting (e.g. a reap-confirmation timeout) and still cancels the rest within the bound', async () => {
+    // handle.cancel() can now reject rather than always resolving once it merely initiated
+    // termination (see spawnProcess's process-tree reap confirmation). Without per-session error
+    // isolation, a single rejection would make cancelAll's own Promise.all reject, which -- since
+    // apps/daemon/src/index.ts's shutdown handler calls cancelAll() via `void shutdown(...)` --
+    // would surface as an unhandled rejection during daemon shutdown instead of the documented
+    // bounded wait, skipping mcpManager.close()/app.close()/discovery-file cleanup entirely.
+    const { provider, sessionManager } = setup();
+    const failing = sessionManager.create('claude', '/tmp', 'hi');
+    const failingSession = provider.sessions.get(failing.id)!;
+    failingSession.handle.cancel = () => Promise.reject(new Error('reap confirmation timed out'));
+
+    const ok = sessionManager.create('claude', '/tmp', 'hi');
+    const okSession = provider.sessions.get(ok.id)!;
+    void okSession.handle.cancel().then(() => {
+      okSession.push({ type: 'session.cancelled' });
+      okSession.finish();
+    });
+
+    await expect(sessionManager.cancelAll(2_000)).resolves.toBeUndefined();
+    expect(sessionManager.get(ok.id)?.status).toBe('cancelled');
+  }, 10_000);
+});
+
+describe('SessionManager: sessions recovered from the durable store obey the same in-memory cap', () => {
+  const RETENTION_CAP = 50; // MAX_RETAINED_COMPLETED_SESSIONS in session-manager.ts
+
+  /** `count` completed records, one lineage each, oldest first. */
+  function seedCompletedRecords(stateRoot: string, count: number): string[] {
+    const base = Date.now() - count * 60_000;
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const stamp = new Date(base + i * 60_000).toISOString();
+      const record = makeRecord({
+        status: 'completed',
+        terminalReason: 'provider_completed',
+        startedAt: stamp,
+        completedAt: stamp,
+      });
+      seedRecord(stateRoot, record);
+      ids.push(record.session.id);
+    }
+    return ids;
+  }
+
+  it('trims the seeded set to the cap, keeping the most recently completed', () => {
+    const stateRoot = makeStateRoot();
+    const ids = seedCompletedRecords(stateRoot, RETENTION_CAP + 5);
+
+    const { sessionManager, store } = setupDurable(stateRoot);
+
+    // Without the FIFO seeding, every recovered record would sit in memory for the daemon's whole
+    // lifetime: the cap only ever counted sessions *this* process watched finish.
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+    for (const id of ids.slice(0, 5)) expect(sessionManager.get(id)).toBeUndefined();
+    for (const id of ids.slice(5)) expect(sessionManager.get(id)).toBeDefined();
+
+    // Durable retention is a separate, deliberately more permissive policy (docs/privacy.md), so
+    // the in-memory trim evicted nothing from disk.
+    expect(store.stats().records).toBe(RETENTION_CAP + 5);
+    for (const id of ids) expect(store.get(id)).toBeDefined();
+  }, 20_000);
+
+  it('counts a recovered session against the cap that a newly completed one then pushes out', async () => {
+    const stateRoot = makeStateRoot();
+    const ids = seedCompletedRecords(stateRoot, RETENTION_CAP);
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+
+    const fresh = sessionManager.create('claude', '/tmp', 'hi');
+    const testSession = provider.sessions.get(fresh.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    // The oldest recovered session -- not the new one, and not nothing at all -- is what leaves.
+    expect(sessionManager.get(ids[0] as string)).toBeUndefined();
+    expect(sessionManager.get(fresh.id)).toBeDefined();
+    expect(sessionManager.list()).toHaveLength(RETENTION_CAP);
+    expect(store.get(ids[0] as string)).toBeDefined();
+  }, 20_000);
+});
+
+describe('SessionManager: the unknown-frame ledger reaches the durable record', () => {
+  const RAW_FRAME = '{"type":"weird","payload":"SENTINEL_UNKNOWN_FRAME_CONTENT"}';
+
+  it('persists a bounded, content-free tally of provider output it could not interpret', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+
+    // The production seam: `run-session.ts` calls exactly this, once per line it could not fully
+    // interpret. Driving it directly keeps the test about the daemon's wiring rather than about a
+    // provider CLI's output format.
+    const probe = provider.startedOptions.get(session.id)?.launchProbe;
+    expect(probe?.onUnknownFrame, 'the launch probe carries no unknown-frame callback').toBeDefined();
+    probe?.onUnknownFrame?.('unrecognized_event_type', RAW_FRAME, 'weird');
+    probe?.onUnknownFrame?.('unrecognized_event_type', RAW_FRAME, 'weird');
+    probe?.onUnknownFrame?.('unparseable_line', 'not json at all');
+
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    const frames = store.get(session.id)?.session.unknownFrames ?? [];
+    expect(frames.map((frame) => frame.kind)).toEqual(['unrecognized_event_type', 'unparseable_line']);
+    const first = frames[0]!;
+    expect(first.eventType).toBe('weird');
+    expect(first.occurrences).toBe(2);
+    expect(first.bytes).toBe(Buffer.byteLength(RAW_FRAME, 'utf8'));
+    expect(first.sha256).toBe(createHash('sha256').update(RAW_FRAME, 'utf8').digest('hex'));
+
+    // The raw line is correlatable by hash and unreadable from disk, which is the only reason a
+    // field fed straight from provider stdout is safe to persist.
+    expect(readAllText(stateRoot)).not.toContain('SENTINEL_UNKNOWN_FRAME_CONTENT');
+  }, 20_000);
+
+  it('leaves unknownFrames empty for a session whose output was fully understood', async () => {
+    const stateRoot = makeStateRoot();
+    const { provider, sessionManager, store } = setupDurable(stateRoot);
+    const session = sessionManager.create('claude', '/tmp', 'hi');
+
+    const testSession = provider.sessions.get(session.id)!;
+    testSession.push({ type: 'session.completed' });
+    testSession.finish();
+    await tick();
+
+    expect(store.get(session.id)?.session.unknownFrames).toEqual([]);
+  }, 20_000);
 });

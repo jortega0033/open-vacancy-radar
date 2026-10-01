@@ -9,10 +9,24 @@ import type {
   LetterType,
   SavedJobRecord,
 } from '../../window.js';
+import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
+import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
-import { buildLetterPrompt, MAX_INSTRUCTION_CHARS } from './prompt.js';
+import { EmptyState, ErrorBanner } from '../shell/index.js';
+import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
+import { buildBundledDocumentPrompt } from '../generation/prompts.js';
+import { exportDocx, exportMarkdown, exportPdf } from './export.js';
+import {
+  canGenerateGroundedLetter,
+  GROUNDED_LETTER_DISCLOSURE,
+  GROUNDED_LETTER_UNAVAILABLE,
+  renderGroundedLetterFromSelection,
+  type GroundedLetterRequest,
+} from './grounded.js';
+import { MAX_INSTRUCTION_CHARS } from './prompt.js';
 import {
   labelFor,
   LETTER_LENGTH_OPTIONS,
@@ -26,6 +40,9 @@ import {
 const JOB_LIVE = 'live';
 const JOB_MANUAL = 'manual';
 const JOB_SAVED_PREFIX = 'saved:';
+
+/** How long the "Copied" / "Exported" feedback stays up. */
+const COPY_FEEDBACK_MS = 2_000;
 
 export interface LetterGeneratorProps {
   /** An existing row to edit. Saving updates it in place rather than creating a second copy. */
@@ -42,24 +59,42 @@ export interface LetterGeneratorProps {
   onSaved?: (letter: LetterRecord) => void;
   /** Rendered as a "Back to library" affordance when supplied. */
   onClose?: () => void;
+  /** Return to the vacancy that opened this generator. */
+  onBackToVacancy?: () => void;
 }
 
 /**
  * Generate → edit → save, in one screen.
  *
  * The generation step is a real agent run: `useAgentRun` (shared with the CV assistant) starts an
- * AgentDock session on the user's own Claude Code CLI and streams `assistant.message` chunks back.
- * That means it is genuinely asynchronous and can genuinely fail, so this component keeps three
- * separate ideas apart that a fake instant generator would let collapse into one:
+ * AgentDock session on the user's own Claude Code CLI and streams the reply back. That means it is
+ * genuinely asynchronous and can genuinely fail, so this component keeps three separate ideas apart
+ * that a fake instant generator would let collapse into one:
  *
- * - **the stream** (`run.text`) — read-only, appended to as it arrives, shown through the same
- *   `AiOutput` surface as the rest of the app;
- * - **the working document** (`body`) — a plain editable text area, seeded from the stream once the
- *   run completes and owned by the user from that moment on;
- * - **the saved row** (`letterId` / `savedBody`) — what is actually in the database.
+ * - **the run** (`run.status` / `run.error`): read-only, shown through the same `AiOutput` surface
+ *   as the rest of the app;
+ * - **the working document** (`body`): a plain editable text area, seeded from the assembled letter
+ *   once the run completes and owned by the user from that moment on;
+ * - **the saved row** (`letterId` / `savedBody`): what is actually in the database.
  *
  * Because those are separate, a failed *re*generation cannot destroy a letter that was already
  * loaded or already saved: the error appears above the editor and the text stays exactly as it was.
+ *
+ * F-J changed what the run returns. It is no longer a draft the model wrote; it is a list of ids
+ * chosen from the candidate's own reviewed CV facts, which `renderGroundedLetterFromSelection`
+ * turns into a document or refuses outright. The three document controls survive that change with
+ * real work to do, and what each one now moves is worth being precise about, because "the control
+ * is still on screen" would be a poor substitute for "the control still does something":
+ *
+ * - **Type** decides the document's structure by construction: a short application message is
+ *   assembled with no salutation and no sign-off, because it goes into a form field.
+ * - **Tone** picks which set of app-authored connecting lines the letter is built from. It can no
+ *   longer talk the document into a claim, because it never touches the facts.
+ * - **Length** decides how many facts are cited, which under template assembly is the only thing
+ *   that can honestly make a letter longer or shorter.
+ *
+ * `chunkSeparator: ''` for the same reason the CV library's parse runs use it: the reply has to
+ * parse as one JSON object, and a "\n\n" inserted between two chunks of it would not.
  */
 export function LetterGenerator({
   letter = null,
@@ -67,8 +102,9 @@ export function LetterGenerator({
   model,
   onSaved,
   onClose,
+  onBackToVacancy,
 }: LetterGeneratorProps) {
-  const run = useAgentRun();
+  const run = useAgentRun({ chunkSeparator: '' });
 
   const [cvs, setCvs] = useState<CvDocumentRecord[]>([]);
   const [cvError, setCvError] = useState<string>();
@@ -88,6 +124,7 @@ export function LetterGenerator({
   const [length, setLength] = useState<LetterLength>(letter?.length ?? 'standard');
   const [status, setStatus] = useState<LetterStatus>(letter?.status ?? 'draft');
   const [instructions, setInstructions] = useState('');
+  const { provider } = useEffectiveProvider();
 
   const [title, setTitle] = useState(letter?.title ?? '');
   // A title the user typed is theirs; only an untouched one keeps tracking the type and company.
@@ -99,12 +136,35 @@ export function LetterGenerator({
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [saveError, setSaveError] = useState<string>();
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  /** A reply that was not a usable fact selection. Kept apart from `run.error` because the run
+   * itself succeeded: what failed is the contract it was supposed to answer under. */
+  const [selectionError, setSelectionError] = useState<string>();
+
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [copyError, setCopyError] = useState<string>();
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'exported' | 'failed'>('idle');
+  const [exportError, setExportError] = useState<string>();
+  const exportTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Which run's output has already been moved into the editor. A counter rather than a text
   // comparison, so a second run that happens to produce the identical text still replaces edits the
-  // user made in between — "Regenerate" must always mean "replace with the new draft".
+  // user made in between: "Regenerate" must always mean "replace with the new draft".
   const runSeq = useRef(0);
   const appliedSeq = useRef(0);
+  // The inputs the in-flight run was started for. Held rather than recomputed when it completes, so
+  // the letter is always assembled from exactly the facts the selection was made over even if the
+  // user changed the CV, the job or the document settings while it was running.
+  const requestRef = useRef<GroundedLetterRequest | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
+      if (exportTimeoutRef.current !== undefined) clearTimeout(exportTimeoutRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -225,45 +285,83 @@ export function LetterGenerator({
   }, [jobSource, vacancy, selectedSavedJob, letter, manualCompany, manualRole]);
 
   const cvRecord = useMemo(() => cvs.find((doc) => doc.id === cvId) ?? null, [cvs, cvId]);
-  const cvDocument: CvDocument | null = cvRecord ? { fileName: cvRecord.name, text: cvRecord.text } : null;
+  // Memoized because the generation bundle below is keyed on it: a fresh object every render would
+  // rebuild the bundle (and re-enumerate the source facts) on every keystroke in the job form.
+  const cvDocument: CvDocument | null = useMemo(
+    () => (cvRecord ? { fileName: cvRecord.name, text: cvRecord.text } : null),
+    [cvRecord],
+  );
 
   const typeLabel = labelFor(LETTER_TYPE_OPTIONS, type);
   const derivedTitle = useMemo(() => {
     const company = lead?.company?.trim() ?? '';
-    return company ? `${typeLabel} — ${company}` : typeLabel;
+    return company ? `${typeLabel}, ${company}` : typeLabel;
   }, [typeLabel, lead?.company]);
 
   useEffect(() => {
     if (!titleTouched.current) setTitle(derivedTitle);
   }, [derivedTitle]);
 
-  // Hand the finished stream to the editor. Only on `completed`: a failed or cancelled run leaves
-  // whatever the user already had in place.
+  // #281: the letter is generated from the shared input bundle, so the corrected profile and the
+  // reviewed source CV on the selected record reach the prompt instead of only its raw text, and the
+  // requirement lines read out of the whole posting survive the job-description clamp.
+  const bundle = useMemo(
+    () =>
+      cvDocument && lead
+        ? buildGenerationInputBundle({
+            documentType: type,
+            length,
+            cv: cvDocument,
+            sourceCv: cvRecord?.source ?? null,
+            profile: cvRecord?.profile ?? null,
+            vacancy: lead,
+            ...(instructions.trim().length > 0 ? { instructions } : {}),
+          })
+        : null,
+    [cvDocument, cvRecord, lead, type, length, instructions],
+  );
+
+  // Assemble the finished letter and hand it to the editor. Only on `completed`, and only if the
+  // reply was a usable fact selection: a failed, cancelled or rejected run leaves whatever the user
+  // already had in place rather than replacing a real letter with nothing.
   useEffect(() => {
     if (run.status !== 'completed') return;
     if (appliedSeq.current === runSeq.current) return;
-    const text = run.text.trim();
-    if (!text) return;
+    const request = requestRef.current;
+    if (!request) return;
     appliedSeq.current = runSeq.current;
-    setBody(text);
+    try {
+      setBody(renderGroundedLetterFromSelection(run.text, request));
+      setSelectionError(undefined);
+    } catch (err) {
+      setSelectionError(
+        describeError(err, 'the letter generation run returned something that could not be used'),
+      );
+    }
   }, [run.status, run.text]);
 
   const hasBody = body.trim().length > 0;
   const isDirty = body !== savedBody;
-  const canGenerate = !!cvDocument && !!lead && !run.isBusy;
+  const isGrounded = canGenerateGroundedLetter(bundle);
+  const canGenerate = isGrounded && !run.isBusy;
 
   const startRun = useCallback(() => {
-    if (!cvDocument || !lead) return;
+    if (!bundle) return;
     setConfirmRegenerate(false);
     setSaveState('idle');
     setSaveError(undefined);
+    setSelectionError(undefined);
     runSeq.current += 1;
-    void run.start(buildLetterPrompt(cvDocument, lead, { type, tone, length, instructions }), model ? { model } : {});
-  }, [cvDocument, lead, type, tone, length, instructions, model, run]);
+    requestRef.current = { bundle, type, tone, length };
+    void run.start(buildBundledDocumentPrompt(bundle, { tone, instructions }), {
+      ...(model ? { model } : {}),
+      provider,
+    });
+  }, [bundle, type, tone, length, instructions, model, provider, run]);
 
   const handleGenerate = useCallback(() => {
     // Replacing text the user has edited but not saved is the one destructive thing this screen
-    // does, so it asks first — and only then.
+    // does, so it asks first, and only then.
     if (hasBody && isDirty && !confirmRegenerate) {
       setConfirmRegenerate(true);
       return;
@@ -321,7 +419,48 @@ export function LetterGenerator({
     onSaved,
   ]);
 
-  const showStreamPanel = run.isBusy || run.status === 'failed' || run.status === 'cancelled';
+  const handleCopy = useCallback(async () => {
+    if (copyTimeoutRef.current !== undefined) clearTimeout(copyTimeoutRef.current);
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopyState('copied');
+      setCopyError(undefined);
+    } catch (err) {
+      setCopyState('failed');
+      setCopyError(describeError(err, 'could not copy to the clipboard'));
+    }
+    copyTimeoutRef.current = setTimeout(() => setCopyState('idle'), COPY_FEEDBACK_MS);
+  }, [body]);
+
+  const handleExport = useCallback(
+    async (format: 'md' | 'docx' | 'pdf') => {
+      if (exportTimeoutRef.current !== undefined) clearTimeout(exportTimeoutRef.current);
+      setExportState('exporting');
+      setExportError(undefined);
+      const exportTitle = title.trim() || derivedTitle;
+      try {
+        const exporter = format === 'md' ? exportMarkdown : format === 'docx' ? exportDocx : exportPdf;
+        const result = await exporter(exportTitle, body);
+        if (result.saved) {
+          setExportState('exported');
+          exportTimeoutRef.current = setTimeout(() => setExportState('idle'), COPY_FEEDBACK_MS);
+        } else {
+          setExportState('idle'); // the user cancelled the save dialog, not a failure
+        }
+      } catch (err) {
+        setExportState('failed');
+        setExportError(describeError(err, 'could not export this letter'));
+      }
+    },
+    [body, title, derivedTitle],
+  );
+
+  /** A rejected selection is as much a failure of this generation as a dead session is, and it is
+   * reported through the same panel so the user never has to look in two places for what went
+   * wrong. */
+  const failure = selectionError ?? run.error;
+  const showStreamPanel =
+    run.isBusy || run.status === 'failed' || run.status === 'cancelled' || selectionError !== undefined;
 
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -338,11 +477,11 @@ export function LetterGenerator({
                 onChange={(event) => setJobSource(event.target.value)}
                 disabled={run.isBusy}
               >
-                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title} — ${vacancy.company}`}</option>}
+                {vacancy && <option value={JOB_LIVE}>{`${vacancy.title}, ${vacancy.company}`}</option>}
                 <option value={JOB_MANUAL}>Enter the job manually</option>
                 {savedJobs.map((job) => (
                   <option key={job.id} value={`${JOB_SAVED_PREFIX}${job.id}`}>
-                    {`${job.role} — ${job.company}`}
+                    {`${job.role}, ${job.company}`}
                   </option>
                 ))}
               </select>
@@ -353,7 +492,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{vacancy.title}</div>
                 <div className="text-base-content/60">
                   {vacancy.company}
-                  {vacancy.location ? ` — ${vacancy.location}` : ''}
+                  {vacancy.location ? `, ${vacancy.location}` : ''}
                 </div>
               </div>
             )}
@@ -363,7 +502,7 @@ export function LetterGenerator({
                 <div className="font-semibold">{selectedSavedJob.role}</div>
                 <div className="text-base-content/60">
                   {selectedSavedJob.company}
-                  {selectedSavedJob.location ? ` — ${selectedSavedJob.location}` : ''}
+                  {selectedSavedJob.location ? `, ${selectedSavedJob.location}` : ''}
                 </div>
               </div>
             )}
@@ -434,11 +573,7 @@ export function LetterGenerator({
 
           <section>
             <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">CV</h3>
-            {cvError && (
-              <div className="alert alert-error alert-soft mb-2 text-sm" role="alert">
-                {cvError}
-              </div>
-            )}
+            {cvError && <ErrorBanner className="mb-2">{cvError}</ErrorBanner>}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
                 No CVs saved yet. Upload one on the Search page and choose “Save to CV library”, then
@@ -535,8 +670,8 @@ export function LetterGenerator({
               />
             </label>
             <p className="mt-1 text-xs text-base-content/50">
-              Optional. Instructions never override the rule that nothing may be claimed the CV does
-              not support.
+              Optional. Instructions only steer which of your confirmed facts get cited: nothing here
+              can add a claim your CV does not carry.
             </p>
           </section>
 
@@ -570,9 +705,12 @@ export function LetterGenerator({
                 Choose a job, or enter a role and a company, to enable generation.
               </p>
             )}
+            {bundle && !isGrounded && (
+              <p className="text-xs text-base-content/50">{GROUNDED_LETTER_UNAVAILABLE}</p>
+            )}
             <p className="text-xs text-base-content/50">
-              Generated on your own Claude Code CLI through AgentDock. Nothing is sent to a
-              letter-writing service.
+              Generated on your own {PROVIDER_LABEL[provider]} CLI through AgentDock. Nothing is
+              sent to a letter-writing service.
             </p>
           </div>
         </div>
@@ -615,12 +753,48 @@ export function LetterGenerator({
             onClick={() => void handleSave()}
             disabled={!hasBody || saveState === 'saving' || run.isBusy}
           >
-            {saveState === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+            {saveState === 'saving' && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
             {letterId ? 'Save changes' : 'Save letter'}
           </button>
+          <button
+            className="btn btn-outline"
+            type="button"
+            onClick={() => void handleCopy()}
+            disabled={!hasBody}
+          >
+            Copy
+          </button>
+          <div className="dropdown dropdown-end">
+            <button tabIndex={0} className="btn btn-outline" type="button" disabled={!hasBody || exportState === 'exporting'}>
+              {exportState === 'exporting' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+              Export
+            </button>
+            <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-44 border border-base-300 p-2 shadow">
+              <li>
+                <button type="button" onClick={() => void handleExport('md')}>
+                  Markdown (.md)
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => void handleExport('docx')}>
+                  Word (.docx)
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => void handleExport('pdf')}>
+                  PDF (.pdf)
+                </button>
+              </li>
+            </ul>
+          </div>
           {onClose && (
             <button className="btn btn-ghost" type="button" onClick={onClose}>
               Back to library
+            </button>
+          )}
+          {vacancy && onBackToVacancy && (
+            <button className="btn btn-ghost" type="button" onClick={onBackToVacancy}>
+              Back to {vacancy.title}
             </button>
           )}
         </div>
@@ -632,22 +806,34 @@ export function LetterGenerator({
             </span>
           )}
           {letterId && isDirty && <span className="text-base-content/60">Unsaved changes.</span>}
+          {copyState === 'copied' && (
+            <span className="text-success" role="status">
+              Copied to clipboard.
+            </span>
+          )}
+          {exportState === 'exported' && (
+            <span className="text-success" role="status">
+              Exported.
+            </span>
+          )}
         </div>
 
-        {saveError && (
-          <div className="alert alert-error mt-3 text-sm" role="alert">
-            {saveError}
-          </div>
-        )}
+        {saveError && <ErrorBanner className="mt-3">{saveError}</ErrorBanner>}
+        {copyState === 'failed' && copyError && <ErrorBanner className="mt-3">{copyError}</ErrorBanner>}
+        {exportState === 'failed' && exportError && <ErrorBanner className="mt-3">{exportError}</ErrorBanner>}
 
         {showStreamPanel && (
           <AiOutput
-            status={run.status}
-            text={run.text}
-            {...(run.error ? { error: run.error } : {})}
+            status={selectionError ? 'failed' : run.status}
+            // Never `run.text`: what streams back is a list of fact ids under a contract this
+            // screen may still reject, and showing it would put unvalidated model output on screen
+            // looking like a draft. The finished letter appears in the editor below or not at all.
+            text=""
+            {...(failure ? { error: failure } : {})}
             label="letter being generated"
             idleHint="No document yet."
-            busyLabel={`Writing a ${typeLabel.toLowerCase()} for this vacancy…`}
+            busyLabel={`Choosing which of your CV facts belong in this ${typeLabel.toLowerCase()}…`}
+            providerLabel={PROVIDER_LABEL[provider]}
           />
         )}
 
@@ -664,19 +850,17 @@ export function LetterGenerator({
               }}
             />
             <p className="mt-2 text-xs text-base-content/50">
-              A first draft written from your CV and the posting text above. Read it before you send
-              it — you are responsible for the final text.
+              {GROUNDED_LETTER_DISCLOSURE} Read it before you send it: you are responsible for the
+              final text.
             </p>
           </div>
         ) : (
           !showStreamPanel && (
-            <div className="rounded-box mt-4 border border-base-300 p-8 text-center">
-              <div className="text-sm font-semibold">No document yet</div>
-              <p className="mt-1.5 text-sm text-base-content/60">
-                Choose a job, a CV and the document settings, then generate. The draft is written
-                from your saved CV and the vacancy text, and stays editable.
-              </p>
-            </div>
+            <EmptyState
+              illustration={emptyLettersIllustration}
+              title="No document yet"
+              description="Choose a job, a CV and the document settings, then generate. The draft is assembled from the facts you confirmed on that CV, and stays editable."
+            />
           )
         )}
       </div>

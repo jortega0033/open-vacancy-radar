@@ -4,7 +4,7 @@ import { PROVIDER_IDS } from './provider.js';
 export const providerIdSchema = z.enum(PROVIDER_IDS);
 
 // AD-15: every key is optional and unknown keys pass through rather than being rejected or
-// silently stripped — "absent means unsupported" is a documented, valid state (see
+// silently stripped: "absent means unsupported" is a documented, valid state (see
 // ProviderCapabilities), not a validation failure. This is what makes adding a 6th capability
 // additive: a client built against a newer @agent-dock/shared can validate an older daemon's
 // response (missing the new key) without error, and an older client validating a newer daemon's
@@ -16,6 +16,8 @@ export const providerCapabilitiesSchema = z
     tools: z.boolean().optional(),
     usage: z.boolean().optional(),
     thinking: z.boolean().optional(),
+    modelCatalog: z.boolean().optional(),
+    attachments: z.boolean().optional(),
   })
   .catchall(z.boolean());
 
@@ -31,6 +33,29 @@ export const providerStatusSchema = z.object({
   /** Provider-native model ids/aliases this adapter will pass through as-is. Absent means the
    * provider has no selectable model (it always uses its CLI's own default). */
   availableModels: z.array(z.string()).optional(),
+  /** See `AuthSource`'s own doc comment (provider.ts). Absent for a provider whose CLI reports no
+   * such distinction. */
+  authSource: z.enum(['chatgpt', 'api_key', 'unknown']).optional(),
+});
+
+/**
+ * One outbound attachment for a one-shot session (port of agentdock#152/#153), at most one entry
+ * per request today -- widen only with a real second use case. `path` may not start with `-`:
+ * Codex's attachment flag (`-i`/`--image <path>`) takes the path as a bare argv value, and a
+ * leading `-` risks the CLI's own arg parser treating it as a flag rather than a value -- a real
+ * absolute path never legitimately starts with `-` on any platform this app supports, so rejecting
+ * it here costs nothing and closes that ambiguity at the source. The route that consumes this
+ * (`routes/sessions.ts`, `routes/v2-sessions-create.ts`) additionally requires `path` to resolve
+ * inside the session's own working directory -- an attachment's bytes are automatically sent to a
+ * third-party AI provider, a materially different capability than `cwd` merely bounding where the
+ * provider process runs, so it does not inherit `cwd`'s existing trust.
+ */
+export const sessionAttachmentInputSchema = z.object({
+  path: z
+    .string()
+    .min(1, 'attachment path is required')
+    .refine((value) => !value.startsWith('-'), 'attachment path must not start with "-"'),
+  mimeType: z.string().min(1, 'attachment mimeType is required'),
 });
 
 /** Body for POST /sessions. Rejects anything not an absolute-looking, non-empty path/prompt. */
@@ -41,9 +66,12 @@ export const createSessionRequestSchema = z.object({
   /** Continue a prior provider-native session/thread, when `capabilities.resume` is true. */
   resumeProviderSessionId: z.string().min(1).optional(),
   /** One of the provider's `availableModels`. Passed straight through to the CLI's own model
-   * flag, unvalidated against that list — an unknown value surfaces as a normal session.failed
+   * flag, unvalidated against that list: an unknown value surfaces as a normal session.failed
    * event from the CLI itself, rather than the daemon guessing which ids are still current. */
   model: z.string().min(1).optional(),
+  /** Delivered with the initial prompt when the selected provider's `capabilities.attachments` is
+   * true; rejected by the route otherwise. */
+  attachments: z.array(sessionAttachmentInputSchema).max(1).optional(),
 });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -73,7 +101,7 @@ const agentEventBaseSchema = z.object({
 });
 
 /**
- * Runtime validation for the wire shape of `AgentEventEnvelope` (protocol v1) — used by
+ * Runtime validation for the wire shape of `AgentEventEnvelope` (protocol v1), used by
  * @agent-dock/client to reject a malformed SSE frame with a typed error instead of handing the
  * caller garbage. Mirrors the `AgentEvent` union in events.ts field-for-field; if you add a
  * variant there, add it here too.
@@ -110,6 +138,7 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     toolCallId: z.string().optional(),
     result: z.unknown().optional(),
     isError: z.boolean().optional(),
+    resultAttachmentId: z.string().uuid().optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('usage'),
@@ -117,6 +146,27 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
     outputTokens: z.number().optional(),
     cachedInputTokens: z.number().optional(),
     cost: z.number().optional(),
+    contextTokens: z.number().optional(),
+    contextWindowTokens: z.number().optional(),
+  }),
+  agentEventBaseSchema.extend({
+    type: z.literal('usage.rate_limits'),
+    limitId: z.string().optional(),
+    limitName: z.string().optional(),
+    primary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
+    secondary: z
+      .object({
+        usedPercent: z.number(),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      })
+      .optional(),
   }),
   agentEventBaseSchema.extend({
     type: z.literal('error'),
@@ -137,8 +187,57 @@ export const agentEventEnvelopeSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const healthResponseSchema = z.object({
-  status: z.literal('ok'),
-  uptimeSeconds: z.number(),
-  protocolVersion: z.number(),
-});
+/**
+ * A daemon's advertised protocol versions. `.max(16)` on the array and `.max(9999)` on each entry
+ * are both comfortable headroom over the two real versions (`[1, 2]`) this repo will ever emit, and
+ * exist so this schema itself satisfies "strict v2 schemas reject unbounded ... input" -- an
+ * unbounded integer, or an unbounded array of them, from a network response is exactly the shape
+ * that requirement is about, even though no real daemon here could produce one.
+ */
+export const supportedProtocolVersionsSchema = z
+  .array(z.number().int().positive().max(9999))
+  .min(1)
+  .max(16)
+  .superRefine((versions, ctx) => {
+    if (new Set(versions).size !== versions.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'supported protocol versions must be unique' });
+    }
+  });
+
+export const healthResponseSchema = z
+  .object({
+    status: z.literal('ok'),
+    uptimeSeconds: z.number(),
+    protocolVersion: z.number(),
+    /** Absent from a pre-v2 daemon; still optional so a client can validate one. This repo's own
+     * daemon reports `[1, 2]` when its durable session store opened and the v2 read routes are
+     * mounted, and `[1]` when it fell back to memory-only operation (ADI-05). `protocolVersion`
+     * above stays `1` forever regardless, so an old client reading only that field never sees a
+     * change. */
+    supportedProtocolVersions: supportedProtocolVersionsSchema.optional(),
+    /**
+     * A UUID minted once when the daemon process starts, stable for its whole lifetime (ADI-06).
+     *
+     * Optional, because a pre-ADI-06 daemon does not send one and this schema must still validate
+     * that response. Its purpose is entirely on the client side: the desktop app captures it when
+     * the daemon becomes ready, and a *changed* value means the daemon it granted a workspace to no
+     * longer exists. Every outstanding grant is expired at that point, because the daemon that
+     * would have honored it has been replaced by one that never saw the user's confirmation.
+     * Bounded and charset-pinned like every other v2 identifier.
+     */
+    daemonInstanceId: z.string().uuid().optional(),
+  })
+  .superRefine((health, ctx) => {
+    // A daemon that still supports v1 must say so in both fields consistently: `protocolVersion`
+    // frozen at its historical value AND listed in `supportedProtocolVersions` when that field is
+    // present. Without this check, a self-contradictory response (protocolVersion: 1 but an array
+    // that omits 1) would parse successfully and then silently fail every v1 request downstream --
+    // a confusing outage instead of a clear validation error at the boundary where it belongs.
+    if (health.supportedProtocolVersions && !health.supportedProtocolVersions.includes(health.protocolVersion)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'supportedProtocolVersions must include protocolVersion',
+        path: ['supportedProtocolVersions'],
+      });
+    }
+  });

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE source [<!ENTITY secret SYSTEM "file:///not-readable">]>
+<source>
+  <publisher>Workable</publisher>
+  <publisherurl>https://www.workable.com</publisherurl>
+  <job><title>&secret;</title></job>
+</source>

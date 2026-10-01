@@ -13,20 +13,63 @@
  *  3. **Errors say what is wrong, never what was sent.** The message is echoed back through IPC
  *     and may end up in a log; the value itself might be CV text or personal notes.
  *
- * Everything here is pure — no database, no Electron — which is why it is a separate module from
+ * Everything here is pure (no database, no Electron), which is why it is a separate module from
  * the handlers: it is exhaustively unit-testable on its own (see test/workspace-validate.test.ts).
  */
 
+import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from './cv-profile-schema.js';
+import { CV_ENGAGEMENT_TYPES, CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from './cv-source-schema.js';
 import type {
+  CvEngagementType,
+  CvSourceDocument,
+  CvSourceEducationEntry,
+  CvSourceExperienceEntry,
+  CvSourceProjectEntry,
+} from './cv-source-schema.js';
+import {
+  CV_CLAIM_FIELDS,
+  CV_EVIDENCE_CLASSES,
+  CV_EVIDENCE_LIMITS,
+  CV_EVIDENCE_OVERLAY_ORIGINS,
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_FACT_OWNERSHIPS,
+  CV_FACT_SOURCE_KINDS,
+  CV_FACT_VERIFICATIONS,
+  CV_LISTING_STATUSES,
+  CV_REQUIREMENT_CLASSIFICATIONS,
+  CV_WORDING_APPROVAL_STATUSES,
+} from './cv-evidence-schema.js';
+import type {
+  CvApprovedWording,
+  CvEvidenceFact,
+  CvEvidenceOverlayState,
+  CvRequirementMapping,
+} from './cv-evidence-schema.js';
+import { MCP_GRANT_LIMITS, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
+import type {
+  ApplicationAnswerInput,
+  ApplicationAnswerPatch,
+  ApplicationArtifactInput,
+  ApplicationArtifactKind,
+  ApplicationAttemptCheckpoint,
+  ApplicationAttemptInput,
+  ApplicationAttemptPatch,
+  ApplicationCompletionEvidence,
   ApplicationFilter,
   ApplicationInput,
   ApplicationPatch,
+  ApplicationReapplyRequest,
   ApplicationStatus,
   AppSettingsPatch,
   CvDocumentInput,
   CvDocumentPatch,
+  CvEvidenceOverlayInput,
+  CvEvidenceOverlayPatch,
+  CvExportFormat,
   CvKind,
   CvProfile,
+  CvTextSource,
+  DefaultAiProvider,
   DensityPreference,
   LetterInput,
   LetterLength,
@@ -34,7 +77,7 @@ import type {
   LetterStatus,
   LetterTone,
   LetterType,
-  Market,
+  McpClientGrantInput,
   SavedJobInput,
   SavedJobPatch,
   SavedJobStatus,
@@ -49,13 +92,37 @@ export const LIMITS = {
   short: 512,
   /** notes, summaries, next steps */
   medium: 20_000,
-  /** an extracted CV — a long PDF is realistically well under this */
+  /** an extracted CV: a long PDF is realistically well under this */
   cvText: 2_000_000,
   /** a generated letter */
   letterBody: 200_000,
-  /** number of entries in cvProfile.skills */
-  skills: 200,
+  /**
+   * A kept gap analysis. Same order of magnitude as a letter and for the same reason: it is one
+   * CLI answer, not a document the user assembles, so anything approaching this bound is a bug or
+   * a hostile caller rather than a long analysis.
+   */
+  gapAnalysis: 200_000,
+  /** A full job description snapshot (#198) -- generous enough for a genuinely long real posting,
+   * finite against a hostile or malformed source page. */
+  jdSnapshot: 200_000,
+  /** A short free-text checkpoint detail (#198): "waiting on a CAPTCHA", not a document. */
+  checkpointDetail: 2_000,
+  /** One saved application-form answer (#372): generous enough for a genuine paragraph answer to
+   * a "why do you want to work here?"-style question, finite against a hostile or mistaken paste
+   * of an entire cover letter or CV into a single answer field. */
+  applicationAnswer: 5_000,
 } as const;
+
+/** A lowercase SHA-256 hex digest: exactly what `contentHash`/`jdSnapshotHash`/
+ * `sourceCvContentHash` hold everywhere in the application-attempt tables (#198). Fixed length and
+ * charset, so a caller cannot pass an arbitrary string where a real digest is expected. */
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+
+function sha256Hex(value: unknown, field: string): string {
+  const text = str(value, field, 64);
+  if (!SHA256_HEX_PATTERN.test(text)) fail(`"${field}" must be a lowercase SHA-256 hex digest`);
+  return text;
+}
 
 export class WorkspaceInputError extends Error {
   constructor(message: string) {
@@ -120,6 +187,13 @@ function nullableIsoDate(value: unknown, field: string): string | null {
   return parsed.toISOString();
 }
 
+/** Same as `nullableIsoDate`, but the field is required. */
+function requiredIsoDate(value: unknown, field: string): string {
+  const parsed = nullableIsoDate(value, field);
+  if (parsed === null) fail(`"${field}" is required`);
+  return parsed;
+}
+
 /**
  * Copies `key` from `source` onto `target` only when the caller actually supplied it.
  * `undefined` means "leave this column alone" for every patch verb in this file; a caller that
@@ -135,7 +209,6 @@ function patch<T, K extends keyof T & string>(
   target[key] = parse(source[key]) as Partial<T>[K];
 }
 
-export const MARKETS: readonly Market[] = ['netherlands', 'worldwide'];
 export const SAVED_JOB_STATUSES: readonly SavedJobStatus[] = ['considering', 'preparing', 'applied'];
 export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
   'preparing',
@@ -148,6 +221,8 @@ export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
 ];
 export const APPLICATION_FILTERS: readonly ApplicationFilter[] = ['all', 'active', 'archived'];
 export const CV_KINDS: readonly CvKind[] = ['uploaded', 'manual'];
+export const CV_TEXT_SOURCES: readonly CvTextSource[] = ['text_layer', 'ai_transcription'];
+export const CV_EXPORT_FORMATS: readonly CvExportFormat[] = ['pdf', 'docx'];
 export const LETTER_TYPES: readonly LetterType[] = [
   'motivation_letter',
   'cover_letter',
@@ -161,8 +236,24 @@ export const START_PAGES: readonly StartPage[] = ['search', 'saved', 'applicatio
 export const THEMES: readonly ThemePreference[] = ['light', 'dark', 'system'];
 export const DENSITIES: readonly DensityPreference[] = ['comfortable', 'compact'];
 export const SIDEBAR_STARTS: readonly SidebarStartPreference[] = ['expanded', 'collapsed', 'remember_last'];
-/** Values `lastOpenedPage` may hold — the renderer's nav ids, not the `startPage` enum. */
-export const NAV_PAGES = ['search', 'saved', 'applications', 'cv', 'letters', 'runtime', 'settings'] as const;
+export const DEFAULT_PROVIDERS: readonly DefaultAiProvider[] = ['claude', 'codex'];
+/**
+ * Values `lastOpenedPage` may hold: the renderer's nav ids, not the `startPage` enum.
+ *
+ * `'agent-workspace'` is ADI-07's eighth destination. It is not added to `START_PAGES`: that enum
+ * is what a user may pick as their *opening* screen in Settings, and a page whose whole purpose is
+ * to show sessions that are running right now is a poor thing to land on cold.
+ */
+export const NAV_PAGES = [
+  'search',
+  'saved',
+  'applications',
+  'cv',
+  'letters',
+  'agent-workspace',
+  'runtime',
+  'settings',
+] as const;
 
 /** Every `…:update` / `…:delete` channel takes its row id through here first. */
 export function parseId(value: unknown, field = 'id'): string {
@@ -187,7 +278,6 @@ export function parseSavedJobInput(value: unknown): SavedJobInput {
   return {
     role: requiredNonEmpty(input.role, 'role', LIMITS.short),
     company: requiredNonEmpty(input.company, 'company', LIMITS.short),
-    market: oneOf(input.market, 'market', MARKETS),
     location: input.location === undefined ? '' : str(input.location, 'location', LIMITS.short),
     vacancyKey: nullableStr(input.vacancyKey, 'vacancyKey', LIMITS.short),
     salary: nullableStr(input.salary, 'salary', LIMITS.short),
@@ -197,6 +287,9 @@ export function parseSavedJobInput(value: unknown): SavedJobInput {
     sourceUrl: nullableStr(input.sourceUrl, 'sourceUrl', LIMITS.short),
     notes: input.notes === undefined ? '' : str(input.notes, 'notes', LIMITS.medium),
     status: input.status === undefined ? 'considering' : oneOf(input.status, 'status', SAVED_JOB_STATUSES),
+    // Nullable, and null is the default: a newly saved job has no analysis. `gapAnalysisAt` is
+    // deliberately absent from this allow-list, so a renderer cannot date a stored analysis.
+    gapAnalysis: nullableStr(input.gapAnalysis, 'gapAnalysis', LIMITS.gapAnalysis),
   };
 }
 
@@ -205,7 +298,6 @@ export function parseSavedJobPatch(value: unknown): SavedJobPatch {
   const out: SavedJobPatch = {};
   patch(input, out, 'role', (v) => requiredNonEmpty(v, 'role', LIMITS.short));
   patch(input, out, 'company', (v) => requiredNonEmpty(v, 'company', LIMITS.short));
-  patch(input, out, 'market', (v) => oneOf(v, 'market', MARKETS));
   patch(input, out, 'location', (v) => str(v, 'location', LIMITS.short));
   patch(input, out, 'vacancyKey', (v) => nullableStr(v, 'vacancyKey', LIMITS.short));
   patch(input, out, 'salary', (v) => nullableStr(v, 'salary', LIMITS.short));
@@ -215,6 +307,7 @@ export function parseSavedJobPatch(value: unknown): SavedJobPatch {
   patch(input, out, 'sourceUrl', (v) => nullableStr(v, 'sourceUrl', LIMITS.short));
   patch(input, out, 'notes', (v) => str(v, 'notes', LIMITS.medium));
   patch(input, out, 'status', (v) => oneOf(v, 'status', SAVED_JOB_STATUSES));
+  patch(input, out, 'gapAnalysis', (v) => nullableStr(v, 'gapAnalysis', LIMITS.gapAnalysis));
   return out;
 }
 
@@ -232,7 +325,6 @@ export function parseApplicationInput(value: unknown): ApplicationInput {
   return {
     role: requiredNonEmpty(input.role, 'role', LIMITS.short),
     company: requiredNonEmpty(input.company, 'company', LIMITS.short),
-    market: oneOf(input.market, 'market', MARKETS),
     location: input.location === undefined ? '' : str(input.location, 'location', LIMITS.short),
     savedJobId: nullableStr(input.savedJobId, 'savedJobId', LIMITS.short),
     verification: nullableStr(input.verification, 'verification', LIMITS.short),
@@ -252,7 +344,6 @@ export function parseApplicationPatch(value: unknown): ApplicationPatch {
   const out: ApplicationPatch = {};
   patch(input, out, 'role', (v) => requiredNonEmpty(v, 'role', LIMITS.short));
   patch(input, out, 'company', (v) => requiredNonEmpty(v, 'company', LIMITS.short));
-  patch(input, out, 'market', (v) => oneOf(v, 'market', MARKETS));
   patch(input, out, 'location', (v) => str(v, 'location', LIMITS.short));
   patch(input, out, 'savedJobId', (v) => nullableStr(v, 'savedJobId', LIMITS.short));
   patch(input, out, 'verification', (v) => nullableStr(v, 'verification', LIMITS.short));
@@ -272,18 +363,164 @@ export function parseApplicationPatch(value: unknown): ApplicationPatch {
 function parseProfile(value: unknown): Partial<CvProfile> {
   const input = asRecord(value, '"profile"');
   const out: Partial<CvProfile> = {};
-  patch(input, out, 'title', (v) => str(v, 'profile.title', LIMITS.short));
-  patch(input, out, 'years', (v) => str(v, 'profile.years', LIMITS.short));
-  patch(input, out, 'location', (v) => str(v, 'profile.location', LIMITS.short));
-  patch(input, out, 'languages', (v) => str(v, 'profile.languages', LIMITS.short));
-  patch(input, out, 'summary', (v) => str(v, 'profile.summary', LIMITS.medium));
-  patch(input, out, 'auth', (v) => str(v, 'profile.auth', LIMITS.short));
+  for (const key of CV_PROFILE_SHORT_FIELDS) {
+    patch(input, out, key, (v) => str(v, `profile.${key}`, CV_PROFILE_LIMITS.shortField));
+  }
+  patch(input, out, 'summary', (v) => str(v, 'profile.summary', CV_PROFILE_LIMITS.summary));
   patch(input, out, 'skills', (v) => {
     if (!Array.isArray(v)) fail('"profile.skills" must be an array of strings');
-    if (v.length > LIMITS.skills) fail(`"profile.skills" must have at most ${LIMITS.skills} entries`);
-    return v.map((entry, index) => str(entry, `profile.skills[${index}]`, LIMITS.short));
+    if (v.length > CV_PROFILE_LIMITS.skills) {
+      fail(`"profile.skills" must have at most ${CV_PROFILE_LIMITS.skills} entries`);
+    }
+    return v.map((entry, index) => str(entry, `profile.skills[${index}]`, CV_PROFILE_LIMITS.shortField));
   });
   return out;
+}
+
+/**
+ * #274's structured source CV, checked field by field like everything else in this file.
+ *
+ * Two rules specific to this payload, on top of the file's usual three:
+ *
+ *  - **`reviewedAt` is not in the allow-list.** It is stamped by the main process from its own
+ *    clock when this value is written (see `repository.ts`), exactly as `savedJobs.gapAnalysisAt`
+ *    already is: a renderer that could set it could claim a CV was confirmed by a person at a time
+ *    nobody confirmed it, and "a human reviewed this" is the one claim the export gate relies on.
+ *  - **Every array is bounded, entry by entry.** A source CV is the largest structured value this
+ *    database holds, and it is written straight from an AI answer the user has reviewed; a bound
+ *    per entry as well as per array is what keeps a malformed answer from becoming a disk write.
+ */
+function boundedArray(value: unknown, field: string, max: number): unknown[] {
+  if (!Array.isArray(value)) fail(`"${field}" must be an array`);
+  if (value.length > max) fail(`"${field}" must have at most ${max} entries`);
+  return value;
+}
+
+function stringList(value: unknown, field: string, maxItems: number, maxChars: number): string[] {
+  return boundedArray(value, field, maxItems).map((entry, index) => str(entry, `${field}[${index}]`, maxChars));
+}
+
+function parseSourceExperience(value: unknown, index: number): CvSourceExperienceEntry {
+  const entry = asRecord(value, `"source.experience[${index}]"`);
+  const engagement: CvEngagementType =
+    entry.engagement === undefined
+      ? 'employment'
+      : oneOf(entry.engagement, `source.experience[${index}].engagement`, CV_ENGAGEMENT_TYPES);
+  // Same fallback `parseSourceProject` already uses for its own `id`: an empty/missing id gets a
+  // stable, position-keyed one rather than being rejected, so a legacy record without ids is
+  // never blocked from being saved back.
+  const id = str(entry.id ?? '', `source.experience[${index}].id`, LIMITS.short).trim();
+  return {
+    id: id.length > 0 ? id : `experience-${index + 1}`,
+    company: str(entry.company ?? '', `source.experience[${index}].company`, CV_SOURCE_LIMITS.shortField),
+    title: str(entry.title ?? '', `source.experience[${index}].title`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.experience[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+    engagement,
+    // Only a client engagement carries a client. Blanked rather than rejected for direct
+    // employment, so a stale value left over from a mis-typed entry cannot survive a correction.
+    client:
+      engagement === 'client_engagement'
+        ? str(entry.client ?? '', `source.experience[${index}].client`, CV_SOURCE_LIMITS.shortField)
+        : '',
+    bullets: stringList(
+      entry.bullets ?? [],
+      `source.experience[${index}].bullets`,
+      CV_SOURCE_LIMITS.bulletsPerEntry,
+      CV_SOURCE_LIMITS.bullet,
+    ),
+  };
+}
+
+function parseSourceEducation(value: unknown, index: number): CvSourceEducationEntry {
+  const entry = asRecord(value, `"source.education[${index}]"`);
+  return {
+    institution: str(entry.institution ?? '', `source.education[${index}].institution`, CV_SOURCE_LIMITS.shortField),
+    credential: str(entry.credential ?? '', `source.education[${index}].credential`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.education[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+  };
+}
+
+function parseSourceProject(value: unknown, index: number): CvSourceProjectEntry {
+  const entry = asRecord(value, `"source.projects[${index}]"`);
+  const id = str(entry.id ?? '', `source.projects[${index}].id`, LIMITS.short).trim();
+  return {
+    id: id.length > 0 ? id : `project-${index + 1}`,
+    name: str(entry.name ?? '', `source.projects[${index}].name`, CV_SOURCE_LIMITS.shortField),
+    role: str(entry.role ?? '', `source.projects[${index}].role`, CV_SOURCE_LIMITS.shortField),
+    dates: str(entry.dates ?? '', `source.projects[${index}].dates`, CV_SOURCE_LIMITS.shortField),
+    organization: str(
+      entry.organization ?? '',
+      `source.projects[${index}].organization`,
+      CV_SOURCE_LIMITS.shortField,
+    ),
+    description: str(
+      entry.description ?? '',
+      `source.projects[${index}].description`,
+      CV_SOURCE_LIMITS.projectDescription,
+    ),
+    technologies: stringList(
+      entry.technologies ?? [],
+      `source.projects[${index}].technologies`,
+      CV_SOURCE_LIMITS.technologiesPerProject,
+      CV_SOURCE_LIMITS.listItem,
+    ),
+    links: stringList(
+      entry.links ?? [],
+      `source.projects[${index}].links`,
+      CV_SOURCE_LIMITS.linksPerProject,
+      CV_SOURCE_LIMITS.listItem,
+    ),
+    pinned: entry.pinned === undefined ? false : bool(entry.pinned, `source.projects[${index}].pinned`),
+  };
+}
+
+function nonNegativeInt(value: unknown, field: string, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    fail(`"${field}" must be a non-negative integer`);
+  }
+  if (value > max) fail(`"${field}" must be at most ${max}`);
+  return value;
+}
+
+export function parseCvSource(value: unknown): CvSourceDocument | null {
+  if (value === null || value === undefined) return null;
+  const input = asRecord(value, '"source"');
+  const contact = asRecord(input.contact ?? {}, '"source.contact"');
+  const complete = input.complete === undefined ? true : bool(input.complete, 'source.complete');
+  return {
+    contact: {
+      name: str(contact.name ?? '', 'source.contact.name', CV_SOURCE_LIMITS.shortField),
+      title: str(contact.title ?? '', 'source.contact.title', CV_SOURCE_LIMITS.shortField),
+      location: str(contact.location ?? '', 'source.contact.location', CV_SOURCE_LIMITS.shortField),
+      email: str(contact.email ?? '', 'source.contact.email', CV_SOURCE_LIMITS.shortField),
+      phone: str(contact.phone ?? '', 'source.contact.phone', CV_SOURCE_LIMITS.shortField),
+      links: stringList(contact.links ?? [], 'source.contact.links', CV_SOURCE_LIMITS.links, CV_SOURCE_LIMITS.listItem),
+    },
+    summary: str(input.summary ?? '', 'source.summary', CV_SOURCE_LIMITS.summary),
+    experience: boundedArray(input.experience ?? [], 'source.experience', CV_SOURCE_LIMITS.experienceEntries).map(
+      parseSourceExperience,
+    ),
+    education: boundedArray(input.education ?? [], 'source.education', CV_SOURCE_LIMITS.educationEntries).map(
+      parseSourceEducation,
+    ),
+    projects: boundedArray(input.projects ?? [], 'source.projects', CV_SOURCE_LIMITS.projectEntries).map(
+      parseSourceProject,
+    ),
+    maxProjects:
+      input.maxProjects === undefined
+        ? PROJECTS_UNLIMITED
+        : nonNegativeInt(input.maxProjects, 'source.maxProjects', CV_SOURCE_LIMITS.maxProjectsSetting),
+    complete,
+    // A reason only means something for an incomplete record; keeping one on a complete record
+    // would let a stale "…was truncated" line outlive the truncation it described.
+    incompleteReason: complete
+      ? ''
+      : str(input.incompleteReason ?? '', 'source.incompleteReason', CV_SOURCE_LIMITS.incompleteReason),
+    coveredChars: input.coveredChars === undefined ? 0 : nonNegativeInt(input.coveredChars, 'source.coveredChars', LIMITS.cvText),
+    sourceChars: input.sourceChars === undefined ? 0 : nonNegativeInt(input.sourceChars, 'source.sourceChars', LIMITS.cvText),
+    // Stamped by the repository, never accepted from the caller: see this function's own comment.
+    reviewedAt: '',
+  };
 }
 
 export function parseCvDocumentInput(value: unknown): CvDocumentInput {
@@ -294,6 +531,8 @@ export function parseCvDocumentInput(value: unknown): CvDocumentInput {
     targetRole: input.targetRole === undefined ? '' : str(input.targetRole, 'targetRole', LIMITS.short),
     text: input.text === undefined ? '' : str(input.text, 'text', LIMITS.cvText),
     profile: input.profile === undefined ? {} : parseProfile(input.profile),
+    source: input.source === undefined ? null : parseCvSource(input.source),
+    textSource: input.textSource === undefined ? undefined : oneOf(input.textSource, 'textSource', CV_TEXT_SOURCES),
     isDefault: input.isDefault === undefined ? false : bool(input.isDefault, 'isDefault'),
   };
 }
@@ -305,10 +544,209 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
   patch(input, out, 'targetRole', (v) => str(v, 'targetRole', LIMITS.short));
   patch(input, out, 'text', (v) => str(v, 'text', LIMITS.cvText));
   patch(input, out, 'profile', (v) => parseProfile(v));
+  // Replaced wholesale, not merged like `profile`: the drawer always sends the entire reviewed
+  // source back, and merging arrays entry by entry would make "I deleted a project during review"
+  // impossible to express. An explicit `null` clears it.
+  patch(input, out, 'source', (v) => parseCvSource(v));
+  // `textSource` is deliberately NOT patchable, the same way `isDefault` below is not: it can only
+  // be set at creation (`parseCvDocumentInput` above), which is also the only place the AI-
+  // transcription review step ever runs. Allowing it here would let a later, unrelated patch claim
+  // `'ai_transcription'` provenance -- or silently launder it back to `'text_layer'` -- with no
+  // review having happened for that patch at all.
   // `isDefault` is deliberately NOT patchable: promoting a CV has to go through
   // `workspace:cv-documents:set-default`, which demotes the previous default in the same
   // transaction. Allowing it here would let the library end up with two defaults, or none.
   return out;
+}
+
+/** `{ id, format }` envelope for `workspace:cv-documents:export` (#156). */
+export function parseCvExportInput(value: unknown): { id: string; format: CvExportFormat } {
+  const input = asRecord(value, 'export request');
+  return { id: parseId(input.id), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+// -------------------------------------------------------------------------- cv evidence overlays
+
+function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
+  const entry = asRecord(value, `"facts[${index}]"`);
+  const parentType = oneOf(entry.parentType, `facts[${index}].parentType`, ['experience', 'project'] as const);
+  const verification =
+    entry.verification === undefined
+      ? 'self_reported'
+      : oneOf(entry.verification, `facts[${index}].verification`, CV_FACT_VERIFICATIONS);
+  const metricValueStr = entry.metricValue === undefined ? '' : str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField);
+  const hasMetric = metricValueStr.trim().length > 0;
+  return {
+    factId: requiredNonEmpty(entry.factId, `facts[${index}].factId`, CV_EVIDENCE_LIMITS.shortField),
+    // Empty for a "not my work" answer with no anchor to name (#419's clarification flow: a
+    // `needs_verification` requirement commonly has no `anchorParentId` at all) -- not every fact
+    // is scoped to one role or project, unlike `CvSourceProjectEntry.id` elsewhere in this app.
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `facts[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    parentType,
+    client: entry.client === undefined ? '' : str(entry.client, `facts[${index}].client`, CV_EVIDENCE_LIMITS.shortField),
+    activity: str(entry.activity ?? '', `facts[${index}].activity`, CV_EVIDENCE_LIMITS.activity),
+    mechanism: str(entry.mechanism ?? '', `facts[${index}].mechanism`, CV_EVIDENCE_LIMITS.mechanism),
+    result: str(entry.result ?? '', `facts[${index}].result`, CV_EVIDENCE_LIMITS.result),
+    ownership: entry.ownership === undefined ? 'unknown' : oneOf(entry.ownership, `facts[${index}].ownership`, CV_FACT_OWNERSHIPS),
+    sourceKind:
+      entry.sourceKind === undefined
+        ? 'candidate_testimony'
+        : oneOf(entry.sourceKind, `facts[${index}].sourceKind`, CV_FACT_SOURCE_KINDS),
+    sourceReference: str(entry.sourceReference ?? '', `facts[${index}].sourceReference`, CV_EVIDENCE_LIMITS.shortField),
+    verification,
+    // A metric with a value but no stated basis is refused outright, rather than silently accepted
+    // with an empty basis: `describeCvEvidenceOverlayGaps` cannot tell "no metric" from "a metric
+    // nobody grounded" once both are blank, and the second is exactly what #419 forbids.
+    metricValue: hasMetric ? metricValueStr : '',
+    metricUnit: hasMetric ? str(entry.metricUnit ?? '', `facts[${index}].metricUnit`, CV_EVIDENCE_LIMITS.shortField) : '',
+    metricBasis: (() => {
+      const basis = str(entry.metricBasis ?? '', `facts[${index}].metricBasis`, CV_EVIDENCE_LIMITS.shortField);
+      if (hasMetric && basis.trim().length === 0) {
+        fail(`"facts[${index}].metricBasis" is required when metricValue is set`);
+      }
+      return hasMetric ? basis : '';
+    })(),
+    supersedes: entry.supersedes === undefined ? '' : str(entry.supersedes, `facts[${index}].supersedes`, CV_EVIDENCE_LIMITS.shortField),
+    // Preserved from the caller rather than stamped here: this app's own `state`/`approvedAt`
+    // fields on this same overlay are already renderer-supplied (see `CvApprovedWording
+    // .approvedAt`'s doc comment), so re-blanking just this one timestamp would not raise the
+    // trust bar, only make it inconsistent with its neighbours.
+    createdAt: entry.createdAt === undefined ? '' : str(entry.createdAt, `facts[${index}].createdAt`, CV_EVIDENCE_LIMITS.shortField),
+  };
+}
+
+function parseApprovedWording(value: unknown, index: number): CvApprovedWording {
+  const entry = asRecord(value, `"wordingVariants[${index}]"`);
+  return {
+    variantId: requiredNonEmpty(entry.variantId, `wordingVariants[${index}].variantId`, CV_EVIDENCE_LIMITS.shortField),
+    targetField: oneOf(entry.targetField, `wordingVariants[${index}].targetField`, CV_CLAIM_FIELDS),
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `wordingVariants[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `wordingVariants[${index}].text`, CV_EVIDENCE_LIMITS.wordingText),
+    factIds: stringList(
+      entry.factIds ?? [],
+      `wordingVariants[${index}].factIds`,
+      CV_EVIDENCE_LIMITS.factIdsPerVariant,
+      CV_EVIDENCE_LIMITS.shortField,
+    ),
+    status: entry.status === undefined ? 'draft' : oneOf(entry.status, `wordingVariants[${index}].status`, CV_WORDING_APPROVAL_STATUSES),
+    // Preserved from the caller, not stamped here -- see `CvApprovedWording.approvedAt`'s own doc
+    // comment. Blanking it here would silently discard the timestamp `proposeWordingFromFacts`
+    // sets at the moment of approval.
+    approvedAt: entry.approvedAt === undefined ? '' : str(entry.approvedAt, `wordingVariants[${index}].approvedAt`, CV_EVIDENCE_LIMITS.shortField),
+    sourceRevision:
+      entry.sourceRevision === undefined ? '' : str(entry.sourceRevision, `wordingVariants[${index}].sourceRevision`, CV_EVIDENCE_LIMITS.shortField),
+  };
+}
+
+function parseRequirementMapping(value: unknown, index: number): CvRequirementMapping {
+  const entry = asRecord(value, `"requirements[${index}]"`);
+  return {
+    requirementId: requiredNonEmpty(entry.requirementId, `requirements[${index}].requirementId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `requirements[${index}].text`, CV_EVIDENCE_LIMITS.requirementText),
+    jdAnchor: entry.jdAnchor === undefined ? '' : str(entry.jdAnchor, `requirements[${index}].jdAnchor`, CV_EVIDENCE_LIMITS.shortField),
+    classification: oneOf(entry.classification, `requirements[${index}].classification`, CV_REQUIREMENT_CLASSIFICATIONS),
+    evidenceClass: oneOf(entry.evidenceClass, `requirements[${index}].evidenceClass`, CV_EVIDENCE_CLASSES),
+    anchorParentId:
+      entry.anchorParentId === undefined ? '' : str(entry.anchorParentId, `requirements[${index}].anchorParentId`, CV_EVIDENCE_LIMITS.shortField),
+    candidateAdded: entry.candidateAdded === undefined ? false : bool(entry.candidateAdded, `requirements[${index}].candidateAdded`),
+    reviewed: entry.reviewed === undefined ? false : bool(entry.reviewed, `requirements[${index}].reviewed`),
+  };
+}
+
+export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayInput {
+  const input = asRecord(value, 'CV evidence overlay');
+  return {
+    cvId: parseId(input.cvId),
+    vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
+    jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
+    jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
+    jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
+    origin: input.origin === undefined ? 'vacancy' : oneOf(input.origin, 'origin', CV_EVIDENCE_OVERLAY_ORIGINS),
+  };
+}
+
+// #421's case contract: `'candidate_approved'` is never accepted through the generic patch --
+// only `approveCvEvidenceOverlay` may set it. `CvEvidenceOverlayPatch['state']` already excludes
+// it at the type level; this is the same rule enforced against the raw, unknown runtime payload.
+const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candidate_approved'>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
+  (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
+);
+
+export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
+  const input = asRecord(value, '"patch"');
+  const out: CvEvidenceOverlayPatch = {};
+  patch(input, out, 'sourceCvContentHash', (v) => sha256Hex(v, 'sourceCvContentHash'));
+  patch(input, out, 'jdSnapshot', (v) => str(v, 'jdSnapshot', LIMITS.jdSnapshot));
+  patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
+  patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
+  patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
+  patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
+  patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
+  patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));
+  return out;
+}
+
+/** `{ id, expectedCaseRevision }` envelope for `workspace:cv-evidence-overlays:approve` (#421). */
+export function parseCvEvidenceOverlayApproveInput(value: unknown): { id: string; expectedCaseRevision: string } {
+  const input = asRecord(value, 'approve request');
+  return {
+    id: parseId(input.id),
+    expectedCaseRevision: requiredNonEmpty(input.expectedCaseRevision, 'expectedCaseRevision', LIMITS.short),
+  };
+}
+
+/** `{ caseId }` envelope for `workspace:cv-tailoring-proposals:list` (#421). */
+export function parseCaseIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').caseId);
+}
+
+/** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */
+export function parseCvEvidenceOverlayLookup(value: unknown): { cvId: string; vacancyKey: string } {
+  const input = asRecord(value, 'lookup');
+  return { cvId: parseId(input.cvId), vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short) };
+}
+
+/** `{ cvId }` envelope for `workspace:cv-evidence-overlays:list`. */
+export function parseCvIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').cvId);
+}
+
+/** `{ overlayId, format }` envelope for `workspace:cv-evidence-overlays:export` (#419, slice 4). */
+export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: string; format: CvExportFormat } {
+  const input = asRecord(value, 'export request');
+  return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+/**
+ * #421's local-client grant. `sourceCvId`/`caseIds` are required or forbidden depending on
+ * `scopeType` rather than both simply optional: a `source_cv` grant given a `caseIds` list (or
+ * vice versa) is a caller confusing the two scope types, which fails loudly here rather than
+ * silently keeping only the field that matched.
+ */
+export function parseMcpClientGrantInput(value: unknown): McpClientGrantInput {
+  const input = asRecord(value, 'MCP client grant');
+  const scopeType = oneOf(input.scopeType, 'scopeType', MCP_GRANT_SCOPE_TYPES);
+  if (scopeType === 'source_cv') {
+    if (input.caseIds !== undefined) fail('"caseIds" must not be set for a "source_cv" grant');
+    return {
+      name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+      scopeType,
+      sourceCvId: parseId(input.sourceCvId),
+      canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+      expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+    };
+  }
+  if (input.sourceCvId !== undefined) fail('"sourceCvId" must not be set for a "case_ids" grant');
+  return {
+    name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+    scopeType,
+    caseIds: stringList(input.caseIds ?? [], 'caseIds', MCP_GRANT_LIMITS.caseIdsPerGrant, LIMITS.short),
+    canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+    expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+  };
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -345,6 +783,151 @@ export function parseLetterPatch(value: unknown): LetterPatch {
   return out;
 }
 
+// ------------------------------------------------------------- application answers (#372)
+
+export const APPLICATION_ANSWER_CONTROL_TYPES = ['text', 'textarea'] as const;
+
+export function parseApplicationAnswerInput(value: unknown): ApplicationAnswerInput {
+  const input = asRecord(value, 'application answer');
+  return {
+    label: requiredNonEmpty(input.label, 'label', LIMITS.short),
+    controlType: oneOf(input.controlType, 'controlType', APPLICATION_ANSWER_CONTROL_TYPES),
+    // Trimmed and required non-empty: #372 asks for empty/oversized answers to be refused with an
+    // actionable message, not silently truncated or stored as a blank row nobody meant to save.
+    answer: requiredNonEmpty(input.answer, 'answer', LIMITS.applicationAnswer),
+    originCompany: input.originCompany === undefined ? '' : str(input.originCompany, 'originCompany', LIMITS.short),
+    originRole: input.originRole === undefined ? '' : str(input.originRole, 'originRole', LIMITS.short),
+  };
+}
+
+/** Only `answer` is patchable -- see `ApplicationAnswerPatch`'s own comment in `types.ts` for why
+ * `label`/`controlType`/origin are fixed at creation rather than editable here. */
+export function parseApplicationAnswerPatch(value: unknown): ApplicationAnswerPatch {
+  const input = asRecord(value, '"patch"');
+  const out: ApplicationAnswerPatch = {};
+  patch(input, out, 'answer', (v) => requiredNonEmpty(v, 'answer', LIMITS.applicationAnswer));
+  return out;
+}
+
+// ------------------------------------------------------------- application attempts (#198)
+
+export const APPLICATION_ATTEMPT_CHECKPOINTS: readonly ApplicationAttemptCheckpoint[] = [
+  'queued',
+  'reading_jd',
+  'tailoring',
+  'rendering',
+  'filling',
+  'ready',
+  'submitting',
+  'submitted',
+  'needs_user',
+  'skipped',
+  'failed',
+  'submission_unknown',
+  'user_reported',
+];
+
+/** The only completion evidence a renderer-originated patch may assert (#275): see
+ * `parseApplicationAttemptPatch` for why `receipt_confirmed` is not reachable from this side. */
+export const RENDERER_COMPLETION_EVIDENCE: readonly ApplicationCompletionEvidence[] = ['user_reported'];
+
+/** #275's reapply request. Both fields are required and the reason is bounded like any other
+ * free text: this is a durable record of a decision, so "present but empty" is not a reapply. */
+function parseApplicationReapply(value: unknown): ApplicationReapplyRequest {
+  const input = asRecord(value, '"reapply"');
+  return {
+    supersedesAttemptId: requiredNonEmpty(input.supersedesAttemptId, 'supersedesAttemptId', LIMITS.short),
+    reason: requiredNonEmpty(input.reason, 'reason', LIMITS.checkpointDetail),
+  };
+}
+
+export function parseApplicationAttemptInput(value: unknown): ApplicationAttemptInput {
+  const input = asRecord(value, 'application attempt');
+  return {
+    applicationId: nullableStr(input.applicationId, 'applicationId', LIMITS.short),
+    vacancyKey: nullableStr(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    canonicalUrl: input.canonicalUrl === undefined ? '' : str(input.canonicalUrl, 'canonicalUrl', LIMITS.short),
+    requisitionId: nullableStr(input.requisitionId, 'requisitionId', LIMITS.short),
+    company: requiredNonEmpty(input.company, 'company', LIMITS.short),
+    role: requiredNonEmpty(input.role, 'role', LIMITS.short),
+    sourceCvId: nullableStr(input.sourceCvId, 'sourceCvId', LIMITS.short),
+    sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
+    jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
+    jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
+    jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    workflowVersion: input.workflowVersion === undefined ? '' : str(input.workflowVersion, 'workflowVersion', LIMITS.short),
+    checkpoint:
+      input.checkpoint === undefined ? 'queued' : oneOf(input.checkpoint, 'checkpoint', APPLICATION_ATTEMPT_CHECKPOINTS),
+    checkpointDetail:
+      input.checkpointDetail === undefined ? '' : str(input.checkpointDetail, 'checkpointDetail', LIMITS.checkpointDetail),
+    force: input.force === undefined ? false : bool(input.force, 'force'),
+    ...(input.reapply === undefined ? {} : { reapply: parseApplicationReapply(input.reapply) }),
+  };
+}
+
+export function parseApplicationAttemptPatch(value: unknown): ApplicationAttemptPatch {
+  const input = asRecord(value, '"patch"');
+  const out: ApplicationAttemptPatch = {};
+  patch(input, out, 'applicationId', (v) => nullableStr(v, 'applicationId', LIMITS.short));
+  patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'checkpoint', (v) => oneOf(v, 'checkpoint', APPLICATION_ATTEMPT_CHECKPOINTS));
+  patch(input, out, 'checkpointDetail', (v) => str(v, 'checkpointDetail', LIMITS.checkpointDetail));
+  patch(input, out, 'submittedAt', (v) => nullableIsoDate(v, 'submittedAt'));
+  /**
+   * #275's completion evidence, restricted at this boundary to `user_reported` -- and defaulted to
+   * it whenever the renderer moves an attempt to a completed checkpoint without saying.
+   *
+   * The renderer is the user. What arrives here is a person telling the app an application is
+   * done, which is exactly and only `user_reported`; it has no way to observe a confirmation page
+   * or a receipt, so it must not be able to claim `receipt_confirmed` and have a later audit read
+   * a self-report as delivery evidence. Main-process submission code writes that value directly
+   * through the repository, which is not on the other side of this boundary.
+   *
+   * The default covers `user_reported` as well as `submitted` since #271 split the two. A renderer
+   * patch to either is the same act -- a person asserting completion -- and both now suppress a
+   * duplicate under #275's lookup, so both must carry the evidence type that says where the claim
+   * came from. Defaulting only `submitted`, as this did when #275 was written against a codebase
+   * that had no `user_reported` checkpoint, would have left the checkpoint a person is actually
+   * steered to with null evidence, indistinguishable from a pre-migration legacy row.
+   */
+  patch(input, out, 'completionEvidence', (v) =>
+    v === null ? null : oneOf(v, 'completionEvidence', RENDERER_COMPLETION_EVIDENCE),
+  );
+  if (out.completionEvidence === undefined && (out.checkpoint === 'submitted' || out.checkpoint === 'user_reported')) {
+    out.completionEvidence = 'user_reported';
+  }
+  return out;
+}
+
+export const APPLICATION_ARTIFACT_KINDS: readonly ApplicationArtifactKind[] = [
+  'cv_pdf',
+  'cover_letter_pdf',
+  'combined_pdf',
+  'other',
+];
+
+/** Generous but finite: real generated documents (a tailored CV/cover-letter PDF) are realistically
+ * well under this; a hostile or malformed value should fail loudly rather than wedge storage. */
+const MAX_ARTIFACT_BYTES = 50_000_000;
+
+export function parseApplicationArtifactInput(value: unknown): ApplicationArtifactInput {
+  const input = asRecord(value, 'application artifact');
+  const byteSize = input.byteSize;
+  if (typeof byteSize !== 'number' || !Number.isInteger(byteSize) || byteSize < 0) {
+    fail('"byteSize" must be a non-negative integer');
+  }
+  if (byteSize > MAX_ARTIFACT_BYTES) fail(`"byteSize" must be at most ${MAX_ARTIFACT_BYTES} bytes`);
+  return {
+    attemptId: requiredNonEmpty(input.attemptId, 'attemptId', LIMITS.short),
+    kind: oneOf(input.kind, 'kind', APPLICATION_ARTIFACT_KINDS),
+    fileName: input.fileName === undefined ? '' : str(input.fileName, 'fileName', LIMITS.short),
+    mimeType: requiredNonEmpty(input.mimeType, 'mimeType', LIMITS.short),
+    byteSize,
+    contentHash: sha256Hex(input.contentHash, 'contentHash'),
+    storagePath: input.storagePath === undefined ? '' : str(input.storagePath, 'storagePath', LIMITS.short),
+  };
+}
+
 // ------------------------------------------------------------------------------ settings
 
 export function parseSettingsPatch(value: unknown): AppSettingsPatch {
@@ -357,10 +940,15 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'sidebarStart', (v) => oneOf(v, 'sidebarStart', SIDEBAR_STARTS));
   patch(input, out, 'sidebarCollapsed', (v) => bool(v, 'sidebarCollapsed'));
   patch(input, out, 'lastOpenedPage', (v) => oneOf(v, 'lastOpenedPage', NAV_PAGES));
-  patch(input, out, 'defaultMarket', (v) => oneOf(v, 'defaultMarket', MARKETS));
+  patch(input, out, 'minimizeToTrayOnClose', (v) => bool(v, 'minimizeToTrayOnClose'));
+  patch(input, out, 'welcomeSeen', (v) => bool(v, 'welcomeSeen'));
+  patch(input, out, 'autoScanEnabled', (v) => bool(v, 'autoScanEnabled'));
+  // `autoApplyEnabled` is deliberately absent, and its absence is the point: this validator is an
+  // allow-list, so a renderer payload carrying it is dropped here rather than reaching Drizzle. The
+  // auto-apply kill switch is the one setting whose "on" state would let this app submit an
+  // application by itself, and nothing the renderer says may put it there -- for this release it
+  // has no writer at all. See `schema.ts`'s comment on the column.
   patch(input, out, 'defaultLocation', (v) => str(v, 'defaultLocation', LIMITS.short));
-  patch(input, out, 'sponsorOnlyDefault', (v) => bool(v, 'sponsorOnlyDefault'));
-  patch(input, out, 'indVerificationEnabled', (v) => bool(v, 'indVerificationEnabled'));
   patch(input, out, 'defaultCvId', (v) => nullableStr(v, 'defaultCvId', LIMITS.short));
   patch(input, out, 'defaultLetterType', (v) => oneOf(v, 'defaultLetterType', LETTER_TYPES));
   patch(input, out, 'defaultLetterTone', (v) => oneOf(v, 'defaultLetterTone', LETTER_TONES));
@@ -370,5 +958,196 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   );
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
+  patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
+  // #421: the candidate's own on/off switch for the local MCP endpoint -- unlike `autoApplyEnabled`
+  // above, this one is meant to be renderer-writable.
+  patch(input, out, 'mcpEndpointEnabled', (v) => bool(v, 'mcpEndpointEnabled'));
+  // ADI-07's three AI Workspace preferences. See `AGENT_WORKSPACE_PREF_LIMITS` for why these live
+  // in SQLite alongside every other setting rather than in localStorage.
+  patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));
+  patch(input, out, 'agentArchivedSessionIds', (v) => parseArchivedSessionIds(v));
+  patch(input, out, 'agentUnreadCounts', (v) => parseUnreadCounts(v));
   return out;
+}
+
+// ------------------------------------------------------------ AI Workspace (ADI-07)
+
+/**
+ * Bounds for the three AI Workspace preference fields.
+ *
+ * These are renderer-local view state (which session is selected, which are archived, how many
+ * unread entries each has) and they live in `app_settings` -- the same SQLite row as every other
+ * preference in this app -- rather than in `localStorage`. That is a deliberate consistency
+ * decision, not an accident: a user who exports, resets, or backs up their workspace database
+ * expects it to carry their app state, and a second, invisible store in Chromium's profile
+ * directory would silently not be part of any of that.
+ *
+ * The caps exist because these are the only settings whose *size* is driven by how much the user
+ * does rather than by a fixed enum. A session list is bounded by the daemon's own eviction quota,
+ * so 200 entries is far more than can accumulate; the cap is a bound on a hostile renderer, not a
+ * product limit anyone will meet.
+ */
+export const AGENT_WORKSPACE_PREF_LIMITS = {
+  archivedSessions: 200,
+  unreadSessions: 200,
+  /** A session id is a UUID (36 chars); `LIMITS.short` is already generous, this is the real shape. */
+  sessionId: 128,
+  /** No badge means anything above this, and an unbounded integer is a rendering hazard. */
+  maxUnread: 9_999,
+} as const;
+
+/**
+ * A bounded list of session ids.
+ *
+ * Stored as a JSON column, matching `cv_documents.profile`'s existing precedent for "a small
+ * structured value in this database", rather than introducing a join table for a list that is
+ * never queried, joined, or ordered by SQL.
+ */
+export function parseArchivedSessionIds(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) fail('"agentArchivedSessionIds" must be an array of session ids');
+  if (value.length > AGENT_WORKSPACE_PREF_LIMITS.archivedSessions) {
+    fail(`"agentArchivedSessionIds" must have at most ${AGENT_WORKSPACE_PREF_LIMITS.archivedSessions} entries`);
+  }
+  const seen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    // Deduplicated here rather than trusted: archiving is idempotent in the reducer, and a stored
+    // list with the same id twice would make it stop being idempotent across a reload.
+    seen.add(str(entry, `agentArchivedSessionIds[${index}]`, AGENT_WORKSPACE_PREF_LIMITS.sessionId));
+  }
+  return [...seen];
+}
+
+/** A bounded `sessionId -> unread count` map. Same JSON-column reasoning as the list above. */
+export function parseUnreadCounts(value: unknown): Record<string, number> {
+  if (value === null || value === undefined) return {};
+  const input = asRecord(value, '"agentUnreadCounts"');
+  const keys = Object.keys(input);
+  if (keys.length > AGENT_WORKSPACE_PREF_LIMITS.unreadSessions) {
+    fail(`"agentUnreadCounts" must have at most ${AGENT_WORKSPACE_PREF_LIMITS.unreadSessions} entries`);
+  }
+  const out: Record<string, number> = {};
+  for (const key of keys) {
+    const id = str(key, 'agentUnreadCounts key', AGENT_WORKSPACE_PREF_LIMITS.sessionId);
+    const count = input[key];
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+      fail(`"agentUnreadCounts.${id}" must be a non-negative integer`);
+    }
+    out[id] = Math.min(count, AGENT_WORKSPACE_PREF_LIMITS.maxUnread);
+  }
+  return out;
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * `agent-workspace:*` IPC payloads (ADI-07).
+ *
+ * Same three rules as the rest of this file: allow-list, never spread; bound every string; and say
+ * what is wrong without echoing what was sent. One rule is added, specific to these channels:
+ * **nothing here accepts a location**. There is no `path`, `cwd`, `workspaceId`, or `incarnation`
+ * parser below, so a renderer that attaches one has it dropped here, on top of the preload bridge
+ * already refusing to put it on the wire.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Canonical UUID form, the shape every v2 session id has (`agentSessionV2ViewSchema.id`). */
+const SESSION_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * `opaqueCursorV2Schema`'s charset and cap, restated.
+ *
+ * Restated rather than imported because this module is deliberately dependency-free (see its own
+ * header: it is pure so it can be unit-tested without Electron or a database). The daemon validates
+ * the cursor again on arrival, so this is the boundary check, not the authority.
+ */
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
+
+/** `pageLimitV2Schema`'s bounds, restated for the same reason. */
+export const PAGE_LIMIT_BOUNDS = { min: 1, max: 100, default: 50 } as const;
+
+export function parseSessionId(value: unknown, field = 'sessionId'): string {
+  const id = str(value, field, 128);
+  if (!SESSION_ID_PATTERN.test(id)) fail(`"${field}" must be a session id`);
+  return id;
+}
+
+export interface AgentWorkspacePageRequest {
+  cursor?: string;
+  limit: number;
+}
+
+function parsePage(input: Record<string, unknown>): AgentWorkspacePageRequest {
+  let limit: number = PAGE_LIMIT_BOUNDS.default;
+  if (input.limit !== undefined && input.limit !== null) {
+    if (typeof input.limit !== 'number' || !Number.isInteger(input.limit)) fail('"limit" must be an integer');
+    if (input.limit < PAGE_LIMIT_BOUNDS.min || input.limit > PAGE_LIMIT_BOUNDS.max) {
+      fail(`"limit" must be between ${PAGE_LIMIT_BOUNDS.min} and ${PAGE_LIMIT_BOUNDS.max}`);
+    }
+    limit = input.limit;
+  }
+  if (input.cursor === undefined || input.cursor === null) return { limit };
+  const cursor = str(input.cursor, 'cursor', 256);
+  if (!CURSOR_PATTERN.test(cursor)) fail('"cursor" must be an opaque pagination cursor');
+  return { cursor, limit };
+}
+
+/** `agent-workspace:list`. Takes paging and nothing else: no provider filter, no path, no query. */
+export function parseAgentWorkspaceListInput(value: unknown): AgentWorkspacePageRequest {
+  if (value === undefined || value === null) return { limit: PAGE_LIMIT_BOUNDS.default };
+  return parsePage(asRecord(value, 'list payload'));
+}
+
+/** `agent-workspace:get`. */
+export function parseAgentWorkspaceGetInput(value: unknown): string {
+  return parseSessionId(asRecord(value, 'payload').sessionId);
+}
+
+/** `agent-workspace:events`. */
+export function parseAgentWorkspaceEventsInput(
+  value: unknown,
+): AgentWorkspacePageRequest & { sessionId: string } {
+  const input = asRecord(value, 'events payload');
+  return { sessionId: parseSessionId(input.sessionId), ...parsePage(input) };
+}
+
+/** `sessionSearchQuerySchema`'s own bound (packages/shared/src/session-v2.ts), restated here for the
+ * same reason `PAGE_LIMIT_BOUNDS` restates `pageLimitV2Schema`'s: this parser runs before the
+ * request ever reaches the daemon, so it should refuse the same inputs the daemon would, not a
+ * looser or stricter set. */
+const SEARCH_QUERY_MAX_LENGTH = 200;
+// eslint-disable-next-line no-control-regex
+const SEARCH_QUERY_PATTERN = /^[^\u0000-\u001f\u007f]+$/;
+
+/** `agent-workspace:search`. */
+export function parseAgentWorkspaceSearchInput(value: unknown): AgentWorkspacePageRequest & { query: string } {
+  const input = asRecord(value, 'search payload');
+  const query = requiredNonEmpty(input.query, 'query', SEARCH_QUERY_MAX_LENGTH);
+  if (!SEARCH_QUERY_PATTERN.test(query)) fail('"query" must not contain control characters');
+  return { query, ...parsePage(input) };
+}
+
+/** `agent-workspace:attachment` (ADI-29). Both ids are session/attachment ids -- the same UUID
+ * shape, so `parseSessionId` covers the second with a different field name for its own message. */
+export function parseAgentWorkspaceAttachmentInput(value: unknown): { sessionId: string; attachmentId: string } {
+  const input = asRecord(value, 'attachment payload');
+  return {
+    sessionId: parseSessionId(input.sessionId),
+    attachmentId: parseSessionId(input.attachmentId, 'attachmentId'),
+  };
+}
+
+/** `agent-workspace:attach`. `lastSeq` resumes the SSE stream; it is an index, never a cursor. */
+export function parseAgentWorkspaceAttachInput(value: unknown): { sessionId: string; lastSeq?: number } {
+  const input = asRecord(value, 'attach payload');
+  const sessionId = parseSessionId(input.sessionId);
+  if (input.lastSeq === undefined || input.lastSeq === null) return { sessionId };
+  if (typeof input.lastSeq !== 'number' || !Number.isInteger(input.lastSeq) || input.lastSeq < 0) {
+    fail('"lastSeq" must be a non-negative integer');
+  }
+  return { sessionId, lastSeq: input.lastSeq };
+}
+
+/** `agent-workspace:detach`. */
+export function parseAgentWorkspaceDetachInput(value: unknown): string {
+  return parseSessionId(asRecord(value, 'payload').sessionId);
 }

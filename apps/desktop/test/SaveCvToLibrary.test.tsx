@@ -13,6 +13,8 @@ const SAVED: CvDocumentRecord = {
   targetRole: '',
   text: CV.text,
   profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  source: null,
+  textSource: 'text_layer',
   isDefault: true,
   uploadedAt: '2026-08-29T10:00:00.000Z',
   updatedAt: '2026-08-29T10:00:00.000Z',
@@ -27,7 +29,7 @@ afterEach(() => {
 });
 
 describe('SaveCvToLibrary', () => {
-  it('persists the extracted text and file name — and nothing else about the file', async () => {
+  it('persists the extracted text and file name, and nothing else about the file', async () => {
     // Notably absent: any path. The renderer never learns one, so it cannot leak one here.
     const bridge = installWorkspaceBridge({ createCvDocument: vi.fn().mockResolvedValue(SAVED) });
     render(<SaveCvToLibrary cv={CV} />);

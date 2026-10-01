@@ -22,7 +22,7 @@ describe('resolveThemeName', () => {
   it('returns null for "system", which is how the OS is allowed to decide', () => {
     // The dark theme is declared with daisyUI's `prefersdark`, which emits
     // `@media (prefers-color-scheme: dark) { :root:not([data-theme]) { … } }`. Removing the
-    // attribute is therefore not "give up and go light" — it is the live-following state, and it
+    // attribute is therefore not "give up and go light". It is the live-following state, and it
     // needs no media-query listener in JavaScript.
     expect(resolveThemeName('system')).toBeNull();
   });

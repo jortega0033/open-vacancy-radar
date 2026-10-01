@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": "infosec-search-1",
+  "error": {
+    "code": -32000,
+    "message": "rate limit exceeded (HTTP 429): retry after 60 seconds"
+  }
+}

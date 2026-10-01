@@ -1,13 +1,13 @@
-import type { ApplicationFilter, ApplicationInput, ApplicationRecord, ApplicationStatus, Market } from '../../window.js';
+import type { ApplicationFilter, ApplicationInput, ApplicationRecord, ApplicationStatus } from '../../window.js';
 
 /**
  * Canonical status list/labels/styling. `types.ts` (electron/workspace/types.ts) is the source of
- * truth for the enum itself — nothing here may invent a status the schema does not have.
+ * truth for the enum itself. Nothing here may invent a status the schema does not have.
  *
  * Colors follow DESIGN-TOKENS.md: the pipeline states (preparing/applied/recruiter_screen/
  * interview) are "still working on it" and stay grayscale, matching the "info stays grayscale"
  * rule. `offer` and `rejected` are genuine outcomes, so they get the real success/error hue on the
- * inline `<select>` itself — the option text still names the state either way, so color is never
+ * inline `<select>` itself. The option text still names the state either way, so color is never
  * the only signal.
  */
 export const APPLICATION_STATUS_ORDER: readonly ApplicationStatus[] = [
@@ -19,6 +19,12 @@ export const APPLICATION_STATUS_ORDER: readonly ApplicationStatus[] = [
   'rejected',
   'withdrawn',
 ];
+
+/** The two pipeline stages "Prepare interview" (#358) targets -- shared by `ApplicationsTable.tsx`
+ * (which gates the row action on it) and `InterviewPrepDrawer.tsx` (which gates the prompt builder
+ * on the same check), so the two can never drift apart into a row action that opens a drawer that
+ * then refuses to run, or vice versa. */
+export const INTERVIEW_PREPARABLE_STATUSES = new Set<ApplicationStatus>(['recruiter_screen', 'interview']);
 
 export const APPLICATION_STATUS_LABEL: Record<ApplicationStatus, string> = {
   preparing: 'Preparing',
@@ -39,13 +45,6 @@ export const APPLICATION_STATUS_SELECT_CLASS: Record<ApplicationStatus, string> 
   rejected: 'select select-sm select-error',
   withdrawn: 'select select-sm',
 };
-
-export const MARKET_LABEL: Record<Market, string> = {
-  netherlands: 'Netherlands',
-  worldwide: 'Worldwide',
-};
-
-export const MARKET_OPTIONS: readonly Market[] = ['netherlands', 'worldwide'];
 
 export interface ApplicationsFilterTab {
   key: ApplicationFilter;
@@ -80,12 +79,11 @@ export function toDateInputValue(iso: string | null): string {
   return iso ? iso.slice(0, 10) : '';
 }
 
-/** Rebuilds the create payload for an existing record — used to recreate a row on delete-undo. */
+/** Rebuilds the create payload for an existing record: used to recreate a row on delete-undo. */
 export function toApplicationInput(record: ApplicationRecord): ApplicationInput {
   return {
     role: record.role,
     company: record.company,
-    market: record.market,
     location: record.location,
     savedJobId: record.savedJobId,
     verification: record.verification,

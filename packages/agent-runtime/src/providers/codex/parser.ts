@@ -37,7 +37,7 @@ function itemEvent(kind: 'started' | 'completed', item: Record<string, unknown>)
       return undefined;
     case 'error':
       // Codex surfaces item-level "error" entries for non-fatal warnings too (e.g. a config
-      // quirk) — the turn keeps going and can still complete successfully after one. A genuinely
+      // quirk). The turn keeps going and can still complete successfully after one. A genuinely
       // fatal error comes through as turn.failed instead, so this is marked recoverable.
       if (kind === 'completed') {
         return {
@@ -109,8 +109,12 @@ export function parseCodexLine(raw: unknown, logger: Logger): ParsedLine {
       const message = typeof error?.message === 'string' ? error.message : 'Codex turn failed';
       return { events: [{ type: 'error', message, recoverable: false }] };
     }
-    default:
-      logger.debug('codex: unrecognized event type', { eventType: String(obj.type) });
-      return { events: [] };
+    default: {
+      // See the equivalent branch in providers/claude/parser.ts: `events` is unchanged, and
+      // `unrecognized` is diagnostic-only input for the ADI-04 supervisor's frame ledger.
+      const eventType = String(obj.type);
+      logger.debug('codex: unrecognized event type', { eventType });
+      return { events: [], unrecognized: { eventType } };
+    }
   }
 }

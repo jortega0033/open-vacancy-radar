@@ -1,0 +1,18 @@
+{
+  "content": [
+    { "type": "text", "text": "{\"job\":{\"id\":\"job-001\",\"title\":\"Security Engineer 1\",\"company\":\"Example Security Corp 1\",\"url\":\"https://www.infosecjobboard.com/jobs/job-001\",\"location\":\"Remote\",\"description\":\"Own detection engineering and incident response.\",\"employment_type\":\"full-time\",\"posted_at\":\"2026-09-01T09:00:00Z\"}}" }
+  ],
+  "structuredContent": {
+    "job": {
+      "id": "job-001",
+      "title": "Security Engineer 1",
+      "company": "Example Security Corp 1",
+      "url": "https://www.infosecjobboard.com/jobs/job-001",
+      "location": "Remote",
+      "description": "Own detection engineering and incident response.",
+      "employment_type": "full-time",
+      "posted_at": "2026-09-01T09:00:00Z"
+    }
+  },
+  "isError": false
+}

@@ -31,6 +31,7 @@ export type CrawlerHttpErrorOptions = {
   url: string | URL;
   detail: string;
   status?: number;
+  retryAfterMs?: number;
 };
 
 /**
@@ -53,6 +54,7 @@ export class CrawlerHttpError extends Error {
   public readonly code: CrawlerHttpErrorCode;
   public readonly safeUrl: string;
   public readonly status: number | undefined;
+  public readonly retryAfterMs: number | undefined;
 
   public constructor(options: CrawlerHttpErrorOptions) {
     const safeUrl = redactUrl(options.url);
@@ -62,6 +64,7 @@ export class CrawlerHttpError extends Error {
     this.code = options.code;
     this.safeUrl = safeUrl;
     this.status = options.status;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 

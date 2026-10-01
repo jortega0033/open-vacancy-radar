@@ -1,10 +1,19 @@
-import { useState, type FormEvent } from 'react';
-import type { CvDocumentRecord, CvProfile } from '../../window.js';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
+import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
+import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-source-schema.js';
+import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
+import { parseSourceCvResponse } from '../cv/source-cv-response.js';
+import { useAgentRun } from '../cv/useAgentRun.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
+import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
+import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
+import { CvSourceReview } from './CvSourceReview.js';
 
 /**
- * Everything the drawer can change — deliberately not `CvDocumentInput`/`CvDocumentPatch`
- * directly: `kind` never appears here (a manual profile is always created with `kind: 'manual'`,
+ * Everything the drawer can change (deliberately not `CvDocumentInput`/`CvDocumentPatch`
+ * directly): `kind` never appears here (a manual profile is always created with `kind: 'manual'`,
  * and an existing document's kind can never change), and the page decides at the call site
  * whether this becomes a `createCvDocument` or an `updateCvDocument` call.
  */
@@ -12,11 +21,17 @@ export interface CvDrawerSubmitPayload {
   name: string;
   targetRole: string;
   profile: CvProfile;
+  /**
+   * #274's reviewed structured source CV, present only once one has been read out of this CV's
+   * text. Saving the drawer is the review: the main process stamps `reviewedAt` on arrival, which
+   * is what lets an export trust that a person actually confirmed these records.
+   */
+  source?: CvSourceDocument | null;
 }
 
 export interface CvDrawerProps {
   mode: 'add' | 'edit';
-  /** Present in edit mode — pre-fills the form from the existing record, uploaded or manual. */
+  /** Present in edit mode: pre-fills the form from the existing record, uploaded or manual. */
   record?: CvDocumentRecord;
   onCancel: () => void;
   /** Rejecting shows the thrown error's message inline; resolving closes the drawer. */
@@ -50,6 +65,34 @@ function toFormState(record: CvDocumentRecord | undefined): FormState {
 }
 
 /**
+ * Merges whichever `CvProfile` fields an extraction actually produced onto the form, leaving every
+ * other field exactly as the user left it. Shared by the AI-parse path and the deterministic
+ * source-CV derivation below precisely because they must land in the form the same way: both are
+ * proposals for review, and neither may blank out a field it had nothing to say about.
+ */
+function applyProfileFields(prev: FormState, parsed: Partial<CvProfile>): FormState {
+  return {
+    ...prev,
+    title: parsed.title ?? prev.title,
+    years: parsed.years ?? prev.years,
+    location: parsed.location ?? prev.location,
+    languages: parsed.languages ?? prev.languages,
+    skillsText: parsed.skills ? skillsToText(parsed.skills) : prev.skillsText,
+    summary: parsed.summary ?? prev.summary,
+    auth: parsed.auth ?? prev.auth,
+  };
+}
+
+/** How each derivable field is named to the user in the "filled from your source CV" status, in the
+ * form's own label wording rather than the schema's field names. */
+const DERIVED_FIELD_LABELS: Partial<Record<keyof CvProfile, string>> = {
+  title: 'title',
+  years: 'years of experience',
+  location: 'location',
+  summary: 'summary',
+};
+
+/**
  * Add/edit drawer for a CV library entry (`export-src.html` "New manual profile" / "Edit parsed
  * profile", lines ~359-445). One form serves both "add a manual profile" and "edit any CV's
  * profile metadata": an uploaded CV has exactly the same `profile` shape as a manual one, just
@@ -57,18 +100,135 @@ function toFormState(record: CvDocumentRecord | undefined): FormState {
  *
  * Docked to the right edge via daisyUI's `modal-end`, matching `ApplicationDrawer`'s convention
  * (self-contained submitting/error state, async `onSubmit`) rather than `SavedJobDrawer`'s plain
- * fixed panel — one of the two existing drawer conventions, not a third.
+ * fixed panel: one of the two existing drawer conventions, not a third.
  */
 export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
+  useEscapeToClose(onCancel);
   const [form, setForm] = useState<FormState>(() => toFormState(record));
   const [validationError, setValidationError] = useState<string>();
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [parseError, setParseError] = useState<string>();
+  const [source, setSource] = useState<CvSourceDocument | null>(() => record?.source ?? null);
+  const [sourceError, setSourceError] = useState<string>();
+  /** The fields the last click filled in from the source CV instead of from an AI run, in the
+   * user's wording. `null` means that has not happened for this drawer. */
+  const [derivedFields, setDerivedFields] = useState<string[] | null>(null);
 
   const isEdit = mode === 'edit';
+  const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
+  // Only the gaps saving cannot close: "not reviewed yet" is what this drawer's own Save button
+  // fixes, so listing it here would report a blocker the next click removes.
+  const sourceGaps = source ? describeCvSourceContentGaps(source) : [];
+
+  // The same reasoning `sourceGaps` above applies to "reviewed": the record in `source` is the one
+  // on screen, either loaded from an already-reviewed CV or sitting in the review panel with the
+  // candidate looking at it, and saving the drawer is what stamps the review. Either way it is
+  // data a person can see and correct, which is the property the derivation depends on. Recomputed
+  // per render rather than memoized, matching `sourceGaps`: it is arithmetic over a handful of
+  // records, not work worth caching.
+  const derivedProfile = source ? deriveCvProfileFromSource(source) : {};
+  const canDeriveFromSource = coversCvProfileCore(derivedProfile);
+
+  // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
+  // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
+  const parseRun = useAgentRun({ chunkSeparator: '' });
+  const parseAppliedRef = useRef(false);
+  const parseSucceeded = parseRun.status === 'completed' && !parseError;
+
+  // A second, separate run for #274's full source-CV extraction. Deliberately not folded into the
+  // one above: they answer different questions (seven summary fields vs. the whole document as
+  // records), they read different amounts of the CV, and a failure of one must not discard the
+  // other's result while the user is part-way through a review.
+  const sourceRun = useAgentRun({ chunkSeparator: '' });
+  const sourceAppliedRef = useRef(false);
+
+  // Mirrors how every other AI feature (Gap Analysis, Letters, ...) resolves which CLI to run
+  // through (issue #400): the effective provider, not the raw persisted preference, so this still
+  // runs on a machine where the preferred CLI isn't installed but exactly one alternative is.
+  const { provider } = useEffectiveProvider();
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Applies the AI's fields to the form exactly once per run, the moment that run completes:
+  // never automatically saved, so a wrong or thin answer costs the user a glance, not their data.
+  useEffect(() => {
+    if (parseRun.status !== 'completed' || parseAppliedRef.current) return;
+    parseAppliedRef.current = true;
+    try {
+      const parsed = parseCvAiResponse(parseRun.text);
+      setForm((prev) => applyProfileFields(prev, parsed));
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'could not read the AI response');
+    }
+  }, [parseRun.status, parseRun.text]);
+
+  // Same "apply exactly once, never auto-save" rule as the profile parse above: the extracted
+  // records land in the review panel for the candidate to correct and confirm, and only reach the
+  // database when they press Save.
+  useEffect(() => {
+    if (sourceRun.status !== 'completed' || sourceAppliedRef.current || !record) return;
+    sourceAppliedRef.current = true;
+    try {
+      setSource(parseSourceCvResponse(sourceRun.text, record.text));
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : 'could not read the AI response');
+    }
+  }, [sourceRun.status, sourceRun.text, record]);
+
+  // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
+  // it's still running, otherwise the daemon session keeps running unobserved until it times out.
+  // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
+  // this must run its cleanup only on actual unmount, reading whatever the latest run was.
+  const parseRunRef = useRef(parseRun);
+  parseRunRef.current = parseRun;
+  const sourceRunRef = useRef(sourceRun);
+  sourceRunRef.current = sourceRun;
+  useEffect(() => {
+    return () => {
+      if (parseRunRef.current.isBusy) void parseRunRef.current.cancel();
+      if (sourceRunRef.current.isBusy) void sourceRunRef.current.cancel();
+    };
+  }, []);
+
+  /**
+   * Fills the seven summary fields, from the structured source CV when there is one and from the
+   * AI-parse prompt when there is not.
+   *
+   * The branch is the whole point: `buildSourceCvPrompt` has already read this CV end to end into
+   * records the candidate can see, and asking a second model run to re-read the same text for the
+   * title, the years and the location it can be computed from is a wait and a second chance to come
+   * back unparseable, for facts already in hand. When the derivation cannot produce those core
+   * fields -- dates this app cannot read, a CV with no employment history at all -- nothing is
+   * applied and the original AI call runs exactly as it always has, so the fallback is the
+   * behaviour users already know rather than a blank field.
+   */
+  function handleParseWithAi() {
+    if (!record || !canParseWithAi) return;
+    setParseError(undefined);
+
+    if (canDeriveFromSource) {
+      setForm((prev) => applyProfileFields(prev, derivedProfile));
+      setDerivedFields(
+        (Object.keys(derivedProfile) as (keyof CvProfile)[])
+          .map((key) => DERIVED_FIELD_LABELS[key])
+          .filter((label): label is string => label !== undefined),
+      );
+      return;
+    }
+
+    setDerivedFields(null);
+    parseAppliedRef.current = false;
+    void parseRun.start(buildCvParsePrompt(record.name, record.text), { provider });
+  }
+
+  function handleReadSourceCv() {
+    if (!record || !canParseWithAi) return;
+    sourceAppliedRef.current = false;
+    setSourceError(undefined);
+    void sourceRun.start(buildSourceCvPrompt(record.name, record.text), { provider });
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -92,6 +252,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
         summary: form.summary.trim(),
         auth: form.auth.trim(),
       },
+      ...(source ? { source } : {}),
     };
 
     setSubmitting(true);
@@ -128,6 +289,89 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
         <form className="flex flex-1 flex-col overflow-y-auto" onSubmit={handleSubmit}>
           <div className="flex-1 space-y-3 px-5 py-4">
+            {canParseWithAi && (
+              <div className="rounded-box border border-base-300 bg-base-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleParseWithAi}
+                    disabled={submitting || parseRun.isBusy}
+                  >
+                    {parseRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                    Parse with AI
+                  </button>
+                  {parseRun.isBusy && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => void parseRun.cancel()}
+                    >
+                      Stop
+                    </button>
+                  )}
+                  <span className="text-xs text-base-content/60">
+                    {canDeriveFromSource
+                      ? 'Fills in the fields below from the CV records you already have, with no second AI run.'
+                      : 'Reads the extracted text and fills in the fields below for you to review.'}
+                  </span>
+                </div>
+                {derivedFields && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    Filled in from your source CV records, no AI run needed: {derivedFields.join(', ')}. Review
+                    before saving.
+                  </p>
+                )}
+                {parseSucceeded && !derivedFields && (
+                  <p className="mt-2 text-xs text-success" role="status">
+                    Filled in from your CV: review before saving.
+                  </p>
+                )}
+                {(parseError ?? (parseRun.status === 'failed' ? parseRun.error : undefined)) && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {parseError ?? parseRun.error}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {canParseWithAi && (
+              <div className="rounded-box border border-base-300 bg-base-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleReadSourceCv}
+                    disabled={submitting || sourceRun.isBusy}
+                  >
+                    {sourceRun.isBusy && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                    {source ? 'Read the CV again' : 'Read the full CV into records'}
+                  </button>
+                  {sourceRun.isBusy && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void sourceRun.cancel()}>
+                      Stop
+                    </button>
+                  )}
+                  <span className="text-xs text-base-content/60">
+                    Keeps your real employers, dates, contact details, links and projects so exports and tailoring
+                    can use them.
+                  </span>
+                </div>
+                {(sourceError ?? (sourceRun.status === 'failed' ? sourceRun.error : undefined)) && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {sourceError ?? sourceRun.error}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {source && <CvSourceReview source={source} disabled={submitting} onChange={setSource} />}
+            {source && sourceGaps.length > 0 && (
+              <p className="text-xs text-warning" role="status">
+                Saved, this CV still cannot be exported: {sourceGaps.join('; ')}.
+              </p>
+            )}
+
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Name *
@@ -137,7 +381,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
                 disabled={submitting}
-                placeholder="e.g. Frontend CV — Netherlands"
+                placeholder="e.g. Frontend CV: Netherlands"
               />
             </label>
 
@@ -261,7 +505,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {submitting && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
               {isEdit ? 'Save changes' : 'Add CV'}
             </button>
           </div>

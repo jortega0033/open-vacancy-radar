@@ -8,16 +8,15 @@ export const atsProviderSchema = z.enum([
   'teamtailor',
   'smartrecruiters',
   'personio',
+  'workable',
   'workday',
   'successfactors',
+  'rippling',
   'json_ld',
   'html',
   'unknown',
 ]);
 export type AtsProvider = z.infer<typeof atsProviderSchema>;
-
-export const mappingConfidenceSchema = z.enum(['high', 'medium', 'low', 'unknown']);
-export type MappingConfidence = z.infer<typeof mappingConfidenceSchema>;
 
 export const workplaceModeSchema = z.enum(['remote', 'hybrid', 'onsite', 'unknown']);
 export type WorkplaceMode = z.infer<typeof workplaceModeSchema>;
@@ -65,51 +64,3 @@ export type VacancyAdapter = {
   supports(source: CareerSourceDescriptor): boolean;
   listVacancies(source: CareerSourceDescriptor): Promise<AdapterResult>;
 };
-
-export const deterministicScoreSchema = z.object({
-  relevant: z.boolean(),
-  deterministicScore: z.number().int().min(0).max(100),
-  technicalFit: z.number().int().min(0).max(100),
-  roleFit: z.number().int().min(0).max(100),
-  seniorityFit: z.number().int().min(0).max(100),
-  languageFit: z.number().int().min(0).max(100),
-  locationFit: z.number().int().min(0).max(100),
-  dutchRequired: z.boolean(),
-  dutchPreferred: z.boolean(),
-  languageEvidence: z.array(z.string()),
-  primaryFit: z.string(),
-  matchingSkills: z.array(z.string()),
-  gaps: z.array(z.string()),
-  reasons: z.array(z.string()),
-});
-export type DeterministicScore = z.infer<typeof deterministicScoreSchema>;
-
-export const semanticScoreSchema = z.object({
-  relevant: z.boolean(),
-  score: z.number().int().min(0).max(100),
-  technicalFit: z.number().int().min(0).max(100),
-  seniorityFit: z.number().int().min(0).max(100),
-  languageFit: z.number().int().min(0).max(100),
-  locationFit: z.number().int().min(0).max(100),
-  dutchRequired: z.boolean(),
-  primaryFit: z.string(),
-  matchingSkills: z.array(z.string()),
-  gaps: z.array(z.string()),
-  reasons: z.array(z.string()),
-}).strict();
-export type SemanticScore = z.infer<typeof semanticScoreSchema>;
-
-export const scanErrorCategorySchema = z.enum([
-  'network_error',
-  'timeout',
-  'blocked',
-  'parse_error',
-  'unsupported_ats',
-  'invalid_vacancy',
-  'company_mapping_error',
-  'semantic_score_error',
-  'rate_limited',
-  'unsafe_url',
-  'http_error',
-]);
-export type ScanErrorCategory = z.infer<typeof scanErrorCategorySchema>;

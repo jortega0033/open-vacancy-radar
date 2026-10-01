@@ -70,6 +70,65 @@ describe('createSessionRequestSchema', () => {
     const result = createSessionRequestSchema.safeParse({ provider: 'claude', cwd: '/tmp', prompt: 'hi', model: '' });
     expect(result.success).toBe(false);
   });
+
+  it('accepts an optional attachments array with one entry (port of agentdock#152/#153)', () => {
+    const result = createSessionRequestSchema.safeParse({
+      provider: 'claude',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: 'application/pdf' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a request with no attachments field at all', () => {
+    const result = createSessionRequestSchema.safeParse({ provider: 'claude', cwd: '/tmp', prompt: 'hi' });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.attachments).toBeUndefined();
+  });
+
+  it('rejects more than one attachment', () => {
+    const result = createSessionRequestSchema.safeParse({
+      provider: 'claude',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [
+        { path: '/tmp/a.pdf', mimeType: 'application/pdf' },
+        { path: '/tmp/b.pdf', mimeType: 'application/pdf' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an attachment with an empty path', () => {
+    const result = createSessionRequestSchema.safeParse({
+      provider: 'claude',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '', mimeType: 'application/pdf' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an attachment with an empty mimeType', () => {
+    const result = createSessionRequestSchema.safeParse({
+      provider: 'claude',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '/tmp/cv.pdf', mimeType: '' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an attachment path starting with "-", to avoid CLI argv-parsing ambiguity', () => {
+    const result = createSessionRequestSchema.safeParse({
+      provider: 'claude',
+      cwd: '/tmp',
+      prompt: 'hi',
+      attachments: [{ path: '-rf', mimeType: 'application/pdf' }],
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('providerCapabilitiesSchema', () => {
@@ -83,7 +142,7 @@ describe('providerCapabilitiesSchema', () => {
     expect(providerCapabilitiesSchema.safeParse(invalid).success).toBe(false);
   });
 
-  // AD-15: every known key is optional — absent means unsupported, the same as `false` — so a
+  // AD-15: every known key is optional (absent means unsupported, the same as `false`), so a
   // client built against a newer @agent-dock/shared can still validate an older daemon's
   // response that predates a since-added capability, without that capability being present.
   it('accepts a status with a capability key omitted entirely', () => {
@@ -152,6 +211,32 @@ describe('providerStatusSchema', () => {
     const status = { id: 'claude', name: 'Claude Code', installed: true, authenticated: 'authenticated' };
     expect(providerStatusSchema.safeParse(status).success).toBe(false);
   });
+
+  it('round-trips authSource rather than silently stripping it (ADI-08)', () => {
+    const status = {
+      id: 'codex',
+      name: 'Codex',
+      installed: true,
+      authenticated: 'authenticated',
+      capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true },
+      authSource: 'chatgpt',
+    };
+    const result = providerStatusSchema.safeParse(status);
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.authSource).toBe('chatgpt');
+  });
+
+  it('rejects an authSource outside the closed enum', () => {
+    const status = {
+      id: 'codex',
+      name: 'Codex',
+      installed: true,
+      authenticated: 'authenticated',
+      capabilities: { resume: true, cancellation: true, tools: true, usage: true, thinking: true },
+      authSource: 'oauth_someday',
+    };
+    expect(providerStatusSchema.safeParse(status).success).toBe(false);
+  });
 });
 
 describe('agentEventEnvelopeSchema', () => {
@@ -181,14 +266,23 @@ describe('agentEventEnvelopeSchema', () => {
     }
   });
 
+  it('accepts a tool.completed carrying a valid resultAttachmentId, and rejects a non-UUID one (ADI-29)', () => {
+    const base = { sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
+    const valid = { ...base, type: 'tool.completed', resultAttachmentId: '11111111-2222-4333-8444-555555555555' };
+    expect(agentEventEnvelopeSchema.safeParse(valid).success).toBe(true);
+
+    const invalid = { ...base, type: 'tool.completed', resultAttachmentId: 'not-a-uuid' };
+    expect(agentEventEnvelopeSchema.safeParse(invalid).success).toBe(false);
+  });
+
   it('rejects an unrecognized event type', () => {
     const event = { type: 'provider.raw_jsonl', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
     expect(agentEventEnvelopeSchema.safeParse(event).success).toBe(false);
   });
 
-  // AD-14: assistant.delta was removed from protocol v1 before any adapter ever emitted it — see
+  // AD-14: assistant.delta was removed from protocol v1 before any adapter ever emitted it: see
   // packages/shared/src/events.ts. This pins the removal so it can't silently come back.
-  it('rejects assistant.delta — removed from protocol v1 (AD-14), never re-add without deliberately updating this test', () => {
+  it('rejects assistant.delta (removed from protocol v1, AD-14), never re-add without deliberately updating this test', () => {
     const event = { type: 'assistant.delta', text: 'hi', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' };
     expect(agentEventEnvelopeSchema.safeParse(event).success).toBe(false);
   });
@@ -211,6 +305,82 @@ describe('healthResponseSchema', () => {
 
   it('rejects a response without protocolVersion', () => {
     expect(healthResponseSchema.safeParse({ status: 'ok', uptimeSeconds: 5 }).success).toBe(false);
+  });
+
+  it('accepts a pre-v2 response with no supportedProtocolVersions field at all, and does not add one', () => {
+    const result = healthResponseSchema.safeParse({ status: 'ok', uptimeSeconds: 5, protocolVersion: 1 });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).not.toHaveProperty('supportedProtocolVersions');
+  });
+
+  it('accepts a v1/v2 daemon response, keeping the legacy protocolVersion at 1', () => {
+    const result = healthResponseSchema.safeParse({
+      status: 'ok',
+      uptimeSeconds: 5,
+      protocolVersion: 1,
+      supportedProtocolVersions: [1, 2],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.protocolVersion).toBe(1);
+      expect(result.data.supportedProtocolVersions).toEqual([1, 2]);
+    }
+  });
+
+  it('rejects a self-contradictory response where supportedProtocolVersions omits protocolVersion', () => {
+    // A daemon claiming protocolVersion: 1 but listing only [2] as supported is internally
+    // inconsistent -- this must be a clean ValidationError at the boundary, not a response that
+    // parses successfully and then confusingly fails every v1 request downstream.
+    const result = healthResponseSchema.safeParse({
+      status: 'ok',
+      uptimeSeconds: 5,
+      protocolVersion: 1,
+      supportedProtocolVersions: [2],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a self-consistent v2-only response, where both fields agree v1 is gone', () => {
+    const result = healthResponseSchema.safeParse({
+      status: 'ok',
+      uptimeSeconds: 5,
+      protocolVersion: 2,
+      supportedProtocolVersions: [2],
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('supportedProtocolVersionsSchema (via healthResponseSchema)', () => {
+  function parse(supportedProtocolVersions: unknown) {
+    return healthResponseSchema.safeParse({ status: 'ok', uptimeSeconds: 5, protocolVersion: 1, supportedProtocolVersions });
+  }
+
+  it('rejects an empty array', () => {
+    expect(parse([]).success).toBe(false);
+  });
+
+  it('rejects duplicate versions', () => {
+    expect(parse([1, 1]).success).toBe(false);
+  });
+
+  it('rejects a non-integer version', () => {
+    expect(parse([1.5]).success).toBe(false);
+  });
+
+  it('rejects a non-positive version', () => {
+    expect(parse([0]).success).toBe(false);
+    expect(parse([-1]).success).toBe(false);
+  });
+
+  it('rejects a non-number entry', () => {
+    expect(parse([1, '2']).success).toBe(false);
+  });
+
+  it('accepts up to 16 unique versions and rejects a 17th, so an unbounded array cannot pass', () => {
+    const sixteen = Array.from({ length: 16 }, (_, index) => index + 1);
+    expect(parse(sixteen).success).toBe(true);
+    expect(parse([...sixteen, 17]).success).toBe(false);
   });
 });
 

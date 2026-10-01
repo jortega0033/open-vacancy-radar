@@ -1,10 +1,19 @@
 import type { AtsHttpClient } from '../ats/http.js';
-import { AtsResponseError } from '../ats/http.js';
+import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
+import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
 import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
+  isoPostedAt,
   locations,
   numberValue,
   parseSalaryText,
@@ -19,6 +28,42 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+
+/**
+ * FreeHire umbrella discovery integration: hardened structured adapter for remote job aggregation.
+ *
+ * ## Contract and Reliability (issue #6 hardening)
+ *
+ * **Rate limiting:** FreeHire rate limit responses (HTTP 429) are detected by `sourceFailure()`
+ * and marked as 'blocked', never 'error'. This status prevents user-facing retry loops while
+ * allowing parallel discovery to continue without cascading failures.
+ *
+ * **Bounded responses:** When FreeHire returns fewer results than the total available (meta.total
+ * > data.length), the response is marked as 'partial' status and includes the count mismatch in
+ * the error message. Callers MUST NOT treat partial results as definitive. Partial status prevents
+ * the UI from reporting incomplete coverage as exhaustive search results.
+ *
+ * **Outage behavior:** FreeHire failures (malformed response, server error, timeout) are caught
+ * and reported as 'error' status without blocking direct-ATS scanning. The adapter ensures that
+ * FreeHire discovery failing never cascades to prevent local ATS results from being obtained.
+ * This is critical for reliability: FreeHire is a secondary aggregator, not a primary path.
+ *
+ * **Direct ATS attribution:** Jobs found via FreeHire always point to the original ATS host
+ * (Ashby, Greenhouse, Lever, etc.), never to an intermediate aggregator. This preserves
+ * attribution visibility for diagnostics and ensures CVs reach the correct hiring system.
+ *
+ * **Deduplication:** Duplicate jobs discovered locally and via FreeHire converge using the
+ * `discoveryAudit()` key strategy, which combines provider name, job slug, and URL. The global
+ * remote scan's deduplication logic ensures duplicates are merged before evaluation.
+ *
+ * **Caching:** HTTP caching policy is delegated to the AtsHttpClient (passed in options).
+ * The adapter declares no explicit cache control; the crawler layer makes cache decisions
+ * based on response headers and per-source retry policy.
+ *
+ * **User-agent policy:** The adapter sends all requests through `http.get()`, which applies
+ * a user-agent identifying the client (Open Vacancy Radar). FreeHire's API documentation
+ * does not restrict user-agent patterns.
+ */
 
 const FREEHIRE_ATS_HOSTS = [
   'ashbyhq.com',
@@ -40,6 +85,12 @@ const FREEHIRE_ATS_HOSTS = [
   'workable.com',
 ] as const;
 
+/**
+ * Filters a job URL to ensure it points directly to a known ATS system, not an aggregator.
+ * FreeHire provides URLs that may link to intermediate job boards; this function ensures we
+ * only accept direct ATS URLs for attribution transparency and to reach the correct hiring system.
+ * Non-ATS URLs are silently skipped during job ingestion.
+ */
 function directAtsUrl(value: unknown): string | null {
   const url = httpUrl(value);
   if (url === null) return null;
@@ -70,12 +121,16 @@ async function discoverFreehire(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://freehire.me/api/v1/jobs/search');
-  url.searchParams.set('category', 'frontend');
+  if (config.discovery.roleQuery) url.searchParams.set('category', config.discovery.roleQuery);
   url.searchParams.set('work_mode', 'remote');
   url.searchParams.set('regions', 'global,eu');
   url.searchParams.set('salary_currency', 'USD');
-  url.searchParams.set('salary_min', String(config.minimumAnnualBaseUsd));
+  if (config.minimumAnnualBaseUsd !== null) {
+    url.searchParams.set('salary_min', String(config.minimumAnnualBaseUsd));
+  }
   url.searchParams.set('reality', 'fresh');
   url.searchParams.set('posted_within_days', '30');
   url.searchParams.set('sort', 'posted_at');
@@ -108,7 +163,9 @@ async function discoverFreehire(
         currency: stringValue(enrichment?.salary_currency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(enrichment?.salary_period),
         advertisedMinimum: numberValue(enrichment?.salary_min),
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.description),
+        postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -124,6 +181,10 @@ async function discoverFreehire(
         listings: vacancies.length,
         status,
         error: status === 'partial' ? `Bounded to ${root.data.length} of ${total} matching rows.` : null,
+        ...networkAttemptFields(counters),
+        ...(status === 'partial'
+          ? incompleteAudit(`Bounded to ${root.data.length} of ${total} matching rows.`)
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -136,6 +197,7 @@ async function discoverFreehire(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -150,8 +212,10 @@ async function discoverJobOpportunities(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = new URL('https://api.jobopportunitiesapi.org/public/jobs');
-  url.searchParams.set('q', 'frontend');
+  if (config.discovery.roleQuery) url.searchParams.set('q', config.discovery.roleQuery);
   url.searchParams.set('remote_confirmed', 'true');
   url.searchParams.set('require_fields', 'salary');
   url.searchParams.set('limit', String(config.discovery.jobOpportunitiesLimit));
@@ -187,6 +251,8 @@ async function discoverJobOpportunities(
         currency: stringValue(job.salary_currency)?.toUpperCase() ?? null,
         salaryPeriod: stringValue(job.salary_period),
         advertisedMinimum: numberValue(job.salary_min),
+        salaryProvenance: 'reviewed_structured',
+        postedAt: isoPostedAt(stringValue(job.posted_at)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -201,6 +267,10 @@ async function discoverJobOpportunities(
         listings: vacancies.length,
         status: partial ? 'partial' : 'success',
         error: partial ? 'More rows match; keyless access intentionally exposes one page.' : null,
+        ...networkAttemptFields(counters),
+        ...(partial
+          ? incompleteAudit('More rows match; keyless access intentionally exposes one page.')
+          : completeAudit()),
       }],
       vacancies,
     };
@@ -213,6 +283,7 @@ async function discoverJobOpportunities(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -223,11 +294,14 @@ async function discoverRemoteLanders(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://remotelanders.com/api/jobs';
   const pageSize = 100;
   try {
@@ -261,6 +335,8 @@ async function discoverRemoteLanders(
           currency: salary.currency,
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
+          salaryProvenance: 'loose_text',
+          postedAt: isoPostedAt(stringValue(job.postedDate)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -272,6 +348,7 @@ async function discoverRemoteLanders(
       if (complete) break;
       if (page === config.discovery.remoteLandersMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.remoteLandersMaxPages}-page limit.`;
       }
     }
@@ -279,6 +356,7 @@ async function discoverRemoteLanders(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -289,6 +367,8 @@ async function discoverRemoteLanders(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -298,20 +378,25 @@ async function discoverJobgether(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://jobgether.com/astroapi/ai/jobs.json';
   const pageSize = 25;
   try {
     for (let page = 1; page <= config.discovery.jobgetherMaxPages; page += 1) {
       const url = new URL('https://jobgether.com/astroapi/ai/jobs.json');
-      url.searchParams.set('keyword', 'frontend');
+      if (config.discovery.roleQuery) url.searchParams.set('keyword', config.discovery.roleQuery);
       url.searchParams.set('remoteType', 'full-remote');
       url.searchParams.set('includeHybrid', 'false');
-      url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      if (config.minimumAnnualBaseUsd !== null) {
+        url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      }
       url.searchParams.set('currency', 'USD');
       url.searchParams.set('sort', 'date');
       url.searchParams.set('page', String(page));
@@ -339,6 +424,8 @@ async function discoverJobgether(
           currency: salary.currency,
           salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
           advertisedMinimum: salary.minimum,
+          salaryProvenance: 'loose_text',
+          postedAt: stringValue(job.postedAt),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -348,6 +435,7 @@ async function discoverJobgether(
       if (!hasMore) break;
       if (page === config.discovery.jobgetherMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the documented ${config.discovery.jobgetherMaxPages}-page limit.`;
       }
     }
@@ -355,6 +443,7 @@ async function discoverJobgether(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -365,9 +454,223 @@ async function discoverJobgether(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
+}
+
+export interface JobgetherOfferDetail {
+  /** `null` when the offer carried no description at all, or the offer id was not found (a listing
+   * that has since been taken down between the scan and "Prepare application"). Never an empty
+   * string standing in for either. */
+  description: string | null;
+}
+
+/** A Jobgether offer URL looks like `https://jobgether.com/offer/<24-hex-id>-<slug>`; the id is the
+ * only part the per-offer detail endpoint needs. `null` for anything that doesn't match, so a
+ * caller can tell "not a Jobgether URL" apart from "a Jobgether URL this failed to parse".
+ * The terminator after the id is deliberately permissive -- slug (`-`), path segment (`/`),
+ * query string (`?`), fragment (`#`), or end-of-string -- so a URL a real user actually clicked
+ * (carrying a `?ref=`/`#section` a plain scan-discovered URL never would) still resolves. */
+export function jobgetherOfferIdFromUrl(url: string): string | null {
+  const match = /\/offer\/([a-f0-9]{24})(?:[-/?#]|$)/iu.exec(url);
+  return match ? match[1]! : null;
+}
+
+/**
+ * On-demand single-offer lookup, kept separate from the bulk list scan above because
+ * `discoverJobgether`'s own list endpoint (`astroapi/ai/jobs.json`) never returns a description for
+ * any of the thousands of rows one scan can touch, and fetching this endpoint for every one of them
+ * would trade a scale problem for a rate-limit one. Call this only when a specific vacancy actually
+ * needs its description -- "Prepare application" finding an empty `jdSnapshot`, not the scan itself.
+ *
+ * Confirmed live against the real API (not guessed from documentation): `astroapi/offer/<id>.json`
+ * returns `{ offer: { description: "<p>...</p>...", ... } }`, real HTML with no page chrome mixed
+ * in -- unlike the public `jobgether.com/offer/...` HTML page, which also renders nav, "Related
+ * jobs", "Other jobs at this company", and premium-upsell copy around the same content. Reading the
+ * API response directly is what keeps this from needing to strip that chrome out again.
+ */
+export async function fetchJobgetherOfferDetail(
+  http: AtsHttpClient,
+  offerId: string,
+): Promise<JobgetherOfferDetail> {
+  const response = await http.get(`https://jobgether.com/astroapi/offer/${encodeURIComponent(offerId)}.json`, {
+    allowedOrigins: ['https://jobgether.com'],
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (response.status === 404) return { description: null };
+  requireSuccessfulResponse('jobgether', response);
+  let root: unknown;
+  try {
+    root = JSON.parse(response.body) as unknown;
+  } catch (error) {
+    throw new AtsResponseError('jobgether', 'invalid offer detail JSON', response.status, { cause: error });
+  }
+  const parsed = record(root);
+  const offer = parsed ? record(parsed.offer) : null;
+  const rawDescription = offer ? stringValue(offer.description) : null;
+  return { description: rawDescription ? htmlToText(rawDescription) : null };
+}
+
+/** Every request this makes stays inside Workable's own candidate-facing apply host. */
+const WORKABLE_APPLY_ORIGIN = 'https://apply.workable.com';
+
+/**
+ * Exactly ten uppercase hex characters, verified rather than assumed: all 33,013 job URLs in one
+ * live pull of `WORKABLE_ALL_CUSTOMER_FEED_URL` matched this shape, with no exceptions. Matching
+ * case-insensitively because Workable itself resolves a lowercased shortcode (also checked live)
+ * and a URL a person pasted from somewhere else may well have been lowercased on the way.
+ */
+const WORKABLE_SHORTCODE = /^[0-9a-f]{10}$/iu;
+
+/** The account slug in a Workable apply URL is a DNS-label-shaped board identifier, the same shape
+ * `WorkableAdapter` already validates before putting one in a request path. */
+const WORKABLE_ACCOUNT = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/iu;
+
+/** Only a single retry, unlike a scan's unattended requests: this whole path runs inside a person's
+ * "Prepare application" click, where an honest early refusal beats a retry ladder they sit through. */
+const WORKABLE_DETAIL_MAX_RETRIES = 1;
+
+export type WorkableJobReference = Readonly<{
+  /**
+   * `null` for the short `/j/<shortcode>` form the bulk feed emits, which does not name the hiring
+   * account at all. `fetchWorkableJobDetail` resolves it in that case; it is only carried here when
+   * the URL already spelled it out, so a canonical URL costs one request instead of two.
+   */
+  account: string | null;
+  shortcode: string;
+}>;
+
+export interface WorkableJobDetail {
+  /** `null` when the listing carried no description text, or the shortcode no longer resolves to a
+   * live job (taken down between the scan and "Prepare application"). Never an empty string standing
+   * in for either. */
+  description: string | null;
+}
+
+/**
+ * Recognises the two Workable apply-URL shapes this app can actually end up holding, and `null` for
+ * everything else, so a caller can tell "not a Workable URL" apart from one it failed to parse.
+ *
+ * `workable_global`'s feed parser only ever emits `https://apply.workable.com/j/<shortcode>` (it
+ * rejects a job whose `<url>` is anything else outright), but the URL reaching "Prepare application"
+ * can also be the canonical `https://apply.workable.com/<account>/j/<shortcode>` that short form
+ * redirects to -- that is what a person's browser address bar shows, and what a saved or
+ * hand-corrected apply URL tends to be. Both are accepted; a trailing slash, a tracking query
+ * string, or a fragment on either is ignored rather than treated as a parse failure.
+ */
+export function workableJobReferenceFromUrl(url: string): WorkableJobReference | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'apply.workable.com') {
+    return null;
+  }
+  const segments = parsed.pathname.split('/').filter((segment) => segment.length > 0);
+  if (segments.length === 2) {
+    const [marker = '', shortcode = ''] = segments;
+    return marker === 'j' && WORKABLE_SHORTCODE.test(shortcode)
+      ? { account: null, shortcode: shortcode.toUpperCase() }
+      : null;
+  }
+  if (segments.length === 3) {
+    const [account = '', marker = '', shortcode = ''] = segments;
+    return marker === 'j' && WORKABLE_ACCOUNT.test(account) && WORKABLE_SHORTCODE.test(shortcode)
+      ? { account, shortcode: shortcode.toUpperCase() }
+      : null;
+  }
+  return null;
+}
+
+/**
+ * Turns the account-less short form into the account the detail endpoint needs, by letting Workable
+ * answer the question itself: `/j/<shortcode>` is a 301 to `/<account>/j/<shortcode>`, so the final
+ * URL of a followed request names the account. There is no shortcode-only detail route to use
+ * instead -- the apply site's own JavaScript bundle (`careers.*.js`) only ever builds
+ * `/api/v2/accounts/<account>/jobs/<shortcode>`, and probing `/api/v2/jobs/<shortcode>`,
+ * `/api/v1/widget/jobs/<shortcode>` and `/api/v3/accounts/.../jobs/<shortcode>` live returned 404.
+ *
+ * A shortcode with no live job behind it redirects to `/oops` rather than 404ing, which is why this
+ * reads the destination instead of trusting the status: an unparseable destination means "no such
+ * job", and returns `null` for the caller to refuse on.
+ */
+async function resolveWorkableAccount(
+  http: AtsHttpClient,
+  shortcode: string,
+): Promise<string | null> {
+  const response = await http.get(`${WORKABLE_APPLY_ORIGIN}/j/${encodeURIComponent(shortcode)}`, {
+    allowedOrigins: [WORKABLE_APPLY_ORIGIN],
+    cache: 'no-store',
+    maxRetries: WORKABLE_DETAIL_MAX_RETRIES,
+  });
+  if (response.status === 404) return null;
+  requireSuccessfulResponse('workable', response);
+  return workableJobReferenceFromUrl(response.finalUrl)?.account ?? null;
+}
+
+/**
+ * On-demand single-listing lookup for `workable_global`, kept out of the bulk feed scan for the same
+ * reason `fetchJobgetherOfferDetail` is kept out of `discoverJobgether`: one pull of Workable's
+ * all-customer feed carries tens of thousands of jobs, and fetching a detail endpoint for every one
+ * of them would trade a missing-description problem for a rate-limit problem. Call this only when a
+ * specific vacancy actually needs its description -- "Prepare application" finding an empty
+ * `jdSnapshot`, never the scan itself. The feed parser's deliberate discarding of the `<description>`
+ * element it streams past (see `workable-feed.ts`) stays exactly as it was.
+ *
+ * Confirmed live against the real endpoint rather than guessed from documentation:
+ * `GET https://apply.workable.com/api/v2/accounts/<account>/jobs/<shortcode>` answers 200 with
+ * `{ shortcode, title, description, requirements, benefits, ... }`, where the three text fields are
+ * real posting HTML with no page chrome around them -- this is the same endpoint apply.workable.com's
+ * own front end calls to render the listing. It is read directly because the alternatives are worse:
+ * the public listing page is an 8 KB JavaScript shell with no posting text in it at all, and its
+ * `og:description` meta tag is a truncated teaser, not the description.
+ *
+ * Workable splits one posting across `description`, `requirements` and `benefits`, and a real
+ * listing routinely puts its must-haves only in `requirements`. Tailoring against `description`
+ * alone would silently drop the half of the posting that matters most, so all three are joined in
+ * the order the apply page itself renders them.
+ */
+export async function fetchWorkableJobDetail(
+  http: AtsHttpClient,
+  reference: WorkableJobReference,
+): Promise<WorkableJobDetail> {
+  const account = reference.account ?? (await resolveWorkableAccount(http, reference.shortcode));
+  if (account === null) return { description: null };
+  const response = await http.get(
+    `${WORKABLE_APPLY_ORIGIN}/api/v2/accounts/${encodeURIComponent(account)}/jobs/${encodeURIComponent(reference.shortcode)}`,
+    {
+      allowedOrigins: [WORKABLE_APPLY_ORIGIN],
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      maxRetries: WORKABLE_DETAIL_MAX_RETRIES,
+    },
+  );
+  if (response.status === 404) return { description: null };
+  requireSuccessfulResponse('workable', response);
+  let root: unknown;
+  try {
+    root = JSON.parse(response.body) as unknown;
+  } catch (error) {
+    throw new AtsResponseError('workable', 'invalid job detail JSON', response.status, {
+      cause: error,
+    });
+  }
+  const job = record(root);
+  if (job === null) {
+    throw new AtsResponseError('workable', 'job detail is not an object', response.status);
+  }
+  const sections = ['description', 'requirements', 'benefits'].flatMap((field) => {
+    const html = stringValue(job[field]);
+    const text = html === null ? '' : htmlToText(html);
+    return text.length > 0 ? [text] : [];
+  });
+  return { description: sections.length > 0 ? sections.join('\n\n') : null };
 }
 
 export async function runStructuredDiscovery(

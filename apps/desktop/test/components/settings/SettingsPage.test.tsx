@@ -6,10 +6,13 @@ import type {
   AppSettingsPatch,
   AppSettingsRecord,
   CvDocumentRecord,
-  LetterRecord,
-  SavedJobRecord,
 } from '../../../src/window.js';
-import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+import {
+  DEFAULT_SETTINGS,
+  installSystemBridge,
+  installVacancyRadarBridge,
+  installWorkspaceBridge,
+} from '../../workspace-bridge.js';
 
 /**
  * `updateSettings` here answers like the real repository: the stored record with the patch
@@ -23,7 +26,13 @@ function mergingUpdateSettings(base: AppSettingsRecord = DEFAULT_SETTINGS) {
 function setup(overrides: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   const system = installSystemBridge();
   const bridge = installWorkspaceBridge({ updateSettings: mergingUpdateSettings(), ...overrides });
+  installVacancyRadarBridge();
   return { bridge, system };
+}
+
+/** Settings is now tabbed (General/Search/Workspace/Advanced); a field only renders once its tab is active. */
+function openTab(name: 'General' | 'Search' | 'Workspace' | 'Advanced') {
+  fireEvent.click(screen.getByRole('tab', { name }));
 }
 
 function makeCv(id: string, name: string): CvDocumentRecord {
@@ -34,6 +43,8 @@ function makeCv(id: string, name: string): CvDocumentRecord {
     targetRole: '',
     text: '',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+    source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
@@ -53,9 +64,7 @@ describe('SettingsPage', () => {
         ...DEFAULT_SETTINGS,
         startPage: 'applications',
         theme: 'dark',
-        defaultMarket: 'worldwide',
-        defaultLocation: 'Amsterdam',
-        sponsorOnlyDefault: false,
+        defaultLocation: 'Germany',
         launchAtLogin: true,
       } satisfies AppSettingsRecord),
     });
@@ -63,33 +72,52 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByLabelText('Start page')).toHaveValue('applications'));
-    expect(screen.getByLabelText('Theme')).toHaveValue('dark');
-    expect(screen.getByLabelText('Default market')).toHaveValue('worldwide');
-    expect(screen.getByLabelText('Default location')).toHaveValue('Amsterdam');
-    expect(screen.getByRole('switch', { name: 'Recognised sponsors only by default' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('switch', { name: 'Launch at login' })).toBeChecked();
-    expect(screen.getByRole('switch', { name: 'IND sponsor verification' })).toBeChecked();
+
+    openTab('Search');
+    expect(screen.getByLabelText('Default search location')).toHaveValue('Germany');
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
-  it('renders exactly the five sections — no fake per-source discovery toggles', async () => {
+  it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
     setup();
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
-    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Settings', 'General', 'Search defaults', 'Documents', 'Applications', 'Data management']);
+    const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
+    expect(tabs).toEqual(['General', 'Search', 'Workspace', 'Advanced']);
+
+    const headingsNow = () => screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headingsNow()).toEqual(['Startup', 'Appearance']);
+
+    openTab('Search');
+    await waitFor(() =>
+      expect(headingsNow()).toEqual(['Default search location', 'Search profile', 'Company roster']),
+    );
+
+    openTab('Workspace');
+    expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
+
+    openTab('Advanced');
+    expect(headingsNow()).toEqual(['AI runtime', 'Local AI assistant access (MCP)', 'Data management', 'About']);
   });
 
-  it('offers exactly the two real markets, never a country list', async () => {
+  it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {
     setup();
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Default market');
+    await screen.findByLabelText('Start page');
+    openTab('Search');
+    const select = await screen.findByLabelText('Default search location');
 
     const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
-    expect(values).toEqual(['netherlands', 'worldwide']);
+    expect(values[0]).toBe('all');
+    expect(values).toContain('Netherlands');
+    expect(values).toContain('Germany');
+    // A real country list, not a two-item market picker in disguise.
+    expect(values.length).toBeGreaterThan(50);
   });
 
   it('autosaves a changed field with a patch containing only that field, and shows "Saved" only after the IPC call resolves', async () => {
@@ -122,11 +150,11 @@ describe('SettingsPage', () => {
     setup({ updateSettings });
 
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Theme');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'dark' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
 
-    // applyTheme ran synchronously with the change, while updateSettings is still pending.
+    // applyTheme ran synchronously with the click, while updateSettings is still pending.
     expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
     expect(updateSettings).toHaveBeenCalledWith({ theme: 'dark' });
   });
@@ -134,9 +162,9 @@ describe('SettingsPage', () => {
   it('applies a density change to the document immediately and persists it', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Density');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'compact' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }));
 
     expect(document.documentElement.getAttribute('data-density')).toBe('compact');
     await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ density: 'compact' }));
@@ -148,13 +176,13 @@ describe('SettingsPage', () => {
     setup({ updateSettings });
 
     render(<SettingsPage />);
-    const select = await screen.findByLabelText('Theme');
+    await screen.findByLabelText('Start page');
 
-    fireEvent.change(select, { target: { value: 'dark' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
     expect(document.documentElement.getAttribute('data-theme')).toBe('openvacancyradar-dark');
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/database unreachable/));
-    expect(screen.getByLabelText('Theme')).toHaveValue('system');
+    expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true');
     expect(document.documentElement.getAttribute('data-theme')).toBeNull();
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
@@ -189,20 +217,22 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
 
-  it('saves the default location on blur, and only when it actually changed', async () => {
+  it('saves the default search location immediately on change', async () => {
     const { bridge } = setup();
     render(<SettingsPage />);
-    const input = await screen.findByLabelText('Default location');
+    await screen.findByLabelText('Start page');
+    openTab('Search');
+    const select = await screen.findByLabelText('Default search location');
 
-    fireEvent.blur(input); // unchanged — no save
-    expect(bridge.updateSettings).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: 'Germany' } });
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Germany' }));
 
-    fireEvent.change(input, { target: { value: 'Amsterdam' } });
-    expect(bridge.updateSettings).not.toHaveBeenCalled(); // not per keystroke
-    fireEvent.blur(input);
+    fireEvent.change(select, { target: { value: 'Netherlands' } });
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Netherlands' }));
 
-    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: 'Amsterdam' }));
-    expect(bridge.updateSettings).toHaveBeenCalledTimes(1);
+    // Back to no preference.
+    fireEvent.change(select, { target: { value: 'all' } });
+    await waitFor(() => expect(bridge.updateSettings).toHaveBeenCalledWith({ defaultLocation: '' }));
   });
 
   it('lists the CV library in the default-CV select and saves the chosen id', async () => {
@@ -211,6 +241,8 @@ describe('SettingsPage', () => {
     });
 
     render(<SettingsPage />);
+    await screen.findByLabelText('Start page');
+    openTab('Workspace');
     const select = await screen.findByLabelText('Default CV');
     await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3));
 
@@ -223,6 +255,8 @@ describe('SettingsPage', () => {
     setup({ listCvDocuments: vi.fn().mockResolvedValue([]) });
     render(<SettingsPage />);
 
+    await screen.findByLabelText('Start page');
+    openTab('Workspace');
     const select = await screen.findByLabelText('Default CV');
     expect(select).toBeDisabled();
     expect(screen.getByText(/no cvs in the library yet/i)).toBeInTheDocument();
@@ -239,8 +273,11 @@ describe('SettingsPage', () => {
     });
 
     render(<SettingsPage />);
-    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('dark'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true'),
+    );
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /reset settings/i }));
@@ -252,13 +289,15 @@ describe('SettingsPage', () => {
           startPage: 'search',
           theme: 'system',
           density: 'comfortable',
-          defaultMarket: 'netherlands',
           defaultCvId: null,
           confirmApplicationDelete: true,
         }),
       ),
     );
-    await waitFor(() => expect(screen.getByLabelText('Theme')).toHaveValue('system'));
+    openTab('General');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'true'),
+    );
     expect(document.documentElement.getAttribute('data-theme')).toBeNull();
     expect(document.documentElement.getAttribute('data-density')).toBeNull();
     await waitFor(() => expect(system.setLaunchAtLogin).toHaveBeenCalledWith(false));
@@ -271,28 +310,34 @@ describe('SettingsPage', () => {
     expect(bridge.deleteLetter).not.toHaveBeenCalled();
   });
 
-  it('reset application data deletes every row through the existing IPC verbs, then restores defaults', async () => {
+  it('reset application data uses the main-process reset and applies returned defaults', async () => {
     const { bridge } = setup({
-      listApplications: vi.fn().mockResolvedValue([{ id: 'app-1' } as ApplicationRecord, { id: 'app-2' } as ApplicationRecord]),
-      listSavedJobs: vi.fn().mockResolvedValue([{ id: 'job-1' } as SavedJobRecord]),
-      listLetters: vi.fn().mockResolvedValue([{ id: 'letter-1' } as LetterRecord]),
-      listCvDocuments: vi.fn().mockResolvedValue([makeCv('cv-1', 'Frontend CV')]),
+      resetApplicationData: vi.fn().mockResolvedValue({
+        settings: DEFAULT_SETTINGS,
+        deleted: {
+          savedJobs: 1,
+          applications: 2,
+          cvDocuments: 1,
+          letters: 1,
+          applicationAttempts: 1,
+          applicationArtifacts: 2,
+          submissionReceipts: 1,
+          automationGrants: 1,
+        },
+      }),
     });
 
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /delete everything/i }));
 
     await waitFor(() => expect(screen.getByText('Application data reset')).toBeInTheDocument());
-    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-1');
-    expect(bridge.deleteApplication).toHaveBeenCalledWith('app-2');
-    expect(bridge.deleteSavedJob).toHaveBeenCalledWith('job-1');
-    expect(bridge.deleteLetter).toHaveBeenCalledWith('letter-1');
-    expect(bridge.deleteCvDocument).toHaveBeenCalledWith('cv-1');
-    expect(bridge.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'system', defaultCvId: null }));
+    expect(bridge.resetApplicationData).toHaveBeenCalledTimes(1);
+    expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 
   it('cancelling a reset confirmation deletes nothing and saves nothing', async () => {
@@ -303,12 +348,13 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
 
+    openTab('Advanced');
     fireEvent.click(screen.getByRole('button', { name: 'Reset application data' }));
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    expect(bridge.deleteApplication).not.toHaveBeenCalled();
+    expect(bridge.resetApplicationData).not.toHaveBeenCalled();
     expect(bridge.updateSettings).not.toHaveBeenCalled();
   });
 

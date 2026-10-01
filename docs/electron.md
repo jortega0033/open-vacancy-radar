@@ -1,7 +1,7 @@
 # Electron
 
 `apps/desktop` is a demo Electron + React client for the daemon. It exists to prove the daemon and
-`@agent-dock/client` work end to end and to give you a real, working example to fork — it has no
+`@agent-dock/client` work end to end and to give you a real, working example to fork: it has no
 provider-specific logic of its own.
 
 ## The three-layer boundary
@@ -10,7 +10,7 @@ provider-specific logic of its own.
 Renderer (React)  ──IPC (contextBridge)──▶  Electron main  ──@agent-dock/client──▶  Daemon
 ```
 
-The renderer **never** calls the daemon's HTTP+SSE API directly — only the main process does,
+The renderer **never** calls the daemon's HTTP+SSE API directly: only the main process does,
 through one `AgentDockClient` instance. This isn't a style preference: a renderer `fetch()` to the
 daemon cannot actually succeed, because the daemon deliberately never answers a CORS preflight. See
 [SECURITY.md](../SECURITY.md#renderer-never-talks-to-the-daemon-directly) for the full explanation
@@ -34,29 +34,41 @@ webPreferences: {
 `webSecurity` is never overridden. `setWindowOpenHandler` denies every `window.open`/`target=_blank`
 popup and opens the URL in the OS browser instead. `will-navigate` (`isAllowedNavigationTarget()`
 in `main.ts`) allows only: in dev mode, the exact dev-server *origin* (a real `new URL(...).origin`
-comparison, not a `startsWith` prefix match — the earlier prefix check would have let
+comparison, not a `startsWith` prefix match: the earlier prefix check would have let
 `http://localhost:5173.evil.example` through against an allowed `http://localhost:5173`); in
 packaged mode, the exact `file://` URL of the app's own `dist/index.html`, not any local file path.
 Anything else redirects to the OS browser instead. A `session.setPermissionRequestHandler` denies
 every permission request by default (camera, mic, geolocation, notifications, ...). None of this
 matters for the *current* UI (it renders no untrusted content or links, and requests no
-permissions), but it's cheap defense in depth for a fork that later adds either — see
-[SECURITY.md](../SECURITY.md#electron-hardening).
+permissions), but it's cheap defense in depth for a fork that later adds either (see
+[SECURITY.md](../SECURITY.md#electron-hardening)).
+
+The supported minimum outer window size is 760 x 600 pixels. `BrowserWindow` enforces that limit,
+including when code or the operating system attempts to restore smaller bounds. The real Electron
+app-shell test verifies the effective bounds after a resize below the minimum.
 
 ## The preload bridge
 
-`electron/preload.ts` exposes exactly seven functions on `window.agentDock` via `contextBridge` —
-never a generic "invoke this channel with this payload" tunnel, and never the daemon's base URL or
-bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a clean status object
-from the IPC payload rather than passing it through once its shape looks roughly right, so an
-accidental extra field on the main-process side (a token, a base URL) can never ride along even by
-mistake — see `apps/desktop/test/preload.test.ts` for the regression test against this real module:
+`electron/preload.ts` exposes seven separate `contextBridge` namespaces on `window`, each a fixed,
+narrow set of functions: never a generic "invoke this channel with this payload" tunnel, and never
+the daemon's base URL or bearer token. `getDaemonStatus`/`onDaemonStatus` specifically reconstruct a
+clean status object from the IPC payload rather than passing it through once its shape looks
+roughly right, so an accidental extra field on the main-process side (a token, a base URL) can never
+ride along even by mistake. Every namespace's exact allowlist is asserted against the real module in
+`apps/desktop/test/preload.test.ts`.
+
+`window.agentDock` — the only bridge that talks to the daemon, via `AgentDockClient` (see
+[client-sdk.md](client-sdk.md)):
 
 ```ts
 interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
+  listMcpProviders(): Promise<McpConnectionStatus[]>;
+  searchMcp(input: McpSearchRequest): Promise<McpVacancyResult[]>;
+  setMcpCredential(input: McpCredentialInput): Promise<void>;
+  removeMcpProvider(providerId: McpProviderId): Promise<void>;
   createSession(input: CreateSessionInput): Promise<AgentSession>;
   cancelSession(sessionId: string): Promise<void>;
   onSessionEvent(callback: (sessionId: string, event: AgentEvent) => void): () => void;
@@ -64,8 +76,54 @@ interface AgentDockBridge {
 }
 ```
 
-Each maps to one `ipcMain.handle(...)` in `main.ts`. If you're adding a new capability the renderer
-needs, add a narrow, single-purpose function here — resist the temptation to add a generic
+The other six namespaces never go through `AgentDockClient`. Four are product-specific to Open
+Vacancy Radar and never touch the daemon at all; the other two (`workspaceGrant`, `agentWorkspace`)
+reach the daemon directly over loopback, but only from the main process:
+
+- **`window.vacancyRadar`** (`VacancyRadarBridge`) — `getStatus`, `getReport`, `runScan`,
+  `getSearchProfile`, `saveSearchProfile`: reads and triggers scans against the vendored
+  `vacancy-engine` package's worldwide/remote pipeline and its own SQLite database.
+- **`window.workspace`** (`WorkspaceBridge`, defined in `electron/workspace/types.ts`) — CRUD over
+  the workspace SQLite database's saved jobs, applications, CV documents, and letters (21 methods:
+  `getSettings`, `updateSettings`, `getCounts`, `list/create/update/delete` for each of the four
+  record types, plus `setDefaultCvDocument` and `duplicateLetter`).
+- **`window.cv`** (`CvBridge`) — `selectAndRead`, `getWorkspaceDir`: the native file-picker/read path
+  for importing a CV, kept separate from `workspace` because it touches the OS file-picker dialog
+  rather than the database.
+- **`window.system`** (`SystemBridge`) — `setLaunchAtLogin`, `getAppVersion`, `saveFile`: the handful
+  of OS-level integrations that don't fit any of the other namespaces.
+- **`window.workspaceGrant`** (`WorkspaceGrantBridge`, ADI-06, plus `startSession` added by ADI-13)
+  — `requestGrant`, `consumeGrant`, `getGrantStatus`, `startSession`: the app's filesystem-trust
+  boundary, which is why it is its own namespace rather than more methods on `agentDock`. Note what
+  it does **not** have. `requestGrant` takes a provider id and nothing else, so the renderer cannot
+  name a folder: only the user can, in the native picker that main opens, and only after confirming
+  a native dialog. `startSession` is addressed by the opaque ref `consumeGrant` returned, never by a
+  location. Nothing here returns a path, a `workspaceId`, or an `incarnation` — a grant is an opaque
+  43-character handle plus a bounded folder basename — and there is no `trust()` verb, because no
+  daemon route would accept one (see [daemon.md](daemon.md#workspace-trust-routes)).
+- **`window.agentWorkspace`** (`AgentWorkspaceBridge`, ADI-07) — `listSessions`, `getSession`,
+  `getSessionEvents`, `attachActivity`, `detachActivity` (five `guardedIpc.handle` channels), plus
+  `onActivity` (a local listener over the one-way `agent-workspace:activity` push channel main sends
+  on, not an `invoke`). Read-only views over the daemon's v2 sessions for the AI Workspace page:
+  every response is rebuilt field by field from a bounded, sanitized shape rather than passed
+  through, so it carries no filesystem path and no daemon-authored text. See the doc comment at the
+  top of `electron/agent-workspace-ipc.ts` for the no-location rule all six functions keep.
+
+Each function maps to one `guardedIpc.handle(...)` registered directly in `main.ts`, except
+`agentWorkspace`'s five, which `main.ts` registers by handing `guardedIpc` to
+`registerAgentWorkspaceHandlers` in its own module, `electron/agent-workspace-ipc.ts` (ADI-07's
+registrar-parameter pattern, so that feature's whole IPC surface is one call to roll back rather
+than fifty handler bodies tangled through `main.ts`). `guardedIpc` is `ipcMain` wrapped by
+`createGuardedIpc` (`electron/ipc-sender-guard.ts`, ADI-16): it verifies that the invoking event
+really came from the main window's own top-level frame before the handler runs at all, since
+`ipcMain.handle` by itself answers any frame in any `WebContents` this process hosts. **Register
+through `guardedIpc`, never through `ipcMain` directly** — a bare `ipcMain.handle` anywhere under
+`electron/` fails `test/ipc-sender-guard.test.ts`. See
+[SECURITY.md](../SECURITY.md#every-ipc-handler-verifies-its-sender) for what the check compares and
+why.
+
+If you're adding a new capability the renderer needs, add a narrow, single-purpose function to the
+namespace it belongs with, or a new namespace if none fits. Resist the temptation to add a generic
 "send arbitrary IPC channel + payload" escape hatch, since that's exactly the shape that would let a
 compromised renderer reach something it shouldn't.
 
@@ -74,7 +132,7 @@ compromised renderer reach something it shouldn't.
 On `app.whenReady()`, `main.ts` spawns the daemon as a child process
 (`spawn(process.execPath, args, { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, ... })`),
 using `resolveDaemonEntry()` (`electron/resolve-daemon-entry.ts`) to pick the right entry point for
-dev/packaged/unpacked — see [packaging.md](packaging.md#resolvedaemonentry) for the three cases. It
+dev/packaged/unpacked (see [packaging.md](packaging.md#resolvedaemonentry) for the three cases). It
 then polls the discovery file (`waitForDaemonReady`, 200ms interval, 15s timeout) until it can read
 a port+token and successfully call `client.health()`, which doubles as both the readiness check and
 the protocol-compatibility check in one call. `daemon:status` IPC events (`connecting` / `ready` /
@@ -82,30 +140,30 @@ the protocol-compatibility check in one call. `daemon:status` IPC events (`conne
 daemon internals.
 
 `app.requestSingleInstanceLock()` means a second launch of the app focuses the existing window
-instead of opening a second one — which would otherwise spawn a second daemon and lose the
+instead of opening a second one, which would otherwise spawn a second daemon and lose the
 single-instance race described in [daemon.md#single-instance-behavior](daemon.md#single-instance-behavior).
 
 On quit, `killDaemon()` aborts the active SSE subscription, best-effort calls
 `POST /sessions/cancel-all` over HTTP to cancel *every* in-flight session (not just the one the UI
 happens to be tracking), then kills the daemon child process. This exists specifically because
 Windows' `child.kill()` doesn't deliver a real `SIGTERM` the daemon's own shutdown handler could
-otherwise catch — see [daemon.md#shutdown](daemon.md#shutdown) for the full explanation.
+otherwise catch (see [daemon.md#shutdown](daemon.md#shutdown) for the full explanation).
 
 ## Renderer trust assumptions
 
-The renderer is treated as **semi-trusted, not adversarial** — it's this repo's own React code,
+The renderer is treated as **semi-trusted, not adversarial**: it's this repo's own React code,
 sandboxed by Electron's process isolation, but it's still the layer closest to whatever the CLI's
 output ends up rendering. Concretely: the renderer never receives the daemon's token or base URL
 (so even a fully compromised renderer can't reach the daemon directly), and every IPC input from
-the renderer is re-validated against the Zod schemas at the `ipcMain.handle` boundary in `main.ts`
-— not just trusted because it came from "our own" preload bridge. See the comment on
+the renderer is re-validated against the Zod schemas at the `ipcMain.handle` boundary in `main.ts`,
+not just trusted because it came from "our own" preload bridge. See the comment on
 `daemon:create-session` in `electron/main.ts` for why that revalidation is a distinct concern from
 `@agent-dock/client`'s own validation of the daemon's response.
 
 ## The working-directory picker
 
 `selectDirectory()` opens a native OS directory picker (`dialog.showOpenDialog`) from the main
-process and returns the chosen path (or `null` if cancelled) to the renderer — this is the only way
+process and returns the chosen path (or `null` if cancelled) to the renderer. This is the only way
 a session's `cwd` gets set; the renderer cannot read the filesystem itself to construct one.
 
 ## Provider and session flow (what the demo UI actually does)
@@ -116,8 +174,8 @@ a session's `cwd` gets set; the renderer cannot read the filesystem itself to co
 2. The user picks a provider, a working directory (via the picker above), and types a prompt.
 3. `createSession(input)` creates the session; `main.ts` immediately starts forwarding that
    session's SSE events to the renderer via `onSessionEvent`.
-4. `EventLog.tsx` renders each `AgentEvent` with a single `switch (event.type)` — see
-   [protocol-v1.md](protocol-v1.md) for the full event union; the UI never branches on which
+4. `EventLog.tsx` renders each `AgentEvent` with a single `switch (event.type)` (see
+   [protocol-v1.md](protocol-v1.md) for the full event union); the UI never branches on which
    provider produced an event.
 5. `cancelSession(id)` is available while a session is running.
 
@@ -126,7 +184,7 @@ a session's `cwd` gets set; the renderer cannot read the filesystem itself to co
 - **A new daemon capability the UI needs**: add the IPC handler in `main.ts`, the typed function in
   `preload.ts`'s `AgentDockBridge`, and call it from the renderer through `window.agentDock`. Don't
   add a daemon call directly in renderer code.
-- **A new native OS integration** (file picker, notifications, tray icon, etc.): same pattern — main
+- **A new native OS integration** (file picker, notifications, tray icon, etc.): same pattern: main
   process owns the Electron/Node API, preload exposes a narrow typed function, renderer calls it.
   Never enable `nodeIntegration` or disable `contextIsolation`/`sandbox` to shortcut this.
 - **Rendering content that isn't this repo's own UI** (e.g. a tool result containing a link or

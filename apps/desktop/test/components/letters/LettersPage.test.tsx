@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LettersPage } from '../../../src/components/letters/index.js';
 import { installBridges } from '../../cv-bridges.js';
 import { installWorkspaceBridge } from '../../workspace-bridge.js';
-import { LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
+import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
 
 function setup(workspace: Parameters<typeof installWorkspaceBridge>[0] = {}) {
   const bridges = installBridges();
@@ -84,7 +84,8 @@ describe('LettersPage', () => {
     fireEvent.click(generate);
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, generated text.' });
+    // A fact selection, not prose: the generator assembles the letter from it (F-J).
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
     fireEvent.click(await screen.findByRole('button', { name: /save letter/i }));
@@ -111,6 +112,43 @@ describe('LettersPage', () => {
 
     await waitFor(() => expect(deleteLetter).toHaveBeenCalledWith('del-1'));
     await waitFor(() => expect(onLettersChanged).toHaveBeenCalled());
+  });
+
+  it('with openOnGenerator, opens directly on the Generator tab pre-selected on the handoff vacancy and reports it consumed', async () => {
+    setup();
+    const onVacancyConsumed = vi.fn();
+    const onBackToVacancy = vi.fn();
+
+    render(
+      <LettersPage
+        vacancy={LETTER_VACANCY}
+        openOnGenerator
+        onVacancyConsumed={onVacancyConsumed}
+        onBackToVacancy={onBackToVacancy}
+      />,
+    );
+
+    // Straight to the Generator, not the library-first default this page otherwise always opens on.
+    expect(await screen.findByRole('textbox', { name: /letter title/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    // Pre-selected on the handed-off vacancy, not "enter the job manually".
+    expect(screen.getByRole('combobox', { name: 'Job' })).toHaveValue('live');
+    expect(screen.getByText(LETTER_VACANCY.title)).toBeInTheDocument();
+
+    await waitFor(() => expect(onVacancyConsumed).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: `Back to ${LETTER_VACANCY.title}` }));
+    expect(onBackToVacancy).toHaveBeenCalledWith(LETTER_VACANCY);
+  });
+
+  it('a vacancy without openOnGenerator still opens on the Library, exactly as before -- openOnGenerator is what changed, not passing `vacancy` alone', async () => {
+    setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+
+    render(<LettersPage vacancy={LETTER_VACANCY} />);
+
+    await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('"Back to library" from the generator returns to the list', async () => {

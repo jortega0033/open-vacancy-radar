@@ -2,11 +2,22 @@ import { load } from 'cheerio';
 
 import type { AtsHttpClient, AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
+import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
 import {
   booleanValue,
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
+  isoPostedAt,
+  isoPostedAtFromMmDdYyyyPrefix,
+  isoPostedAtFromUnixSeconds,
   locations,
   numberValue,
   parseSalaryText,
@@ -32,14 +43,26 @@ type RssItem = {
   fields: Record<string, string[]>;
 };
 
+type RssParseResult = { items: RssItem[]; invalidCount: number };
+
+/**
+ * QA regression: this used to be `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads
+ * every text node with no separator between them. Adjacent block elements -- `<p>...experience</p>
+ * <p>Two Microsoft certifications</p>` -- lost the paragraph boundary entirely and ran together as
+ * "experienceTwo Microsoft certifications", a real confirmed case. `htmlToText` (shared with the ATS
+ * adapters) inserts a newline at every block-tag boundary before extracting text, so this now keeps
+ * exactly the same collapsing/trimming behavior while preserving the word boundary a `<p>`/`<br>`
+ * always implied.
+ */
 function decodedText(html: string): string {
-  return load(html).text().replace(/\s+/gu, ' ').trim();
+  return htmlToText(html);
 }
 
-function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
+function parseRss(response: AtsHttpResponse, provider: Provider): RssParseResult {
   requireSuccessfulResponse(provider, response);
   const $ = load(response.body, { xmlMode: true });
   const items: RssItem[] = [];
+  let invalidCount = 0;
   $('item').each((_index, element) => {
     const fields: Record<string, string[]> = {};
     $(element).children().each((_childIndex, child) => {
@@ -51,7 +74,10 @@ function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
     });
     const title = fields.title?.[0];
     const link = httpUrl(fields.link?.[0]);
-    if (title === undefined || link === null) return;
+    if (title === undefined || link === null) {
+      invalidCount += 1;
+      return;
+    }
     items.push({
       title,
       link,
@@ -63,7 +89,7 @@ function parseRss(response: AtsHttpResponse, provider: Provider): RssItem[] {
   if ($('channel').length === 0) {
     throw new AtsResponseError(provider, 'invalid RSS document');
   }
-  return items;
+  return { items, invalidCount };
 }
 
 function companyColonTitle(value: string): { company: string; title: string } {
@@ -105,6 +131,34 @@ function devItTitle(value: string): { company: string; title: string } {
   return { company: match[2].trim(), title: match[1].trim() };
 }
 
+const UN_CAREERS_METADATA_LABELS = [
+  'Level',
+  'Job ID',
+  'Job Network',
+  'Job Family',
+  'Department/Office',
+  'Duty Station',
+  'Staffing Exercise',
+  'Posted Date',
+  'Deadline',
+] as const;
+
+function regularExpressionLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function unCareersMetadata(description: string): Record<string, string | null> {
+  const boundary = UN_CAREERS_METADATA_LABELS.map(regularExpressionLiteral).join('|');
+  return Object.fromEntries(UN_CAREERS_METADATA_LABELS.map((label) => {
+    const match = new RegExp(
+      `(?:^|\\s)${regularExpressionLiteral(label)}\\s*:\\s*(.*?)(?=\\s+(?:${boundary})\\s*:|$)`,
+      'iu',
+    ).exec(description);
+    const value = match?.[1]?.trim();
+    return [label, value === undefined || value.length === 0 ? null : value];
+  }));
+}
+
 async function discoverRss(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
@@ -115,12 +169,22 @@ async function discoverRss(
     normalize(item: RssItem): DiscoveryVacancyAudit | null;
   },
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   try {
-    const items = parseRss(await http.get(options.url), options.provider);
-    const vacancies = items.flatMap((item) => {
+    const parsed = parseRss(await http.get(options.url), options.provider);
+    let invalidCount = parsed.invalidCount;
+    const vacancies = parsed.items.flatMap((item) => {
       const normalized = options.normalize(item);
-      return normalized === null ? [] : [normalized];
+      if (normalized === null) {
+        invalidCount += 1;
+        return [];
+      }
+      return [normalized];
     });
+    // A dropped item is a data-quality gap in the feed itself, not a stopped-early scan: the whole
+    // RSS document was read and every item in it was considered, so this is `complete: true` even
+    // when `status` is `'partial'` for the dropped-item warning.
     return {
       sources: [{
         id: options.id,
@@ -128,8 +192,12 @@ async function discoverRss(
         url: options.url,
         requests: 1,
         listings: vacancies.length,
-        status: 'success',
-        error: null,
+        status: invalidCount > 0 ? 'partial' : 'success',
+        error: invalidCount > 0
+          ? `Dropped ${invalidCount} malformed or unsupported RSS item(s).`
+          : null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
       }],
       vacancies,
     };
@@ -142,6 +210,7 @@ async function discoverRss(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -174,7 +243,77 @@ async function discoverWeWorkRemotely(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
+        minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
+      });
+    },
+  });
+}
+
+async function discoverRemotive(
+  http: AtsHttpClient,
+  config: GlobalRemoteConfig,
+): Promise<DiscoveryRun> {
+  const url = 'https://remotive.com/remote-jobs/feed';
+  return discoverRss(http, config, {
+    provider: 'remotive',
+    id: 'remotive:all-jobs',
+    url,
+    normalize(item) {
+      const company = item.fields.company?.[0]
+        ?? item.fields['dc:creator']?.[0]
+        ?? 'Unspecified employer';
+      const salary = parseSalaryText(`${item.title} ${item.description}`);
+      return discoveryAudit({
+        key: `remotive:${item.fields.jobid?.[0] ?? item.guid}`,
+        provider: 'remotive',
+        company,
+        title: item.title,
+        url: item.link,
+        location: item.fields.location?.[0] ?? 'Remote (eligibility unspecified)',
+        employmentType: item.fields.type?.[0] ?? null,
+        currency: salary.currency,
+        salaryPeriod: salary.period,
+        advertisedMinimum: salary.minimum,
+        description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
+        raw: item,
+        minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
+      });
+    },
+  });
+}
+
+async function discoverUnCareers(
+  http: AtsHttpClient,
+  config: GlobalRemoteConfig,
+): Promise<DiscoveryRun> {
+  const url = 'https://careers.un.org/jobfeed?language=en';
+  return discoverRss(http, config, {
+    provider: 'un_careers',
+    id: 'un_careers:english',
+    url,
+    normalize(item) {
+      const metadata = unCareersMetadata(item.description);
+      return discoveryAudit({
+        key: `un_careers:${metadata['Job ID'] ?? item.guid}`,
+        provider: 'un_careers',
+        company: 'United Nations',
+        title: item.title,
+        url: item.link,
+        location: metadata['Duty Station'] ?? 'Unknown',
+        employmentType: null,
+        currency: null,
+        salaryPeriod: null,
+        advertisedMinimum: null,
+        postedAt: isoPostedAtFromMmDdYyyyPrefix(metadata['Posted Date'] ?? null),
+        raw: {
+          title: item.title,
+          link: item.link,
+          guid: item.guid,
+          metadata,
+        },
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
     },
@@ -205,6 +344,7 @@ async function discoverStartupJobs(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -236,6 +376,7 @@ async function discoverJobsCollider(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -267,6 +408,7 @@ async function discoverDevItJobsNl(
         salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -298,6 +440,7 @@ async function discoverDevItJobsUk(
         salaryPeriod: salary.minimum === null ? null : (salary.period ?? 'annual'),
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -328,6 +471,7 @@ async function discoverRealWorkFromAnywhere(
         salaryPeriod: null,
         advertisedMinimum: null,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -359,6 +503,7 @@ async function discoverJobspresso(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: item.description,
+        postedAt: isoPostedAt(item.fields.pubdate?.[0] ?? null),
         raw: item,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       });
@@ -401,6 +546,8 @@ async function discoverWorkingNomads(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://www.workingnomads.com/api/exposed_jobs/';
   try {
     const response = await http.get(url);
@@ -432,17 +579,36 @@ async function discoverWorkingNomads(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description,
+        postedAt: isoPostedAt(stringValue(job.pub_date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
     });
     return {
-      sources: [{ id: 'working_nomads:public-feed', provider: 'working_nomads', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'working_nomads:public-feed',
+        provider: 'working_nomads',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'working_nomads:public-feed', provider: 'working_nomads', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'working_nomads:public-feed',
+        provider: 'working_nomads',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -452,16 +618,20 @@ async function discoverRemoteFirstJobs(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
-  let lastUrl = 'https://remotefirstjobs.com/api/search-jobs?query=frontend&page=0';
+  let complete = true;
+  let continuationCursor: string | null = null;
+  let lastUrl = 'https://remotefirstjobs.com/api/search-jobs?page=0';
   try {
     for (let page = 0; page < config.discovery.remoteFirstMaxPages; page += 1) {
       const url = new URL('https://remotefirstjobs.com/api/search-jobs');
-      url.searchParams.set('query', 'frontend');
+      if (config.discovery.roleQuery) url.searchParams.set('query', config.discovery.roleQuery);
       url.searchParams.set('page', String(page));
       lastUrl = url.toString();
       requests += 1;
@@ -488,7 +658,9 @@ async function discoverRemoteFirstJobs(
           currency: minimum !== null && minimum > 0 ? 'USD' : null,
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+          salaryProvenance: 'reviewed_structured',
           description: stringValue(job.description),
+          postedAt: isoPostedAt(stringValue(job.published_at)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -496,6 +668,8 @@ async function discoverRemoteFirstJobs(
       if (root.jobs.length < 100) break;
       if (page + 1 === config.discovery.remoteFirstMaxPages) {
         status = 'partial';
+        complete = false;
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.remoteFirstMaxPages}-page limit.`;
       }
     }
@@ -503,6 +677,8 @@ async function discoverRemoteFirstJobs(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -513,6 +689,8 @@ async function discoverRemoteFirstJobs(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };
@@ -522,18 +700,24 @@ async function discoverJobRemotely(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let complete = true;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://jobremotely.io/api/v1/jobs';
   const pageSize = 50;
   try {
     for (let page = 1; page <= config.discovery.jobRemotelyMaxPages; page += 1) {
       const url = new URL('https://jobremotely.io/api/v1/jobs');
-      url.searchParams.set('search', 'frontend');
-      url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      if (config.discovery.roleQuery) url.searchParams.set('search', config.discovery.roleQuery);
+      if (config.minimumAnnualBaseUsd !== null) {
+        url.searchParams.set('salaryMin', String(config.minimumAnnualBaseUsd));
+      }
       url.searchParams.set('sort', 'newest');
       url.searchParams.set('page', String(page));
       url.searchParams.set('limit', String(pageSize));
@@ -562,9 +746,14 @@ async function discoverJobRemotely(
           currency: stringValue(salary?.currency)?.toUpperCase() ?? null,
           salaryPeriod: numberValue(salary?.min) === null ? null : 'annual',
           advertisedMinimum: numberValue(salary?.min),
-          description: Array.isArray(job.skillsRequired)
-            ? job.skillsRequired.filter((value): value is string => typeof value === 'string').join(' ')
-            : null,
+          salaryProvenance: 'reviewed_structured',
+          // `job.skillsRequired` (a keyword list, not prose) used to be joined into this field --
+          // silently passing it off as the job description corrupts CV-tailoring/cover-letter
+          // grounding with plausible-looking wrong text. This API has no free-text description
+          // field at all, so `null` (the same "we don't have this" convention every other source
+          // uses when a description is genuinely absent) is the honest value here.
+          description: null,
+          postedAt: isoPostedAt(stringValue(job.createdAt)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -573,6 +762,8 @@ async function discoverJobRemotely(
       if (data.jobs.length < pageSize || (pages !== null && page >= pages)) break;
       if (page === config.discovery.jobRemotelyMaxPages) {
         status = 'partial';
+        complete = false;
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.jobRemotelyMaxPages}-page limit.`;
       }
     }
@@ -580,6 +771,8 @@ async function discoverJobRemotely(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -590,6 +783,8 @@ async function discoverJobRemotely(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };
@@ -599,6 +794,8 @@ async function discoverRemoteOk(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://remoteok.com/api';
   try {
     const response = await http.get(url);
@@ -628,7 +825,9 @@ async function discoverRemoteOk(
         currency: minimum !== null && minimum > 0 ? 'USD' : null,
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.description),
+        postedAt: isoPostedAt(stringValue(job.date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
@@ -642,6 +841,8 @@ async function discoverRemoteOk(
         listings: vacancies.length,
         status: 'success',
         error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
       }],
       vacancies,
     };
@@ -654,6 +855,7 @@ async function discoverRemoteOk(
         requests: 1,
         listings: 0,
         ...sourceFailure(error),
+        ...networkAttemptFields(counters),
       }],
       vacancies: [],
     };
@@ -664,11 +866,15 @@ async function discoverArbeitnow(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let complete = true;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://www.arbeitnow.com/api/job-board-api?page=1';
   try {
     for (let page = 1; page <= config.discovery.arbeitnowMaxPages; page += 1) {
@@ -707,14 +913,20 @@ async function discoverArbeitnow(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description,
+          postedAt: isoPostedAtFromUnixSeconds(numberValue(job.created_at)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
       }
       const links = record(root.links);
-      if (httpUrl(links?.next) === null) break;
+      const nextUrl = httpUrl(links?.next);
+      if (nextUrl === null) break;
       if (page === config.discovery.arbeitnowMaxPages) {
         status = 'partial';
+        complete = false;
+        // arbeitnow's own paging link, not a synthesized page number -- the most literal
+        // "remaining-work evidence" available for this source.
+        continuationCursor = nextUrl;
         errorMessage = `Stopped at the configured ${config.discovery.arbeitnowMaxPages}-page limit.`;
       }
     }
@@ -722,6 +934,8 @@ async function discoverArbeitnow(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    complete = false;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -732,6 +946,8 @@ async function discoverArbeitnow(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(complete ? completeAudit() : incompleteAudit(errorMessage ?? 'incomplete', continuationCursor)),
     }],
     vacancies,
   };
@@ -742,6 +958,7 @@ export async function runFeedDiscovery(
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
   const runs = await Promise.all([
+    discoverRemotive(http, config),
     discoverWeWorkRemotely(http, config),
     discoverRemoteFirstJobs(http, config),
     discoverJobRemotely(http, config),
@@ -755,6 +972,7 @@ export async function runFeedDiscovery(
     discoverDevItJobsUk(http, config),
     discoverJobspresso(http, config),
     discoverRemoteFrontendJobs(http, config),
+    discoverUnCareers(http, config),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

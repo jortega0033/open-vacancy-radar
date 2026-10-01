@@ -1,0 +1,1 @@
+ALTER TABLE `cv_documents` ADD `source_cv` text;

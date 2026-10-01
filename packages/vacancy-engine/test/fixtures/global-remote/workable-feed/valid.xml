@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<source>
+  <publisher>Workable</publisher>
+  <publisherurl>https://www.workable.com</publisherurl>
+  <job>
+    <title><![CDATA[Senior Frontend Engineer – Café ☕]]></title>
+    <date>Sun, 29 Dec 2019 11:02:25 UTC</date>
+    <referencenumber><![CDATA[
+      FRONT123456
+    ]]></referencenumber>
+    <url><![CDATA[
+      https://apply.workable.com/j/FRONT123456
+    ]]></url>
+    <company><![CDATA[Example & Interfaces]]></company>
+    <city>Amsterdam</city>
+    <state>Noord-Holland</state>
+    <country>Netherlands</country>
+    <remote>true</remote>
+    <postalcode>1012</postalcode>
+    <description><![CDATA[<p>Build Angular & TypeScript interfaces — naïve café ☕.</p>]]></description>
+    <education>Bachelor's degree</education>
+    <jobtype>Full-time</jobtype>
+    <category>Engineering</category>
+    <experience>Senior</experience>
+    <website>https://example.test/careers</website>
+  </job>
+  <job>
+    <title>Senior Backend Engineer</title>
+    <date>Mon, 30 Dec 2019 12:03:26 UTC</date>
+    <referencenumber>BACK123456</referencenumber>
+    <url>https://apply.workable.com/j/BACK123456</url>
+    <company>Server Example</company>
+    <city>Remote</city>
+    <state></state>
+    <country>Worldwide</country>
+    <remote>true</remote>
+    <postalcode></postalcode>
+    <description><![CDATA[<p>Build APIs.</p>]]></description>
+    <education></education>
+    <jobtype>Full-time</jobtype>
+    <category>Engineering</category>
+    <experience>Senior</experience>
+    <website>https://server.example.test/jobs</website>
+  </job>
+</source>

@@ -15,4 +15,8 @@ describeProviderContract({
   },
   expectedAssistantText: 'hello from fixture',
   expectedProviderSessionId: 'claude-fixture-session-id',
+  // ADI-04. `promptViaStdin` mirrors providers/claude/adapter.ts; `fixtureSet` mirrors
+  // CLAUDE_LEGACY_COMPATIBILITY in providers/compatibility-manifest.ts.
+  promptViaStdin: true,
+  fixtureSet: 'claude-legacy-2.1.228-v1',
 });

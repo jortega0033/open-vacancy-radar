@@ -11,10 +11,12 @@ import type { Database } from '../db/client.js';
 
 export type AtsHttpSafeClient = Pick<SafeHttpClient, 'get' | 'postJson'>;
 
-export type DatabaseBackedAtsHttpClientDependencies = Omit<
-  SafeHttpClientDependencies,
-  'cache'
->;
+export type DatabaseBackedAtsHttpClientDependencies = Omit<SafeHttpClientDependencies, 'cache'>;
+
+export type DatabaseBackedHttpClients = Readonly<{
+  safeClient: SafeHttpClient;
+  atsClient: AtsHttpClient;
+}>;
 
 function toAtsResponse(response: SafeHttpResponse): AtsHttpResponse {
   return {
@@ -43,7 +45,29 @@ export function createAtsHttpClient(httpClient: AtsHttpSafeClient): AtsHttpClien
   };
 }
 
-/** Production composition root: shared safety policy plus persistent DB cache. */
+/** Production composition root exposing both views over one scheduler and safety policy. */
+export function createDatabaseBackedHttpClients(
+  config: Pick<
+    AppConfig,
+    | 'globalConcurrency'
+    | 'perDomainConcurrency'
+    | 'requestTimeoutMs'
+    | 'requestQueueTimeoutMs'
+    | 'maxResponseBytes'
+    | 'maxRetries'
+    | 'userAgent'
+  >,
+  database: Database,
+  dependencies: DatabaseBackedAtsHttpClientDependencies = {},
+): DatabaseBackedHttpClients {
+  const safeClient = createSafeHttpClient(config, {
+    ...dependencies,
+    cache: new DatabaseHttpCache(database),
+  });
+  return { safeClient, atsClient: createAtsHttpClient(safeClient) };
+}
+
+/** Backward-compatible ATS-only view of the shared production composition. */
 export function createDatabaseBackedAtsHttpClient(
   config: Pick<
     AppConfig,
@@ -58,9 +82,5 @@ export function createDatabaseBackedAtsHttpClient(
   database: Database,
   dependencies: DatabaseBackedAtsHttpClientDependencies = {},
 ): AtsHttpClient {
-  const safeClient = createSafeHttpClient(config, {
-    ...dependencies,
-    cache: new DatabaseHttpCache(database),
-  });
-  return createAtsHttpClient(safeClient);
+  return createDatabaseBackedHttpClients(config, database, dependencies).atsClient;
 }

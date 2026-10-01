@@ -2,12 +2,12 @@ import { useEffect, useRef } from 'react';
 import type { AgentRunStatus } from './useAgentRun.js';
 
 /**
- * The streaming answer surface, shared by both AI features. Structured like EventLog: a bordered,
- * fixed-height, scrolling region with `role="log"` so a screen reader announces additions, rather
- * than a growing block that pushes the buttons off-screen mid-answer.
+ * The streaming answer surface, shared by both AI features: a bordered, fixed-height, scrolling
+ * region with `role="log"` so a screen reader announces additions, rather than a growing block
+ * that pushes the buttons off-screen mid-answer.
  *
- * Every state is explicit and named — idle, working, streaming-but-not-done, done, failed,
- * cancelled — because "nothing visibly happening" is indistinguishable from "hung" otherwise.
+ * Every state is explicit and named: idle, working, streaming-but-not-done, done, failed,
+ * cancelled (because "nothing visibly happening" is indistinguishable from "hung" otherwise).
  * Monochrome throughout (see DESIGN-TOKENS.md): status is carried by weight, borders and opacity.
  */
 export interface AiOutputProps {
@@ -19,9 +19,12 @@ export interface AiOutputProps {
   /** What the spinner says while waiting, e.g. "Analysing your CV against this vacancy…" */
   busyLabel: string;
   label: string;
+  /** Display name of the CLI this run actually goes through, e.g. "Claude Code" or "Codex" (see
+   * `PROVIDER_LABEL`): the "starting" message names the real provider instead of assuming one. */
+  providerLabel: string;
 }
 
-export function AiOutput({ status, text, error, idleHint, busyLabel, label }: AiOutputProps) {
+export function AiOutput({ status, text, error, idleHint, busyLabel, label, providerLabel }: AiOutputProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isBusy = status === 'starting' || status === 'streaming';
 
@@ -36,7 +39,7 @@ export function AiOutput({ status, text, error, idleHint, busyLabel, label }: Ai
       {isBusy && (
         <div className="mb-3 flex items-center gap-3 text-sm text-base-content/70" role="status">
           <span className="loading loading-spinner loading-sm" aria-hidden="true" />
-          <span>{status === 'starting' ? 'Starting Claude Code…' : busyLabel}</span>
+          <span>{status === 'starting' ? `Starting ${providerLabel}…` : busyLabel}</span>
         </div>
       )}
 

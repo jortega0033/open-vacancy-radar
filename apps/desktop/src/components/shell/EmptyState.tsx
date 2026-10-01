@@ -5,12 +5,12 @@ export interface EmptyStateProps {
   description?: string;
   /** Local SVG URL. Rendered as a mask so its `currentColor` artwork follows every app theme. */
   illustration?: string;
-  /** Optional call to action — a button, a link, anything the caller wants under the copy. */
+  /** Optional call to action: a button, a link, anything the caller wants under the copy. */
   action?: ReactNode;
 }
 
 /**
- * The shared "nothing here (yet)" block: an empty table, an unrun search, and — for now — the
+ * The shared "nothing here (yet)" block: an empty table, an unrun search, and (for now) the
  * five destinations whose real content is separately scoped work.
  *
  * Its job is to say what the space is for, never to imply the app can do something it cannot.

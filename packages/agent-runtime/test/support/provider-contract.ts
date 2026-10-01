@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, ProviderCapabilities, ProviderId } from '@agent-dock/shared';
 import { noopLogger, type Logger } from '../../src/logger.js';
 import { runProviderSession, type ParsedLine } from '../../src/providers/common/run-session.js';
+import {
+  findProviderCompatibility,
+  LEGACY_ONE_SHOT_TRANSPORT_ID,
+} from '../../src/providers/compatibility-manifest.js';
 import type { StartSessionOptions } from '../../src/types.js';
 
 const fixturesDir = fileURLToPath(new URL('../fixtures', import.meta.url));
@@ -28,9 +32,9 @@ const TERMINAL_TYPES = new Set<AgentEvent['type']>(['session.completed', 'sessio
 
 export interface ProviderContractSpec {
   providerId: ProviderId;
-  /** The real, currently-declared capabilities for this provider — drives which sections run. */
+  /** The real, currently-declared capabilities for this provider: drives which sections run. */
   capabilities: ProviderCapabilities;
-  /** The adapter's real parser — this suite exercises actual normalization logic, not a stand-in. */
+  /** The adapter's real parser. This suite exercises actual normalization logic, not a stand-in. */
   parseLine: (raw: unknown, logger: Logger) => ParsedLine;
   /** The adapter's real argv builder, used only for the (process-free) resume assertion below. */
   buildArgs: (opts: StartSessionOptions) => string[];
@@ -40,6 +44,19 @@ export interface ProviderContractSpec {
   expectedAssistantText: string;
   /** The provider-native session/thread id the `success` fixture declares. */
   expectedProviderSessionId: string;
+  /**
+   * Names the conformance fixture corpus this provider is expected to satisfy, matching the
+   * `fixtureSet` on its `providers/compatibility-manifest.ts` entry (ADI-04). Optional so a
+   * provider with no manifest entry can still run this suite.
+   */
+  fixtureSet?: string;
+  /**
+   * Whether this adapter delivers the prompt over stdin rather than in argv (ADI-04). This is not
+   * cosmetic: it is the observable fact the provider's accepted-work boundary is derived from, so
+   * the suite both runs the fixtures the way the real adapter runs them and cross-checks the claim
+   * against the adapter's own argv builder.
+   */
+  promptViaStdin: boolean;
 }
 
 async function collect(events: AsyncGenerator<AgentEvent, void, void>): Promise<AgentEvent[]> {
@@ -51,13 +68,13 @@ async function collect(events: AsyncGenerator<AgentEvent, void, void>): Promise<
 /**
  * Baseline behavioral guarantees every provider adapter must uphold, run against the adapter's
  * *real* parser and argv construction (spawning a small `node` fixture script in place of the
- * real CLI binary — see providers.md#adding-a-new-provider). A future provider adapter can reuse
+ * real CLI binary. See providers.md#adding-a-new-provider). A future provider adapter can reuse
  * this by fixturing its own success/failure/hang scripts and calling `describeProviderContract`
  * with its real `parseLine`/`buildArgs`/`capabilities`.
  *
  * Lives under test/support rather than src/ deliberately: it's a vitest-coupled test helper, not
  * part of the package's public runtime API, so it isn't exported from index.ts or shipped to
- * consumers — a provider package outside this repo would copy the pattern, not import this file.
+ * consumers. A provider package outside this repo would copy the pattern, not import this file.
  */
 export function describeProviderContract(spec: ProviderContractSpec): void {
   describe(`provider contract: ${spec.providerId}`, () => {
@@ -78,6 +95,7 @@ export function describeProviderContract(spec: ProviderContractSpec): void {
           executableNames: [process.execPath],
           buildArgs: () => [join(fixturesDir, fixtureName)],
           parseLine: spec.parseLine,
+          promptViaStdin: spec.promptViaStdin,
         },
         { sessionId: 'contract-session', cwd, prompt: 'hello', ...overrides },
         noopLogger,
@@ -87,6 +105,28 @@ export function describeProviderContract(spec: ProviderContractSpec): void {
     it('declares a complete ProviderCapabilities shape', () => {
       for (const key of ['resume', 'cancellation', 'tools', 'usage', 'thinking'] as const) {
         expect(typeof spec.capabilities[key]).toBe('boolean');
+      }
+    });
+
+    describe('prompt delivery (ADI-04)', () => {
+      it('agrees with its own argv builder about whether the prompt travels in argv', () => {
+        // The single fact the accepted-work boundary is derived from, checked against the real
+        // builder rather than taken on trust from the spec: an adapter that moved its prompt into
+        // or out of argv without updating this would otherwise get a silently wrong boundary.
+        const prompt = 'a-distinctive-contract-prompt';
+        const argv = spec.buildArgs({ sessionId: 'contract-session', cwd, prompt });
+        expect(argv.some((arg) => arg.includes(prompt))).toBe(!spec.promptViaStdin);
+      });
+
+      if (spec.fixtureSet) {
+        it('names the fixture set its compatibility manifest entry declares', () => {
+          const entry = findProviderCompatibility(
+            spec.providerId,
+            spec.providerId === 'claude' ? '2.1.228' : '0.147.0',
+            LEGACY_ONE_SHOT_TRANSPORT_ID,
+          );
+          expect(entry?.fixtureSet).toBe(spec.fixtureSet);
+        });
       }
     });
 

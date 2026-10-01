@@ -49,7 +49,7 @@ function sseResponse(frames: string[], status = 200) {
   return { ok: status >= 200 && status < 300, status, headers: new Headers(), body, json: async () => ({}) } as Response;
 }
 
-describe('AgentDockClient — health / protocol compatibility', () => {
+describe('AgentDockClient: health / protocol compatibility', () => {
   it('resolves health() when the daemon reports a matching protocol version', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(healthOk());
     const client = makeClient(fetchImpl);
@@ -99,7 +99,47 @@ describe('AgentDockClient — health / protocol compatibility', () => {
   });
 });
 
-describe('AgentDockClient — transport and auth errors', () => {
+describe('AgentDockClient: policy-gated MCP API', () => {
+  it('uses fixed MCP routes and validates statuses returned by the daemon', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return jsonResponse(200, { providers: [{
+        providerId: 'approved', enabled: true, connectionEnabled: true, searchEnabled: true,
+        persistenceEnabled: true, connected: false, credentialConfigured: true,
+      }] });
+    });
+    const statuses = await makeClient(fetchImpl).mcp.statuses();
+    expect(statuses[0]?.providerId).toBe('approved');
+    expect(fetchImpl).toHaveBeenLastCalledWith(`${BASE_URL}/mcp/providers`, expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${TOKEN}` }),
+    }));
+  });
+
+  it('rejects arbitrary native provider fields before sending a search', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(healthOk());
+    const client = makeClient(fetchImpl);
+    await expect(client.mcp.search({
+      providerId: 'approved', query: 'frontend', limit: 10, serverUrl: 'https://attacker.test',
+    } as never)).rejects.toThrow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('validates normalized MCP results and rejects extra secret fields', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return jsonResponse(200, { results: [{
+        externalId: '1', title: 'Engineer', company: 'Example', url: 'https://jobs.example.test/1',
+        location: 'Remote', description: null, employmentType: null, publishedAt: null,
+        providerId: 'approved', sourceUrl: 'https://jobs.example.test', attribution: 'Example jobs',
+        policyVersion: '1', policyReviewedAt: '2026-08-30', fetchedAt: '2026-08-30T10:00:00.000Z',
+        expiresAt: '2026-08-31T10:00:00.000Z', credential: 'must-not-cross',
+      }] });
+    });
+    await expect(makeClient(fetchImpl).mcp.search({ providerId: 'approved', query: 'frontend', limit: 10 })).rejects.toThrow();
+  });
+});
+
+describe('AgentDockClient: transport and auth errors', () => {
   it('throws DaemonUnavailableError when fetch itself rejects (connection refused)', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
     const client = makeClient(fetchImpl);
@@ -139,7 +179,7 @@ describe('AgentDockClient — transport and auth errors', () => {
   });
 });
 
-describe('AgentDockClient — providers', () => {
+describe('AgentDockClient: providers', () => {
   it('lists providers', async () => {
     const provider = { id: 'claude', name: 'Claude Code', installed: true, authenticated: 'authenticated', capabilities: CAPS };
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
@@ -170,7 +210,7 @@ describe('AgentDockClient — providers', () => {
   });
 });
 
-describe('AgentDockClient — sessions', () => {
+describe('AgentDockClient: sessions', () => {
   const session = {
     id: '123e4567-e89b-12d3-a456-426614174000',
     provider: 'claude',
@@ -195,6 +235,40 @@ describe('AgentDockClient — sessions', () => {
     const client = makeClient(fetchImpl);
     await expect(client.sessions.create({ provider: 'claude', cwd: '', prompt: 'hi' } as never)).rejects.toThrow();
     expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions'))).toBe(false);
+  });
+
+  it('creates a field-map generation session against its own dedicated route (#201)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      if (url.endsWith('/sessions/application-field-map')) return jsonResponse(201, session);
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = makeClient(fetchImpl);
+    await expect(
+      client.sessions.createFieldMapGeneration({ provider: 'claude', cwd: '/tmp', prompt: 'map these fields' }),
+    ).resolves.toEqual(session);
+    // Never the plain /sessions route -- that would get the "hardened: true" profile, not
+    // "no-network" (see apps/daemon/src/routes/application-generation.ts).
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions') && !String(url).includes('application-field-map'))).toBe(
+      false,
+    );
+  });
+
+  it('creates a vacancy-web-discovery session against its own dedicated route (#398)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      if (url.endsWith('/sessions/vacancy-web-discovery')) return jsonResponse(201, session);
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = makeClient(fetchImpl);
+    await expect(
+      client.sessions.createVacancyWebDiscovery({ provider: 'claude', cwd: '/tmp', prompt: 'search for frontend vacancies' }),
+    ).resolves.toEqual(session);
+    // Never the plain /sessions route -- that would get the "hardened: true" profile, not
+    // "web-only" (see apps/daemon/src/routes/vacancy-web-discovery.ts).
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions') && !String(url).includes('vacancy-web-discovery'))).toBe(
+      false,
+    );
   });
 
   it('throws SessionNotFoundError for a 404 on sessions.get', async () => {
@@ -237,7 +311,7 @@ describe('AgentDockClient — sessions', () => {
   });
 });
 
-describe('AgentDockClient — SSE event streaming', () => {
+describe('AgentDockClient: SSE event streaming', () => {
   it('yields validated events and ends the iteration at the terminal event', async () => {
     const frames = [
       `data: ${JSON.stringify({ type: 'session.started', sessionId: 's1', provider: 'claude', sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' })}\n\n`,
@@ -293,6 +367,40 @@ describe('AgentDockClient — SSE event streaming', () => {
     expect(collected).toHaveLength(1); // the one valid event before the malformed one
   });
 
+  it('throws ValidationError on a single frame exceeding the byte ceiling, defense in depth against a daemon that does not enforce it (ADI-17)', async () => {
+    const oversized = `data: ${JSON.stringify({ type: 'assistant.message', text: 'x'.repeat(1_100_000), sequence: 0, timestamp: '2026-01-01T00:00:00.000Z' })}\n\n`;
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return sseResponse([oversized]);
+    });
+    const client = makeClient(fetchImpl);
+
+    const collected: AgentEventEnvelope[] = [];
+    await expect(
+      (async () => {
+        for await (const event of client.sessions.events('s1')) collected.push(event);
+      })(),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(collected).toHaveLength(0);
+  });
+
+  it('throws ValidationError on a frame that never terminates, instead of buffering it without limit (ADI-17)', async () => {
+    // No `\n\n` anywhere in this chunk -- exactly the "daemon never closes the frame" failure mode
+    // the client-side cap exists to bound.
+    const neverTerminated = `data: ${'x'.repeat(1_100_000)}`;
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      return sseResponse([neverTerminated]);
+    });
+    const client = makeClient(fetchImpl);
+
+    await expect(async () => {
+      for await (const _event of client.sessions.events('s1')) {
+        // no-op
+      }
+    }).rejects.toBeInstanceOf(ValidationError);
+  });
+
   it('throws SessionNotFoundError when opening the stream for an unknown session', async () => {
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/health')) return healthOk();
@@ -315,7 +423,7 @@ describe('AgentDockClient — SSE event streaming', () => {
         err.name = 'AbortError';
         throw err;
       }
-      // Never resolves on its own — only aborting ends this.
+      // Never resolves on its own: only aborting ends this.
       return new Promise<Response>(() => {});
     });
     const client = makeClient(fetchImpl);
@@ -324,5 +432,38 @@ describe('AgentDockClient — SSE event streaming', () => {
     const collected = [];
     for await (const event of client.sessions.events('s1', { signal: controller.signal })) collected.push(event);
     expect(collected).toEqual([]);
+  });
+});
+
+describe('AgentDockClient: baseUrl normalization (CodeQL js/polynomial-redos regression)', () => {
+  it('strips exactly the trailing slashes, however many, without a regex', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = new AgentDockClient({ baseUrl: `${BASE_URL}///`, token: TOKEN, fetch: fetchImpl });
+    await client.health();
+    expect(fetchImpl).toHaveBeenCalledWith(`${BASE_URL}/health`);
+  });
+
+  it('leaves a baseUrl with no trailing slash untouched', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = new AgentDockClient({ baseUrl: BASE_URL, token: TOKEN, fetch: fetchImpl });
+    await client.health();
+    expect(fetchImpl).toHaveBeenCalledWith(`${BASE_URL}/health`);
+  });
+
+  it('completes instantly even on a pathologically long run of trailing slashes', () => {
+    // The regex this replaced (`/\/+$/`) is exactly the quantifier-at-anchor shape CodeQL's
+    // polynomial-ReDoS query flags on unbounded input. A backward character scan can't backtrack at
+    // all, so this input size finishing well under the test timeout is itself the regression proof.
+    const pathological = `${BASE_URL}${'/'.repeat(200_000)}`;
+    const start = performance.now();
+    const client = new AgentDockClient({ baseUrl: pathological, token: TOKEN, fetch: vi.fn() });
+    expect(performance.now() - start).toBeLessThan(50);
+    expect(client).toBeInstanceOf(AgentDockClient);
   });
 });

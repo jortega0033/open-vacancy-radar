@@ -4,7 +4,7 @@ export const PROVIDER_IDS = ['claude', 'codex'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /**
- * Deliberately a pure string union with no boolean member (AD-13) — the previous
+ * Deliberately a pure string union with no boolean member (AD-13): the previous
  * `boolean | 'unknown'` shape let a lazy `if (status.authenticated)` silently treat "couldn't
  * determine" as "authenticated", which is exactly backwards for a security-relevant signal.
  * There is no member here a naive truthiness check would get right by accident: every consumer
@@ -13,13 +13,23 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type AuthStatus = 'authenticated' | 'unauthenticated' | 'unknown';
 
 /**
- * What an AgentDock adapter actually does for a provider — not a marketing claim about the
+ * Which credential an authenticated CLI session is actually using, when the CLI's own status
+ * output distinguishes it. Only Codex's `login status` reports this today (`'chatgpt'` vs.
+ * `'api_key'`) -- Claude's own status output has no equivalent distinction, so `ProviderStatus`
+ * leaves `authSource` absent for Claude rather than guessing. `'unknown'` is a real, conservative
+ * value (matching `AuthStatus`'s own philosophy): it means the CLI reported *some* authenticated
+ * state but the source text didn't match a recognized pattern, never a guess dressed up as a fact.
+ */
+export type AuthSource = 'chatgpt' | 'api_key' | 'unknown';
+
+/**
+ * What an AgentDock adapter actually does for a provider, not a marketing claim about the
  * underlying model. A capability is `true` only if this codebase's adapter reliably implements
  * and normalizes that behavior today; if support is flaky, partial, or untested, it's `false` or
  * simply absent. This is what lets a downstream client render "supports resume" / show a cancel
  * button / expect usage numbers without ever writing `if (provider.id === 'claude')`.
  *
- * Every known key is optional (AD-15) — **absent means unsupported**, exactly like `false` — so
+ * Every known key is optional (AD-15): **absent means unsupported**, exactly like `false`, so
  * adding a 6th capability later doesn't break a client built against today's five-key shape (see
  * `providerCapabilitiesSchema`'s `.catchall`). The index signature lets a future capability this
  * repo hasn't named yet still round-trip through a client one version behind, rather than being
@@ -36,12 +46,49 @@ export interface ProviderCapabilities {
   usage?: boolean;
   /** Does the adapter surface CLI-exposed reasoning as `thinking.delta` (only when the CLI itself makes it public)? */
   thinking?: boolean;
+  /**
+   * Does the adapter implement `AgentProvider.fetchModelCatalog()` (ADI-22a,
+   * `packages/agent-runtime/src/types.ts`) -- a live, RPC/SDK-backed model catalog, not the static
+   * `availableModels` array on this same status? Codex's app-server transport is the first (and,
+   * in this ticket, only) implementation; Claude's stays absent until #144.
+   */
+  modelCatalog?: boolean;
+  /**
+   * Does this adapter actually *implement* the `'no-network'` hardening profile
+   * (`StartSessionOptions.hardened` in `packages/agent-runtime/src/types.ts`) -- a reviewed,
+   * non-customizable argv that drops `WebFetch`/`WebSearch` from the CLI's tool allowlist?
+   *
+   * This is the same kind of statement every other key here makes: what the *adapter* does, never
+   * what the model is capable of. `hardened` is documented as a request, not a contract, and an
+   * adapter with nothing to restrict is free to ignore it -- Codex's `buildCodexArgs` does, by
+   * design and permanently. So "the caller asked for `'no-network'`" and "the session actually got
+   * the restrictions" are two different facts, and this key is the only machine-readable way to
+   * tell them apart without writing `if (provider.id === 'claude')` somewhere outside
+   * `packages/agent-runtime`.
+   *
+   * Added by issue #284 so the stage router (`packages/agent-runtime/src/policy/stage-routing`)
+   * can refuse to *select* a provider for a stage whose contract requires this profile. It is
+   * deliberately **not** what enforces that restriction at the daemon boundary:
+   * `POST /sessions/application-field-map` keeps its own literal provider check, which exists
+   * precisely so the guarantee does not rest on every current and future adapter declaring this
+   * flag honestly. Selection and enforcement are two independent layers, on purpose.
+   */
+  hardenedNoNetwork?: boolean;
+  /**
+   * Can `StartSessionOptions.attachments` be delivered to the CLI with the initial prompt (port of
+   * agentdock#152/#153)? `true` only for a provider whose adapter has a verified attachment-delivery
+   * mechanism -- Claude: a `document`/`image` content block via `--input-format stream-json`; Codex:
+   * `-i/--image <path>` argv, and only on its `'exec'` transport (see `codex/adapter.ts`). See each
+   * provider's own `capabilities.ts` for the exact MIME types its `getAttachmentMimeTypes()`
+   * (`packages/agent-runtime/src/types.ts`) accepts -- this flag is only the boolean gate.
+   */
+  attachments?: boolean;
   [futureCapability: string]: boolean | undefined;
 }
 
 /**
  * Point-in-time read of whether a provider CLI is usable. `authenticated: 'unknown'` must never
- * be treated as `'authenticated'` by callers — it means the daemon could not determine auth state
+ * be treated as `'authenticated'` by callers: it means the daemon could not determine auth state
  * (e.g. the CLI has no machine-readable status command, or the check errored) and the user should
  * be routed to the CLI's own login flow to find out.
  */
@@ -57,4 +104,7 @@ export interface ProviderStatus {
   /** Provider-native model ids/aliases this adapter will pass through as-is. Absent means the
    * provider has no selectable model (it always uses its CLI's own default). */
   availableModels?: string[];
+  /** See `AuthSource`'s own doc comment. Absent for a provider whose CLI reports no such
+   * distinction, or when `authenticated` is not `'authenticated'`. */
+  authSource?: AuthSource;
 }

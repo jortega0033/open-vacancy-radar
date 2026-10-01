@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import type { Market, SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import type { SavedJobInput, SavedJobRecord, SavedJobStatus } from '../../window.js';
+import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
 
 export interface SavedJobDrawerProps {
@@ -16,7 +17,6 @@ export interface SavedJobDrawerProps {
 interface FormState {
   role: string;
   company: string;
-  market: Market;
   location: string;
   salary: string;
   arrangement: string;
@@ -30,7 +30,6 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   return {
     role: job?.role ?? '',
     company: job?.company ?? '',
-    market: job?.market ?? 'netherlands',
     location: job?.location ?? '',
     salary: job?.salary ?? '',
     arrangement: job?.arrangement ?? '',
@@ -41,22 +40,29 @@ function toFormState(job: SavedJobRecord | undefined): FormState {
   };
 }
 
-/** Empty string on an optional free-text field means "not set" — send `null`, not `''`. */
+/** Empty string on an optional free-text field means "not set": send `null`, not `''`. */
 function blankToNull(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
 }
 
+/** Same shape as `SavedJobsTable`'s: a plain local date, falling back to the raw value. */
+function formatKeptAt(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+}
+
 /**
  * Right-side add/edit drawer for a saved job, per the prototype's `EntityEditorDrawer`
  * (`export-src.html` Saved Jobs row "Edit" action / "Add job manually" button). A plain fixed
- * panel with a Tailwind slide-in transition — no drawer library needed for one form.
+ * panel with a Tailwind slide-in transition. No drawer library is needed for one form.
  *
  * Mounted only while a drawer is open (see `SavedJobsPage`), keyed by the job id so switching
  * between "add" and "edit" (or between two different rows) always starts from a fresh form
  * instead of carrying over stale field values.
  */
 export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJobDrawerProps) {
+  useEscapeToClose(onClose);
   const [form, setForm] = useState<FormState>(() => toFormState(job));
   const [validationError, setValidationError] = useState<string>();
 
@@ -76,7 +82,6 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
     onSave({
       role: form.role.trim(),
       company: form.company.trim(),
-      market: form.market,
       location: form.location.trim(),
       salary: blankToNull(form.salary),
       arrangement: blankToNull(form.arrangement),
@@ -127,18 +132,6 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               value={form.company}
               onChange={(e) => set('company', e.target.value)}
             />
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium">Market</span>
-            <select
-              className="select w-full"
-              value={form.market}
-              onChange={(e) => set('market', e.target.value as Market)}
-            >
-              <option value="netherlands">Netherlands</option>
-              <option value="worldwide">Worldwide</option>
-            </select>
           </label>
 
           <label className="block">
@@ -221,6 +214,33 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
             />
           </label>
 
+          {/*
+            The kept gap analysis, when there is one. Read-only and outside the form's `FormState`
+            on purpose: this is generated output the user chose to keep, not a field of the job,
+            and the drawer's Save must never rewrite it. It is left out of `SavedJobInput` here, so
+            `parseSavedJobPatch` sees no `gapAnalysis` key and the stored text survives an edit
+            untouched. Rendered like `AiOutput`'s answer surface (bordered, scrolling, wrapped)
+            rather than as a textarea, for the same reason.
+          */}
+          {job?.gapAnalysis && (
+            <section className="block" aria-label="Saved gap analysis">
+              <span className="mb-1 block text-sm font-medium">
+                Gap analysis
+                {job.gapAnalysisAt && (
+                  <span className="ml-2 font-normal text-base-content/60">
+                    saved {formatKeptAt(job.gapAnalysisAt)}
+                  </span>
+                )}
+              </span>
+              <div className="rounded-box max-h-64 overflow-y-auto border border-base-300 bg-base-100 p-3 text-sm leading-relaxed whitespace-pre-wrap">
+                {job.gapAnalysis}
+              </div>
+              <p className="mt-1 text-xs text-base-content/60">
+                Kept on this computer. Deleting this saved job deletes it too.
+              </p>
+            </section>
+          )}
+
           {validationError && (
             <p className="text-sm text-error" role="alert">
               {validationError}
@@ -237,7 +257,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               Cancel
             </button>
             <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
-              {saving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+              {saving && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}
               Save
             </button>
           </div>

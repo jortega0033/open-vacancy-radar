@@ -1,29 +1,118 @@
+import type { Logger } from '@agent-dock/agent-runtime';
 import { createConsoleLogger } from '@agent-dock/agent-runtime';
+import { DAEMON_EXIT_CODE_LOCK_CONFLICT } from '@agent-dock/shared';
 import { generateToken } from './auth-token.js';
 import {
   DEFAULT_APP_ID,
+  DaemonLockConflictError,
   assertNoLiveDaemon,
   discoveryFilePath,
   removeDiscoveryFile,
   writeDiscoveryFile,
 } from './discovery-file.js';
 import { buildProviderRegistry } from './providers.js';
-import { buildServer } from './server.js';
+import { buildServer, type BuildServerV2Options } from './server.js';
 import { SessionManager } from './session-manager.js';
+import { ActiveSessionLimiter } from './active-session-limiter.js';
+import { openDurableStore } from './open-durable-store.js';
+import { openAttachmentStore } from './open-attachment-store.js';
+import { openApplicationQueueStore } from './open-application-queue-store.js';
+import { openWorkspaceStores } from './open-workspace-stores.js';
+import { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
+import type { McpCredentialStore } from './mcp/types.js';
+import { OsMcpCredentialStore } from './mcp/credential-store.js';
+import { McpConnectionManager } from './mcp/manager.js';
+import { McpSdkConnectorFactory } from './mcp/sdk-connector.js';
+import { infosecJobBoardMcpPolicy } from './mcp/providers/infosec-job-board.js';
+
+/**
+ * Extracted from `main()` so the reviewed-policy allowlist below can be asserted against the real,
+ * constructed manager (`buildMcpManager(...).providerIds()`) rather than pinned by matching the
+ * source text of `main()` itself, which a harmless refactor (renaming an inline array into a named
+ * constant, reordering constructor args) could silently defeat without the invariant actually
+ * changing. See apps/daemon/test/index.test.ts and
+ * docs/adr-agentdock-v2-provenance.md#the-mcp-foundation-ships-dormant-on-purpose.
+ *
+ * The registry started life empty on purpose: "provider-specific policies (starting with #29) will
+ * inject an `OAuthClientProvider` here, and keeping the registry empty until then means an OAuth
+ * server can never be contacted before its redirect URI, PKCE/token persistence, terms, tool, and
+ * retention policy have all been reviewed together." InfoSec Job Board (#48) is the first policy
+ * added to it -- and, being a no-auth (`transport.auth: 'none'`) public MCP server, it needs no
+ * `OAuthClientProvider` at all, so it carries none of the OAuth-onboarding risk that invariant was
+ * guarding against. Every other item in `docs/mcp-source-policy.md`'s "required review record"
+ * (source URL, attribution, terms/policy version, review date, retention, the two allowlisted
+ * tools, fixed argument mappers, strict output parsers, a payload limit, a timeout, and independent
+ * kill switches) was reviewed for it in #48; see `mcp/providers/infosec-job-board.ts` for that
+ * record and `docs/mcp-source-policy.md`'s provider-decision table for the tracking entry. A future
+ * OAuth-requiring provider (#29 Upwork and later) still injects its `OAuthClientProvider` here, and
+ * still must not be added except as its own explicit, reviewed change to this function's body.
+ */
+export function buildMcpManager(mcpCredentials: McpCredentialStore, logger: Logger): McpConnectionManager {
+  return new McpConnectionManager(
+    [infosecJobBoardMcpPolicy],
+    new McpSdkConnectorFactory(mcpCredentials),
+    mcpCredentials,
+    logger,
+  );
+}
 
 async function main() {
   const logger = createConsoleLogger('daemon', process.env.AGENT_DOCK_LOG_LEVEL === 'debug' ? 'debug' : 'info');
   // Namespaces the discovery rendezvous per application (AD-02) so two different products built
   // on this boilerplate can each run their own daemon at once instead of colliding on one
-  // machine-global path. The reference desktop app never sets this — it only matters for a fork
+  // machine-global path. The reference desktop app never sets this. It only matters for a fork
   // that wants to coexist with another AgentDock-based app on the same machine.
   const appId = process.env.AGENT_DOCK_APP_ID?.trim() || DEFAULT_APP_ID;
   assertNoLiveDaemon(appId);
   const registry = buildProviderRegistry(logger);
-  const sessionManager = new SessionManager(registry, logger);
+  const limiter = new ActiveSessionLimiter();
+  const durable = openDurableStore(appId, logger);
+  // ADI-29. Independent of `durable` above in the same way `applicationQueue` is: opening it does
+  // not require the durable session store to exist, so it is opened unconditionally.
+  const attachments = openAttachmentStore(appId, logger);
+  // #200. Independent of `durable` above -- it needs no session/workspace collaborators -- so it
+  // is opened unconditionally rather than only when the session store is available.
+  const applicationQueue = openApplicationQueueStore(appId, logger);
+  // ADI-06. Opened before the session manager because the manager takes the trust store as a
+  // collaborator: `workspaceIsTrusted` has to read the same store the routes write, or a revocation
+  // would be visible to one and not the other.
+  const workspaceStores = openWorkspaceStores(appId, logger);
+  // ADI-13. One instance, shared between the session manager (which releases every lease, at its two
+  // terminal-cleanup sites) and the create route (which acquires them). Two instances would be two
+  // disjoint lease tables: acquisition would succeed, release would find nothing, and the user's
+  // folder would be write-locked for the daemon's whole lifetime after its first session.
+  const leaseManager = new WorkspaceExecutionLeaseManager();
+  const sessionManager = new SessionManager(
+    registry,
+    logger,
+    undefined,
+    limiter,
+    durable,
+    workspaceStores ? { trustStore: workspaceStores.trustStore } : undefined,
+    leaseManager,
+    attachments,
+  );
   const token = generateToken();
+  const mcpCredentials = new OsMcpCredentialStore();
+  const mcpManager = buildMcpManager(mcpCredentials, logger);
 
-  const app = buildServer({ registry, sessionManager, token, logger });
+  const v2: BuildServerV2Options | undefined = durable
+    ? {
+        store: durable,
+        limiter,
+        ...(attachments ? { attachments } : {}),
+        ...(workspaceStores ? { workspace: { ...workspaceStores, leaseManager } } : {}),
+      }
+    : undefined;
+  const app = buildServer({
+    registry,
+    sessionManager,
+    token,
+    logger,
+    mcpManager,
+    ...(v2 ? { v2 } : {}),
+    ...(applicationQueue ? { applicationQueue } : {}),
+  });
 
   const requestedPort = Number(process.env.AGENT_DOCK_PORT ?? '0');
   await app.listen({ port: requestedPort, host: '127.0.0.1' });
@@ -40,6 +129,10 @@ async function main() {
     shuttingDown = true;
     logger.info('shutting down', { signal });
     await sessionManager.cancelAll();
+    // Closed before the server stops accepting requests finishes unwinding: a trust decision that
+    // arrives during shutdown must be refused, not recorded by a daemon that is about to vanish.
+    workspaceStores?.auditStore.close('the daemon is shutting down');
+    await mcpManager.close();
     await app.close();
     removeDiscoveryFile(appId);
     process.exit(0);
@@ -51,7 +144,11 @@ async function main() {
 
 main().catch((err) => {
   console.error('daemon failed to start:', err instanceof Error ? err.message : err);
-  process.exit(1);
+  // A lock conflict gets its own exit code so the parent process (apps/desktop/electron/main.ts)
+  // can tell "another instance already owns this app id, and is reachable" apart from a genuine
+  // startup failure, using only this process's exit code -- see
+  // `DAEMON_EXIT_CODE_LOCK_CONFLICT`'s own comment for why that's the only contract available.
+  process.exit(err instanceof DaemonLockConflictError ? DAEMON_EXIT_CODE_LOCK_CONFLICT : 1);
 });
 
 export { discoveryFilePath };

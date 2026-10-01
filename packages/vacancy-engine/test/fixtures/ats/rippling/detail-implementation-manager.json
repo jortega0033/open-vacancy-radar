@@ -1,0 +1,18 @@
+{
+  "uuid": "c3fe4961-2d04-4093-b05b-e916b0873463",
+  "name": "Implementation Manager, Strategic Workforce Planning",
+  "description": {
+    "company": "<p>Acme is the global leader in workforce intelligence.</p>",
+    "role": "<p>We're looking for an experienced Implementation Manager to lead end-to-end delivery.</p><ul><li>EMEA-based role supporting global clients</li></ul>"
+  },
+  "workLocations": ["London, United Kingdom", "Germany"],
+  "department": { "name": "GTM", "base_department": "GTM", "department_tree": ["GTM"] },
+  "employmentType": { "label": "SALARIED_FT", "id": "Salaried, full-time" },
+  "createdOn": "2026-07-29T08:11:25.316000-07:00",
+  "url": "https://ats.rippling.com/acme-careers/jobs/c3fe4961-2d04-4093-b05b-e916b0873463",
+  "board": { "boardType": "RIPPLING", "slug": "acme-careers", "companyName": "Acme" },
+  "payRangeDetails": [],
+  "companyName": "Acme",
+  "unlistedFromSearch": false,
+  "jsonLd": null
+}

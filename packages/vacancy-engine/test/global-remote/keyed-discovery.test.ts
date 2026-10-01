@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { AtsHttpResponse } from '../../src/ats/http.js';
 import { runKeyedDiscovery } from '../../src/global-remote/keyed-discovery.js';
 import type { GlobalRemoteConfig } from '../../src/global-remote/models.js';
+import {
+  NAV_ARBEIDSPLASSEN_FEED_URL,
+  navArbeidsplassenEntryUrl,
+} from '../../src/global-remote/nav-arbeidsplassen-discovery.js';
 import { FixtureHttpClient, jsonPostFixtureKey } from '../ats/helpers.js';
 
 function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): GlobalRemoteConfig {
@@ -10,6 +14,7 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
     version: 'test',
     minimumAnnualBaseUsd: 100_000,
     discovery: {
+      roleQuery: 'frontend',
       himalayasQueries: ['frontend'],
       himalayasCountry: 'NL',
       himalayasMaxPagesPerQuery: 1,
@@ -22,6 +27,11 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       jobRemotelyMaxPages: 1,
       arbeitnowMaxPages: 1,
       diceMaxPages: 1,
+      remooteRoleTitle: 'frontend',
+      remooteCountry: 'Netherlands',
+      remooteLimit: 10,
+      aiDevJobsMaxPages: 1,
+      taiwanJobsMaxCities: 1,
       museEnabled: false,
       museMaxPages: 1,
       adzunaAppId: '',
@@ -30,19 +40,22 @@ function config(overrides: Partial<GlobalRemoteConfig['discovery']> = {}): Globa
       joobleApiKey: '',
       reedApiKey: '',
       jobspipeApiKey: '',
+      atsRosterConcurrency: 1,
+      navArbeidsplassenApiKey: '',
+      navArbeidsplassenMaxPages: 1,
       ...overrides,
     },
     officialSources: [],
   };
 }
 
-const ADZUNA_URL = 'https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id=test-id&app_key=test-key&content-type=application%2Fjson&what=frontend+developer&results_per_page=50';
+const ADZUNA_URL = 'https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id=test-id&app_key=test-key&content-type=application%2Fjson&what=frontend&results_per_page=50';
 const JOOBLE_URL = 'https://jooble.org/api/test-jooble-key';
-const JOOBLE_BODY = { keywords: 'frontend developer', location: 'remote' };
-const REED_URL = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend+developer&resultsToTake=100';
+const JOOBLE_BODY = { keywords: 'frontend', location: 'remote' };
+const REED_URL = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend&resultsToTake=100';
 const JOBSPIPE_URL = 'https://api.jobspipe.dev/v1/jobs/search';
 const JOBSPIPE_BODY = {
-  job_title_or: ['frontend developer', 'frontend engineer', 'frontend architect'],
+  job_title_or: ['frontend'],
   remote: true,
   posted_at_max_age_days: 30,
   limit: 25,
@@ -72,6 +85,7 @@ describe('keyed discovery sources (configuration-required until a project key is
           salary_min: 65000,
           salary_max: 80000,
           contract_time: 'full_time',
+          created: '2026-08-05T00:00:00Z',
           redirect_url: 'https://www.adzuna.co.uk/jobs/details/adz-1',
         }],
       })],
@@ -99,6 +113,7 @@ describe('keyed discovery sources (configuration-required until a project key is
           minimumSalary: 60000,
           maximumSalary: 75000,
           currency: 'GBP',
+          date: '25/08/2026',
           jobUrl: 'https://www.reed.co.uk/jobs/frontend-developer/901',
           jobDescription: 'Build accessible web interfaces.',
         }],
@@ -134,13 +149,15 @@ describe('keyed discovery sources (configuration-required until a project key is
     expect(result.sources.every((source) => source.status === 'success')).toBe(true);
     expect(result.vacancies).toHaveLength(4);
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'adzuna'))
-      .toMatchObject({ company: 'Adzuna Co', location: 'London, UK', decision: 'location_restricted' });
+      .toMatchObject({ company: 'Adzuna Co', location: 'London, UK', decision: 'location_restricted', postedAt: '2026-08-05T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jooble'))
-      .toMatchObject({ company: 'Jooble Co', location: 'Worldwide', decision: 'official_review_candidate' });
+      .toMatchObject({ company: 'Jooble Co', location: 'Worldwide', decision: 'official_review_candidate', postedAt: '2026-08-01T00:00:00.000Z' });
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'reed'))
-      .toMatchObject({ company: 'Reed Co', location: 'London', decision: 'location_restricted' });
+      .toMatchObject({ company: 'Reed Co', location: 'London', decision: 'location_restricted', postedAt: '2026-08-25T00:00:00.000Z' });
+    // Regression for the mislabeled-description bug: `seniority` (a level label, not prose) must
+    // never be passed off as the job description -- it should read as genuinely absent.
     expect(result.vacancies.find((vacancy) => vacancy.provider === 'jobspipe'))
-      .toMatchObject({ company: 'JobsPipe Co', location: 'Worldwide', decision: 'salary_unverified' });
+      .toMatchObject({ company: 'JobsPipe Co', location: 'Worldwide', decision: 'salary_unverified', description: null });
   });
 
   it('sends the Reed API key as a Basic auth header and isolates a blocked Jooble response', async () => {
@@ -160,5 +177,67 @@ describe('keyed discovery sources (configuration-required until a project key is
       .toMatchObject({ status: 'blocked', requests: 1, listings: 0 });
     expect(result.sources.find((source) => source.provider === 'reed'))
       .toMatchObject({ status: 'success', listings: 0 });
+  });
+
+  it('only runs NAV Arbeidsplassen once its bearer token is configured', async () => {
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const feedBody = JSON.stringify({
+      version: 'https://jsonfeed.org/version/1',
+      title: 'Arbeidsplassen.no - Stillingsannonser',
+      home_page_url: 'https://arbeidsplassen.nav.no',
+      feed_url: NAV_ARBEIDSPLASSEN_FEED_URL,
+      description: 'Offentlig feed av stillingsannonser fra Arbeidsplassen.no',
+      next_url: null,
+      id: '22222222-0000-4000-8000-000000000001',
+      next_id: null,
+      items: [{
+        id: uuid,
+        url: `https://arbeidsplassen.nav.no/stillinger/stilling/${uuid}`,
+        title: 'Frontend Developer',
+        content_text: 'Frontend Developer at Nordic Product AS',
+        date_modified: '2026-08-20T09:00:00Z',
+        _feed_entry: { uuid, status: 'ACTIVE', title: 'Frontend Developer', businessName: 'Nordic Product AS', municipal: 'Oslo', sistEndret: '2026-08-20T09:00:00Z' },
+      }],
+    });
+    const detailBody = JSON.stringify({
+      uuid,
+      sistEndret: '2026-08-20T09:00:00Z',
+      status: 'ACTIVE',
+      ad_content: {
+        uuid,
+        published: '2026-08-15T08:00:00Z',
+        expires: '2099-01-01T00:00:00Z',
+        updated: '2026-08-20T09:00:00Z',
+        workLocations: [{ country: 'Norway', city: 'Oslo', municipal: 'Oslo', county: 'Oslo' }],
+        contactList: [{ name: 'Kari Nordmann', email: 'kari@example.invalid', phone: '12345678', role: 'Recruiter' }],
+        title: 'Frontend Developer',
+        description: 'Build UI in Oslo.',
+        applicationUrl: 'https://nordicproduct.example/apply',
+        occupationCategories: [],
+        categoryList: [],
+        link: `https://arbeidsplassen.nav.no/stillinger/stilling/${uuid}`,
+        employer: { name: 'Nordic Product AS' },
+        engagementtype: 'Fast',
+        extent: 'Heltid',
+      },
+    });
+
+    const noKey = await runKeyedDiscovery(new FixtureHttpClient(new Map()), config());
+    expect(noKey.sources.find((source) => source.provider === 'nav_arbeidsplassen')).toBeUndefined();
+
+    const routes = new Map<string, string | AtsHttpResponse>([
+      [NAV_ARBEIDSPLASSEN_FEED_URL, feedBody],
+      [navArbeidsplassenEntryUrl(uuid), detailBody],
+    ]);
+    const withKey = await runKeyedDiscovery(
+      new FixtureHttpClient(routes),
+      config({ navArbeidsplassenApiKey: 'test-nav-key', navArbeidsplassenMaxPages: 1 }),
+    );
+
+    expect(withKey.sources.find((source) => source.provider === 'nav_arbeidsplassen'))
+      .toMatchObject({ status: 'success', listings: 1 });
+    expect(withKey.vacancies.find((vacancy) => vacancy.provider === 'nav_arbeidsplassen'))
+      .toMatchObject({ company: 'Nordic Product AS', location: 'Oslo, Norway, Europe' });
+    expect(JSON.stringify(withKey)).not.toContain('Kari Nordmann');
   });
 });

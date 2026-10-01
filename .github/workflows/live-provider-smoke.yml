@@ -1,0 +1,64 @@
+name: Live provider smoke
+
+# ADI-19: an explicit opt-in, version-scoped smoke matrix that drives one real Protocol v1 session
+# per production transport this repo actually ships (Claude CLI one-shot, Codex exec one-shot --
+# see apps/daemon/src/live-smoke/types.ts for why this is narrower than upstream AgentDock's own
+# four-transport matrix) using a genuinely installed and authenticated provider CLI. This is NOT
+# part of the everyday CI gate: it needs a runner with real, licensed Claude/Codex credentials,
+# which no GitHub-hosted runner has. On a stock GitHub-hosted runner every case reports a clean
+# `skipped_missing_binary`/`skipped_missing_auth` -- that is expected, not a failure. To make this
+# meaningful, point it at a self-hosted runner with both CLIs installed and authenticated, and set
+# the `AGENT_DOCK_LIVE_PROVIDER_SMOKE` variable in a protected GitHub Environment scoped to that
+# runner. The `environment:` gate below is what makes this "protected": a run against it needs
+# whatever required reviewers/secrets that environment is configured with, separate from ordinary
+# push/PR CI. This repo does not yet have a `live-provider-smoke` GitHub Environment configured --
+# creating one (and pointing a self-hosted runner at it) is a deliberate follow-up decision for a
+# human to make, not something this change does on its own.
+#
+# Never runs on push or pull_request -- manual dispatch or the weekly schedule only.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '41 7 * * 3' # Wednesdays, 07:41 UTC -- an arbitrary off-peak time, not a meaningful bound.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-smoke-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Live provider smoke matrix
+    runs-on: windows-latest
+    environment: live-provider-smoke
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run live provider smoke matrix
+        working-directory: apps/daemon
+        env:
+          AGENT_DOCK_LIVE_PROVIDER_SMOKE: ${{ vars.AGENT_DOCK_LIVE_PROVIDER_SMOKE || '0' }}
+        run: pnpm smoke:live-providers
+
+      - name: Upload redacted evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-provider-smoke-evidence
+          path: apps/daemon/live-provider-smoke-evidence.jsonl
+          if-no-files-found: ignore
+          retention-days: 90

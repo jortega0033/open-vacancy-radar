@@ -1,0 +1,1 @@
+ALTER TABLE `app_settings` ADD `minimize_to_tray_on_close` integer DEFAULT false NOT NULL;

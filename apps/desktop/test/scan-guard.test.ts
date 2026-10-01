@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import type { ScanLock } from '@open-vacancy-radar/vacancy-engine';
-import { createScanGuard, SCAN_BUSY_IN_PROCESS, SCAN_BUSY_OTHER_PROCESS } from '../electron/scan-guard.js';
+import {
+  createScanGuard,
+  isExpectedScanBusyError,
+  SCAN_BUSY_IN_PROCESS,
+  SCAN_BUSY_OTHER_PROCESS,
+} from '../electron/scan-guard.js';
 
 interface CountingLock extends ScanLock {
   acquisitions: number;
@@ -23,7 +28,7 @@ function grantingLock(): CountingLock {
   return lock;
 }
 
-/** A lock already held by somebody else — what a second process looks like from here. */
+/** A lock already held by somebody else: what a second process looks like from here. */
 const heldLock: ScanLock = { tryAcquire: () => null };
 
 function deferred<T>() {
@@ -38,7 +43,7 @@ function deferred<T>() {
 
 describe('createScanGuard', () => {
   it('refuses a second scan of the SAME kind while one is in flight', async () => {
-    const guard = createScanGuard(() => grantingLock());
+    const { runExclusiveScan: guard } = createScanGuard(() => grantingLock());
     const first = deferred<string>();
 
     const running = guard(() => first.promise, { takeAdvisoryLock: true });
@@ -48,21 +53,19 @@ describe('createScanGuard', () => {
     await expect(running).resolves.toBe('first');
   });
 
-  it('refuses a second scan of a DIFFERENT kind too — one guard covers both pipelines', async () => {
-    // The global-remote and Netherlands scans write the same engine database. A per-kind flag
-    // would let them interleave, which is the bug this single shared guard exists to prevent.
-    const guard = createScanGuard(() => grantingLock());
+  it('refuses a second scan even with a different takeAdvisoryLock option: one guard, one in-flight flag', async () => {
+    const { runExclusiveScan: guard } = createScanGuard(() => grantingLock());
     const globalRemote = deferred<string>();
 
     const running = guard(() => globalRemote.promise, { takeAdvisoryLock: true });
-    await expect(guard(async () => 'nl', { takeAdvisoryLock: false })).rejects.toThrow(SCAN_BUSY_IN_PROCESS);
+    await expect(guard(async () => 'second', { takeAdvisoryLock: false })).rejects.toThrow(SCAN_BUSY_IN_PROCESS);
 
     globalRemote.resolve('worldwide');
     await running;
   });
 
   it('clears the in-flight flag when a scan fails, so the next one is not wedged shut', async () => {
-    const guard = createScanGuard(() => grantingLock());
+    const { runExclusiveScan: guard } = createScanGuard(() => grantingLock());
     await expect(guard(async () => Promise.reject(new Error('network down')), { takeAdvisoryLock: true })).rejects.toThrow(
       'network down',
     );
@@ -70,7 +73,7 @@ describe('createScanGuard', () => {
   });
 
   it('refuses to start when another process holds the advisory lock, with a distinguishable message', async () => {
-    const guard = createScanGuard(() => heldLock);
+    const { runExclusiveScan: guard } = createScanGuard(() => heldLock);
     const run = vi.fn();
     await expect(guard(run, { takeAdvisoryLock: true })).rejects.toThrow(SCAN_BUSY_OTHER_PROCESS);
     expect(run).not.toHaveBeenCalled();
@@ -78,7 +81,7 @@ describe('createScanGuard', () => {
 
   it('recovers after a cross-process refusal rather than staying refused forever', async () => {
     let lock: ScanLock = heldLock;
-    const guard = createScanGuard(() => lock);
+    const { runExclusiveScan: guard } = createScanGuard(() => lock);
     await expect(guard(async () => 'x', { takeAdvisoryLock: true })).rejects.toThrow(SCAN_BUSY_OTHER_PROCESS);
 
     lock = grantingLock();
@@ -87,23 +90,80 @@ describe('createScanGuard', () => {
 
   it('takes and releases the advisory lock exactly once around a scan', async () => {
     const lock = grantingLock();
-    const guard = createScanGuard(() => lock);
+    const { runExclusiveScan: guard } = createScanGuard(() => lock);
     await guard(async () => 'done', { takeAdvisoryLock: true });
     expect(lock.acquisitions).toBe(1);
     expect(lock.releases).toBe(1);
   });
 
-  it('does not touch the advisory lock for a scan that takes it itself (runEndToEndScan)', async () => {
+  it('does not touch the advisory lock for a scan that takes it itself', async () => {
     // Double-acquiring would deadlock against the engine's own acquisition on any platform where
     // the SQLite file lock is per-handle rather than per-process.
     const lock = grantingLock();
-    const guard = createScanGuard(() => lock);
+    const { runExclusiveScan: guard } = createScanGuard(() => lock);
     await guard(async () => 'done', { takeAdvisoryLock: false });
     expect(lock.acquisitions).toBe(0);
   });
 
   it('fails clearly when the engine (and therefore the lock) has not initialized yet', async () => {
-    const guard = createScanGuard(() => undefined);
+    const { runExclusiveScan: guard } = createScanGuard(() => undefined);
     await expect(guard(async () => 'x', { takeAdvisoryLock: true })).rejects.toThrow(/not initialized/);
+  });
+
+  it('isScanInFlight reports true only while a scan is actually running', async () => {
+    const { runExclusiveScan, isScanInFlight } = createScanGuard(() => grantingLock());
+    const first = deferred<string>();
+
+    expect(isScanInFlight()).toBe(false);
+    const running = runExclusiveScan(() => first.promise, { takeAdvisoryLock: true });
+    expect(isScanInFlight()).toBe(true);
+
+    first.resolve('done');
+    await running;
+    expect(isScanInFlight()).toBe(false);
+  });
+
+  it('isScanInFlight clears even when the scan fails', async () => {
+    const { runExclusiveScan, isScanInFlight } = createScanGuard(() => grantingLock());
+    await expect(
+      runExclusiveScan(async () => Promise.reject(new Error('network down')), { takeAdvisoryLock: true }),
+    ).rejects.toThrow('network down');
+    expect(isScanInFlight()).toBe(false);
+  });
+
+  it('a background-triggered scan and a manual scan cannot run concurrently, and the loser is a swallowable refusal (#195)', async () => {
+    // Models the real #195 race: the background timer and a manual "Search" click share the exact
+    // same `runExclusiveScan`, so whichever loses is refused with one of the two known messages --
+    // which the timer path must be able to recognize and swallow silently, not log as a failure.
+    const { runExclusiveScan: guard } = createScanGuard(() => grantingLock());
+    const background = deferred<string>();
+
+    const backgroundScan = guard(() => background.promise, { takeAdvisoryLock: true });
+    const manualScan = guard(async () => 'manual', { takeAdvisoryLock: true }).catch((error: unknown) => {
+      expect(isExpectedScanBusyError(error)).toBe(true);
+      return 'swallowed';
+    });
+
+    await expect(manualScan).resolves.toBe('swallowed');
+    background.resolve('background');
+    await expect(backgroundScan).resolves.toBe('background');
+  });
+});
+
+describe('isExpectedScanBusyError', () => {
+  it('recognizes the in-process busy message', () => {
+    expect(isExpectedScanBusyError(new Error(SCAN_BUSY_IN_PROCESS))).toBe(true);
+  });
+
+  it('recognizes the cross-process busy message', () => {
+    expect(isExpectedScanBusyError(new Error(SCAN_BUSY_OTHER_PROCESS))).toBe(true);
+  });
+
+  it('does not recognize an unrelated error', () => {
+    expect(isExpectedScanBusyError(new Error('network down'))).toBe(false);
+  });
+
+  it('does not recognize a non-Error thrown value', () => {
+    expect(isExpectedScanBusyError('a vacancy scan is already running')).toBe(false);
   });
 });

@@ -30,10 +30,11 @@ describe('readCvFile', () => {
   });
 
   it('rejects an unsupported extension even though the dialog filtered for it', async () => {
-    const path = await write('cv.docx', 'not really a docx');
-    await expect(readCvFile(path)).rejects.toThrow(/unsupported CV file type "\.docx"/);
+    const path = await write('cv.rtf', 'not a supported format');
+    await expect(readCvFile(path)).rejects.toThrow(/unsupported CV file type "\.rtf"/);
     expect(isSupportedCvFile(path)).toBe(false);
     expect(isSupportedCvFile('/somewhere/CV.PDF')).toBe(true); // extension check is case-insensitive
+    expect(isSupportedCvFile('/somewhere/CV.DOCX')).toBe(true);
   });
 
   it('rejects an empty file with a message that says which file', async () => {
@@ -47,6 +48,11 @@ describe('readCvFile', () => {
   });
 
   it('advertises exactly the extensions the dialog filter offers', () => {
-    expect([...CV_FILE_EXTENSIONS]).toEqual(['pdf', 'txt', 'md']);
+    expect([...CV_FILE_EXTENSIONS]).toEqual(['pdf', 'txt', 'md', 'docx']);
+  });
+
+  it('rejects a .docx-named file that is not actually a valid ZIP/OOXML document, with an actionable message (issue #357)', async () => {
+    const path = await write('cv.docx', 'not really a docx');
+    await expect(readCvFile(path)).rejects.toThrow(/could not read "cv\.docx" as a Word document/);
   });
 });

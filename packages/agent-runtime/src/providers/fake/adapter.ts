@@ -7,7 +7,7 @@ export type FakeScenario = 'success' | 'failure' | 'hang-until-cancelled';
 /**
  * Deliberately not a copy of the real adapters' capabilities: `resume`, `tools`, and `thinking`
  * are `false` because FakeProvider genuinely doesn't implement them (no resume branching, no
- * tool/thinking events emitted below) — that contrast is useful for tests asserting
+ * tool/thinking events emitted below). That contrast is useful for tests asserting
  * capability-gated behavior actually gates on the flag rather than always running.
  */
 export const FAKE_PROVIDER_CAPABILITIES: ProviderCapabilities = {
@@ -17,6 +17,13 @@ export const FAKE_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   usage: true,
   thinking: false,
 };
+
+/** MIME types `FakeProvider.getAttachmentMimeTypes()` reports, for tests exercising the ported
+ * attachment path (agentdock#152/#153) without needing a real Claude/Codex install. Not implied by
+ * `FAKE_PROVIDER_CAPABILITIES.attachments`, which stays absent/false by default like every other
+ * capability here -- a test opting into attachment support still sets `capabilities.attachments:
+ * true` explicitly on the status it passes to the constructor. */
+export const FAKE_PROVIDER_ATTACHMENT_MIME_TYPES = ['application/pdf', 'image/png'] as const;
 
 /**
  * In-process fake provider (spawns no subprocess) used by daemon and desktop tests so they never
@@ -45,6 +52,10 @@ export class FakeProvider implements AgentProvider {
 
   async detect(): Promise<ProviderStatus> {
     return this.status;
+  }
+
+  getAttachmentMimeTypes(): readonly string[] {
+    return FAKE_PROVIDER_ATTACHMENT_MIME_TYPES;
   }
 
   startSession(options: StartSessionOptions): ProviderSessionHandle {

@@ -1,0 +1,1 @@
+ALTER TABLE `application_attempts` ADD `prepared_fields` text DEFAULT '' NOT NULL;

@@ -1,53 +1,193 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createSessionRequestSchema, sessionIdParamSchema } from '@agent-dock/shared';
+import {
+  DAEMON_EXIT_CODE_LOCK_CONFLICT,
+  createSessionRequestSchema,
+  mcpCredentialInputSchema,
+  mcpProviderIdSchema,
+  mcpSearchRequestSchema,
+  providerIdSchema,
+  sessionIdParamSchema,
+  workspaceTrustViewSchema,
+  type ProviderId,
+  type ProviderStatus,
+  type WorkspaceTrustView,
+} from '@agent-dock/shared';
 import { AgentDockClient } from '@agent-dock/client';
 import {
+  candidateProfileSchema,
+  createDatabaseBackedAtsHttpClient,
   createDatabaseClient,
   createLogger,
   createScanLock,
+  fetchJobgetherOfferDetail,
+  fetchWorkableJobDetail,
+  jobgetherOfferIdFromUrl,
+  loadCandidateProfile,
   loadConfig,
   migrateDatabase,
-  runEndToEndScan,
+  readAtsRosterStatus,
+  readGlobalRemoteReport,
+  runAtsRosterImport,
   runGlobalRemoteScan,
+  workableJobReferenceFromUrl,
+  type AtsRosterImportResult,
+  type AtsRosterStatus,
+  type CandidateProfile,
   type Database,
   type GlobalRemoteReport,
-  type JobRadarReport,
   type ScanLock,
+  type ScanProgressEvent,
 } from '@open-vacancy-radar/vacancy-engine';
+import {
+  AGENT_WORKSPACE_ACTIVITY_CHANNEL,
+  createSessionAliasBook,
+  registerAgentWorkspaceHandlers,
+} from './agent-workspace-ipc.js';
+import { AgentWorkspaceRelay } from './agent-workspace-relay.js';
+import type { ActivityPush } from './agent-workspace-types.js';
+import { ApplicationQueueRelay, type ApplicationQueueEventSource } from './application-queue-relay.js';
+import type { ApplicationQueueEvent } from './application-queue-types.js';
+import { ApplicationDataResetGate } from './application-data-reset-gate.js';
+import { runFieldMapGeneration, runTextGeneration } from './application-generation-runner.js';
+import {
+  recoverInterruptedApplicationAttempts,
+  resumeApplicationAttempt,
+  restartApplicationTailoring,
+  runNextApplicationAttempt,
+  startApplicationAttempt,
+  type ApplicationPipelineDeps,
+  type ApplicationQueuePort,
+  type PipelineVacancy,
+} from './application-pipeline.js';
+import { applicationQueueRefusal, createApplicationQueuePort } from './application-queue-port.js';
+import type { ApplicationValueProfile } from './application-value-table.js';
+import {
+  applyApplicationFieldMap,
+  cancelScheduledAutomaticSubmission,
+  closeAllApplicationReviews,
+  closeApplicationReview,
+  confirmApplicationAnswer,
+  evaluateAndScheduleAutomaticSubmission,
+  fireDueAutomaticSubmissions,
+  hideApplicationReviewHandoff,
+  openApplicationReview,
+  showApplicationReviewForHandoff,
+  showApplicationReviewHandoff,
+  submitApplicationReview,
+  recordUserReportedSubmission,
+} from './application-review-session.js';
+import { resolvePolicyIdForCanonicalUrl, setAutoApplyEnabled } from './application-target-policies.js';
+import { requestAutomationGrant } from './automatic-submission-grant.js';
+import { notifyApplicationPreparation } from './application-preparation-notify.js';
+import { notifyVacancyScanCompleted, notifyVacancyScanFailed } from './vacancy-scan-notify.js';
+import { isWindowInBackground } from './app-background-state.js';
+import type {
+  ApplicationValueTableEntryInput,
+  ApplyApplicationFieldMapInput,
+  ConfirmApplicationAnswerInput,
+  OpenApplicationReviewInput,
+} from './application-executor-types.js';
+import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
+import { buildDaemonEnvironment } from './daemon-environment.js';
+import { createGuardedIpc } from './ipc-sender-guard.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
-import { resolveWindowIcon } from './resolve-window-icon.js';
+import { resolveTrayIcon, resolveWindowIcon } from './resolve-window-icon.js';
+import {
+  resolveVacancyEngineDataRoot,
+  resolveVacancyEngineMigrationsFolder,
+} from './resolve-vacancy-engine-paths.js';
 import { sendToRenderer } from './send-to-renderer.js';
-import { CV_FILE_EXTENSIONS, readCvFile, type CvFileContent } from './cv-text.js';
-import { createScanGuard, SCAN_BUSY_OTHER_PROCESS } from './scan-guard.js';
+import { parseVacancyScanRequest, scheduledScanQueryFromProfile, type ParsedVacancyScanRequest } from './vacancy-scan-query.js';
+import { runAiWebDiscovery } from './vacancy-web-discovery.js';
+import { CV_FILE_EXTENSIONS, NoSelectablePdfTextError, isTranscribablePageCount, readCvFile } from './cv-text.js';
+import {
+  cleanupStagedPath,
+  consumeStagedCvAttachment,
+  stageForTranscription,
+  sweepStaleStagedAttachments,
+} from './cv-transcription-staging.js';
+import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
+import { shouldRunScheduledScan } from './scheduled-scan.js';
+import { createTick } from './tick.js';
+import { createDaemonRespawn } from './daemon-respawn.js';
+import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
+import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
+import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
+import {
+  WorkspaceGrantManager,
+  WorkspaceGrantRefusedError,
+  type DaemonConsumeOutcome,
+  type DaemonCreateSessionOutcome,
+  type GrantExpiryReason,
+} from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
+import type { CvExportFormat, CvExportResult } from './workspace/types.js';
 import {
+  parseApplicationAnswerInput,
+  parseApplicationAnswerPatch,
+  parseApplicationAttemptPatch,
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
+  parseCaseIdEnvelope,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
+  parseCvEvidenceOverlayExportInput,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
+  parseCvExportInput,
+  parseCvIdEnvelope,
+  parseId,
   parseIdAndPatch,
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
 } from './workspace/validate.js';
+import { printHtmlToPdf } from './application-artifact-staging.js';
+import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportFileName } from './cv-export.js';
+import { renderResumeDocx } from './resume-docx.js';
+import { renderResumeHtml } from './resume-html.js';
+import { validateRenderedResumePdf } from './resume-pdf-validation.js';
+import { composeApprovedTailoredResume } from './resume-source.js';
+import { startMcpServer, type McpServerHandle } from './mcp-server.js';
+import type { TailoredResume } from './resume-schema.js';
+import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Electron's default `app.getPath('userData')` etc. derive from `app.getName()`, which falls back
+// to package.json's `name` field (`@agent-dock/desktop`, an internal workspace name) when nothing
+// sets it explicitly. Left unset, every user-data path (workspace/vacancy-engine databases, the
+// Chromium profile) would live under a directory named after that internal package rather than
+// the product name shown everywhere else (the installer, the window title, the docs). Must run
+// before any `app.getPath(...)` call below, so it comes first, right after `app` becomes usable.
+app.setName('Open Vacancy Radar');
+
+// Electron's default application menu (File/Edit/View/Window) is generic boilerplate this app has
+// no use for: no menu-driven File action exists, and standard text-field editing (copy/paste/undo)
+// works through Chromium's native input handling regardless of whether an application menu is
+// installed, not through the menu's accelerators. Removing it entirely reads as a finished product
+// instead of an unconfigured Electron shell.
+Menu.setApplicationMenu(null);
+
 // Two AgentDock windows would each spawn their own daemon sidecar and race over the same
 // discovery file (the daemon's own single-instance guard, see SECURITY.md, would make the
-// second one fail to start) — rather than let that surface as a confusing "daemon unavailable"
+// second one fail to start), rather than let that surface as a confusing "daemon unavailable"
 // error, refuse to open a second window at all and focus the existing one instead.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -55,7 +195,7 @@ if (!gotSingleInstanceLock) {
 }
 
 /**
- * Renderer status only — never the token or base URL. The renderer talks to the daemon
+ * Renderer status only: never the token or base URL. The renderer talks to the daemon
  * exclusively through the IPC handlers below, which delegate to `@agent-dock/client`; the
  * `AgentDockClient` instance (which carries the bearer token) never crosses into the renderer
  * process. See SECURITY.md.
@@ -65,22 +205,101 @@ type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'una
 let daemonChild: ChildProcess | undefined;
 let client: AgentDockClient | undefined;
 let mainWindow: BrowserWindow | undefined;
-let activeSessionId: string | undefined;
-let activeStreamAbort: AbortController | undefined;
+let tray: Tray | undefined;
+/**
+ * Mirrors the `minimizeToTrayOnClose` workspace setting for the `close` handler below, which
+ * cannot `await workspace.getSettings()` mid-event -- `close` is synchronous and a queued async
+ * read would let the default (unwanted) OS close behavior proceed before the answer arrives.
+ * Hydrated once from the database after `ensureWorkspaceDb()` resolves, and kept in sync by the
+ * `workspace:settings:update` handler on every write (ADI-22).
+ */
+let minimizeToTrayOnClose = false;
+/**
+ * Set only by the real quit paths (tray "Quit", `before-quit`). The `close` handler checks this
+ * to tell "user clicked the window's X button" (hide to tray) apart from "the app is actually
+ * quitting" (let the window close for real) -- both fire the same `close` event.
+ */
+let isQuitting = false;
+/**
+ * Mirrors the `autoScanEnabled` workspace setting for the background-scan timer below (#195),
+ * hydrated and kept in sync the same way and for the same reason as `minimizeToTrayOnClose`: the
+ * timer tick is synchronous plumbing around an async scan call, and reading a live setting on
+ * every 5-minute tick is needless DB traffic when this mirror is already kept current.
+ */
+let autoScanEnabled = false;
+/** #421's local MCP endpoint, non-`null` only while actually listening. Started/stopped by
+ * `syncMcpServer` below, never constructed directly elsewhere -- that function is the single
+ * place that decides whether one should be running right now. */
+let mcpServerHandle: McpServerHandle | null = null;
+/**
+ * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
+ * this file will answer (ADI-16).
+ *
+ * Captured at window creation and cleared on that window's destruction, for the same reason the
+ * ADI-06 grant channels capture `webContents.id` eagerly: reading it later, from a `BrowserWindow`
+ * Electron has already torn down, is reading a property of a destroyed object -- and "the window is
+ * gone" is exactly the moment the guard needs an answer. `undefined` (no window yet, or none any
+ * more) rejects every call rather than allowing one: see electron/ipc-sender-guard.ts.
+ */
+let mainWindowWebContentsId: number | undefined;
+/**
+ * The single source of truth `daemon:get-status` reads from. Without this, that handler had to
+ * re-derive a status from `client` alone (set or not), which can only ever mean "ready" or
+ * "connecting" -- it has no way to represent "already failed", so a pull-based query made any time
+ * after a startup failure incorrectly reported "connecting" forever, no matter how long ago the
+ * daemon actually died. `sendStatus` is the only place that both updates this and pushes to the
+ * renderer, so the two can never disagree.
+ */
+let latestDaemonStatus: DaemonStatus = { state: 'connecting' };
+
+/**
+ * Every in-flight **v1** event forward, keyed by session id (ADI-07).
+ *
+ * This replaces the single `activeStreamAbort` module global that used to sit here alongside an
+ * `activeSessionId`. That pair was a single-slot relay: `forwardSessionEvents` overwrote both on
+ * every new session, so a second concurrent session silently orphaned the first one's abort
+ * controller and `killDaemon` could only ever abort whichever stream started last. `activeSessionId`
+ * itself was pure write-only bookkeeping -- it was assigned by `daemon:create-session` and cleared
+ * at a terminal event, and **nothing ever read it** (the shutdown path had already moved to
+ * `sessions.cancelAll()` for exactly this reason, see AD-12) -- so it is simply gone.
+ *
+ * Keying by session id is the same fix ADI-07 makes for the new v2 relay in
+ * `agent-workspace-relay.ts`, applied to the v1 path so the two cannot disagree about what
+ * "shut down every stream" means. The forwarding itself is untouched: same channel, same raw
+ * envelope, same synthesized error event on failure.
+ */
+const v1EventForwards = new Map<string, AbortController>();
+
+/**
+ * The daemon's loopback address and per-launch bearer token, kept here so the ADI-06 workspace
+ * routes can be called directly.
+ *
+ * `AgentDockClient` deliberately has no workspace methods: adding them would widen a package that
+ * three other consumers depend on, for one caller. This is the same token and the same origin the
+ * client already uses, so nothing new is exposed -- and, as everywhere else in this file, it never
+ * crosses into the renderer (see SECURITY.md and the preload bridge's own docstring).
+ */
+let daemonConnection: { baseUrl: string; token: string } | undefined;
+/**
+ * The UUID `/health` reports for the currently-connected daemon process (ADI-06, D7).
+ *
+ * A change means the daemon that the user granted workspace access to no longer exists, so every
+ * outstanding grant refers to an approval its replacement never saw. Comparing this on every
+ * readiness transition is what makes "restarting the daemon revokes outstanding grants" structural
+ * rather than something a future edit has to remember.
+ */
+let daemonInstanceId: string | undefined;
 
 let vacancyDb: Database | undefined;
 let vacancyEngineInit: Promise<Database> | undefined;
 let vacancyScanLock: ScanLock | undefined;
 let latestVacancyReport: GlobalRemoteReport | undefined;
-let latestNetherlandsReport: JobRadarReport | undefined;
 
 /**
- * One guard for *both* scan kinds, not one per kind — the two pipelines write the same engine
- * database, so running them together is exactly as damaging as running two of either. See
- * electron/scan-guard.ts for why the in-process half and the cross-process advisory lock are both
- * needed.
+ * Guards the vacancy scan against overlapping with itself. See electron/scan-guard.ts for why the
+ * in-process half and the cross-process advisory lock are both needed.
  */
-const runExclusiveScan = createScanGuard(() => vacancyScanLock);
+const { runExclusiveScan, isScanInFlight } = createScanGuard(() => vacancyScanLock);
 
 let workspaceDb: WorkspaceDb | undefined;
 let workspaceInit: Promise<WorkspaceDb> | undefined;
@@ -89,18 +308,81 @@ let closeWorkspaceDb: (() => void) | undefined;
 
 /**
  * Where `config/global-remote-profile-v1.json` and `reports/global-remote/*` live for the vendored
- * engine. Dev-mode only: this assumes the monorepo layout (`apps/desktop/dist-electron` three
- * levels under the repo root, next to `packages/vacancy-engine`) and will need a real resolution
- * strategy — bundling the engine's `config/` as a packaged resource and moving `reports/` under
- * `app.getPath('userData')` — before this app is ever built with `electron-builder`.
+ * engine, in dev/unpacked mode: the monorepo layout (`apps/desktop/dist-electron` three levels
+ * under the repo root, next to `packages/vacancy-engine`).
  */
 function vacancyEngineProjectRoot(): string {
   return join(__dirname, '..', '..', '..', 'packages', 'vacancy-engine');
 }
 
+/** Read-only migration SQL, shipped as an extraResource (see electron-builder.yml). */
+function vacancyEngineMigrationsFolder(): string {
+  return resolveVacancyEngineMigrationsFolder({
+    vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+}
+
+let vacancyEngineDataRootInit: Promise<void> | undefined;
+
+/**
+ * Where the engine reads `config/*.json` (including `company-domain-candidates-v1.json`, which it
+ * also *writes* back to across scans — not purely static input) and writes `reports/`/`.data/`.
+ * Once packaged, this seeds `config/` from the read-only copy shipped as an extraResource.
+ * `force: false` skips only the individual destination files that already exist (so an
+ * update-carried-forward `company-domain-candidates-v1.json` is never overwritten by the packaged
+ * default) rather than gating on whether the whole directory exists: a launch interrupted mid-copy,
+ * or a future release adding a new config file, both still complete on the next call instead of
+ * leaving a partial `config/` permanently stuck. Retries on failure like the two lazy-init
+ * functions below, for the same reason: a transient error (disk full, AV lock) shouldn't wedge
+ * every scan for the rest of the process's lifetime.
+ */
+async function vacancyEngineDataRoot(): Promise<string> {
+  // Real Electron layout tests seed an isolated report tree. Keep that fixture out of the
+  // developer's repository report directory, and never honor the hook in a packaged build.
+  const e2eDataRoot = process.env.OVR_E2E_VACANCY_ENGINE_DATA_ROOT?.trim();
+  if (!app.isPackaged && e2eDataRoot) return e2eDataRoot;
+  const root = resolveVacancyEngineDataRoot({
+    vacancyEngineProjectRoot: vacancyEngineProjectRoot(),
+    isPackaged: app.isPackaged,
+    userDataPath: app.getPath('userData'),
+  });
+  if (!app.isPackaged) return root;
+  vacancyEngineDataRootInit ??= cp(
+    join(process.resourcesPath, 'vacancy-engine', 'config'),
+    join(root, 'config'),
+    { recursive: true, force: false },
+  );
+  try {
+    await vacancyEngineDataRootInit;
+    return root;
+  } catch (error) {
+    vacancyEngineDataRootInit = undefined;
+    throw error;
+  }
+}
+
+/**
+ * Hydrates `latestVacancyReport` from the `latest.json` a previous process lifetime's scan wrote
+ * to disk (#195) -- without this, a scan that finished before this launch (including one from
+ * before this feature existed) stays invisible to `vacancy:get-report` until the next scan Electron
+ * itself runs in the current process. Pre-warm only, exactly like `ensureVacancyEngine`/
+ * `ensureWorkspaceDb` below: `vacancyEngineDataRoot()` can itself throw in packaged mode (it awaits
+ * a first-run config seed copy), so this is wrapped failure-tolerant -- on any error,
+ * `latestVacancyReport` is simply left `undefined`, exactly like today, never a new startup failure.
+ */
+async function hydrateLatestVacancyReport(): Promise<void> {
+  try {
+    latestVacancyReport = await readGlobalRemoteReport(await vacancyEngineDataRoot());
+  } catch {
+    // Tolerated -- see doc comment above.
+  }
+}
+
 /**
  * The database itself lives under the OS-provided per-user app data directory, never inside the
- * (potentially read-only, once packaged) install location — the whole point of this engine being
+ * (potentially read-only, once packaged) install location. The whole point of this engine being
  * embedded is that an end user never touches a file path or a database server.
  */
 async function ensureVacancyEngine(): Promise<Database> {
@@ -113,15 +395,14 @@ async function ensureVacancyEngine(): Promise<Database> {
     const config = vacancyEngineConfig();
     const { db } = createDatabaseClient(config.databasePath);
     // `migrateDatabase`'s default migrations folder is the relative path `drizzle`, which only
-    // resolves when the process cwd happens to be `packages/vacancy-engine` — never true once
-    // Electron actually launches. Resolve it against the same dev-mode project root used for
-    // `config/` and `reports/` below instead of relying on cwd.
-    await migrateDatabase(db, join(vacancyEngineProjectRoot(), 'drizzle'));
+    // resolves when the process cwd happens to be `packages/vacancy-engine`, never true once
+    // Electron actually launches. Resolve it explicitly instead of relying on cwd.
+    await migrateDatabase(db, vacancyEngineMigrationsFolder());
     vacancyDb = db;
     // Created once, alongside the database it guards: `createScanLock` takes exclusivity on a
     // sidecar SQLite file keyed to this database path, so it is meaningful across processes
     // (a `pnpm vacancies:scan` run against the same userData database, a second app instance
-    // that somehow got past the single-instance lock) — not just within this one.
+    // that somehow got past the single-instance lock), not just within this one.
     vacancyScanLock = createScanLock(config.databasePath);
     return db;
   })();
@@ -143,7 +424,7 @@ function vacancyEngineConfig() {
 
 /**
  * Opens the personal-workspace database, on the same lazy-init-once contract as
- * `ensureVacancyEngine` above and for the same reasons — `app.whenReady` pre-warms it while the
+ * `ensureVacancyEngine` above and for the same reasons: `app.whenReady` pre-warms it while the
  * window is being created, so a renderer call arriving mid-migration joins that run instead of
  * starting a second `migrate()` against the same SQLite file.
  */
@@ -153,6 +434,19 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     const { db, close } = createWorkspaceDb(app.getPath('userData'));
     workspaceDb = db;
     closeWorkspaceDb = close;
+    // ADI-22: hydrate the `close`-handler and background-scan-timer mirrors once, here, since
+    // neither can await a fresh read at the moment they need the answer. Kept in sync afterward
+    // by the `workspace:settings:update` handler.
+    const settings = workspace.getSettings(db);
+    minimizeToTrayOnClose = settings.minimizeToTrayOnClose;
+    autoScanEnabled = settings.autoScanEnabled;
+    // The auto-apply kill switch is a third mirror of the same kind, kept in the module that
+    // enforces it rather than here: `resolvePolicyIdForCanonicalUrl` is synchronous and is called
+    // from synchronous plumbing. If this line never runs -- a failed open, a migration that threw
+    // -- that module stays in its refusing state, so the failure mode is "nothing is automatically
+    // submittable", never the reverse.
+    setAutoApplyEnabled(settings.autoApplyEnabled);
+    void syncMcpServer(settings.mcpEndpointEnabled);
     return db;
   })();
 
@@ -164,7 +458,31 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
   }
 }
 
-// Namespaces the daemon rendezvous per application (AD-02) — see apps/daemon/src/discovery-file.ts
+/**
+ * The single place that decides whether #421's local MCP endpoint should be running right now,
+ * called after every read or write of `mcpEndpointEnabled` (startup hydration, a settings update,
+ * a data reset). Never throws: a bind failure is logged and leaves the endpoint off rather than
+ * failing whatever caller triggered this (app startup, a settings save) -- the same "a pre-warm
+ * failure must not become an unhandled rejection" reasoning `ensureVacancyEngine`'s own callers
+ * already follow at the call sites below.
+ */
+async function syncMcpServer(enabled: boolean): Promise<void> {
+  if (enabled && !mcpServerHandle) {
+    try {
+      mcpServerHandle = await startMcpServer(ensureWorkspaceDb);
+    } catch (err) {
+      console.error('failed to start the MCP endpoint', err instanceof Error ? err.message : err);
+    }
+    return;
+  }
+  if (!enabled && mcpServerHandle) {
+    const handle = mcpServerHandle;
+    mcpServerHandle = null;
+    await handle.close();
+  }
+}
+
+// Namespaces the daemon rendezvous per application (AD-02). See apps/daemon/src/discovery-file.ts
 // for the daemon side of this. A fork shipping its own product under a different name should set
 // this to its own id (env var, or hardcode a different literal here) so it doesn't collide with
 // another AgentDock-based app's daemon on the same machine; the reference app just uses the
@@ -177,10 +495,55 @@ function discoveryFilePath(): string {
 }
 
 function sendStatus(status: DaemonStatus): void {
+  latestDaemonStatus = status;
   sendToRenderer(mainWindow, 'daemon:status', status);
 }
 
+// Bounded respawn-with-backoff for an unexpected daemon exit (draft-daemon-auto-respawn). Capped
+// at 4 attempts, doubling from 1s up to 8s (1s/2s/4s/8s, ~15s of total wall-clock retrying): a
+// daemon down for a transient reason -- a port race, a slow disk on first launch -- usually comes
+// back within the first attempt or two, while one that is durably broken (a missing native
+// module, a corrupt install) gets a few increasingly spaced-out tries rather than hammering the
+// machine in a tight crash loop, then gives up and leaves today's `{state:'unavailable'}` in
+// place for the user to act on. Safe to do at all only because a fresh daemon start already
+// reconciles any stale application-queue lease on its own (`ApplicationQueueStore
+// #reconcileStaleLeaseOnStartup`), so a respawned daemon starts from a clean state instead of a
+// wedged one.
+const DAEMON_RESPAWN_MAX_ATTEMPTS = 4;
+const DAEMON_RESPAWN_BASE_DELAY_MS = 1_000;
+const DAEMON_RESPAWN_MAX_DELAY_MS = 8_000;
+
+// The attempt counter, the backoff formula, the `isQuitting` gate and the generation guard all live
+// in daemon-respawn.ts, not here: main.ts cannot be imported by a test, so anything that stays in
+// this file is covered by code review alone. `spawnDaemon`/`setTimeout`/`isQuitting` are injected
+// rather than called directly so that module stays free of any Electron API.
+const daemonRespawn = createDaemonRespawn({
+  policy: {
+    maxAttempts: DAEMON_RESPAWN_MAX_ATTEMPTS,
+    baseDelayMs: DAEMON_RESPAWN_BASE_DELAY_MS,
+    maxDelayMs: DAEMON_RESPAWN_MAX_DELAY_MS,
+  },
+  isQuitting: () => isQuitting,
+  spawnDaemon: () => spawnDaemon(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  onExhausted: (reason, maxAttempts) =>
+    console.warn(`[daemon] respawn budget exhausted after ${maxAttempts} attempts, giving up: ${reason}`),
+  onScheduled: (reason, attempt, maxAttempts, delayMs) =>
+    console.warn(`[daemon] respawning after unexpected exit (attempt ${attempt}/${maxAttempts}, retrying in ${delayMs}ms): ${reason}`),
+});
+
+/**
+ * Called from every path in `spawnDaemon` that can observe the daemon child dying (the `exit`
+ * handler once it was ready, and the early-exit race before it ever became ready). Decides,
+ * in one place, whether that death deserves a retry or is the end of the road.
+ */
+function scheduleDaemonRespawn(reason: string): void {
+  sendStatus({ state: 'unavailable', error: reason });
+  daemonRespawn.scheduleRespawn(reason);
+}
+
 function spawnDaemon(): void {
+  const generation = daemonRespawn.nextGeneration();
   const { cwd, args } = resolveDaemonEntry({
     mainDir: __dirname,
     isDevServer: !!process.env.VITE_DEV_SERVER_URL,
@@ -191,68 +554,524 @@ function spawnDaemon(): void {
 
   daemonChild = spawn(process.execPath, args, {
     cwd,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AGENT_DOCK_APP_ID: APP_ID },
+    env: {
+      ...buildDaemonEnvironment(process.env),
+      ELECTRON_RUN_AS_NODE: '1',
+      AGENT_DOCK_APP_ID: APP_ID,
+      // ADI-05: pins the daemon's durable v2 session state under the same per-user data root that
+      // already holds workspace.db and vacancy-engine.db, in its own subdirectory. Without this the
+      // daemon would fall back to its own platform-native location (%LOCALAPPDATA%\<appId> and
+      // friends), creating a second, undocumented product-data directory that a user uninstalling
+      // or resetting the app would never find. The subdirectory matters as much as the root: the
+      // daemon refuses a state root that overlaps a product database path (see
+      // apps/daemon/src/state-directory.ts), so that a backup, a drizzle migration, or a workspace
+      // reset can never carry the session store along with it.
+      AGENT_DOCK_STATE_DIR: join(app.getPath('userData'), 'agentdock-state'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
 
+  // Bounded, matching the same snippet-size convention `run-session.ts` uses for a provider CLI's
+  // stderr: a crash reason (missing native module, a thrown error on require(), a missing system
+  // library) is almost always in the first couple thousand characters, and this is forwarded to
+  // the renderer's "Daemon unavailable" banner, not just logged, so it must stay short.
+  let stderrSnippet = '';
   daemonChild.stdout?.on('data', (chunk: Buffer) => {
     // The daemon's own logger already redacts secrets; forward for local debugging only.
     console.log(`[daemon] ${chunk.toString('utf8').trim()}`);
   });
   daemonChild.stderr?.on('data', (chunk: Buffer) => {
-    console.error(`[daemon] ${chunk.toString('utf8').trim()}`);
-  });
-  daemonChild.on('exit', (code, signal) => {
-    if (!client) return; // never became ready; startup error already reported
-    client = undefined;
-    sendStatus({ state: 'unavailable', error: `daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})` });
+    const text = chunk.toString('utf8');
+    console.error(`[daemon] ${text.trim()}`);
+    if (stderrSnippet.length < 2000) stderrSnippet = (stderrSnippet + text).slice(0, 2000);
   });
 
-  waitForDaemonReady(spawnedAt).catch((err: Error) => {
-    sendStatus({ state: 'unavailable', error: `daemon failed to start: ${err.message}` });
+  // If the daemon exits before ever becoming ready, `waitForDaemonReady` below would otherwise run
+  // out its full timeout and report a generic "timed out" message, discarding the one piece of
+  // information that actually explains what happened: the exit code and whatever the process
+  // printed to stderr before dying (a thrown require() error, a missing native module, a missing
+  // system library). Racing this against `waitForDaemonReady` lets whichever failure is real win.
+  let rejectOnEarlyExit!: (error: Error) => void;
+  const earlyExit = new Promise<never>((_resolve, reject) => {
+    rejectOnEarlyExit = reject;
+  });
+
+  const earlyExitMessage = (code: number | null, signal: NodeJS.Signals | null): string => {
+    const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
+    return `process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`;
+  };
+
+  daemonChild.on('exit', (code, signal) => {
+    if (!client) {
+      // A lock conflict means another instance of this same app already won the discovery-file
+      // race and is alive and reachable right now (see `discoveryFilePath`'s own comment): attach
+      // to it instead of spending this generation's whole respawn budget losing the same race
+      // again on every retry.
+      if (code === DAEMON_EXIT_CODE_LOCK_CONFLICT) {
+        void attachToDaemonAfterLockConflict(generation).then((attached) => {
+          if (attached) return;
+          // The winning daemon exited, or its discovery file was stale/corrupt, in the time it
+          // took to read it: nothing left to attach to, so this is a genuine failure after all.
+          rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
+        });
+        return;
+      }
+      rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
+      return;
+    }
+    client = undefined;
+    scheduleDaemonRespawn(`daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
+  });
+
+  Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit]).catch((err: Error) => {
+    scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
   });
 }
 
-async function waitForDaemonReady(spawnedAt: number, timeoutMs = 15_000): Promise<void> {
+/**
+ * Settled once per `generation` by whichever of `waitForDaemonReady`'s own poll loop or
+ * `attachToDaemonAfterLockConflict` reaches a final outcome first for that generation (adoption via
+ * `finishDaemonAdoption`, or giving up on this generation via `quitAsDuplicateInstance`). Both run
+ * concurrently for the same generation (the lock-conflict exit fires without cancelling the
+ * sibling poll loop already in flight from the same `spawnDaemon()` call), so without this guard
+ * both could independently reach a conclusion for the same generation -- and `waitForDaemonReady`
+ * specifically needs it to recognize that its generation was already settled by the *other* path,
+ * rather than spending its full 15s timeout polling for a file freshness condition that can no
+ * longer be satisfied, then throwing a bogus "timed out" failure after the app already decided to
+ * quit.
+ */
+let adoptedGeneration: number | undefined;
+
+/**
+ * Everything this process's own freshly-spawned daemon child does once it becomes ready (reachable
+ * `baseUrl`/`token`/`daemonInstanceId` in hand). A no-op if `generation` was already adopted or
+ * abandoned by a concurrent lock-conflict outcome for the same generation (see `adoptedGeneration`
+ * and `quitAsDuplicateInstance`).
+ */
+function finishDaemonAdoption(
+  connectedClient: AgentDockClient,
+  baseUrl: string,
+  token: string,
+  daemonInstanceId: string | undefined,
+  generation: number,
+): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  // Reuses the exact client instance the caller already called `.health()` on, rather than
+  // building a fresh one: `AgentDockClient` memoizes its protocol-compatibility check per
+  // instance, so a fresh client here would silently repeat that `/health` round trip on this
+  // client's first real call.
+  client = connectedClient;
+  daemonConnection = { baseUrl, token };
+  // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
+  // different process, so every outstanding approval is void. Done before the status goes
+  // `ready`, so no renderer can consume a stale grant against the new daemon.
+  adoptDaemonInstance(daemonInstanceId);
+  daemonRespawn.resetAttempts();
+  sendStatus({ state: 'ready' });
+  // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
+  // request), there is exactly one application queue and no per-session redaction concern,
+  // so this attaches proactively -- "reopening the window reflects current queue state"
+  // needs the stream live before any renderer even asks.
+  applicationQueueRelay.attach();
+  // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+  // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+  // must not wait on workspace recovery.
+  void recoverApplicationPipelineOnStartup();
+}
+
+/** Reads and parses a discovery file into the `{baseUrl, token}` shape `AgentDockClient` wants.
+ * Shared by `waitForDaemonReady` and `attachToDaemonAfterLockConflict` so the discovery file's
+ * on-disk shape is only decoded in one place. `undefined` for anything that isn't a daemon to
+ * connect to: missing, mid-write, or left behind corrupt. */
+function readDiscoveryFileConnection(file: string): DiscoveredDaemon | undefined {
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
+    return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A `DAEMON_EXIT_CODE_LOCK_CONFLICT` child exit (see `assertNoLiveDaemon` in
+ * `apps/daemon/src/discovery-file.ts`) means another daemon with this same app id is alive right
+ * now -- and by construction that can only exist if a sibling Electron *main process* is also
+ * alive, since this process's own daemon-spawn is gated behind `app.requestSingleInstanceLock()`
+ * already having refused every other instance (see `gotSingleInstanceLock`'s call site). In other
+ * words, reaching this function at all means that guard was already defeated for this launch --
+ * Electron's own single-instance lock has a narrow, OS-level race on an ungraceful kill-and-
+ * relaunch (observed via vite-plugin-electron's dev-server hot restart, which force-kills the old
+ * main process rather than letting it quit cleanly) that can let two live instances both pass it.
+ * This process is the half of that pair that lost the daemon-spawn race too, so rather than try to
+ * recover and run on as a second full instance -- its own window, tray icon, background-scan/
+ * auto-apply/application-pipeline timers, and SQLite connections to workspace.db/vacancy-engine.db
+ * alongside the sibling's -- it quits (`quitAsDuplicateInstance`) once it confirms the sibling's
+ * daemon is actually reachable. Returns `false` when there is nothing valid to confirm (the
+ * sibling's discovery file is stale or its daemon isn't actually there), so the caller falls back
+ * to treating the exit as an ordinary failure instead of quitting over a false alarm.
+ */
+async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
+  if (isQuitting) return false; // already shutting down; nothing left to confirm or act on
+  const attached = await tryAttachToWinningDaemon({
+    readDiscoveryFile: () => readDiscoveryFileConnection(discoveryFilePath()),
+    checkHealth: async (daemon) => {
+      try {
+        // health() also verifies protocol compatibility (see @agent-dock/client).
+        return await new AgentDockClient(daemon).health();
+      } catch {
+        return undefined; // stale file from a daemon that already exited, or not listening yet
+      }
+    },
+  });
+  if (!attached) return false;
+  if (isQuitting || !daemonRespawn.isCurrentGeneration(generation)) {
+    // Superseded, or the app started quitting while the check was in flight: either way this
+    // generation has nothing left to retry, so report "handled" without taking further action.
+    console.warn('[daemon] ignoring stale lock-conflict result from a superseded or quitting spawn attempt');
+    return true;
+  }
+  quitAsDuplicateInstance(generation);
+  return true;
+}
+
+/**
+ * Called once `attachToDaemonAfterLockConflict` confirms a sibling instance's daemon is alive and
+ * reachable: this process is a duplicate Electron instance that should never have started
+ * alongside it (see that function's own comment for how `app.requestSingleInstanceLock()` can
+ * still let this happen). `app.quit()` routes through the existing quit handlers further down this
+ * file: a `before-quit` listener sets `isQuitting` before any window's `close` handler can
+ * intercept it into hiding to the tray instead of actually closing, and another `before-quit`
+ * listener runs `killDaemon()` against this process's own (already-exited) `daemonChild` -- safe,
+ * since `client` was never assigned here and `killDaemon`'s session-cancel call is gated on it.
+ */
+function quitAsDuplicateInstance(generation: number): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  console.warn(
+    '[daemon] lost a discovery-file lock conflict to a sibling instance\'s already-running daemon -- ' +
+      'quitting this duplicate instance rather than running alongside it',
+  );
+  app.quit();
+}
+
+async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const file = discoveryFilePath();
 
   while (Date.now() < deadline) {
+    // The daemon-exit handler's lock-conflict path (`attachToDaemonAfterLockConflict`) runs
+    // concurrently with this same loop, for this same generation, without cancelling it: if that
+    // path already settled this generation, stop polling for a freshness condition it may never
+    // satisfy instead of spending the rest of the timeout only to throw a bogus failure below.
+    if (adoptedGeneration === generation) return;
     if (existsSync(file) && statSync(file).mtimeMs >= spawnedAt - 1000) {
       try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        const candidate = new AgentDockClient({ baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token });
-        // health() also verifies protocol compatibility (see @agent-dock/client) — this doubles
+        const daemon = readDiscoveryFileConnection(file);
+        if (!daemon) throw new Error('discovery file mid-write'); // caught below; keep polling
+        const candidate = new AgentDockClient(daemon);
+        // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
-        await candidate.health();
-        client = candidate;
-        sendStatus({ state: 'ready' });
+        const health = await candidate.health();
+        if (!daemonRespawn.isCurrentGeneration(generation)) {
+          // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
+          // stale loop's poll finally landed. Stand down instead of clobbering its state.
+          console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
+          return;
+        }
+        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
-        // bump) a stale daemon still shutting down — keep polling rather than fail on one miss
+        // bump) a stale daemon still shutting down: keep polling rather than fail on one miss
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // One last check: the lock-conflict path may have settled this generation during the final
+  // 200ms sleep above, after the loop's own condition check but before the deadline formally
+  // elapsed.
+  if (adoptedGeneration === generation) return;
   throw new Error('timed out waiting for daemon to become ready');
 }
 
-/** Streams one session's events to the renderer and clears `activeSessionId` at its terminal event. */
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-06: workspace grants.
+ *
+ * Everything below keeps one rule: the renderer never sees a filesystem path. It asks for a grant
+ * (naming only a provider), main runs the native picker and the native confirmation dialog, and
+ * what comes back is an opaque handle plus a bounded folder name. The path lives in the grant
+ * record in this process and is handed only to the daemon, over loopback, at consumption time.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+const PROVIDER_DISPLAY_NAMES: Readonly<Record<ProviderId, string>> = Object.freeze({
+  claude: 'Claude Code',
+  codex: 'Codex',
+});
+
+/** How long one control-plane call to the daemon may take before this process gives up on it.
+ * Every route this function reaches (queue ops, trust, audit) is a fast, bounded, local operation --
+ * nothing here is a real AI generation call (those go through `@agent-dock/client`'s own streaming
+ * session API, not this helper). 30s is generous for any of them, while still bounded: a hung daemon
+ * without this would hang the caller forever, which for the application-pipeline tick (issue found
+ * live this session) meant one stuck request permanently wedging the whole recurring preparation
+ * worker -- its in-flight guard (now `applicationPipelineTick.inFlight`, see `tick.ts`) never reset,
+ * so every future 15s tick silently no-op'd forever, with no error ever logged, since nothing ever
+ * actually rejected. */
+const DAEMON_FETCH_TIMEOUT_MS = 30 * 1000;
+
+/** One authenticated request to a daemon route `@agent-dock/client` does not model. */
+async function daemonFetch(path: string, init: { method: string; body?: unknown }): Promise<Response> {
+  if (!daemonConnection) throw new Error('daemon is not ready yet');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DAEMON_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(`${daemonConnection.baseUrl}${path}`, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${daemonConnection.token}`,
+        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Every message this process is willing to show for a daemon refusal, keyed by the daemon's code. */
+const DAEMON_REFUSAL_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  unc_workspace_unsupported:
+    'network locations are not supported as agent workspaces. Choose a folder on a local drive: a ' +
+    'network path cannot be given a stable identity, so the app cannot guarantee that the folder ' +
+    'you approve is the folder the agent later runs in.',
+  invalid_workspace_path: 'this folder could not be read, so it cannot be used as an agent workspace',
+  workspace_not_reusable:
+    'this folder cannot be used as an agent workspace: the filesystem does not report a stable ' +
+    'identity for it. Choose a folder on a local disk.',
+  audit_log_full:
+    'the security log is full, so this action was refused rather than performed unrecorded. ' +
+    'Archive it and restart the app.',
+  audit_unavailable:
+    'the security log is not writable, so this action was refused rather than performed unrecorded. ' +
+    'Restart the app.',
+  audit_write_failed: 'this action could not be recorded in the security log, so it was not performed',
+});
+
+/**
+ * The renderer-facing message for a daemon refusal, chosen from the closed table above by the
+ * daemon's machine-readable `code` and **never** taken from its `error` text.
+ *
+ * The previous version returned `body.error` verbatim, which is a path leak waiting to happen: an
+ * audit-store failure's message quotes the filesystem error that caused it, and that error names the
+ * daemon's log file. Reading only `code` means a message this process did not write can never reach
+ * the renderer, whatever a future daemon build decides to put in `error`. It is the same defensive
+ * shape `consumeGrant` below already used, applied to the two calls that did not have it.
+ *
+ * An unrecognized code falls back to the caller's own fixed message rather than to the daemon's
+ * text, so a code added daemon-side later degrades to a vague message, never to an unreviewed one.
+ */
+async function daemonRefusal(res: Response, fallback: string): Promise<{ message: string; code: string }> {
+  let code = '';
+  try {
+    const body = (await res.json()) as { code?: unknown };
+    if (typeof body.code === 'string') code = body.code;
+  } catch {
+    // A body that is not JSON tells us nothing beyond the status, which the fallback already covers.
+  }
+  return { message: DAEMON_REFUSAL_MESSAGES[code] ?? fallback, code };
+}
+
+/**
+ * Replaces the tracked daemon instance, expiring every outstanding grant when it actually changed.
+ *
+ * The first observation (`daemonInstanceId === undefined`) is adoption, not a change, so a normal
+ * startup expires nothing. Every later differing value is a restart.
+ */
+function adoptDaemonInstance(nextInstanceId: string | undefined): void {
+  if (daemonInstanceId !== undefined && nextInstanceId !== daemonInstanceId) {
+    const expired = workspaceGrants.expireAll('daemon_generation');
+    if (expired.length > 0) {
+      void workspaceGrants.reportExpiries(expired, 'daemon_generation', 'daemon_restart');
+    }
+  }
+  daemonInstanceId = nextInstanceId;
+}
+
+const workspaceGrants = new WorkspaceGrantManager({
+  async inspectWorkspace({ path, provider }): Promise<WorkspaceTrustView> {
+    const res = await daemonFetch('/v2/workspaces/inspect', { method: 'POST', body: { path, provider } });
+    if (!res.ok) {
+      const refusal = await daemonRefusal(res, 'this folder could not be inspected');
+      throw new WorkspaceGrantRefusedError(refusal.message, refusal.code || 'inspect_failed');
+    }
+    const body = (await res.json()) as { workspace?: unknown };
+    // Parsed rather than cast: this response feeds a security confirmation dialog, and a malformed
+    // one must fail loudly instead of rendering `undefined` where a folder name belongs.
+    return workspaceTrustViewSchema.parse(body.workspace);
+  },
+
+  async consumeGrant(input): Promise<DaemonConsumeOutcome> {
+    const res = await daemonFetch('/v2/workspaces/consume-grant', { method: 'POST', body: input });
+    if (res.ok) return { ok: true };
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+    // The daemon's machine-readable code is mapped onto the local reason vocabulary. Anything
+    // unrecognized becomes `not_trusted`, which is the fail-closed direction: an outcome this build
+    // cannot interpret must never read as success.
+    const code = typeof body.code === 'string' ? body.code : '';
+    if (code === 'workspace_identity_drift') return { ok: false, reason: 'identity_drift' };
+    if (code === 'workspace_revoked') return { ok: false, reason: 'trust_revoked' };
+    if (code === 'audit_log_full' || code === 'audit_unavailable' || code === 'audit_write_failed') {
+      return { ok: false, reason: 'audit_failure' };
+    }
+    return { ok: false, reason: 'not_trusted' };
+  },
+
+  /**
+   * `POST /v2/sessions` (ADI-13).
+   *
+   * The response body carries the daemon's full v2 session view, and that view has a `cwd` field --
+   * a real filesystem path. So the result is **rebuilt field by field** here rather than passed
+   * through, on the same principle as `toGrantOffer` in preload.ts: a path cannot cross a boundary
+   * it was never copied across, whatever a future daemon build decides to include.
+   *
+   * Failures are mapped from the daemon's machine-readable `code` only, never from its `error` text,
+   * for the reason `daemonRefusal` documents: an audit-store failure's message quotes the filesystem
+   * error that names the daemon's log file.
+   */
+  async createSession(input): Promise<DaemonCreateSessionOutcome> {
+    const res = await daemonFetch('/v2/sessions', { method: 'POST', body: input });
+
+    if (res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { session?: unknown };
+      const session = body.session as Record<string, unknown> | undefined;
+      if (!session || typeof session.id !== 'string') return { ok: false, reason: 'refused' };
+      return {
+        ok: true,
+        session: {
+          sessionId: session.id,
+          // The provider the caller's ref named, never the one the response claimed: this process
+          // knows which workspace it asked about, and echoing the body would be one more field a
+          // future change could widen.
+          provider: input.provider,
+          status: typeof session.status === 'string' ? session.status : 'starting',
+          ...(typeof session.model === 'string' ? { model: session.model } : {}),
+        },
+      };
+    }
+
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown };
+    const code = typeof body.code === 'string' ? body.code : '';
+    return { ok: false, reason: daemonSessionRefusalReason(code) };
+  },
+
+  async recordGrantEvent(input): Promise<void> {
+    const res = await daemonFetch('/v2/workspaces/grant-events', { method: 'POST', body: input });
+    if (!res.ok) {
+      // `audit_failure` is kept as the code regardless of which audit fault the daemon reported:
+      // this is the grant manager's own reason vocabulary, and the daemon's finer distinction
+      // (full vs unwritable) is already reflected in the message chosen from the closed table.
+      const refusal = await daemonRefusal(
+        res,
+        'this action could not be recorded in the security log, so it was not performed',
+      );
+      throw new WorkspaceGrantRefusedError(refusal.message, 'audit_failure');
+    }
+  },
+
+  async pickDirectory(): Promise<string | null> {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose a folder for the agent to work in',
+      properties: ['openDirectory'],
+    });
+    const picked = result.filePaths[0];
+    if (result.canceled || !picked) return null;
+    return picked;
+  },
+
+  confirm: (input) => confirmWorkspaceGrant(mainWindow, input),
+  daemonInstanceId: () => daemonInstanceId,
+  providerName: (provider) => PROVIDER_DISPLAY_NAMES[provider],
+  onEvent: (message, meta) => console.warn(`[workspace-grant] ${message}`, meta ?? {}),
+});
+
+/** Expires (and audits) every grant a `WebContents` holds. Wired to navigation and destruction. */
+function expireGrantsForWebContents(webContentsId: number, reason: GrantExpiryReason): void {
+  const expired = workspaceGrants.expireForWebContents(webContentsId, reason);
+  if (expired.length === 0) return;
+  void workspaceGrants.reportExpiries(
+    expired,
+    reason,
+    reason === 'navigation' ? 'navigation' : 'policy',
+  );
+}
+
+/**
+ * Streams one v1 session's **raw** events to the renderer on `daemon:session-event`.
+ *
+ * This is the CV/Letters path (`useAgentRun`), and ADI-07 leaves what it *does* byte-identical:
+ * every envelope is pushed unmodified, on the same channel, and a stream failure still synthesizes
+ * the same non-recoverable `error` event that `useAgentRun` depends on to stop waiting for a
+ * terminal event that can no longer come.
+ *
+ * The only change is bookkeeping: the controller is registered per session id in `v1EventForwards`
+ * instead of overwriting one shared `activeStreamAbort`, and the terminal-event branch no longer
+ * writes to a global nothing read. See `v1EventForwards` for why that pair had to go.
+ *
+ * It is deliberately **not** replaced by ADI-07's sanitizing relay. The two serve different
+ * consumers over different contracts: this one hands raw envelopes to a one-shot text runner
+ * working in an app-owned scratch directory, while the new relay carries sanitized entries for
+ * concurrent sessions running in the user's own folders. Folding them together would either
+ * redact v1 (breaking `useAgentRun`) or un-redact v2 (breaking the boundary ADI-07 exists to add).
+ */
+/**
+ * Issue #396: a session started with a staged CV attachment registers its staging directory here so
+ * it gets cleaned up once (and only once) the session is truly done -- not right after
+ * `client.sessions.create()` returns, which only means the daemon accepted the request and started
+ * the provider process. For Codex specifically, the attachment path is handed to the CLI as an argv
+ * flag (`-i`/`--image`) that the subprocess reads on its own after starting, not bytes the daemon
+ * reads up front the way Claude's `stream-json` payload does -- deleting the file on `create()`'s
+ * own return could race that read. `ATTACHMENT_CLEANUP_BACKSTOP_MS` is a main-process-side timeout
+ * independent of the renderer's own (`useAgentRun`'s `RUN_TIMEOUT_MS`): it fires even if the
+ * renderer that started this session is gone (reloaded, crashed) and never gets to cancel it.
+ */
+const pendingAttachmentCleanup = new Map<string, { dir: string; timer: ReturnType<typeof setTimeout> }>();
+const ATTACHMENT_CLEANUP_BACKSTOP_MS = 10 * 60 * 1000;
+
+function registerAttachmentCleanup(sessionId: string, dir: string): void {
+  const timer = setTimeout(() => {
+    pendingAttachmentCleanup.delete(sessionId);
+    void cleanupStagedPath(dir);
+    if (client) void client.sessions.cancel(sessionId).catch(() => {});
+  }, ATTACHMENT_CLEANUP_BACKSTOP_MS);
+  pendingAttachmentCleanup.set(sessionId, { dir, timer });
+}
+
+/** No-op for any session that never had a staged attachment -- safe to call unconditionally. */
+function finishAttachmentCleanup(sessionId: string): void {
+  const pending = pendingAttachmentCleanup.get(sessionId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingAttachmentCleanup.delete(sessionId);
+  void cleanupStagedPath(pending.dir);
+}
+
 function forwardSessionEvents(sessionId: string): void {
   if (!client) return;
   const controller = new AbortController();
-  activeStreamAbort = controller;
+  v1EventForwards.set(sessionId, controller);
   const activeClient = client;
 
   void (async () => {
     try {
       for await (const event of activeClient.sessions.events(sessionId, { signal: controller.signal })) {
         sendToRenderer(mainWindow, 'daemon:session-event', { sessionId, event });
-        if (event.type === 'session.completed' || event.type === 'session.failed' || event.type === 'session.cancelled') {
-          if (activeSessionId === sessionId) activeSessionId = undefined;
-        }
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -260,15 +1079,30 @@ function forwardSessionEvents(sessionId: string): void {
         sessionId,
         event: { type: 'error', message: `event stream failed: ${(err as Error).message}`, recoverable: false },
       });
+    } finally {
+      // Guarded on identity so a re-forwarded session id does not have its successor's
+      // registration deleted by its predecessor's late teardown.
+      if (v1EventForwards.get(sessionId) === controller) v1EventForwards.delete(sessionId);
+      // Reached whether the loop above ended on a genuine terminal event (completed/failed/
+      // cancelled), the synthesized non-recoverable `error` above, or an abort from `killDaemon`
+      // below -- every path a v1 session's forwarding can end on, which is exactly when a staged
+      // attachment (if any) is safe to remove.
+      finishAttachmentCleanup(sessionId);
     }
   })();
 }
 
 async function killDaemon(): Promise<void> {
-  activeStreamAbort?.abort();
+  // Every stream, not "whichever one started last". ADI-07 replaced a single `activeStreamAbort`
+  // global with these two keyed registries precisely so this line means what it always claimed to.
+  agentWorkspaceRelay.detachAll();
+  applicationQueueRelay.detach();
+  closeAllApplicationReviews();
+  for (const controller of [...v1EventForwards.values()]) controller.abort();
+  v1EventForwards.clear();
   if (client) {
     try {
-      // Cancels every in-flight session over HTTP, not just `activeSessionId` — on Windows,
+      // Cancels every in-flight session over HTTP, not just `activeSessionId`: on Windows,
       // daemonChild.kill() below maps to TerminateProcess, which never gives the daemon's own
       // SIGTERM handler (and its cancelAll()) a chance to run, so this HTTP call is the only
       // reliable way to stop every session's CLI process on that platform. Tracking a single
@@ -280,13 +1114,17 @@ async function killDaemon(): Promise<void> {
     }
   }
   daemonChild?.kill();
+  // Issue #396: a final unconditional sweep, so a CV staged for transcription but never consumed
+  // (the user closed the app instead of answering the consent prompt) or a session whose own
+  // per-session cleanup above hasn't run yet does not survive process exit.
+  await sweepStaleStagedAttachments(await ensureAiWorkspaceDir(), { force: true });
 }
 
 const packagedEntryUrl = pathToFileURL(join(__dirname, '..', 'dist', 'index.html')).href;
 
 /**
  * Scopes `will-navigate` to exactly the app's own content instead of "any http(s) origin that
- * happens to start with the dev-server URL" or "any file:// path at all" — both of the previous
+ * happens to start with the dev-server URL" or "any file:// path at all". Both of the previous
  * checks were prefix-based (`url.startsWith(...)`), which a URL like
  * `http://localhost:5173.evil.example` passes against an allowed `http://localhost:5173`. Real
  * origin comparison (dev) and exact-path comparison against the one file this app ever loads
@@ -304,7 +1142,7 @@ function isAllowedNavigationTarget(url: string): boolean {
   return url === packagedEntryUrl;
 }
 
-/** Drops any non-http(s) URL rather than handing it to the OS shell — see external-url.ts. */
+/** Drops any non-http(s) URL rather than handing it to the OS shell. See external-url.ts. */
 function openExternalIfSafe(url: string): void {
   if (!isSafeExternalUrl(url)) return;
   void shell.openExternal(url);
@@ -320,6 +1158,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 720,
+    minWidth: 760,
+    minHeight: 600,
     ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
@@ -336,18 +1176,47 @@ function createWindow(): void {
     openExternalIfSafe(url);
     return { action: 'deny' };
   });
+
+  // Captured eagerly, and used by both handlers below. Reading `webContents.id` inside the
+  // `destroyed` handler would be reading a property of an object Electron has already torn down,
+  // which is exactly the moment the id is needed.
+  const webContentsId = mainWindow.webContents.id;
+  // ADI-16: the same id, published to the IPC sender guard. Assigned here rather than derived from
+  // `mainWindow` on demand so that the guard reads a plain number and never touches a possibly
+  // destroyed `BrowserWindow`, and so a window recreated by macOS's `activate` (which reassigns
+  // `mainWindow`) simply replaces it.
+  mainWindowWebContentsId = webContentsId;
+
   mainWindow.webContents.on('will-navigate', (event, url) => {
+    // ADI-06: every navigation attempt expires this WebContents' grants, including one to an
+    // allowed target. A grant is bound to the page the user was looking at when they approved it,
+    // and a reload replaces that page: the new document never showed anyone a dialog, so it must
+    // ask again. Expiring before the allow-check means a same-origin reload is covered too.
+    expireGrantsForWebContents(webContentsId, 'navigation');
     if (isAllowedNavigationTarget(url)) return;
     event.preventDefault();
     openExternalIfSafe(url);
   });
 
-  // Deny every permission request by default — nothing in this UI currently asks for camera,
-  // microphone, geolocation, notifications, etc, so there's no legitimate request to allow.
-  // Electron's own per-permission/per-platform defaults are inconsistent; this makes the policy
-  // explicit and uniform instead of relying on them.
-  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
+  // A destroyed WebContents can never present a handle again, but the record would otherwise sit in
+  // the map until its TTL, still consumable by a `webContentsId` the OS is free to reuse.
+  mainWindow.webContents.on('destroyed', () => {
+    expireGrantsForWebContents(webContentsId, 'webcontents_destroyed');
+    // ADI-16: stop answering IPC for an id whose window no longer exists. Guarded on identity so a
+    // late teardown of an older window cannot clear the id of the one that replaced it -- the same
+    // reason `forwardSessionEvents` checks controller identity before deleting its registration.
+    if (mainWindowWebContentsId === webContentsId) mainWindowWebContentsId = undefined;
+  });
+
+  // Deny every permission request by default except the one this UI genuinely uses:
+  // `clipboard-sanitized-write`, requested by `navigator.clipboard.writeText` for the "Copy to
+  // clipboard" (CoverLetter.tsx, LetterGenerator.tsx) and "Copy diagnostics" (AboutSection.tsx)
+  // buttons. Nothing here reads the clipboard or asks for camera, microphone, geolocation,
+  // notifications, etc, so there's no other legitimate request to allow. Electron's own
+  // per-permission/per-platform defaults are inconsistent; this makes the policy explicit and
+  // uniform instead of relying on them.
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'clipboard-sanitized-write');
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -359,35 +1228,904 @@ function createWindow(): void {
   mainWindow.webContents.on('did-finish-load', () => {
     if (client) sendStatus({ state: 'ready' });
   });
+
+  // #194: when the setting is on, closing the window hides it to the tray instead of quitting --
+  // `isQuitting` (set only by the tray's own "Quit" item and `before-quit`) distinguishes that from
+  // an actual app quit, since both reach this same `close` event.
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !minimizeToTrayOnClose) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
 }
 
-ipcMain.handle('daemon:get-status', (): DaemonStatus => (client ? { state: 'ready' } : { state: 'connecting' }));
+/**
+ * Windows-only (see electron-builder.yml: no `linux:`/`mac:` target). Built once and held at
+ * module scope -- Electron destroys a `Tray` instance the moment it's garbage-collected, so a
+ * local variable here would silently vanish the tray icon at an unpredictable point.
+ */
+function createTray(): void {
+  const iconPath = resolveTrayIcon({
+    appPath: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+  });
+  if (!iconPath) return;
 
-ipcMain.handle('daemon:list-providers', async () => {
+  tray = new Tray(iconPath);
+  tray.setToolTip('Open Vacancy Radar');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Open Open Vacancy Radar',
+        click: () => {
+          if (!mainWindow) {
+            createWindow();
+            return;
+          }
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  tray.on('click', () => {
+    if (!mainWindow) {
+      createWindow();
+      return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * ADI-16: every channel below is registered through `guardedIpc`, never through `ipcMain` directly.
+ *
+ * `guardedIpc.handle` is `ipcMain.handle` with one thing added: before the listener runs at all, the
+ * invoking event's sender is checked to be the top-level frame of the window `createWindow()` built.
+ * Anything else -- a subframe, a second window, a `<webview>`, a devtools-hosted page -- is refused
+ * with a fixed message and never reaches the handler body. See electron/ipc-sender-guard.ts for what
+ * "the main window's own top-level frame" means mechanically and why `event.sender.id` alone is not
+ * it.
+ *
+ * A direct registration on `ipcMain` anywhere under electron/ fails test/ipc-sender-guard.test.ts, so a
+ * handler added later without this cannot ship unverified. `ipcMain` is imported solely to be handed
+ * to `createGuardedIpc` below.
+ * ---------------------------------------------------------------------------------------------
+ */
+const guardedIpc = createGuardedIpc(ipcMain, {
+  mainWindowWebContentsId: () => mainWindowWebContentsId,
+  onRejected: ({ channel }) =>
+    // No payload, no sender id, no frame detail: a rejection is a security event worth seeing in the
+    // log, and the channel name alone says which surface was probed. Everything else would either
+    // repeat what the renderer already sent or describe this process's internals.
+    console.warn(`[ipc-sender-guard] refused an invoke on '${channel}' from an unverified sender`),
+});
+
+const applicationDataResetGate = new ApplicationDataResetGate();
+
+guardedIpc.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
+
+guardedIpc.handle('daemon:list-providers', async () => {
   if (!client) throw new Error('daemon is not ready yet');
   return client.providers.list();
 });
 
-ipcMain.handle('daemon:create-session', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:mcp-statuses', async () => {
   if (!client) throw new Error('daemon is not ready yet');
-  // Validated here too, at the IPC boundary from the (untrusted) renderer — @agent-dock/client
+  return client.mcp.statuses();
+});
+
+guardedIpc.handle('daemon:mcp-search', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  return client.mcp.search(mcpSearchRequestSchema.parse(input));
+});
+
+guardedIpc.handle('daemon:mcp-set-credential', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  await client.mcp.setCredential(mcpCredentialInputSchema.parse(input));
+});
+
+guardedIpc.handle('daemon:mcp-remove', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  await client.mcp.remove(mcpProviderIdSchema.parse(input));
+});
+
+guardedIpc.handle('daemon:create-session', async (_event, input: unknown) => {
+  if (!client) throw new Error('daemon is not ready yet');
+  // Validated here too, at the IPC boundary from the (untrusted) renderer. @agent-dock/client
   // validates again before it ever builds a request, but that's a different concern (protecting
   // the client's own contract), not a substitute for validating what crossed the privileged
   // boundary from the renderer in the first place.
-  const parsed = createSessionRequestSchema.parse(input);
-  const session = await client.sessions.create(parsed);
-  activeSessionId = session.id;
+  //
+  // `cwd` is parsed away and never read from `input` (issue #175): a renderer that attaches one
+  // has it dropped here, the same rule the workspace-grant channels already apply to `path`/`cwd`.
+  // main always substitutes the app-owned AI-workspace scratch dir itself, so this channel can no
+  // more be pointed at an arbitrary directory than those are -- the daemon's own `cwd` validation
+  // (`existsSync`/`isDirectory` in `routes/sessions.ts`) is intentionally left permissive, since it
+  // is reached only by this now-pinned call, never directly by the renderer.
+  //
+  // `attachments` is dropped the same way: the daemon-facing schema's `attachments` field takes a
+  // real filesystem path per entry, and this channel must never accept one of those from the
+  // renderer (issue #396). The only way to attach a file through this channel is the separate,
+  // opaque `attachmentCandidateId` handled below, which this process resolves to a path itself.
+  const parsed = createSessionRequestSchema.omit({ cwd: true, attachments: true }).parse(input);
+
+  // Issue #396: resolves a `cv:select-and-read`-issued candidate id (never a path) to the staged
+  // PDF this same process copied there, only after the user answered the native consent dialog
+  // that call already showed. `attachmentCandidateId` is not part of the daemon's own request
+  // schema at all -- it is a desktop-app-level indirection over `attachments`, read straight off
+  // `input` rather than through `parsed`, the same way `cwd` above is handled outside the schema
+  // it is later merged back into.
+  const attachmentCandidateId =
+    input && typeof input === 'object' && typeof (input as Record<string, unknown>).attachmentCandidateId === 'string'
+      ? (input as Record<string, unknown>).attachmentCandidateId as string
+      : undefined;
+  let attachments: { path: string; mimeType: string }[] | undefined;
+  let stagedDir: string | undefined;
+  // Overridden below, never left to the renderer's own claim, once a candidate is being consumed:
+  // a candidate id only ever means "the user consented to sending this file to this provider, for
+  // this transcription prompt" (the security review for issue #396 flagged that leaving these to
+  // the renderer would let a compromised one redeem a real consent for a different provider or a
+  // different, self-chosen prompt -- neither of which the user actually agreed to).
+  let provider = parsed.provider;
+  let prompt = parsed.prompt;
+  if (attachmentCandidateId) {
+    const staged = consumeStagedCvAttachment(attachmentCandidateId);
+    if (!staged) {
+      throw new Error('this file is no longer available for transcription; please pick it again');
+    }
+    attachments = [{ path: staged.path, mimeType: staged.mimeType }];
+    stagedDir = staged.dir;
+    provider = staged.provider;
+    prompt = CV_TRANSCRIPTION_PROMPT;
+  }
+
+  let session;
+  try {
+    session = await client.sessions.create({
+      ...parsed,
+      provider,
+      prompt,
+      // A dedicated per-candidate directory containing only this one staged file, rather than the
+      // shared `ensureAiWorkspaceDir()` root every other v1 session uses (issue #396's security
+      // review): that shared directory is documented elsewhere as deliberately empty so a session
+      // "looking around on its own finds nothing of the user's in reach", an invariant a staged CV
+      // would otherwise quietly break for every other concurrently-running session.
+      cwd: stagedDir ?? (await ensureAiWorkspaceDir()),
+      ...(attachments ? { attachments } : {}),
+    });
+  } catch (err) {
+    // The session never started: nothing will ever emit the terminal event `forwardSessionEvents`
+    // below would otherwise clean this up on, so it is this catch's job instead.
+    if (stagedDir) await cleanupStagedPath(stagedDir);
+    throw err;
+  }
+  // `activeSessionId = session.id` used to sit here. It was write-only state (see `v1EventForwards`
+  // above): nothing ever read it, and tracking "the one session" is the shape ADI-07 removes.
+  if (stagedDir) registerAttachmentCleanup(session.id, stagedDir);
   forwardSessionEvents(session.id);
   return session;
 });
 
-ipcMain.handle('daemon:cancel-session', async (_event, input: unknown) => {
+guardedIpc.handle('daemon:cancel-session', async (_event, input: unknown) => {
   if (!client) throw new Error('daemon is not ready yet');
   const { sessionId } = sessionIdParamSchema.parse({ sessionId: input });
   await client.sessions.cancel(sessionId);
 });
 
-ipcMain.handle('dialog:select-directory', async () => {
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Workspace grant IPC (ADI-06).
+ *
+ * Three channels, and **none of them accepts a path**. `workspace-grant:request` takes a provider
+ * id and nothing else, so a renderer that sends a path along has it dropped here; the folder can
+ * only ever come from the native picker main opens. `workspace-grant:consume` and
+ * `workspace-grant:status` take a 43-character opaque handle. Every response is built field by
+ * field from a bounded display object, never passed through from the grant record.
+ *
+ * `dialog:select-directory` above is deliberately NOT retrofitted into this system. It is a
+ * pre-v2 bridge the existing Run panel depends on, grandfathered per ADI-07's framing, and folding
+ * it in would change v1 behavior that this ticket promises to leave byte-identical.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+guardedIpc.handle('workspace-grant:request', async (event, input: unknown) => {
+  // Parsed from the whole payload's `provider` field only. Anything else a renderer attached
+  // (a `path`, a `cwd`, a pre-baked workspace id) has no reader here and cannot reach the daemon.
+  const provider = providerIdSchema.parse(
+    input && typeof input === 'object' ? (input as { provider?: unknown }).provider : input,
+  );
+  return workspaceGrants.requestGrant(provider, event.sender.id);
+});
+
+guardedIpc.handle('workspace-grant:consume', async (event, input: unknown) => {
+  const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
+  // `event.sender.id` is Electron's own, unspoofable identification of the calling frame: the
+  // renderer cannot claim to be a different WebContents than the one the grant was issued to.
+  return workspaceGrants.consumeGrant(handle, event.sender.id);
+});
+
+guardedIpc.handle('workspace-grant:status', (event, input: unknown) => {
+  void event;
+  const handle = input && typeof input === 'object' ? (input as { grantHandle?: unknown }).grantHandle : input;
+  return workspaceGrants.grantStatus(handle);
+});
+
+/**
+ * `workspace:start-session` (ADI-13): the fourth channel, and the first one that starts real work.
+ *
+ * It takes an opaque workspace session ref, a prompt, and optionally a resume target and a
+ * capability list. **Exactly four fields are read**, and none of them can name a location: a
+ * renderer that attaches `path`, `cwd`, `workspaceId`, or `incarnation` has those arguments dropped
+ * here, because nothing below looks for them. The real path and identity come from the ref record
+ * held in this process, which was populated when the daemon confirmed the user's grant.
+ *
+ * The response is rebuilt in `createSession` above and is reason-only on failure, so no path and no
+ * daemon-authored text crosses back either.
+ */
+guardedIpc.handle('workspace:start-session', async (event, input: unknown) => {
+  const payload = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  return workspaceGrants.startSession(
+    {
+      workspaceSessionRef: payload.workspaceSessionRef,
+      prompt: payload.prompt,
+      resumeProviderSessionId: payload.resumeProviderSessionId,
+      capabilities: payload.capabilities,
+    },
+    // Electron's own unspoofable identification of the calling frame, same as the consume channel.
+    event.sender.id,
+  );
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * AI Workspace IPC (ADI-07): the seventh preload namespace.
+ *
+ * The five channels, their paging helpers, and their per-session tool-call alias book all live in
+ * electron/agent-workspace-ipc.ts, not here. Nothing in this module's scope belongs to the feature
+ * beyond the handful of lines below, and that is the point: main.ts's other ~fifty channels cannot
+ * be reached by it, and rolling the feature back is deleting one call rather than untangling
+ * shared globals. See that module's docstring for the no-location rule all five channels keep.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Shared by the live relay and the history reader so both agree on a session's tool aliases. */
+const aliasesForSession = createSessionAliasBook();
+
+const agentWorkspaceRelay = new AgentWorkspaceRelay({
+  // Read fresh rather than captured: `client` is replaced on a daemon restart.
+  client: () => client,
+  aliasesFor: aliasesForSession,
+  push: (message: ActivityPush) => sendToRenderer(mainWindow, AGENT_WORKSPACE_ACTIVITY_CHANNEL, message),
+  onEvent: (message, meta) => console.warn(`[agent-workspace] ${message}`, meta ?? {}),
+});
+
+/** One authenticated GET against a v2 read route, returning the parsed body or `undefined`. */
+async function daemonGetJson(path: string): Promise<Record<string, unknown> | undefined> {
+  const res = await daemonFetch(path, { method: 'GET' });
+  if (!res.ok) {
+    if (res.status === 404) return undefined;
+    // No daemon-authored text crosses: the caller turns this into its own fixed message, the same
+    // discipline `daemonRefusal` applies to the workspace routes.
+    throw new Error(`the agent runtime refused this request (status ${res.status})`);
+  }
+  const body: unknown = await res.json().catch(() => undefined);
+  return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+}
+
+registerAgentWorkspaceHandlers(guardedIpc, {
+  getJson: daemonGetJson,
+  aliasesFor: aliasesForSession,
+  relay: agentWorkspaceRelay,
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * #200: the daemon-owned application queue. Content-free by design (see
+ * `application-queue-store.ts`'s own doc comment) -- these handlers only ever pass an opaque
+ * attempt id back and forth, never a job description, a CV, or a rendered file. Reaches the daemon
+ * via `daemonFetch`/`daemonGetJson` rather than `@agent-dock/client`, matching every other v2
+ * surface in this file (see that pair's own doc comments for why).
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * Incrementally parses the daemon's application-queue SSE byte stream. A close cousin of
+ * `@agent-dock/client`'s internal `parseSseStream`, reimplemented locally rather than imported: that
+ * one is tied to `agentEventEnvelopeSchema` (the AI-session protocol), and this stream carries a
+ * different, much simpler event shape this app's own daemon defines, not a shared protocol type.
+ */
+async function* parseApplicationQueueSseStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<ApplicationQueueEvent, void, void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const onAbort = () => void reader.cancel().catch(() => {});
+  signal.addEventListener('abort', onAbort);
+  try {
+    while (true) {
+      if (signal.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex: number;
+      while ((separatorIndex = buffer.indexOf('\n\n')) >= 0) {
+        const rawFrame = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const dataLine = rawFrame.split('\n').find((line) => line.startsWith('data: '));
+        if (!dataLine) continue; // comment/keepalive frame (the daemon's leading ":ok")
+        try {
+          yield JSON.parse(dataLine.slice('data: '.length)) as ApplicationQueueEvent;
+        } catch {
+          // A malformed frame from this app's own daemon is not worth ending the whole relay over;
+          // the next well-formed frame still arrives.
+        }
+      }
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+const applicationQueueEventSource: ApplicationQueueEventSource = {
+  events({ signal, lastEventId }) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        if (!daemonConnection) return;
+        const headers: Record<string, string> = { Authorization: `Bearer ${daemonConnection.token}` };
+        if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+        const res = await fetch(`${daemonConnection.baseUrl}/v2/applications/events`, { headers, signal });
+        if (!res.ok || !res.body) return;
+        yield* parseApplicationQueueSseStream(res.body, signal);
+      },
+    };
+  },
+};
+
+/** Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
+ * own "one-way push, not a handle channel" rule. */
+const APPLICATION_QUEUE_ACTIVITY_CHANNEL = 'application-queue:activity';
+
+const applicationQueueRelay = new ApplicationQueueRelay({
+  // Read fresh rather than captured, for the same reason `agentWorkspaceRelay` does: a daemon
+  // restart replaces `daemonConnection`, and a relay holding the old one would stream from a
+  // process that no longer exists.
+  client: () => (daemonConnection ? applicationQueueEventSource : undefined),
+  push: (event: ApplicationQueueEvent) => sendToRenderer(mainWindow, APPLICATION_QUEUE_ACTIVITY_CHANNEL, event),
+  onEvent: (message, meta) => console.warn(`[application-queue] ${message}`, meta ?? {}),
+});
+
+function parseAttemptId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
+    throw new Error('"attemptId" must be a non-empty string');
+  }
+  return value;
+}
+
+/** Bounds are generous on purpose: the real per-answer size limit for what gets *saved* into the
+ * reusable answer library lives in `workspace/validate.ts`'s `LIMITS.applicationAnswer` (#372) --
+ * this only guards the live-fill IPC call itself against a malformed payload. */
+function parseConfirmApplicationAnswerInput(value: unknown): ConfirmApplicationAnswerInput {
+  const source = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const attemptId = parseAttemptId(source.attemptId);
+  if (typeof source.fieldRef !== 'string' || source.fieldRef.length === 0 || source.fieldRef.length > 200) {
+    throw new Error('"fieldRef" must be a non-empty string');
+  }
+  if (typeof source.value !== 'string' || source.value.length === 0 || source.value.length > 10_000) {
+    throw new Error('"value" must be a non-empty string of at most 10,000 characters');
+  }
+  if (typeof source.fieldIndex !== 'number' || !Number.isInteger(source.fieldIndex) || source.fieldIndex < 0) {
+    throw new Error('"fieldIndex" must be a non-negative integer');
+  }
+  return { attemptId, fieldRef: source.fieldRef, value: source.value, fieldIndex: source.fieldIndex };
+}
+
+guardedIpc.handle('application-queue:enqueue', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const attemptId = parseAttemptId(input);
+    const res = await daemonFetch('/v2/applications', { method: 'POST', body: { attemptId } });
+    if (!res.ok) throw new Error(await applicationQueueRefusal(res, 'could not add this attempt to the queue'));
+    return ((await res.json()) as { entry: unknown }).entry;
+  });
+});
+
+/**
+ * The shared body for pause/resume/skip/cancel: identical shape, only the daemon path verb
+ * differs. Each channel is still registered through its own separate, literal-string
+ * `guardedIpc.handle` call below, rather than this function looping over a channel list --
+ * `test/ipc-sender-guard.test.ts` finds every registration by scanning main.ts's source text for
+ * exactly that call shape with a literal first argument, so a channel name built from a variable
+ * would be invisible to that audit even though the guard itself would still work correctly at
+ * runtime.
+ */
+async function applicationQueueTransition(verb: 'pause' | 'resume' | 'skip' | 'cancel', input: unknown) {
+  const attemptId = parseAttemptId(input);
+  const res = await daemonFetch(`/v2/applications/${encodeURIComponent(attemptId)}/${verb}`, { method: 'POST' });
+  if (!res.ok) throw new Error(await applicationQueueRefusal(res, `could not ${verb} this attempt`));
+  return ((await res.json()) as { entry: unknown }).entry;
+}
+guardedIpc.handle('application-queue:pause', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('pause', input)),
+);
+guardedIpc.handle('application-queue:resume', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('resume', input)),
+);
+guardedIpc.handle('application-queue:skip', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('skip', input)),
+);
+guardedIpc.handle('application-queue:cancel', (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(() => applicationQueueTransition('cancel', input)),
+);
+
+guardedIpc.handle('application-queue:get-status', async () => {
+  const body = await daemonGetJson('/v2/applications');
+  return body ?? { entries: [], lease: null };
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Application executor IPC (issues #201, #202). Four channels over
+ * `application-review-session.ts`'s per-attempt registry: `open-review` creates an isolated
+ * browser view and returns a snapshot, `apply-field-map` validates and applies a field map against
+ * it, `submit-review` runs the pre-submit gate and clicks the real submit control, `close-review`
+ * tears the view down. `policyId` is the only policy-related value that ever crosses this boundary
+ * -- the renderer cannot supply origins, upload constraints, or kill switches; those are resolved
+ * main-process side from the compiled table in `application-target-policies.ts`, and today that
+ * table's one entry is fixture-only (`killSwitches.submit` on for every other target that might
+ * ever be added -- see that file's own comment). `submit-review` itself performs no confirmation
+ * step: the renderer must not call it before the user has explicitly reviewed and confirmed this
+ * specific attempt, per #196's trust-domain split -- confirmation is the caller's job, not this
+ * channel's.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+function parsePolicyId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) {
+    throw new Error('"policyId" must be a non-empty string');
+  }
+  return value;
+}
+
+function parseTargetUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2000) {
+    throw new Error('"targetUrl" must be a non-empty string');
+  }
+  try {
+    new URL(value);
+  } catch {
+    throw new Error('"targetUrl" must be a valid URL');
+  }
+  return value;
+}
+
+function parseOpenReviewInput(input: unknown): OpenApplicationReviewInput {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return {
+    attemptId: parseAttemptId(source.attemptId),
+    policyId: parsePolicyId(source.policyId),
+    targetUrl: parseTargetUrl(source.targetUrl),
+    ...(source.refresh === true ? { refresh: true } : {}),
+  };
+}
+
+const VALUE_PROVENANCES = ['cv', 'profile', 'user_answer', 'jd'] as const;
+
+function parseValueTable(value: unknown): ApplicationValueTableEntryInput[] {
+  if (!Array.isArray(value)) throw new Error('"valueTable" must be an array');
+  return value.map((entry, index) => {
+    const source = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
+    if (typeof source.valueRef !== 'string' || source.valueRef.length === 0) {
+      throw new Error(`valueTable[${index}].valueRef must be a non-empty string`);
+    }
+    if (typeof source.value !== 'string') {
+      throw new Error(`valueTable[${index}].value must be a string`);
+    }
+    if (typeof source.provenance !== 'string' || !(VALUE_PROVENANCES as readonly string[]).includes(source.provenance)) {
+      throw new Error(`valueTable[${index}].provenance must be one of ${VALUE_PROVENANCES.join(', ')}`);
+    }
+    return { valueRef: source.valueRef, value: source.value, provenance: source.provenance as ApplicationValueTableEntryInput['provenance'] };
+  });
+}
+
+function parseApplyFieldMapInput(input: unknown): ApplyApplicationFieldMapInput {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return {
+    attemptId: parseAttemptId(source.attemptId),
+    // Untrusted beyond this point: `validateFieldMap` (#196 §2.4) is the real boundary for this
+    // field, run inside `applyApplicationFieldMap` itself, never here.
+    fieldMap: source.fieldMap,
+    valueTable: parseValueTable(source.valueTable),
+    ...(typeof source.allowJdProvenance === 'boolean' ? { allowJdProvenance: source.allowJdProvenance } : {}),
+  };
+}
+
+guardedIpc.handle('application-executor:open-review', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => openApplicationReview(parseOpenReviewInput(input)));
+});
+
+guardedIpc.handle('application-executor:apply-field-map', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const parsed = parseApplyFieldMapInput(input);
+    const result = await applyApplicationFieldMap(await ensureWorkspaceDb(), parsed);
+    // An upload control the executor may not drive is handed to the user as a real, visible page
+    // (#273) -- not left as a refusal code the renderer might render as a quiet error. The result
+    // still carries `manualHandoff` so the review UI can say which document to pick.
+    if (result.manualHandoff && mainWindow) {
+      showApplicationReviewForHandoff(parsed.attemptId, mainWindow, await ensureWorkspaceDb());
+    }
+    return result;
+  });
+});
+
+guardedIpc.handle('application-executor:confirm-answer', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () =>
+    confirmApplicationAnswer(await ensureWorkspaceDb(), parseConfirmApplicationAnswerInput(input)),
+  );
+});
+
+guardedIpc.handle('application-executor:submit-review', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () =>
+    submitApplicationReview(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
+});
+
+guardedIpc.handle('application-executor:resolve-target-policy', (_event, input: unknown) => {
+  return resolvePolicyIdForCanonicalUrl(parseTargetUrl(input)) ?? null;
+});
+
+guardedIpc.handle('application-executor:close-review', async (_event, input: unknown) => {
+  await closeApplicationReview(parseAttemptId(input));
+});
+
+/*
+ * The live handoff (#277). Two channels, both taking nothing but an attempt id: the renderer can
+ * ask for *its own* attempt's already-open view to be put on screen or taken off it, and can say
+ * nothing else about what happens. It cannot name a window, supply bounds, choose a URL, or reach a
+ * view for an attempt that has no open review -- `showApplicationReviewHandoff` resolves the window
+ * from this module's own `mainWindow` and the view from the main-process registry, exactly as every
+ * other channel here resolves a policy from the compiled table rather than from its caller.
+ */
+guardedIpc.handle('application-executor:show-handoff', async (_event, input: unknown) => {
+  return showApplicationReviewHandoff(await ensureWorkspaceDb(), mainWindow, parseAttemptId(input));
+});
+
+guardedIpc.handle('application-executor:hide-handoff', (_event, input: unknown) => {
+  hideApplicationReviewHandoff(mainWindow, parseAttemptId(input));
+});
+
+function parseRequestAutomationGrantInput(input: unknown): { policyId: string; durationMs: number } {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const durationMs = source.durationMs;
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error('"durationMs" must be a positive number');
+  }
+  return { policyId: parsePolicyId(source.policyId), durationMs };
+}
+
+guardedIpc.handle('application-executor:request-automation-grant', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { policyId, durationMs } = parseRequestAutomationGrantInput(input);
+    const result = await requestAutomationGrant(mainWindow, await ensureWorkspaceDb(), policyId, durationMs);
+    return result.ok ? { ok: true, expiresAt: result.grant.expiresAt } : { ok: false, reason: result.reason };
+  });
+});
+
+guardedIpc.handle('application-executor:schedule-automatic-submission', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () =>
+    evaluateAndScheduleAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input)),
+  );
+});
+
+guardedIpc.handle('application-executor:cancel-scheduled-automatic-submission', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    cancelScheduledAutomaticSubmission(await ensureWorkspaceDb(), parseAttemptId(input));
+  });
+});
+
+guardedIpc.handle('application-executor:record-user-reported-submission', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const db = await ensureWorkspaceDb();
+    const attemptId = parseAttemptId(input);
+    const attempt = workspace.getApplicationAttempt(db, attemptId);
+    const manualState = attempt.checkpoint === 'ready' || attempt.checkpoint === 'needs_user';
+    const artifacts = workspace.listApplicationArtifacts(db, attemptId);
+    if (!manualState || resolvePolicyIdForCanonicalUrl(attempt.canonicalUrl) !== undefined || artifacts.length === 0) {
+      throw new Error('this attempt is not in a prepared manual-application state');
+    }
+    return recordUserReportedSubmission(db, attemptId);
+  });
+});
+
+guardedIpc.handle('application-executor:save-artifact', async (_event, input: unknown) => {
+  if (!mainWindow) return { saved: false };
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: artifact.fileName || 'application-document.pdf',
+    filters: [{ name: 'PDF document', extensions: ['pdf'] }],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+  await cp(artifact.storagePath, result.filePath);
+  return { saved: true };
+});
+
+guardedIpc.handle('application-executor:open-artifact', async (_event, input: unknown) => {
+  const artifact = workspace.getApplicationArtifact(await ensureWorkspaceDb(), parseId(input, 'artifactId'));
+  if (!artifact.storagePath || !existsSync(artifact.storagePath)) {
+    throw new Error('the staged document is no longer available');
+  }
+  const detail = await shell.openPath(artifact.storagePath);
+  return detail ? { opened: false, detail } : { opened: true };
+});
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * #272: the preparation pipeline that joins the pieces above into one production path -- queue,
+ * JD/CV snapshots, document staging, field-map generation, filling, ready-for-review.
+ *
+ * Pipeline IPC takes app-owned record ids, not a URL, company, or job description: everything an
+ * attempt is made of is resolved here, main-process
+ * side, from this app's own records. The renderer cannot name where an application goes, which CV
+ * it is built from, or what text it is tailored against.
+ *
+ * Nothing here changes what happens at the submit decision. This path stops at review; the submit
+ * kill switch, the human confirmation, the rate limits and the CAPTCHA refusal all still sit
+ * between `ready` and any real submission, untouched.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/** Where staged CV/letter PDFs live. App-owned, per-user, and never a path the renderer supplies. */
+function applicationArtifactStorageRoot(): string {
+  return join(app.getPath('userData'), 'application-artifacts');
+}
+
+/** The daemon's queue as the pipeline consumes it. Built here, implemented in
+ * `application-queue-port.ts` -- see that module's own comment for why it is not inline. */
+const applicationQueuePort: ApplicationQueuePort = createApplicationQueuePort({
+  request: daemonFetch,
+  getJson: daemonGetJson,
+  log: (message, meta) => console.warn(`[application-queue] ${message}`, meta ?? {}),
+});
+
+/** The narrow projection of the search profile the pipeline's value table draws on. A profile that
+ * has never been configured produces `null`, contributing no values rather than assumed ones. */
+async function loadApplicationValueProfile(): Promise<ApplicationValueProfile | null> {
+  try {
+    const profile = await loadCandidateProfile(await candidateProfilePath());
+    return {
+      candidateName: profile.candidateName,
+      currentRole: profile.currentRole,
+      location: profile.location,
+      professionalLanguage: profile.constraints.professionalLanguage,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Built once, lazily, and reused: `createDatabaseBackedAtsHttpClient` allocates its own
+// `RequestScheduler` per call, so a fresh client per "Prepare application" click would let each
+// click's own scheduler enforce a full, independent `globalConcurrency`/`perDomainConcurrency`
+// budget on top of every other one already in flight, instead of one shared pool actually limiting
+// the app's total outbound request rate the way the config values are meant to.
+let applicationJdHttpClient: ReturnType<typeof createDatabaseBackedAtsHttpClient> | undefined;
+
+async function ensureApplicationJdHttpClient(): Promise<
+  ReturnType<typeof createDatabaseBackedAtsHttpClient>
+> {
+  if (!applicationJdHttpClient) {
+    const vacancyDb = await ensureVacancyEngine();
+    applicationJdHttpClient = createDatabaseBackedAtsHttpClient(vacancyEngineConfig(), vacancyDb);
+  }
+  return applicationJdHttpClient;
+}
+
+/**
+ * The per-listing description lookup behind `ApplicationPipelineDeps.fetchMissingJobDescription`,
+ * for the two sources whose list scans structurally cannot carry one.
+ *
+ * Jobgether's list endpoint returns no description for any row; `workable_global` reads a
+ * `<description>` off Workable's all-customer feed and deliberately discards it rather than
+ * retaining tens of thousands of full job posts in a compact snapshot. Both have a per-listing
+ * endpoint that does carry the real text, and each fetch function's own doc comment records how it
+ * was confirmed live rather than assumed from documentation.
+ *
+ * Any other source's URL falls through to `null` without a request, exactly as if no fetch had been
+ * attempted -- including one that IS scrapable but bot-gated (Himalayas' public job page, confirmed
+ * separately), which stays an honest refusal rather than something this tries to work around. The
+ * shared HTTP client is only built once a URL is actually recognised, so an unrecognised one never
+ * pays for opening the vacancy-engine database.
+ */
+async function fetchOnDemandJobDescription(canonicalUrl: string): Promise<string | null> {
+  const offerId = jobgetherOfferIdFromUrl(canonicalUrl);
+  const workableJob = workableJobReferenceFromUrl(canonicalUrl);
+  if (offerId === null && workableJob === null) return null;
+  const http = await ensureApplicationJdHttpClient();
+  if (offerId !== null) return (await fetchJobgetherOfferDetail(http, offerId)).description;
+  return workableJob === null ? null : (await fetchWorkableJobDetail(http, workableJob)).description;
+}
+
+async function applicationPipelineDeps(): Promise<ApplicationPipelineDeps> {
+  const db = await ensureWorkspaceDb();
+  return {
+    db,
+    storageRoot: applicationArtifactStorageRoot(),
+    queue: applicationQueuePort,
+    async generateFieldMap(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      // The one production caller `application-generation-runner.ts` was written for. `cwd` is the
+      // app's own empty scratch directory, the same one every other one-shot text session gets:
+      // this session is hardened to the daemon's 'no-network' profile and is never asked to touch
+      // a file.
+      return runFieldMapGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    async generateTailoredResume(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        // Only Claude's adapter implements the daemon's no-network hardening profile.
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    async generateCoverLetter(prompt: string) {
+      if (!client) return { ok: false, text: '', error: 'the agent runtime is not running' };
+      return runTextGeneration(client, {
+        provider: 'claude',
+        cwd: await ensureAiWorkspaceDir(),
+        prompt,
+      });
+    },
+    loadProfile: loadApplicationValueProfile,
+    async fetchMissingJobDescription(canonicalUrl: string) {
+      const description = await fetchOnDemandJobDescription(canonicalUrl);
+      if (description === null) return null;
+      // `complete: true` is a claim about THESE fields specifically, not copied from elsewhere.
+      // Jobgether's per-offer `description` is its own canonical, full-length job-posting text, and
+      // Workable's per-job endpoint is what its apply page itself renders from, description plus
+      // requirements plus benefits (both confirmed live -- see each fetch function's doc comment).
+      // Neither is a preview/teaser field a paywall or an "apply to see more" gate could truncate.
+      // If that ever stops being true for some listing, this would need a real signal to detect it,
+      // not this comment alone.
+      return { description, complete: true };
+    },
+    abandonPreparationAfterMs: APPLICATION_PIPELINE_PREPARATION_CEILING_MS,
+    log: (message, meta) => console.warn(`[application-pipeline] ${message}`, meta ?? {}),
+  };
+}
+
+/**
+ * One vacancy as this app's own discovery data records it, or `undefined` when the latest report
+ * has no row for that key (the report was replaced by a newer scan, or the saved job predates one).
+ *
+ * `applyUrl` is preferred over the raw discovered `url` only when issue #278's own resolver marked
+ * it `verified`; anything weaker falls back to the discovered URL rather than treating a careers
+ * page or an aggregator listing as a place to apply.
+ */
+function resolvePipelineVacancy(vacancyKey: string): PipelineVacancy | undefined {
+  const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+  if (!row) return undefined;
+  const verifiedApplyUrl = row.applyUrl?.status === 'verified' ? row.applyUrl.url : null;
+  return {
+    vacancyKey: row.key,
+    company: row.company,
+    role: row.title,
+    applyUrl: verifiedApplyUrl ?? row.url,
+    description: row.description,
+    // No discovery source this app reads truncates a description: each returns the posting's text
+    // whole or returns none at all (`DiscoveryVacancyAudit.description` is null in that case, never
+    // a shortened string). A source that ever starts truncating has to report that here instead.
+    descriptionComplete: true,
+  };
+}
+
+async function startPipelineForSavedJob(savedJobId: string) {
+  const deps = await applicationPipelineDeps();
+  const job = workspace.listSavedJobs(deps.db).find((saved) => saved.id === savedJobId);
+  if (!job) throw new Error('no such saved job');
+
+  const vacancy = (job.vacancyKey ? resolvePipelineVacancy(job.vacancyKey) : undefined) ?? {
+    vacancyKey: job.vacancyKey,
+    company: job.company,
+    role: job.role,
+    applyUrl: job.sourceUrl ?? '',
+    description: null,
+    descriptionComplete: false,
+  };
+  const result = await startApplicationAttempt(deps, { vacancy });
+  if (result.ok) void applicationPipelineTick.runOnce();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:start', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const savedJobId = parseId(source.savedJobId, 'savedJobId');
+    return startPipelineForSavedJob(savedJobId);
+  });
+});
+
+guardedIpc.handle('application-pipeline:start-from-vacancy', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const vacancyKey = parseId(source.vacancyKey, 'vacancyKey');
+    const row = latestVacancyReport?.discoveryAudit.find((vacancy) => vacancy.key === vacancyKey);
+    if (!row) throw new Error('this vacancy is no longer available in the latest report');
+
+    const db = await ensureWorkspaceDb();
+    let savedJob = workspace.listSavedJobs(db).find((saved) => saved.vacancyKey === vacancyKey);
+    const created = savedJob === undefined;
+    savedJob ??= workspace.createSavedJob(db, {
+      role: row.title,
+      company: row.company,
+      location: row.location,
+      vacancyKey: row.key,
+      matchPercent: row.profileScore,
+      sourceUrl: row.url,
+      status: 'considering',
+    });
+
+    const result = await startPipelineForSavedJob(savedJob.id);
+    if (result.reason === 'attempt_already_in_progress' && result.attemptId) {
+      return { ok: true, attemptId: result.attemptId, savedJobId: savedJob.id, created: false };
+    }
+    return { ...result, savedJobId: savedJob.id, created };
+  });
+});
+
+async function restartTailoring(attemptId: string, mode: 'ai' | 'original') {
+  const result = await restartApplicationTailoring(await applicationPipelineDeps(), attemptId, mode);
+  if (result.ok) void applicationPipelineTick.runOnce();
+  return result;
+}
+
+guardedIpc.handle('application-pipeline:retry-tailoring', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'ai');
+  });
+});
+
+guardedIpc.handle('application-pipeline:use-original-cv', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(() => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    return restartTailoring(parseId(source.attemptId, 'attemptId'), 'original');
+  });
+});
+
+guardedIpc.handle('application-pipeline:resume', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+    const result = await resumeApplicationAttempt(await applicationPipelineDeps(), parseId(source.attemptId, 'attemptId'));
+    if (result.ok) void applicationPipelineTick.runOnce();
+    return result;
+  });
+});
+
+guardedIpc.handle('dialog:select-directory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -395,19 +2133,15 @@ ipcMain.handle('dialog:select-directory', async () => {
 });
 
 /**
- * A scratch directory the CV/AI features hand to `createSession` as its `cwd`. The daemon requires
- * an existing directory, but these two features are one-shot text generation — the CLI is never
- * asked to touch a file. Pointing it at a dedicated, empty, app-owned folder (rather than the
- * user's repo, their home directory, or `os.tmpdir()` which other processes share) means an agent
- * that decided to look around on its own finds nothing of the user's in reach. The renderer only
- * ever learns this one path; it still cannot read or write it.
- *
- * Be precise about what this is and isn't: it is a good *default*, not an enforced sandbox.
- * `daemon:create-session` accepts whatever `cwd` the renderer sends (the Run panel in App.tsx
- * exists to let the user pick an arbitrary one), so "the CV features run in an empty directory" is
- * a convention the renderer follows, not a boundary the main process imposes. Enforcing it would
- * mean main choosing the `cwd` itself for these sessions — worth doing if the generic
- * arbitrary-`cwd` Run panel is ever removed, but pointless while it is still there.
+ * A scratch directory `daemon:create-session` pins as every v1 session's `cwd` (issue #175). The
+ * daemon requires an existing directory, but the CV/AI features this channel serves are one-shot
+ * text generation: the CLI is never asked to touch a file. Pointing it at a dedicated, empty,
+ * app-owned folder (rather than the user's repo, their home directory, or `os.tmpdir()` which
+ * other processes share) means an agent that decided to look around on its own finds nothing of
+ * the user's in reach. The renderer only ever learns this one path; it still cannot read or write
+ * it, and as of #175 it can no longer name a different one either -- `daemon:create-session` never
+ * reads a `cwd` field from the renderer at all, so this is an enforced boundary, not merely a
+ * convention the caller happens to follow.
  */
 async function ensureAiWorkspaceDir(): Promise<string> {
   const dir = join(app.getPath('userData'), 'ai-workspace');
@@ -415,16 +2149,60 @@ async function ensureAiWorkspaceDir(): Promise<string> {
   return dir;
 }
 
-ipcMain.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
+guardedIpc.handle('cv:get-workspace-dir', (): Promise<string> => ensureAiWorkspaceDir());
 
 /**
- * Opens a native file picker and returns the CV's extracted plain text — never a path the renderer
+ * The transcription session's own prompt (issue #396). Defined here, in main, and never taken from
+ * the renderer: a staged candidate id must always mean "run *this* transcription", not "attach this
+ * file to whatever prompt the caller happened to send" (see `daemon:create-session`'s own comment
+ * on why `prompt` is overridden whenever a candidate is being consumed).
+ */
+const CV_TRANSCRIPTION_PROMPT = [
+  'The attached PDF is a scanned or image-only CV/resume with no selectable text layer.',
+  'Transcribe it faithfully into plain text: every section, employer, date range, degree, and',
+  'skill, in the same order as the original document. Do not summarize, comment, translate, or',
+  'add anything that is not present in the document. Reply with only the transcribed text.',
+].join(' ');
+
+/**
+ * `cv:select-and-read`'s result (issue #396). The `'ok'` case is byte-identical to what this
+ * channel always returned. `'scanned-pdf'` means the user was shown the native transcription
+ * consent dialog below and approved it: `candidateId` is an opaque handle to a copy of the file's
+ * bytes this process already staged into its own AI-workspace scratch directory (see
+ * `cv-transcription-staging.ts`), never the file's path or bytes themselves.
+ * `'scanned-pdf-unavailable'` covers every other outcome for a PDF with no text layer -- too many
+ * pages to transcribe, no configured provider that can accept an attachment, or the user declining
+ * the consent dialog -- and never stages anything at all.
+ */
+type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
+
+/**
+ * Opens a native file picker and returns the CV's extracted plain text: never a path the renderer
  * could then ask something else to open, and never raw filesystem access. The renderer cannot
  * choose *which* file is read: only the user can, through the OS dialog. Mirrors
  * `dialog:select-directory` above (null on cancel / no window); a genuine read or parse failure
- * rejects, so the UI can show the reason instead of a silent empty state.
+ * (other than the scanned-PDF case below, which is not a failure) rejects, so the UI can show the
+ * reason instead of a silent empty state.
+ *
+ * For a scanned/image-only PDF within the transcription page bound, this handler resolves the
+ * effective provider and shows the native transcription-consent dialog **itself**, before ever
+ * returning to the renderer. This is deliberate, not an implementation detail: consent decided in
+ * the renderer (a React-drawn dialog gated by component state) would only gate the honest render
+ * path, not a compromised one -- any renderer JS can already call `window.agentDock.createSession`
+ * directly, bypassing whatever UI main never enforced. Deciding consent here, with a real OS
+ * dialog `dialog.showMessageBox` (via `confirmCvTranscription`), means a candidate id is never
+ * even minted until the user has genuinely answered it -- the same discipline
+ * `confirmWorkspaceGrant`/`workspace-grant.ts` already use for an analogous decision.
  */
-ipcMain.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => {
+guardedIpc.handle('cv:select-and-read', async (): Promise<CvSelectResult | null> => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select your CV',
@@ -433,12 +2211,117 @@ ipcMain.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => 
   });
   const filePath = result.filePaths[0];
   if (result.canceled || !filePath) return null;
-  return readCvFile(filePath);
+
+  try {
+    const content = await readCvFile(filePath);
+    return { status: 'ok', fileName: content.fileName, text: content.text };
+  } catch (err) {
+    if (!(err instanceof NoSelectablePdfTextError)) throw err;
+    const { fileName, pageCount } = err;
+
+    if (!isTranscribablePageCount(pageCount)) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'too-many-pages' };
+    }
+
+    // Resolves the same way the renderer's own `useEffectiveProvider` would (issue #400's
+    // resolver), but entirely here: the consent dialog below must name a real, capability-checked
+    // provider, and whether to even show it must never depend on anything the renderer claims.
+    const unavailable = () =>
+      ({ status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'no-provider' }) as const;
+    if (!client) return unavailable();
+    let providers: ProviderStatus[];
+    try {
+      providers = await client.providers.list();
+    } catch {
+      return unavailable();
+    }
+    const settings = workspace.getSettings(await ensureWorkspaceDb());
+    const provider = resolveEffectiveProvider(settings.defaultProvider, providers);
+    const providerStatus = providers.find((status) => status.id === provider);
+    if (!providerStatus?.installed || providerStatus.capabilities.attachments !== true) {
+      return unavailable();
+    }
+
+    // The one and only place consent is granted for this feature. See this handler's own doc
+    // comment for why a native dialog, not a renderer-drawn one, is required here.
+    const consented = await confirmCvTranscription(mainWindow, {
+      fileName,
+      providerName: PROVIDER_DISPLAY_NAMES[provider],
+    });
+    if (!consented) {
+      return { status: 'scanned-pdf-unavailable', fileName, pageCount, reason: 'declined' };
+    }
+
+    // Re-read rather than threading bytes back out of `cv-text.ts`: that module's contract is
+    // "path in, text out" (see its own doc comment), never bytes out. `filePath` never left this
+    // process, so re-reading it here costs a second read of a file already bounded to 10 MB and
+    // keeps that boundary exactly as documented.
+    const bytes = await readFile(filePath);
+    const workspaceDir = await ensureAiWorkspaceDir();
+    const candidateId = await stageForTranscription(workspaceDir, fileName, bytes, provider);
+    return { status: 'scanned-pdf', fileName, pageCount, candidateId };
+  }
+});
+
+interface SaveFileFilter {
+  name: string;
+  extensions: string[];
+}
+
+interface SaveFileInput {
+  suggestedName: string;
+  data: string;
+  encoding: 'utf8' | 'base64';
+  filters: SaveFileFilter[];
+}
+
+/** Generous for a one-page letter (even a real .docx/.pdf), still a finite bound on what the
+ * renderer can make main write to disk. */
+const MAX_EXPORT_BYTES = 20_000_000;
+
+function assertSaveFileInput(input: unknown): asserts input is SaveFileInput {
+  if (typeof input !== 'object' || input === null) throw new Error('invalid export request');
+  const { suggestedName, data, encoding, filters } = input as Record<string, unknown>;
+  if (typeof suggestedName !== 'string' || !suggestedName.trim()) {
+    throw new Error('"suggestedName" is required');
+  }
+  if (typeof data !== 'string') throw new Error('"data" must be a string');
+  if (encoding !== 'utf8' && encoding !== 'base64') throw new Error('"encoding" must be "utf8" or "base64"');
+  if (!Array.isArray(filters) || filters.length === 0) throw new Error('"filters" is required');
+  for (const filter of filters) {
+    if (typeof filter !== 'object' || filter === null) throw new Error('invalid filter');
+    const { name, extensions } = filter as Record<string, unknown>;
+    const validExtensions = Array.isArray(extensions) && extensions.every((ext) => typeof ext === 'string');
+    if (typeof name !== 'string' || !validExtensions) throw new Error('invalid filter');
+  }
+}
+
+/**
+ * Saves already-finished file bytes to a user-chosen path via the native save dialog. The
+ * renderer builds the actual export content (plain markdown text, or a real .docx/.pdf buffer via
+ * the `docx`/`jspdf` packages) and hands it across as one payload; main only ever names a path and
+ * writes bytes, never generates document content itself.
+ */
+guardedIpc.handle('system:save-file', async (_event, input: unknown): Promise<{ saved: boolean; path?: string }> => {
+  assertSaveFileInput(input);
+  if (!mainWindow) return { saved: false };
+  const buffer = Buffer.from(input.data, input.encoding);
+  if (buffer.byteLength > MAX_EXPORT_BYTES) throw new Error('export is too large');
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export letter',
+    defaultPath: input.suggestedName,
+    filters: input.filters,
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
 });
 
 /**
  * Awaits the engine rather than sampling it. The renderer asks once, on mount, and treats
- * `{ ready: false }` as terminal ("Vacancy engine unavailable") with no retry — so a bare
+ * `{ ready: false }` as terminal ("Vacancy engine unavailable") with no retry. So a bare
  * `!!vacancyDb` snapshot lost a startup race: `app.whenReady` starts the first-run migration and
  * creates the window in the same tick, and whenever the React mount won, the Vacancy Leads screen
  * stayed permanently unavailable until the app was restarted, despite a perfectly healthy engine.
@@ -446,7 +2329,7 @@ ipcMain.handle('cv:select-and-read', async (): Promise<CvFileContent | null> => 
  * panel's existing "Checking vacancy engine status…" state, and `{ ready: false }` now means only
  * what the renderer already assumes it means: initialization actually failed.
  */
-ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
+guardedIpc.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?: string }> => {
   try {
     await ensureVacancyEngine();
     return { ready: true };
@@ -455,52 +2338,428 @@ ipcMain.handle('vacancy:get-status', async (): Promise<{ ready: boolean; error?:
   }
 });
 
-ipcMain.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+guardedIpc.handle('vacancy:get-report', (): GlobalRemoteReport | null => latestVacancyReport ?? null);
+guardedIpc.handle('vacancy:get-report-summary', (): { runId: string; generatedAt: string; vacancyCount: number } | null =>
+  latestVacancyReport
+    ? {
+        runId: latestVacancyReport.runId,
+        generatedAt: latestVacancyReport.generatedAt,
+        vacancyCount: latestVacancyReport.discoveryAudit.length,
+      }
+    : null,
+);
 
-ipcMain.handle('vacancy:run-scan', async (): Promise<GlobalRemoteReport> => {
+/**
+ * Lets a (re)mounted Search page notice a scan already in flight -- most often its own, started
+ * before the user navigated to another page and back. The scan itself lives entirely in this
+ * process and is never tied to any renderer window's lifetime, so this is the only way the
+ * renderer can tell "idle" and "already running, just not the one I started" apart.
+ */
+guardedIpc.handle('vacancy:get-scan-status', (): { scanning: boolean } => ({ scanning: isScanInFlight() }));
+
+/**
+ * Not an `ipcMain.handle` channel: main sends on it. Mirrors `AGENT_WORKSPACE_ACTIVITY_CHANNEL`'s
+ * own "one-way push, not a handle channel" rule (issue #252).
+ *
+ * A narrow, typed push: every payload is exactly one engine `ScanProgressEvent` (a source id plus
+ * that source's own freshly discovered rows), never a generic "here is some data" envelope. The
+ * renderer only ever reads this to show provisional, honestly-unscored rows sooner -- it is not a
+ * second source of truth for the scan's outcome, which `vacancy:run-scan`'s own resolved value (or
+ * a `vacancy:get-scan-status` poll, for a page that reattaches mid-scan) still is.
+ */
+const VACANCY_SCAN_PROGRESS_CHANNEL = 'vacancy:scan-progress';
+const BROWSE_ALL_RESULT_CAP = 5_000;
+
+/** `isWindowInBackground` bound to this module's own `mainWindow`; see that function's own doc
+ * comment for the policy (issue #366). */
+function isAppInBackground(): boolean {
+  return isWindowInBackground(mainWindow);
+}
+
+/** A scan notification is a courtesy, never a requirement: nothing about deciding whether to show
+ * one, or showing it, may ever fail the scan whose completion/failure it is reporting (issue #366). */
+function notifyScanOutcome(show: () => void): void {
+  try {
+    if (isAppInBackground()) show();
+  } catch (error) {
+    console.error('[vacancy-scan] failed to show scan notification', error);
+  }
+}
+
+/**
+ * Shared scan body for user-triggered vacancy discovery. A normal scan must supply a role or
+ * keyword; browse-all must be explicit and gets capped below.
+ *
+ * `onProgress` (#252) pushes each discovery sub-source's own rows to the renderer the moment that
+ * source resolves, well before this whole function's promise settles -- purely an additional,
+ * best-effort notification layered on top of the scan below. The renderer can be hidden or off the
+ * Search page while this runs; `sendToRenderer` already no-ops once the window is gone, so this is
+ * unconditional rather than gated on "is anyone currently on the Search page".
+ *
+ * The single choke point both the manual `vacancy:run-scan` IPC handler and the unattended
+ * `scheduleBackgroundScanTick` timer call through, so it is also the one place scan-finished/
+ * scan-failed notifications (#366) need to live: whichever path started the scan, this is where it
+ * actually resolves or rejects. A losing race against another already-running scan
+ * (`isExpectedScanBusyError`) is not a real failure of *this* attempt -- the renderer already treats
+ * it as "reattach and wait", never as an error to report -- so it never produces a failure
+ * notification either.
+ */
+async function runVacancyScan(request: ParsedVacancyScanRequest): Promise<GlobalRemoteReport> {
+  const db = await ensureVacancyEngine();
+  try {
+    const report = await runExclusiveScan(
+      async () => {
+        const config = vacancyEngineConfig();
+        const logger = createLogger(config);
+        // Issue #398 Phase 1: an additional, on-demand AI-web-search discovery pass, entirely
+        // inline here inside the `runExclusiveScan` guard this closure already runs under.
+        // `runAiWebDiscovery` itself never acquires `ScanGuard` (see its own doc comment) -- this
+        // is just more work done under the one exclusive scan this handler already holds, never a
+        // second, nested acquisition of it. Skipped entirely (not even called) when not requested,
+        // so every existing caller/test that never sets `aiWebDiscovery` sees byte-identical
+        // `GlobalRemoteScanOptions` to before this feature existed.
+        let aiWebDiscovery: Awaited<ReturnType<typeof runAiWebDiscovery>> | undefined;
+        if (request.aiWebDiscovery === true) {
+          // `runAiWebDiscovery` itself never throws (see its own doc comment), but the setup calls
+          // around it -- `loadCandidateProfile` (rethrows for a malformed/unreadable existing profile
+          // file, only swallowing ENOENT) and `ensureAiWorkspaceDir` (disk full, permission error) --
+          // are not similarly guarded. A failure here must degrade exactly the way an internal
+          // `runAiWebDiscovery` failure already does (`aiWebDiscovery` left undefined, i.e. treated as
+          // if `request.aiWebDiscovery` had been false), never abort the whole scan.
+          try {
+            const profile = await loadCandidateProfile(await candidateProfilePath());
+            aiWebDiscovery = await runAiWebDiscovery(client, {
+              profile,
+              cwd: await ensureAiWorkspaceDir(),
+            });
+            // Issue #398: "the actual queries used in a run are persisted/reportable" -- logged here,
+            // alongside the resulting source audit, since Phase 1 needs no dedicated DB persistence
+            // for this (see `runAiWebDiscovery`'s own doc comment on `queriesUsed`).
+            logger.debug(
+              { queriesUsed: aiWebDiscovery.queriesUsed, sourceAudit: aiWebDiscovery.sourceAudit },
+              'AI web discovery pass finished',
+            );
+          } catch (error) {
+            logger.warn({ error }, 'AI web discovery setup failed; skipping this pass for the current scan');
+          }
+        }
+        const result = await runGlobalRemoteScan(db, config, logger, await vacancyEngineDataRoot(), {
+          ...(request.mode === 'query'
+            ? { query: request.query, ...(request.country ? { country: request.country } : {}), ...(request.employment ? { employment: request.employment } : {}), ...(request.salary ? { salary: request.salary } : {}) }
+            : { query: '', browseAll: true, browseAllResultCap: BROWSE_ALL_RESULT_CAP }),
+          onProgress: (event: ScanProgressEvent) => sendToRenderer(mainWindow, VACANCY_SCAN_PROGRESS_CHANNEL, event),
+          ...(aiWebDiscovery
+            ? {
+                aiWebDiscoveryVacancies: aiWebDiscovery.vacancies,
+                aiWebDiscoverySourceAudit: aiWebDiscovery.sourceAudit,
+              }
+            : {}),
+        });
+        latestVacancyReport = result.report;
+        return result.report;
+      },
+      { takeAdvisoryLock: true },
+    );
+    notifyScanOutcome(() =>
+      notifyVacancyScanCompleted({
+        kept: report.discoveryAudit.length,
+        complete: report.scanBounds?.complete ?? true,
+      }),
+    );
+    return report;
+  } catch (error) {
+    if (!isExpectedScanBusyError(error)) {
+      notifyScanOutcome(() =>
+        notifyVacancyScanFailed({ detail: error instanceof Error ? error.message : 'unknown error' }),
+      );
+    }
+    throw error;
+  }
+}
+
+guardedIpc.handle('vacancy:run-scan', (_event, request: unknown): Promise<GlobalRemoteReport> =>
+  runVacancyScan(parseVacancyScanRequest(request)),
+);
+
+/**
+ * The missing trigger for issue #251/#264's ATS-roster (Greenhouse/Lever/Ashby/Recruitee/Personio)
+ * scan: that PR shipped `runAtsRosterDiscovery` (reads `.data/ats-roster-v1.json`) and the import
+ * step that writes it (`runAtsRosterImport`), but nothing under `electron/` ever called the import
+ * step -- it was reachable only via `node dist/cli.js ats-roster:import`, so a real user's roster
+ * file never existed and every scan found zero companies on these five providers.
+ *
+ * Deliberately a manual Settings action (`AtsRosterSection.tsx`), not an automatic background fetch
+ * like `scheduleBackgroundScanTick` below: the import step itself documents that it is "re-runnable
+ * on a deliberate refresh cadence, not a live fetch at scan time" (see
+ * `pipeline/ats-roster-import.ts`), and this app's one existing automatic recurring network
+ * operation is opt-in and off by default (`autoScanEnabled`) rather than silently on. A roster
+ * refresh is rarer and heavier (five third-party CSV fetches) than a normal scan, so it gets the
+ * same "the user asks for it, and sees an honest status" treatment as every other data-management
+ * action on that page, rather than a new always-on background timer.
+ *
+ * Shares `runExclusiveScan`/the cross-process advisory lock with `runVacancyScan` above -- the same
+ * mutual exclusion the CLI already applies between `ats-roster:import` and `global-remote:scan`
+ * (see cli.ts's `runExclusiveCommand`), so a refresh triggered from Settings can never race a scan's
+ * own read of the roster file. A scan that starts before any import has ever run is unaffected: the
+ * engine's `loadAtsRoster` already tolerates a missing file by returning no roster entries rather
+ * than failing (see `companies/ats-roster-repository.ts`), so this never blocks a normal scan.
+ */
+async function runAtsRosterRefresh(): Promise<AtsRosterImportResult> {
   const db = await ensureVacancyEngine();
   return runExclusiveScan(
     async () => {
       const config = vacancyEngineConfig();
-      const result = await runGlobalRemoteScan(db, config, createLogger(config), vacancyEngineProjectRoot());
-      latestVacancyReport = result.report;
-      return result.report;
+      return runAtsRosterImport(db, config, createLogger(config), await vacancyEngineDataRoot());
     },
     { takeAdvisoryLock: true },
   );
+}
+
+guardedIpc.handle('vacancy:ats-roster:get-status', async (): Promise<AtsRosterStatus> =>
+  readAtsRosterStatus(await vacancyEngineDataRoot()),
+);
+
+guardedIpc.handle('vacancy:ats-roster:refresh', (): Promise<AtsRosterImportResult> => runAtsRosterRefresh());
+
+// #195: fixed for v1, not user-configurable (see the ticket's own Non-goals) -- a schedule-picker
+// UI is future scope, not this one.
+const BACKGROUND_SCAN_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+// Cheap on its own (one timestamp comparison); only the scan `shouldRunScheduledScan` may trigger
+// is expensive. A short tick avoids a raw long-period `setInterval`, which drifts and can fire an
+// accumulated backlog after system sleep -- this instead re-derives "is it time yet" from the
+// real last-scan timestamp on every tick.
+const BACKGROUND_SCAN_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime. A scheduled worldwide
+ * scan now needs the same upstream-effective narrowing signal as a manual scan (#315). Until a
+ * saved-search profile exists for that signal, the timer wakes, records why it skipped, and does no
+ * network work.
+ */
+function scheduleBackgroundScanTick(): void {
+  setInterval(() => {
+    if (!autoScanEnabled) return;
+    if (!shouldRunScheduledScan(latestVacancyReport?.generatedAt, new Date(), BACKGROUND_SCAN_INTERVAL_MS)) return;
+    void candidateProfilePath()
+      .then((path) => loadCandidateProfile(path))
+      .then((profile) => {
+        const query = scheduledScanQueryFromProfile(profile);
+        if (query === null) {
+          console.info('[background-scan] skipped: no saved role or keyword is configured for upstream discovery');
+          return null;
+        }
+        return runVacancyScan({ mode: 'query', query });
+      })
+      .catch((error: unknown) => {
+        if (isExpectedScanBusyError(error)) return;
+        console.error('[background-scan] scheduled scan failed', error);
+      });
+  }, BACKGROUND_SCAN_CHECK_INTERVAL_MS);
+}
+
+// A short poll relative to the cancel window itself (#203's own AUTOMATIC_SUBMIT_CANCEL_WINDOW_MS
+// is 3 minutes): the point of that window is a person having real time to cancel, so this must not
+// add meaningful latency on top of it once it elapses.
+const AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS = 30 * 1000;
+
+// `fireDueAutomaticSubmissions` does "real CDP round trips" (its own doc comment), the same class of
+// call that can hang without a timeout of its own -- this worker had no ceiling on a whole turn
+// until the architecture audit flagged it as the one ticker missing the hard-timeout guard the
+// application-pipeline tick already needed after a real incident. A stuck submit attempt actually
+// reaching the employer's form twice is separately fenced by `submittingAttemptIds`
+// (`application-review-session.ts`), so this ceiling exists to keep the *ticker* alive, not to
+// re-guard submission itself.
+const AUTOMATIC_SUBMISSION_TICK_HARD_TIMEOUT_MS = 4 * 60 * 1000;
+
+const automaticSubmissionTick = createTick({
+  label: 'automatic-submission',
+  hardTimeoutMs: AUTOMATIC_SUBMISSION_TICK_HARD_TIMEOUT_MS,
+  run: async () => {
+    if (applicationDataResetGate.isResetting) return;
+    await applicationDataResetGate.runMutation(async () => fireDueAutomaticSubmissions(await ensureWorkspaceDb()));
+  },
 });
 
 /**
- * The Netherlands half of the Search page: the IND recognised-sponsor pipeline, exposed on the
- * same two-channel shape as the global-remote pair above (`get-*` reads whatever the last run
- * produced without triggering network activity; `run-*` performs the scan).
- *
- * `runEndToEndScan` takes the engine's advisory lock itself and answers
- * `{ status: 'skipped', reason: 'already-running' }` rather than throwing when it cannot get it,
- * so that outcome is translated into the same error message `vacancy:run-scan` uses — from the
- * renderer's point of view "another scan is running" is one condition, not two.
+ * Started once in `app.whenReady()`, runs for the process's whole lifetime -- the same
+ * `setInterval`-with-a-real-catch discipline `scheduleBackgroundScanTick` already uses, so one
+ * automatic submission failing (a real bug, a CDP hiccup) never takes the whole timer down with it.
+ * `fireDueAutomaticSubmissions` itself already handles the actual guardrail re-validation and
+ * notification for each attempt; this function's only job is calling it on a schedule.
  */
-ipcMain.handle('vacancy:get-nl-report', (): JobRadarReport | null => latestNetherlandsReport ?? null);
+function scheduleAutomaticSubmissionTick(): void {
+  setInterval(() => {
+    void automaticSubmissionTick.runOnce();
+  }, AUTOMATIC_SUBMISSION_TICK_INTERVAL_MS);
+}
 
-ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
-  const db = await ensureVacancyEngine();
-  const lock = vacancyScanLock;
-  if (!lock) throw new Error('vacancy engine is not initialized');
+/** How often main asks the daemon whether there is an application to prepare. Short enough that a
+ * resumed or newly-queued attempt starts promptly, long enough that an idle app is not polling a
+ * local HTTP route constantly. A start requested from the UI does not wait for it (see
+ * `application-pipeline:start`). */
+const APPLICATION_PIPELINE_TICK_INTERVAL_MS = 15 * 1000;
 
-  return runExclusiveScan(
-    async () => {
-      const config = vacancyEngineConfig();
-      const result = await runEndToEndScan(db, config, createLogger(config), lock, {
-        // Same dev-mode caveat as `vacancyEngineProjectRoot` itself: this is where the engine
-        // reads `config/candidate-profile-v1.json` and writes `reports/`.
-        projectRoot: vacancyEngineProjectRoot(),
-      });
-      if (result.status === 'skipped') throw new Error(SCAN_BUSY_OTHER_PROCESS);
-      latestNetherlandsReport = result.report;
-      return result.report;
-    },
-    { takeAdvisoryLock: false },
+/** A generous ceiling on one *preparation's* real work -- PDF render, a real generation session, a
+ * real page load, per this worker's own established expectations, comfortably longer than any of
+ * those legitimately take. This is deliberately not about any single external call (`daemonFetch`
+ * already bounds those); it exists so that *whichever* step turns out to hang -- an AI generation
+ * session with no timeout of its own, a page load that never settles, anything not yet hardened --
+ * can never wedge this worker the way a single stuck run did, live: the in-flight guard stayed
+ * `true` forever, so every later tick silently no-op'd with no error ever logged, and a fully
+ * prepared, fully unblocked attempt just sat `queued` indefinitely.
+ *
+ * This is the ceiling that actually fixes that, because `runNextApplicationAttempt` reacts to it by
+ * giving the daemon's lease back and fencing the abandoned run out of every later write (see "the
+ * preparation fence" in `application-pipeline.ts`). Freeing the ticker alone was never enough: the
+ * abandoned call still held the one global lease, so `acquireNextLease()` returned `null` forever
+ * and the queue stayed stopped until the whole app was restarted.
+ */
+const APPLICATION_PIPELINE_PREPARATION_CEILING_MS = 4 * 60 * 1000;
+
+/** The outer backstop, and now only that: it bounds the parts of a turn that are *not* the
+ * preparation itself (acquiring the lease, reading the attempt back, notifying), which nothing else
+ * bounds. Deliberately a minute longer than the ceiling above, so the inner one -- the only one that
+ * can free the lease -- is what fires on a stuck preparation, and this one only ever fires on
+ * something genuinely unexpected. */
+const APPLICATION_PIPELINE_TICK_HARD_TIMEOUT_MS = APPLICATION_PIPELINE_PREPARATION_CEILING_MS + 60 * 1000;
+
+const applicationPipelineTick = createTick({
+  label: 'application-pipeline',
+  hardTimeoutMs: APPLICATION_PIPELINE_TICK_HARD_TIMEOUT_MS,
+  onError: (error) => console.error('[application-pipeline] preparation tick failed', error),
+  // Swallows its own errors on purpose (via `onError` above, not a throw): this is called both from
+  // a timer and (for immediacy) from the start channel, and neither caller has anywhere useful to
+  // surface a transient daemon hiccup -- the attempt's own checkpoint is where an outcome is read.
+  run: async () => {
+    if (applicationDataResetGate.isResetting) return;
+    await applicationDataResetGate.runMutation(async () => {
+      const deps = await applicationPipelineDeps();
+      const { result } = await runNextApplicationAttempt(deps);
+      if (result && (result.checkpoint === 'ready' || result.checkpoint === 'needs_user')) {
+        const attempt = workspace.getApplicationAttempt(deps.db, result.attemptId);
+        notifyApplicationPreparation({
+          company: attempt.company,
+          role: attempt.role,
+          needsUser: result.checkpoint === 'needs_user',
+        });
+      }
+    });
+  },
+});
+
+function scheduleApplicationPipelineTick(): void {
+  setInterval(() => {
+    void applicationPipelineTick.runOnce();
+  }, APPLICATION_PIPELINE_TICK_INTERVAL_MS);
+}
+
+/** How often the staging sweep below runs. Independent of, and much shorter than, the 15-minute
+ * staleness bound itself (`cv-transcription-staging.ts`'s `STALE_MS`) so a candidate the user
+ * abandoned is not left on disk for the rest of a long-running app session. */
+const CV_TRANSCRIPTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Issue #396: the only cleanup path for a CV staged for transcription that is never consumed (the
+ * consent prompt is closed, or a different file is picked instead) -- everything else (a completed,
+ * failed, or cancelled session; app shutdown) is cleaned up at the point it happens, in
+ * `finishAttachmentCleanup`/`killDaemon`. Run once at startup (recovers anything a previous crash
+ * left behind) and then on the interval above for the rest of this process's lifetime.
+ */
+function scheduleCvTranscriptionStagingSweep(): void {
+  const sweep = () => void ensureAiWorkspaceDir().then((dir) => sweepStaleStagedAttachments(dir)).catch(() => {});
+  sweep();
+  setInterval(sweep, CV_TRANSCRIPTION_SWEEP_INTERVAL_MS);
+}
+
+/**
+ * Re-queues every attempt a previous run of the app left mid-preparation, once, at startup.
+ *
+ * Runs after the daemon is reachable, since re-queuing is a daemon call. A failure here is logged
+ * and dropped rather than retried: the attempts stay durably recorded either way, and the next
+ * launch runs this again.
+ */
+async function recoverApplicationPipelineOnStartup(): Promise<void> {
+  try {
+    const recovered = await applicationDataResetGate.runMutation(async () =>
+      recoverInterruptedApplicationAttempts(await applicationPipelineDeps()),
+    );
+    if (recovered.length > 0) {
+      console.warn('[application-pipeline] re-queued interrupted application attempts', { count: recovered.length });
+    }
+  } catch (error: unknown) {
+    console.error('[application-pipeline] startup recovery failed', error);
+  }
+}
+
+async function candidateProfilePath(): Promise<string> {
+  return join(await vacancyEngineDataRoot(), 'config', 'candidate-profile-v1.json');
+}
+
+guardedIpc.handle('vacancy:get-search-profile', async (): Promise<CandidateProfile> => {
+  return loadCandidateProfile(await candidateProfilePath());
+});
+
+/**
+ * Every field in the Settings > Search profile UI autosaves independently (on blur, or
+ * immediately for a toggle), so two edits made in quick succession reach this handler as two
+ * concurrent invocations. Without serializing them, both would read the same on-disk profile
+ * before either write lands, and whichever write finished second would silently discard the
+ * other's field. `profileSaveQueue` chains every save onto the previous one (success or failure)
+ * so the read-modify-write in the handler below is never interleaved with another.
+ */
+let profileSaveQueue: Promise<unknown> = Promise.resolve();
+
+function withProfileSaveQueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = profileSaveQueue.then(task, task);
+  profileSaveQueue = run.then(
+    () => undefined,
+    () => undefined,
   );
+  return run;
+}
+
+/** Monotonically increasing even across same-millisecond saves, so `scoreActiveVacancies` (which
+ * keys cached scores on an exact `candidateProfileVersion` match) can never see two different
+ * profile contents share one version string. */
+let lastProfileVersionStamp = 0;
+function nextProfileVersion(): string {
+  const now = Date.now();
+  lastProfileVersionStamp = now > lastProfileVersionStamp ? now : lastProfileVersionStamp + 1;
+  return `candidate-profile-${lastProfileVersionStamp}`;
+}
+
+/**
+ * Merges an allow-listed patch (see vacancy-profile-validate.ts) onto the profile currently on
+ * disk and writes the result back through a temp-file-then-rename, the same atomic-write idiom
+ * `writeReportFiles`/`writeDomainCandidateCatalog` use elsewhere in the engine: a crash mid-write
+ * (more likely here than for a full scan, since this can fire on every field blur) must never
+ * leave `candidate-profile-v1.json` truncated, since there is no recovery path for a corrupt file.
+ * `profileVersion` is always stamped fresh here, never taken from the caller: `scoreActiveVacancies`
+ * keys its cached deterministic scores off this version, so a save that left it unchanged would let
+ * stale scores survive a profile edit.
+ */
+guardedIpc.handle('vacancy:save-search-profile', async (_event, rawPatch: unknown): Promise<CandidateProfile> => {
+  return applicationDataResetGate.runMutation(() => {
+    const patch = parseCandidateProfilePatch(rawPatch);
+    return withProfileSaveQueue(async () => {
+      const path = await candidateProfilePath();
+      const current = await loadCandidateProfile(path);
+      const next: CandidateProfile = candidateProfileSchema.parse({
+        ...current,
+        ...patch,
+        constraints: { ...current.constraints, ...patch.constraints },
+        profileVersion: nextProfileVersion(),
+      });
+      const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+        await rename(temporary, path);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+      return next;
+    });
+  });
 });
 
 /*
@@ -516,127 +2775,540 @@ ipcMain.handle('vacancy:run-nl-scan', async (): Promise<JobRadarReport> => {
  * ---------------------------------------------------------------------------------------------
  */
 
-ipcMain.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:settings:get', async () => workspace.getSettings(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:settings:update', async (_event, input: unknown) =>
-  workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input)),
-);
-
-/** Badge counts for the sidebar — a dedicated read so the shell never has to fetch three lists. */
-ipcMain.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
-
-ipcMain.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
-
-ipcMain.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
-  workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
-);
-
-ipcMain.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const updated = workspace.updateSettings(await ensureWorkspaceDb(), parseSettingsPatch(input));
+    // ADI-22: keep the mirrors in sync with every write, not just the initial hydration. The
+    // auto-apply switch is re-read here for completeness only: `parseSettingsPatch` refuses to
+    // carry it, so a renderer write can never be what changes it.
+    minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
+    autoScanEnabled = updated.autoScanEnabled;
+    setAutoApplyEnabled(updated.autoApplyEnabled);
+    void syncMcpServer(updated.mcpEndpointEnabled);
+    return updated;
+  });
 });
 
-ipcMain.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
-  workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+/** Badge counts for the sidebar: a dedicated read so the shell never has to fetch three lists. */
+guardedIpc.handle('workspace:counts:get', async () => workspace.getCounts(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:data:reset', async () => {
+  return applicationDataResetGate.runReset(async () => {
+    if (applicationPipelineTick.inFlight || automaticSubmissionTick.inFlight) {
+      throw new Error('wait for the active application task to finish before resetting data');
+    }
+
+    closeAllApplicationReviews();
+    const queueStatus = await daemonGetJson('/v2/applications');
+    const lease = queueStatus?.lease;
+    const expectedLeaseId =
+      lease && typeof lease === 'object' && typeof (lease as { leaseId?: unknown }).leaseId === 'string'
+        ? (lease as { leaseId: string }).leaseId
+        : null;
+    const queueReset = await daemonFetch('/v2/applications', { method: 'DELETE', body: { expectedLeaseId } });
+    if (!queueReset.ok) throw new Error('the application queue could not be reset');
+
+    const result = workspace.resetApplicationData(await ensureWorkspaceDb());
+    try {
+      await rm(applicationArtifactStorageRoot(), { recursive: true, force: true });
+
+      await withProfileSaveQueue(async () => {
+        const path = await candidateProfilePath();
+        const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+        const emptyProfile: CandidateProfile = candidateProfileSchema.parse({
+          profileVersion: nextProfileVersion(),
+          candidateName: '',
+          currentRole: '',
+          location: '',
+          experienceYears: 0,
+          strongestSkills: [],
+          additionalSkills: [],
+          targetRoles: [],
+          consideredRoles: [],
+          excludedRoleFamilies: [],
+          constraints: {
+            professionalLanguage: 'English',
+            dutchRequired: false,
+            primaryCountry: '',
+            allowRemoteEuSupportingNetherlands: false,
+            minimumMonthlyBaseEur: 0,
+          },
+        });
+        await mkdir(dirname(path), { recursive: true });
+        try {
+          await writeFile(temporary, `${JSON.stringify(emptyProfile, null, 2)}\n`, 'utf8');
+          await rename(temporary, path);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      });
+    } catch {
+      throw new Error('application records were reset, but local files could not be cleared; close open files and retry');
+    }
+
+    minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
+    autoScanEnabled = result.settings.autoScanEnabled;
+    setAutoApplyEnabled(result.settings.autoApplyEnabled);
+    void syncMcpServer(result.settings.mcpEndpointEnabled);
+    return result;
+  });
+});
+
+guardedIpc.handle('workspace:saved-jobs:list', async () => workspace.listSavedJobs(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:saved-jobs:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createSavedJob(await ensureWorkspaceDb(), parseSavedJobInput(input)),
+  ),
 );
 
-ipcMain.handle('workspace:applications:list', async (_event, input: unknown) =>
+guardedIpc.handle('workspace:saved-jobs:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateSavedJob(await ensureWorkspaceDb(), id, parseSavedJobPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:saved-jobs:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteSavedJob(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:list', async () => workspace.listApplicationAnswers(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:application-answers:save', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.saveApplicationAnswer(await ensureWorkspaceDb(), parseApplicationAnswerInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplicationAnswer(await ensureWorkspaceDb(), id, parseApplicationAnswerPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:application-answers:record-used', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.recordApplicationAnswerUsed(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:application-answers:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteApplicationAnswer(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:applications:list', async (_event, input: unknown) =>
   workspace.listApplications(await ensureWorkspaceDb(), parseApplicationFilter(input)),
 );
 
-ipcMain.handle('workspace:applications:create', async (_event, input: unknown) =>
-  workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+guardedIpc.handle('workspace:applications:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createApplication(await ensureWorkspaceDb(), parseApplicationInput(input)),
+  ),
 );
 
-ipcMain.handle('workspace:applications:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+guardedIpc.handle('workspace:applications:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplication(await ensureWorkspaceDb(), id, parseApplicationPatch(patch));
+  });
 });
 
-ipcMain.handle('workspace:applications:delete', async (_event, input: unknown) =>
-  workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+guardedIpc.handle('workspace:applications:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteApplication(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
-ipcMain.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
+guardedIpc.handle('workspace:cv-documents:list', async () => workspace.listCvDocuments(await ensureWorkspaceDb()));
 
-ipcMain.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
-  workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+guardedIpc.handle('workspace:cv-documents:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvDocument(await ensureWorkspaceDb(), parseCvDocumentInput(input)),
+  ),
 );
 
-ipcMain.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+guardedIpc.handle('workspace:cv-documents:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvDocument(await ensureWorkspaceDb(), id, parseCvDocumentPatch(patch));
+  });
 });
 
-ipcMain.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
-  workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+guardedIpc.handle('workspace:cv-documents:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
-ipcMain.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
-  workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.setDefaultCvDocument(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
-ipcMain.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
+/**
+ * Renders one `TailoredResume` to PDF or DOCX and saves it via the native save dialog -- the one
+ * place either of those two things happens, shared by `workspace:cv-documents:export` (#156, a
+ * persisted CV Library record's own content) and `workspace:cv-evidence-overlays:export` (#419,
+ * the candidate-approved composition). What differs between those two callers is entirely how the
+ * `resume` argument was built; everything from "render it" onward is identical, so it lives here
+ * once instead of twice risking drift (a PDF-validation fix, a new format, a save-dialog option
+ * applied to one caller and missed in the other).
+ *
+ * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
+ * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
+ * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
+ * `BrowserWindow` that only this process has. Returns `{ saved: false }`, not a throw, when there
+ * is no window to show the dialog on or when the user cancels it -- neither is a failure.
+ */
+async function renderTailoredResumeToFile(
+  resume: TailoredResume,
+  format: CvExportFormat,
+  options: { title: string; defaultFileName: string },
+): Promise<CvExportResult> {
+  if (!mainWindow) return { saved: false };
 
-ipcMain.handle('workspace:letters:create', async (_event, input: unknown) =>
-  workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
-);
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
 
-ipcMain.handle('workspace:letters:update', async (_event, input: unknown) => {
-  const { id, patch } = parseIdAndPatch(input);
-  return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: options.title,
+    defaultPath: `${options.defaultFileName}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
+}
+
+/**
+ * #156: the manual "export my CV as PDF/DOCX with the default app-authored template" action.
+ * Reuses the same rendering machinery #199 built for the unattended auto-apply pipeline
+ * (`resume-html.ts`/`resume-docx.ts`/`resume-pdf-validation.ts`/`printHtmlToPdf`) rather than a
+ * second implementation of either the template or the PDF step, and reads the candidate's name
+ * from the Search page's own candidate profile (the one place in this app that is real,
+ * user-entered identity data) rather than inventing one -- see `cv-export.ts`'s doc comment.
+ */
+guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { id, format } = parseCvExportInput(input);
+  const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
+
+  // #274: a CV whose structured source was never read to the end must not produce a document that
+  // looks complete. Refused here, before anything is rendered, with the reasons the user needs to
+  // fix it -- never quietly exported minus whatever came after the limit.
+  const blockers = describeCvExportBlockers(doc);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be exported yet: ${blockers.join('; ')}`);
+  }
+
+  // A fresh install ships with no search profile configured (#156's own "no default bias" stance
+  // extends here too): rather than blocking the export, the resume simply renders with no name.
+  let candidate: CandidateProfile | null;
+  try {
+    candidate = await loadCandidateProfile(await candidateProfilePath());
+  } catch {
+    candidate = null;
+  }
+  const resume = cvDocumentToTailoredResume(doc, candidate);
+  return renderTailoredResumeToFile(resume, format, {
+    title: 'Export CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
+  });
 });
 
-ipcMain.handle('workspace:letters:delete', async (_event, input: unknown) =>
-  workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+// #419, slice 1: plain CRUD, the same shape every other entity's four/five verbs already follow.
+guardedIpc.handle('workspace:cv-evidence-overlays:list', async (_event, input: unknown) =>
+  workspace.listCvEvidenceOverlays(await ensureWorkspaceDb(), parseCvIdEnvelope(input)),
 );
 
-ipcMain.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
-  workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+guardedIpc.handle('workspace:cv-evidence-overlays:get', async (_event, input: unknown) => {
+  const { cvId, vacancyKey } = parseCvEvidenceOverlayLookup(input);
+  return workspace.getCvEvidenceOverlay(await ensureWorkspaceDb(), cvId, vacancyKey);
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvEvidenceOverlay(await ensureWorkspaceDb(), parseCvEvidenceOverlayInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvEvidenceOverlay(await ensureWorkspaceDb(), id, parseCvEvidenceOverlayPatch(patch));
+  });
+});
+
+/**
+ * #421's case contract: the only channel that may move an overlay's `state` to
+ * `'candidate_approved'` -- see `workspace.approveCvEvidenceOverlay`'s own doc comment for why this
+ * is a dedicated verb rather than another `:update` patch.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:approve', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, expectedCaseRevision } = parseCvEvidenceOverlayApproveInput(input);
+    return workspace.approveCvEvidenceOverlay(await ensureWorkspaceDb(), id, expectedCaseRevision);
+  });
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+/**
+ * #419, slice 4: exports the *candidate-approved* composition, not a persisted CV Library record.
+ * Reuses exactly the rendering/validation/save machinery `workspace:cv-documents:export` (#156)
+ * already established -- the difference is entirely in what builds the `TailoredResume`:
+ * `composeApprovedTailoredResume` (#419) instead of `cvDocumentToTailoredResume` (#274/#156), built
+ * fresh against the CV's *current* reviewed source rather than trusting the overlay's own stored
+ * hash, so a source re-reviewed after the overlay's last save cannot export stale. A blocked
+ * composition refuses the same way `describeCvExportBlockers` already does for the other path --
+ * before anything is rendered, with the reasons, never a silent partial export.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
+  const db = await ensureWorkspaceDb();
+  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
+  const doc = workspace.getCvDocument(db, overlay.cvId);
+
+  // The renderer only ever offers this action once `overlay.state` reaches `'candidate_approved'`
+  // (`ComposedCvReview.tsx`), but that is a UI gate, not a security boundary -- this channel is the
+  // actual enforcement point, the same reasoning `describeCvExportBlockers` already applies to the
+  // #156 export path.
+  if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+    throw new Error('this CV has not been approved yet: open the Approved CV panel and approve it before exporting');
+  }
+  if (!doc.source) {
+    throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+  }
+  const currentSourceCvContentHash = workspace.computeSourceCvContentHash(doc.source);
+  const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);
+  }
+
+  const outcome = await renderTailoredResumeToFile(resume, format, {
+    title: 'Export approved CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
+  });
+  if (!outcome.saved) return outcome;
+
+  // The terminal state (#419): "CV approval and application/submission readiness are separate
+  // states" -- candidate_approved says the content is right, artifact_approved says a real,
+  // validated file now exists from it.
+  await applicationDataResetGate.runMutation(async () =>
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' }),
+  );
+  return outcome;
+});
+
+// #421: named local-client grants for the local MCP endpoint.
+guardedIpc.handle('workspace:mcp-client-grants:list', async () => workspace.listMcpClientGrants(await ensureWorkspaceDb()));
+
+/**
+ * The one-time credential `workspace.createMcpClientGrant` mints is delivered here, entirely
+ * inside main, and deliberately never placed on the object this handler returns: whatever this
+ * function resolves to crosses `ipcMain.handle`'s structured-clone boundary into the renderer, and
+ * the credential must not (#421: "without sending the secret to the renderer", the same rule
+ * SECURITY.md already states for the daemon's own bearer token). `clipboard.writeText` plus a
+ * native `dialog.showMessageBox` (its message text is selectable, so the candidate can also copy
+ * it directly from the dialog if the clipboard write is later overwritten) are both main-process
+ * APIs with no renderer round trip of their own.
+ */
+guardedIpc.handle('workspace:mcp-client-grants:create', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { grant, credential } = workspace.createMcpClientGrant(await ensureWorkspaceDb(), parseMcpClientGrantInput(input));
+    clipboard.writeText(credential);
+    void dialog.showMessageBox({
+      type: 'info',
+      title: 'New MCP client credential',
+      message: `Credential for "${grant.name}" (copied to your clipboard):`,
+      detail: `${credential}\n\nThis is shown once. If you lose it, revoke this grant and create a new one.`,
+    });
+    return grant;
+  });
+});
+
+guardedIpc.handle('workspace:mcp-client-grants:revoke', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.revokeMcpClientGrant(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+/** The port is not itself a secret -- useless without a valid grant credential, and the ticket's
+ * own text asks that "the UI shows the current endpoint" -- so this is a plain read, unlike the
+ * daemon's own base URL/token pair which never crosses into the renderer at all. */
+guardedIpc.handle('workspace:mcp-server:status', async () => ({
+  running: mcpServerHandle !== null,
+  port: mcpServerHandle?.port ?? null,
+}));
+
+// #421's proposal review surface. `createCvTailoringProposal` has no IPC channel at all -- only
+// the (not yet wired, slice 3) MCP tool handlers create one, directly in-process.
+guardedIpc.handle('workspace:cv-tailoring-proposals:list', async (_event, input: unknown) =>
+  workspace.listCvTailoringProposals(await ensureWorkspaceDb(), parseCaseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:accept', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.acceptCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:reject', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.rejectCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:letters:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createLetter(await ensureWorkspaceDb(), parseLetterInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:letters:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateLetter(await ensureWorkspaceDb(), id, parseLetterPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:letters:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:letters:duplicate', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.duplicateLetter(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+/**
+ * Read/patch-only application attempt access for the review UI (issue #202). No `create` or
+ * `delete` channel exists here: an attempt's existence is owned by the main-process generation
+ * pipeline, never initiated by the renderer. `parseApplicationAttemptPatch` (workspace/validate.ts)
+ * already restricts a patch to `applicationId`/`jdComplete`/`checkpoint`/`checkpointDetail`/
+ * `submittedAt` -- the identity/provenance fields an attempt was created with cannot be changed
+ * through this or any channel.
+ */
+guardedIpc.handle('workspace:application-attempts:list', async () => workspace.listApplicationAttempts(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:application-attempts:get', async (_event, input: unknown) =>
+  workspace.getApplicationAttempt(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:application-attempts:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateApplicationAttempt(await ensureWorkspaceDb(), id, parseApplicationAttemptPatch(patch));
+  });
+});
+
+guardedIpc.handle('workspace:application-artifacts:list', async (_event, input: unknown) => {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return workspace.listApplicationArtifacts(await ensureWorkspaceDb(), parseId(source.attemptId, 'attemptId'));
+});
+
+/**
+ * Read/revoke-only (issue #203) -- see `WorkspaceBridge`'s own comment on why creating a grant is
+ * deliberately NOT here: that requires a real native confirmation dialog, wired separately as
+ * `application-executor:request-automation-grant` below, not a plain IPC call any renderer code
+ * could reach.
+ */
+guardedIpc.handle('workspace:automation-grants:list', async () => workspace.listAutomationGrants(await ensureWorkspaceDb()));
+
+guardedIpc.handle('workspace:automation-grants:revoke', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.revokeAutomationGrant(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
 );
 
 /*
  * ---------------------------------------------------------------------------------------------
  * System integration for the Settings page. One narrow verb: mirror the persisted
  * "launch at login" preference into the OS login-item registration. The renderer sends a boolean
- * and nothing else — no app path, no arguments — so this can never register an arbitrary
+ * and nothing else (no app path, no arguments), so this can never register an arbitrary
  * executable. The OS keeps its own persistent record (registry key on Windows, login item on
  * macOS), so applying it once at toggle time is sufficient; no startup re-sync is needed.
  * Skipped in dev because `app.setLoginItemSettings` would register the bare Electron binary,
- * not this app — the preference still persists in settings and applies in packaged builds.
+ * not this app. The preference still persists in settings and applies in packaged builds.
  * ---------------------------------------------------------------------------------------------
  */
-ipcMain.handle('system:set-login-item', (_event, input: unknown) => {
+guardedIpc.handle('system:set-login-item', (_event, input: unknown) => {
   if (typeof input !== 'boolean') throw new Error('"enabled" must be a boolean');
   if (!app.isPackaged) return;
   app.setLoginItemSettings({ openAtLogin: input });
 });
 
+/** Reads `package.json`'s `version` via Electron's own resolution: never a hand-maintained
+ * string the Settings page's About section could drift from. */
+guardedIpc.handle('system:get-app-version', (): string => app.getVersion());
+
 if (gotSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
     mainWindow.focus();
   });
 
   app.whenReady().then(() => {
     spawnDaemon();
     createWindow();
+    createTray();
     // Pre-warm only: any failure is reported to the renderer by `vacancy:get-status`, which awaits
     // this same initialization. Swallowed here so an engine problem never becomes an unhandled
     // rejection during startup.
     ensureVacancyEngine().catch(() => {});
     // Same deal for the workspace database: the first `workspace:*` call awaits this very
-    // promise, so a failure here surfaces as that call rejecting with the real reason.
+    // promise, so a failure here surfaces as that call rejecting with the real reason. It also
+    // hydrates the `minimizeToTrayOnClose`/`autoScanEnabled` mirrors the `close` handler and the
+    // background-scan timer read synchronously, and the auto-apply switch the target-policy
+    // resolver reads synchronously.
     ensureWorkspaceDb().catch(() => {});
+    // #195: pick up a report a previous process lifetime's scan already wrote to disk.
+    void hydrateLatestVacancyReport();
+    scheduleBackgroundScanTick();
+    scheduleAutomaticSubmissionTick();
+    scheduleApplicationPipelineTick();
+    scheduleCvTranscriptionStagingSweep();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else mainWindow?.show();
     });
   });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  // #194: registered before the existing `before-quit` listener below, so `isQuitting` is already
+  // true by the time that listener (and any `close` handler still pending) runs. Without this, the
+  // tray's own "Quit" item would set it too late relative to a `close` event already in flight.
+  app.on('before-quit', () => {
+    isQuitting = true;
   });
 
   // Separate from the daemon shutdown below on purpose: `will-quit` always fires, whereas the
@@ -645,6 +3317,10 @@ if (gotSingleInstanceLock) {
   app.on('will-quit', () => {
     closeWorkspaceDb?.();
     closeWorkspaceDb = undefined;
+    // Best-effort, not awaited: `will-quit` is not awaited by Electron either, and the OS frees
+    // the socket on process exit regardless. #421: "closing OVR removes the endpoint."
+    void mcpServerHandle?.close();
+    mcpServerHandle = null;
   });
 
   let shuttingDown = false;

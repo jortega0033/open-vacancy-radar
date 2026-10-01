@@ -3,12 +3,14 @@ import type { AgentProvider, ProviderSessionHandle, StartSessionOptions } from '
 import { type Logger, noopLogger } from '../../logger.js';
 import { runProviderSession } from '../common/run-session.js';
 import { buildClaudeArgs } from './build-args.js';
+import { CLAUDE_ATTACHMENT_MIME_TYPES } from './capabilities.js';
 import { detectClaude } from './detect.js';
 import { parseClaudeLine } from './parser.js';
+import { buildClaudeStdinPayload } from './stdin-payload.js';
 
 /**
  * Claude Code CLI adapter. Runs `claude -p ... --output-format stream-json --verbose` and
- * normalizes its JSONL output. Authentication is entirely owned by the `claude` binary — this
+ * normalizes its JSONL output. Authentication is entirely owned by the `claude` binary. This
  * adapter never reads Claude's credential storage and never passes an API key.
  */
 export class ClaudeProvider implements AgentProvider {
@@ -21,6 +23,10 @@ export class ClaudeProvider implements AgentProvider {
     return detectClaude(this.logger);
   }
 
+  getAttachmentMimeTypes(): readonly string[] {
+    return CLAUDE_ATTACHMENT_MIME_TYPES;
+  }
+
   startSession(options: StartSessionOptions): ProviderSessionHandle {
     return runProviderSession(
       {
@@ -29,6 +35,7 @@ export class ClaudeProvider implements AgentProvider {
         buildArgs: buildClaudeArgs,
         parseLine: parseClaudeLine,
         promptViaStdin: true,
+        buildStdinPayload: buildClaudeStdinPayload,
       },
       options,
       this.logger,

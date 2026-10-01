@@ -13,7 +13,7 @@ export interface SaveCvToLibraryProps {
  *
  * The ephemeral path deliberately stays: picking a CV to run a single gap analysis against one
  * vacancy is a legitimate thing to do without committing the document to a library you then have
- * to curate. So saving is an explicit second step rather than a side effect of the upload — the
+ * to curate. So saving is an explicit second step rather than a side effect of the upload: the
  * user decides whether this file is a keeper.
  *
  * Only the extracted text and the file name cross into the database; the file itself is never
@@ -31,6 +31,9 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
         name: cv.fileName,
         kind: 'uploaded',
         text: cv.text,
+        // Issue #396: `undefined` here (every call site that predates the AI-transcription
+        // fallback) falls through to the column default, `'text_layer'`.
+        textSource: cv.textSource,
       });
       setState('saved');
       onSaved?.(created.id);
@@ -38,12 +41,12 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
       setState('idle');
       setError(describeError(err, 'could not save this CV to your library'));
     }
-  }, [cv.fileName, cv.text, onSaved]);
+  }, [cv.fileName, cv.text, cv.textSource, onSaved]);
 
   return (
     <div className="flex flex-wrap items-center gap-3">
       <button className="btn btn-outline btn-sm" type="button" onClick={handleSave} disabled={state !== 'idle'}>
-        {state === 'saving' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+        {state === 'saving' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
         {state === 'saved' ? 'Saved to library' : 'Save to CV library'}
       </button>
       {state === 'saved' && (

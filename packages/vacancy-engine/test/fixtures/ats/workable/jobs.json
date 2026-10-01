@@ -1,0 +1,97 @@
+{
+  "name": "Acme B.V.",
+  "description": "Public jobs",
+  "jobs": [
+    {
+      "title": "Senior Platform Engineer",
+      "shortcode": "HYBRID123",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "workplace_type": "hybrid",
+      "url": "https://apply.workable.com/j/HYBRID123",
+      "shortlink": "https://apply.workable.com/j/HYBRID123",
+      "application_url": "https://apply.workable.com/j/HYBRID123/apply",
+      "published_on": "2026-08-20",
+      "created_at": "2026-08-18",
+      "country": "Netherlands",
+      "city": "Amsterdam",
+      "state": "Noord-Holland",
+      "locations": [
+        {
+          "country": "Netherlands",
+          "countryCode": "NL",
+          "city": "Amsterdam",
+          "region": "Noord-Holland",
+          "hidden": false
+        },
+        {
+          "country": "Netherlands",
+          "countryCode": "NL",
+          "city": "Utrecht",
+          "region": "Utrecht",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Build dependable platforms.</p><p>Ship them safely.</p>"
+    },
+    {
+      "title": "Senior Platform Engineer",
+      "shortcode": "HYBRID123",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "workplace_type": "hybrid",
+      "url": "https://apply.workable.com/j/HYBRID123",
+      "published_on": "2026-08-20",
+      "country": "Germany",
+      "city": "Berlin",
+      "state": "",
+      "locations": [
+        {
+          "country": "Germany",
+          "countryCode": "DE",
+          "city": "Berlin",
+          "region": null,
+          "hidden": false
+        }
+      ],
+      "description": "<p>Build dependable platforms.</p><p>Ship them safely.</p>"
+    },
+    {
+      "title": "Remote Product Designer",
+      "shortcode": "REMOTE456",
+      "employment_type": "Contract",
+      "telecommuting": true,
+      "url": "https://apply.workable.com/j/REMOTE456",
+      "published_on": "2026-08-21",
+      "locations": [
+        {
+          "country": "Worldwide",
+          "countryCode": "",
+          "city": "",
+          "region": null,
+          "hidden": false
+        }
+      ],
+      "description": "<div>Design an accessible product.</div>"
+    },
+    {
+      "title": "Office Coordinator",
+      "shortcode": "ONSITE789",
+      "employment_type": "Part-time",
+      "telecommuting": true,
+      "workplace_type": "on_site",
+      "application_url": "https://apply.workable.com/j/ONSITE789/apply",
+      "published_on": "2026-08-22",
+      "location": {
+        "location_str": "Rotterdam, Netherlands"
+      },
+      "description": "<p>Keep the office running.</p>"
+    },
+    {
+      "title": "Malformed public job",
+      "shortcode": "INVALID000",
+      "url": "https://apply.workable.com/j/INVALID000",
+      "published_on": "2026-08-23"
+    }
+  ]
+}

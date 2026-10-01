@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseClaudeAuthStatus } from '../src/providers/claude/detect.js';
 
-describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
+describe('parseClaudeAuthStatus: pure parser (AD-16)', () => {
   it('returns "authenticated" for { loggedIn: true }', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: true }))).toBe('authenticated');
   });
@@ -22,7 +22,7 @@ describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ authMethod: 'claude.ai' }))).toBe('unknown');
   });
 
-  it('returns "unknown" when loggedIn is present but not a boolean — never guesses truthy/falsy', () => {
+  it('returns "unknown" when loggedIn is present but not a boolean: never guesses truthy/falsy', () => {
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: 'yes' }))).toBe('unknown');
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: 1 }))).toBe('unknown');
     expect(parseClaudeAuthStatus(JSON.stringify({ loggedIn: null }))).toBe('unknown');
@@ -40,7 +40,7 @@ describe('parseClaudeAuthStatus — pure parser (AD-16)', () => {
   });
 });
 
-describe('detectClaude — end-to-end failure paths (mocked exec, no real CLI)', () => {
+describe('detectClaude: end-to-end failure paths (mocked exec, no real CLI)', () => {
   beforeEach(() => {
     vi.resetModules();
   });

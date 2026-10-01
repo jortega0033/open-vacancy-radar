@@ -1,11 +1,18 @@
-import { load } from 'cheerio';
-
 import type { AtsHttpClient, AtsHttpResponse } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
+import { htmlToText } from '../ats/shared.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
+  isoPostedAt,
   locations,
   parseSalaryText,
   parsedRoot,
@@ -19,9 +26,19 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+import { discoverRemoote } from './remoote-discovery.js';
 
+/**
+ * QA regression: this used to be `load(html).text().replace(/\s+/gu, ' ').trim()`, which reads
+ * every text node with no separator between them. Adjacent block elements -- `<p>...experience</p>
+ * <p>Two Microsoft certifications</p>` -- lost the paragraph boundary entirely and ran together as
+ * "experienceTwo Microsoft certifications", a real confirmed case. `htmlToText` (shared with the ATS
+ * adapters) inserts a newline at every block-tag boundary before extracting text, so this now keeps
+ * exactly the same collapsing/trimming behavior while preserving the word boundary a `<p>`/`<br>`
+ * always implied.
+ */
 function decodedText(html: string): string {
-  return load(html).text().replace(/\s+/gu, ' ').trim();
+  return htmlToText(html);
 }
 
 function diceStructuredContent(response: AtsHttpResponse): Record<string, unknown> {
@@ -65,23 +82,26 @@ async function discoverDice(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://mcp.dice.com/mcp';
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   try {
     for (let page = 1; page <= config.discovery.diceMaxPages; page += 1) {
       requests += 1;
       const response = await http.postJson(url, {
         jsonrpc: '2.0',
-        id: `dice-frontend-${page}`,
+        id: `dice-search-${page}`,
         method: 'tools/call',
         params: {
           name: 'search_jobs',
           arguments: {
-            keyword: 'frontend developer',
+            ...(config.discovery.roleQuery ? { keyword: config.discovery.roleQuery } : {}),
             jobs_per_page: 100,
             page_number: page,
             sort: 'relevance',
@@ -128,6 +148,7 @@ async function discoverDice(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description: summary,
+          postedAt: isoPostedAt(stringValue(job.postedDate)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -135,6 +156,7 @@ async function discoverDice(
       if (structured.data.length < 100) break;
       if (page === config.discovery.diceMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.diceMaxPages}-page limit.`;
       }
     }
@@ -142,6 +164,7 @@ async function discoverDice(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -152,6 +175,8 @@ async function discoverDice(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -161,11 +186,14 @@ async function discoverTheMuse(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://www.themuse.com/api/public/jobs';
   try {
     for (let page = 1; page <= config.discovery.museMaxPages; page += 1) {
@@ -202,6 +230,7 @@ async function discoverTheMuse(
           salaryPeriod: salary.period,
           advertisedMinimum: salary.minimum,
           description,
+          postedAt: isoPostedAt(stringValue(job.publication_date)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -210,6 +239,7 @@ async function discoverTheMuse(
       if (root.results.length === 0 || (pageCount !== null && page >= pageCount)) break;
       if (page === config.discovery.museMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.museMaxPages}-page limit.`;
       }
     }
@@ -217,6 +247,7 @@ async function discoverTheMuse(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -227,6 +258,8 @@ async function discoverTheMuse(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -238,6 +271,7 @@ export async function runAdditionalDiscovery(
 ): Promise<DiscoveryRun> {
   const runs = await Promise.all([
     discoverDice(http, config),
+    discoverRemoote(http, config),
     ...(config.discovery.museEnabled ? [discoverTheMuse(http, config)] : []),
   ]);
   return {

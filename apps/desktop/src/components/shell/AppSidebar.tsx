@@ -1,23 +1,35 @@
+import { CaretLeft, Cpu } from '@phosphor-icons/react';
 import type { WorkspaceCounts } from '../../window.js';
 import { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 import { NavIcon } from './NavIcon.js';
 import { badgeCount, PRIMARY_NAV, SECONDARY_NAV, type NavItem, type NavPage } from './nav.js';
+import type { RuntimeState } from './WorkspaceHeader.js';
+
+const RUNTIME_TEXT: Record<RuntimeState, string> = {
+  connecting: 'starting',
+  ready: 'ready',
+  unavailable: 'unavailable',
+  'not-installed': 'not installed',
+  'not-authenticated': 'not authenticated',
+};
 
 export interface AppSidebarProps {
   active: NavPage;
   onNavigate(page: NavPage): void;
   collapsed: boolean;
   onToggleCollapsed(): void;
-  counts: WorkspaceCounts;
-  /** e.g. "Claude Code" — the provider the AI features would use right now. */
+  counts: WorkspaceCounts | undefined;
+  /** e.g. "Claude Code": the provider the AI features would use right now. */
   runtimeLabel: string;
-  runtimeReady: boolean;
+  /** The one place this now shows: distinguishes an unreachable daemon from a daemon that's fine
+   * but has no CLI installed/authenticated, so this never claims "ready" when nothing is. */
+  runtimeState: RuntimeState;
 }
 
 /**
  * The persistent left rail: 236px expanded, 64px collapsed.
  *
- * Collapsed is a real mode, not a visual trick — the labels are removed from the accessibility
+ * Collapsed is a real mode, not a visual trick. The labels are removed from the accessibility
  * tree along with the pixels, and each button keeps an `aria-label` plus a `title` so it is still
  * both announced and hoverable. `aria-current="page"` marks the active destination for screen
  * readers; the visual selected state (a `base-300` fill) is the same information for everyone
@@ -30,8 +42,9 @@ export function AppSidebar({
   onToggleCollapsed,
   counts,
   runtimeLabel,
-  runtimeReady,
+  runtimeState,
 }: AppSidebarProps) {
+  const runtimeReady = runtimeState === 'ready';
   const toggleLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 
   return (
@@ -57,19 +70,7 @@ export function AppSidebar({
           title={toggleLabel}
           onClick={onToggleCollapsed}
         >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className={collapsed ? 'rotate-180' : undefined}
-            aria-hidden="true"
-          >
-            <polyline points="14 6 8 12 14 18" />
-            <line x1="17" y1="6" x2="17" y2="18" />
-          </svg>
+          <CaretLeft size={15} className={collapsed ? 'rotate-180' : undefined} aria-hidden="true" />
         </button>
       </div>
 
@@ -83,8 +84,14 @@ export function AppSidebar({
         className={`border-t border-base-300 ${collapsed ? 'flex flex-col items-center gap-1.5 py-3' : 'flex items-center gap-2 px-3.5 py-3'}`}
       >
         <div className="relative flex-none">
-          <div className="flex size-7 items-center justify-center rounded-full bg-base-300 text-xs font-semibold text-base-content/70">
-            JO
+          {/* This footer is the AI runtime status, not an account/profile: the app has no login or
+              online profile concept, so it must never borrow that vocabulary (see AppSidebar's
+              history: it briefly shipped as a fake "Local profile" avatar + label). */}
+          <div
+            className="flex size-7 items-center justify-center rounded-full bg-base-300 text-base-content/70"
+            aria-label="AI runtime"
+          >
+            <Cpu size={15} weight="bold" aria-hidden="true" />
           </div>
           <span
             className={`absolute right-0 bottom-0 size-2 rounded-full border-2 border-base-200 ${runtimeReady ? 'bg-success' : 'bg-base-content/30'}`}
@@ -93,9 +100,9 @@ export function AppSidebar({
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            <div className="truncate text-xs font-medium">Local profile</div>
+            <div className="truncate text-xs font-medium">AI runtime</div>
             <div className="truncate text-xs text-base-content/50">
-              {runtimeLabel} {runtimeReady ? 'ready' : 'unavailable'}
+              {runtimeLabel} {RUNTIME_TEXT[runtimeState]}
             </div>
           </div>
         )}
@@ -109,7 +116,7 @@ interface NavGroupProps {
   active: NavPage;
   onNavigate(page: NavPage): void;
   collapsed: boolean;
-  counts: WorkspaceCounts;
+  counts: WorkspaceCounts | undefined;
 }
 
 function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProps) {
@@ -127,8 +134,13 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
             {...(isActive ? { 'aria-current': 'page' as const } : {})}
             onClick={() => onNavigate(item.id)}
             className={[
-              'btn btn-ghost btn-sm justify-start gap-2.5 font-medium',
-              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full',
+              'btn btn-ghost btn-sm gap-2.5 font-medium',
+              // `justify-start` and `justify-center` must never both be present at once: Tailwind
+              // resolves conflicting utilities by generated-CSS order, not by class-string order,
+              // so having both here left the collapsed icon pinned to the button's start edge
+              // instead of centered in its 44px `ovr-nav-icon` box, overriding daisyUI's own
+              // centered-by-default `.btn` layout.
+              collapsed ? 'ovr-nav-icon mx-auto justify-center px-0' : 'w-full justify-start',
               isActive ? 'bg-base-300 text-base-content' : 'text-base-content/70',
             ].join(' ')}
           >

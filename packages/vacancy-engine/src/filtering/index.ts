@@ -1,9 +1,9 @@
 export {
-  DETERMINISTIC_SCORING_VERSION,
   RELEVANCE_THRESHOLD,
-  detectDutchRequirement,
   isDeterministicallyRelevant,
-  scoreVacancy,
-  type DutchRequirementAssessment,
+  plainText,
+  scoreWorldwideVacancy,
+  UNMET_MANDATORY_LANGUAGE_SCORE_CAP,
+  type WorldwideDeterministicScore,
+  type WorldwideScorableVacancy,
 } from './relevance.js';
-export { assessNetherlandsSalary, type NetherlandsSalaryAssessment } from './compensation.js';

@@ -1,12 +1,12 @@
 # Open Vacancy Radar
 
 An open-source, local-first Electron desktop app for discovering frontend-developer vacancies,
-tracking applications, and preparing CVs and cover letters — with no external database, no cloud
+tracking applications, and preparing CVs and cover letters. It uses no external database, no cloud
 account, and no API key held by this project. Application data lives in an embedded SQLite
 workspace on the user's own machine; AI features run through the reusable AgentDock runtime, which
-drives AI agent CLIs already installed and authenticated on the user's computer — starting with
+drives AI agent CLIs already installed and authenticated on the user's computer (starting with
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex) — without this project ever seeing a password, token, or
+[Codex](https://github.com/openai/codex)), without this project ever receiving a password, token, or
 API key.
 
 ![Open Vacancy Radar search workspace](docs/images/social/readme-hero.webp)
@@ -14,42 +14,76 @@ API key.
 _Reference interface shown with sample data; production behavior comes from the Electron source in
 this repository, not the bundled prototype used to prepare the image._
 
+### 30-second overview
+
+<video src="https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/showreel.mp4" poster="https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/element-899.png" controls muted width="640"></video>
+
+If the player above doesn't render, [watch/download the video directly](https://github.com/jortega0033/open-vacancy-radar/releases/download/v0.1.3/showreel.mp4). Illustrative UI recreation with sample data, not screen-captured footage of the live app.
+
 ## What this is
 
-A personal job-search workspace built around two real, verified discovery pipelines — there is no
-third "generic country" pipeline; every match is either Netherlands-sponsor-verified or
-worldwide-remote-verified, never a placeholder:
+A personal job-search workspace built around one worldwide/remote discovery pipeline: frontend-only
+roles from roughly 40 researched public sources (ATS APIs, RSS feeds, keyed job-board APIs), filtered
+for genuinely remote, non-US-only eligibility, with no default country, role, or salary bias baked in.
 
-- **Netherlands** — frontend vacancies cross-checked against the IND's official recognised-sponsor
-  register, so a match means the employer is a verified sponsor, not just a keyword hit.
-- **Worldwide / remote** — frontend-only roles from ~50 researched public sources (ATS APIs, RSS
-  feeds, keyed job-board APIs), filtered for genuinely remote, non-US-only eligibility.
+For any vacancy that normalizes to a Netherlands location, a best-effort check additionally looks
+up the employer by name against the IND's official recognised-sponsor register. This is a
+name-keyed, unverified lookup, not a curated evidence chain, so a match is always reported as a
+"possible sponsor match" rather than a confirmed one -- confirm the legal entity yourself before
+relying on sponsorship. Like every discovery source, it runs on a bounded budget: one scan resolves
+a capped number of distinct employers against Wikidata rather than one lookup per listing, and any
+employer it did not reach is reported as unchecked, never as unmatched.
 
-Both pipelines are deterministic-first: official ATS APIs and structured feeds before plain HTTP,
+The pipeline is deterministic-first: official ATS APIs and structured feeds before plain HTTP,
 before JSON-LD, before HTML parsing, with a narrowly-scoped headless-browser fallback only where
-nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for the engine itself —
+nothing else works. See [packages/vacancy-engine](packages/vacancy-engine) for the engine itself,
 vendored from the standalone `ind-job-radar` CLI project and ported from PostgreSQL to an embedded
 `better-sqlite3` database so the desktop app needs no external services at all.
 
+On top of that deterministic pipeline, an opt-in "Include AI web search" checkbox on the Search page
+can add one budget-capped session of your configured Claude CLI (its `WebSearch`/`WebFetch` tools
+only, no filesystem access) to look for further candidate vacancies. It only runs once a search
+profile is configured, never blocks the rest of a scan if it fails or times out, and every candidate
+it returns is schema-validated and checked against the same blocked/prohibited source list as the
+deterministic sources before being accepted.
+
+Vacancy coverage is a product requirement: a lawful public source is integrated by default in the
+broadest mode its evidence supports. Sources that take longer to implement remain planned.
+Unclear republication rights use a factual linked index; explicit prohibitions, authentication or
+partner boundaries, and technical access controls stop ingestion. See
+[the job source policy](docs/job-source-policy.md).
+
 On top of that, the desktop app is a full personal tracker:
 
-- **Search** — run either pipeline on demand, save leads, or open the CV assistant on any result.
-- **Saved Jobs** / **Applications** — track status end to end, with confirm-before-delete and a
-  short undo window on every delete.
-- **CV Library** — upload or hand-enter multiple CVs, one marked default, each usable for AI
-  gap-analysis against a specific vacancy.
-- **Letters** — generate motivation letters, cover letters, recruiter messages, or short
+- **Search:** run the pipeline on demand, optionally add the AI web search pass above, save leads,
+  or open the CV assistant on any result.
+- **Saved Jobs** / **Applications:** track status end to end, with confirm-before-delete and a
+  short undo window on every delete. An application in recruiter-screen or interview stage can also
+  generate a review-only interview-prep pack (likely questions, claims to defend, gaps, STAR
+  candidates) built only from data already in the workspace, never invented and never auto-saved.
+- **CV Library:** upload or hand-enter multiple CVs, one marked default, each usable for AI
+  gap-analysis against a specific vacancy. A scanned or image-only PDF with no selectable text can
+  fall back to AI transcription with your explicit consent; you review and correct the text before
+  it's saved, and the CV record keeps track of which source produced it.
+- **Letters:** generate motivation letters, cover letters, recruiter messages, or short
   application-form blurbs from a CV + vacancy pair, in a chosen tone and length, with a library of
   saved drafts.
-- **Settings** — theme (light/dark/system), density, default market, and data export/reset, all
-  persisted locally.
-- **AI Runtime** — the AgentDock provider panel: pick a provider (Claude Code, Codex) and, where
-  supported, a specific model, and watch a run's events stream live.
+- **Settings:** theme (light/dark/system), density, default market, application-data reset,
+  documented manual backup, and (under Workspace) saved answers to recurring application-form
+  questions that are reused only when you explicitly click "Use this answer," all persisted locally.
+- **AI Runtime:** the AgentDock provider panel: see each installed CLI's authentication, version,
+  and capabilities, set one as the default AI features run through, and verify it without spending a
+  model call.
 
-A desktop product on a **Bring Your Own Subscription** foundation: if a user already has `claude`
-or `codex` installed and logged in, Open Vacancy Radar can use that existing session for local AI
-workflows (gap analysis, letter drafting). The installed CLI stays the sole authentication and
-provider boundary; this project never sees a password, token or API key.
+This desktop app relies on CLIs the user already has installed and authenticated, not its own
+subscription or API key: if a user already has `claude` or `codex` installed and logged in, Open
+Vacancy Radar can use that existing session for local AI workflows (gap analysis, letter drafting).
+The installed CLI stays the sole authentication and provider boundary; this project never receives
+a password, token, or API key for those AI CLIs. (A separate MCP job-source layer exists in the
+daemon; it ships with one reviewed, no-auth provider registered — InfoSec Job Board, a public
+vacancy-search MCP server that needs no credential — while generic credential-bearing/OAuth MCP
+providers remain a future, separately reviewed integration. There is currently no screen in the app
+that surfaces this provider; see [SECURITY.md](SECURITY.md).)
 
 ```
 Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──▶ Local Daemon (Fastify, protocol v1)
@@ -59,7 +93,7 @@ Renderer (React) ──IPC──▶ Electron main ──@agent-dock/client──
                                                            └── Codex adapter ────────▶ codex CLI
 ```
 
-The renderer never calls the daemon directly — only Electron's main process does, through the
+The renderer never calls the daemon directly. Only Electron's main process does, through the
 typed `@agent-dock/client` SDK. See
 [SECURITY.md](SECURITY.md#renderer-never-talks-to-the-daemon-directly) for why, and
 [Client SDK](#client-sdk) below for what that package looks like from the outside.
@@ -70,50 +104,58 @@ See [docs/architecture.md](docs/architecture.md) for the full breakdown, and
 ## Where do I start?
 
 - **Just want to run it?** [Getting started](#getting-started) below.
-- **Want to contribute to this repo?** [DEVELOPMENT.md](DEVELOPMENT.md) — setup, an "I want to
+- **Want to contribute to this repo?** [DEVELOPMENT.md](DEVELOPMENT.md): setup, an "I want to
   change X" map of the codebase, and the common architectural rules that keep the security model
   intact.
-- **Want to build your own product on top of AgentDock?** [Building your own product](#building-your-own-product-with-agentdock)
-  below.
 - **Want to add a provider (a third CLI besides Claude/Codex)?**
-  [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider) — self-
+  [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider): self-
   contained, no daemon/client/desktop changes required.
 - **Something's not working?** [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## What this is not
 
-- **Not** an unofficial authentication bypass — every CLI call goes through the real `claude`/`codex`
+- **Not** an unofficial authentication bypass. Every CLI call goes through the real `claude`/`codex`
   binary using its own login state. Nothing here reads, copies, or reverse-engineers credential storage.
-- **Not** a token extractor or an API proxy — this project never makes a direct Anthropic/OpenAI API
+- **Not** a token extractor or an API proxy. This project never makes a direct Anthropic/OpenAI API
   call and never asks a user for an API key in CLI mode.
-- **Not** a hosted job portal or cloud account service — application data stays in the local
+- **Not** a hosted job portal or cloud account service. Application data stays in the local
   desktop workspace, and the AI runtime remains provider-neutral infrastructure.
-- **Not** a replacement for Claude Code or Codex — it's a thin, provider-neutral shell around them.
+- **Not** a replacement for Claude Code or Codex. It's a thin, provider-neutral shell around them.
 
 ## Repository layout
 
 ```
 apps/
   desktop/          Open Vacancy Radar Electron + React application
-                       src/components/{search,saved,applications,cv-library,letters,settings}/
-                       electron/workspace/  — the personal-data SQLite schema, IPC, repository
+                       src/components/{search,saved,applications,cv,cv-library,letters,runtime,settings}/
+                       electron/workspace/  : the personal-data SQLite schema, IPC, repository
   daemon/           Standalone local Node.js service (Fastify), runnable without Electron
 packages/
-  vacancy-engine/   The discovery/scoring engine (NL sponsor pipeline + worldwide remote pipeline),
+  vacancy-engine/   The worldwide/remote discovery engine (plus a best-effort IND sponsor check),
                      vendored from the standalone `ind-job-radar` CLI and ported to embedded SQLite
   agent-runtime/    Provider-neutral runtime: process management, adapters, normalized events
-  client/           @agent-dock/client — typed daemon SDK (HTTP+SSE, auth, protocol version check)
+  client/           @agent-dock/client: typed daemon SDK (HTTP+SSE, auth, protocol version check)
   shared/           Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
+  application-executor/  CDP-based application-form field mapping, readiness, and submission-outcome
+                     primitives behind the desktop app's auto-apply review pipeline, currently
+                     hidden from the UI pending further scoping
 ```
 
 Design tokens and shared UI primitives live in `apps/desktop/src/styles/tokens.css` (the single
-source of theme/color/spacing truth — see [DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md)) and
+source of theme/color/spacing truth, see [DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md)) and
 `apps/desktop/src/components/shell/` (`ConfirmDialog`, `UndoToast`, `EmptyState`, and the app
 shell), reused across every page rather than redefined per feature.
 
 ## Requirements
 
-Install and authenticate the CLIs you want to use, independently of this project:
+- **OS**: Windows 10 or later, 64-bit (x64). The packaged installer is Windows-only for now; see
+  [docs/packaging.md#platform-matrix](docs/packaging.md#platform-matrix).
+- **Node.js**: `>=22` if you're running from source (see `engines` in `package.json`). Not needed
+  to just run the packaged installer.
+- **An AI provider CLI, for AI features only** (search, saved jobs, applications, and letters work
+  without one): install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or
+  [Codex](https://github.com/openai/codex) first, then authenticate the CLIs you want to use,
+  independently of this project:
 
 ```bash
 # Claude Code
@@ -125,8 +167,10 @@ codex login
 codex login status
 ```
 
-This project never automates account signup or handles credentials on your behalf — do that
-directly with each CLI first.
+This project never automates account signup or handles credentials on your behalf, and never
+installs a CLI for you. Do all of that directly with each CLI first; see
+[docs/troubleshooting.md#claudecodex-not-detected-installed-false](docs/troubleshooting.md#claudecodex-not-detected-installed-false)
+if the app doesn't detect a CLI you've already installed.
 
 ## Getting started
 
@@ -141,7 +185,7 @@ curl http://127.0.0.1:<port>/health
 ```
 
 The daemon prints its listening URL and where it wrote its discovery file (port + auth token) on
-startup — see [SECURITY.md](SECURITY.md#local-auth-token) for what that file is and why the token
+startup. See [SECURITY.md](SECURITY.md#local-auth-token) for what that file is and why the token
 exists, and [docs/daemon.md](docs/daemon.md) for everything else about running it standalone.
 
 To run the full desktop app (spawns the daemon automatically):
@@ -153,7 +197,7 @@ pnpm dev:desktop
 No database server or setup step is required: both the vacancy-engine's own database and the
 personal workspace database are embedded SQLite files under Electron's per-user app-data directory,
 created and migrated automatically on first launch. `pnpm install`'s `postinstall` step also
-rebuilds `better-sqlite3`'s native binding against Electron's ABI (`electron-rebuild`) — a plain
+rebuilds `better-sqlite3`'s native binding against Electron's ABI (`electron-rebuild`). A plain
 `node_modules` install alone is not sufficient for the desktop app to run.
 
 ### Everyday commands
@@ -165,27 +209,41 @@ pnpm test        # unit + integration tests (no real CLI calls; see docs/provide
 pnpm lint        # ESLint
 ```
 
+To run vacancy-engine's discovery pipeline standalone, without the desktop app or daemon: copy
+`packages/vacancy-engine/config/.env.example` to `.env` and fill in the keys you need, then
+
+```bash
+pnpm scan            # global-remote:scan -- the full worldwide/remote discovery pipeline
+pnpm roster-import    # ats-roster:import -- imports the tracked ATS roster
+pnpm sponsor-sync     # sponsors:sync -- refreshes the IND sponsor baseline
+```
+
+See [DEVELOPMENT.md#running-vacancy-engines-cli-standalone](DEVELOPMENT.md#running-vacancy-engines-cli-standalone)
+for the rest of `cli.ts`'s commands.
+
 These four also run in CI on every push and pull request, plus a separate Windows job that runs
-`pnpm package:win` and checks a real installer came out — see
+`pnpm package:win` and checks a real installer came out. See
 [CONTRIBUTING.md](CONTRIBUTING.md#before-opening-a-pr).
 
 ## Production build
 
 `pnpm build` compiles every package in dependency order and produces:
 
-- `packages/shared/dist/`, `packages/agent-runtime/dist/` — compiled library output
-- `apps/daemon/dist/index.js` — the daemon bundled by esbuild into **one self-contained file**
-  (every dependency inlined, including the two packages above) — required so it can run under
-  plain `node`, with no workspace resolution or `tsx`, once packaged. See
+- `packages/shared/dist/`, `packages/agent-runtime/dist/`: compiled library output
+- `apps/daemon/dist/`: the daemon bundled by esbuild into `index.js` (every dependency inlined,
+  including the two packages above, except native addons — see below), required so it can run
+  under plain `node`, with no workspace resolution or `tsx`, once packaged. `dist/` also carries
+  `keyring.<platform>.node`, the one native module (`@napi-rs/keyring`, used only for optional MCP
+  job-source credentials) esbuild cannot inline, so it ships as a sibling asset instead. See
   [docs/architecture.md](docs/architecture.md#daemon-discovery-and-lifecycle) for why this needed
   fixing, not just adding.
-- `apps/desktop/dist/` — the Vite production build of the React renderer
-- `apps/desktop/dist-electron/main.js`, `preload.js` — the Electron main process and preload
+- `apps/desktop/dist/`: the Vite production build of the React renderer
+- `apps/desktop/dist-electron/main.js`, `preload.js`: the Electron main process and preload
   script, each bundled to a single file (`main.js` inlines `@agent-dock/client`,
   `@agent-dock/shared`, and `zod`; `preload.js` is forced to CommonJS since Electron's sandboxed
   preload loader doesn't support ESM)
 
-None of this is an installer yet — it's the "does the code actually compile to something runnable"
+None of this is an installer yet. It's the "does the code actually compile to something runnable"
 step. `electron .` against `apps/desktop` at this point runs the app unpacked, useful for a quick
 check without going through a full package step.
 
@@ -197,8 +255,8 @@ pnpm package:win   # pnpm build, then electron-builder --win nsis
 
 Produces, under `dist-packages/` at the repo root:
 
-- `dist-packages/win-unpacked/` — the unpacked app (`Open Vacancy Radar.exe` + `resources/`)
-- `dist-packages/Open Vacancy Radar-Setup-<version>.exe` — the NSIS installer
+- `dist-packages/win-unpacked/`: the unpacked app (`Open Vacancy Radar.exe` + `resources/`)
+- `dist-packages/Open Vacancy Radar-Setup-<version>.exe`: the NSIS installer
 
 `pnpm package` (no `:win`) runs `electron-builder` for whatever platform you're on; today that's
 only meaningfully tested on Windows. Both commands are non-interactive and safe to run from a clean
@@ -208,10 +266,10 @@ outside `app.asar`, and the full Windows-only platform matrix.
 
 ## Client SDK
 
-`@agent-dock/client` is the typed way to talk to the daemon — it owns the HTTP request/response
+`@agent-dock/client` is the typed way to talk to the daemon: it owns the HTTP request/response
 handling, bearer-token auth, incremental SSE parsing, and the protocol-version compatibility check
 (see [Protocol v1](docs/protocol-v1.md)), so a caller never hand-writes daemon URLs, headers, or
-event-stream parsing. It's a plain TypeScript package with no Electron or browser dependency —
+event-stream parsing. It's a plain TypeScript package with no Electron or browser dependency,
 usable from Electron's main process (what this repo's own desktop app does), a Node CLI, or a
 future VS Code extension. See [docs/client-sdk.md](docs/client-sdk.md) for the full public API
 (including `sessions.get`/`sessions.delete`, not shown below) and design decisions.
@@ -230,63 +288,49 @@ const session = await client.sessions.create({
 });
 
 for await (const event of client.sessions.events(session.id)) {
-  console.log(event); // AgentEventEnvelope — a normalized AgentEvent plus sequence/timestamp
+  console.log(event); // AgentEventEnvelope, a normalized AgentEvent plus sequence/timestamp
 }
 
 await client.sessions.cancel(session.id);
 ```
 
-Failures are typed — `DaemonUnavailableError`, `UnauthorizedError`, `ProtocolMismatchError`,
-`ValidationError`, `SessionNotFoundError`, `ProviderUnavailableError`, `DaemonError` — so a caller
+Failures are typed: `DaemonUnavailableError`, `UnauthorizedError`, `ProtocolMismatchError`,
+`ValidationError`, `SessionNotFoundError`, `ProviderUnavailableError`, `DaemonError`. A caller
 can `catch` and branch on `instanceof` instead of parsing error strings. See
 [docs/client-sdk.md](docs/client-sdk.md) and [docs/protocol-v1.md](docs/protocol-v1.md).
 
 ## Adding a provider
 
-See [docs/providers.md](docs/providers.md#adding-a-new-provider) — it's meant to be: implement one
+See [docs/providers.md](docs/providers.md#adding-a-new-provider). It's meant to be: implement one
 adapter, declare its capabilities, write its parser + tests, run it against the shared provider
 contract suite, register it. No daemon, client, or desktop changes required.
 
-## Building your own product with AgentDock
-
-Open Vacancy Radar is the product layer built on AgentDock's reusable daemon and client packages.
-To build a different product on the same foundation:
-
-1. **Fork the repo** and treat `apps/desktop` as a starting point to replace, not extend in place
-   — keep `packages/shared`, `packages/agent-runtime`, `packages/client`, and `apps/daemon`
-   largely as-is; your own product's UI and any product-specific logic (persistence, accounts,
-   a specific end-user workflow) belongs in your own app, not upstream in these packages.
-2. **Talk to the daemon the same way this repo does** — through `@agent-dock/client` from a trusted
-   process (Electron main, a Node backend, a CLI), never from a browser/renderer context. See
-   [SECURITY.md](SECURITY.md#renderer-never-talks-to-the-daemon-directly) for why that boundary is
-   load-bearing, not optional, if your product also runs in a browser-based renderer.
-3. **Add product-specific persistence in your own layer**, not in `SessionStore` — this project's
-   `MemorySessionStore` is deliberately ephemeral (see
-   [docs/daemon.md#session-lifecycle-sessionmanager-sessionstore](docs/daemon.md#session-lifecycle-sessionmanager-sessionstore)).
-   If you need session history to survive a restart, that's a product concern to build in your own
-   app (e.g. by storing `AgentEventEnvelope`s as your product receives them over SSE), not something
-   to retrofit into the daemon.
-4. **Add a provider if you need one AgentDock doesn't ship** — see
-   [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider).
-5. **Package it as your own app** — update `appId`, `productName`, and add an icon in
-   `apps/desktop/electron-builder.yml` (see [docs/packaging.md](docs/packaging.md)); the daemon and
-   client packages need no changes to ship under a different product name.
-
 ## Documentation
 
-- [DEVELOPMENT.md](DEVELOPMENT.md) — setup, an "I want to change X" map, common architectural rules
-- [docs/architecture.md](docs/architecture.md) — component responsibilities, runtime flow, trust boundaries, dependency graph
-- [docs/protocol-v1.md](docs/protocol-v1.md) — the `AgentEvent` union, wire format, ordering guarantees, what's public/stable
-- [docs/client-sdk.md](docs/client-sdk.md) — `@agent-dock/client`'s full public API and design decisions
-- [docs/providers.md](docs/providers.md) — how the Claude/Codex adapters work, provider capabilities, how to add another, the shared contract test suite
-- [docs/daemon.md](docs/daemon.md) — running the daemon standalone, routes, session lifecycle, discovery file
-- [docs/electron.md](docs/electron.md) — the renderer/main/daemon boundary, IPC bridge, where to safely add native functionality
-- [docs/packaging.md](docs/packaging.md) — electron-builder/NSIS specifics, verified commands, platform support
-- [docs/assets.md](docs/assets.md) — brand sources, icon generation, renderer mapping and rebranding
-- [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md) — the design-token rules every component follows
-- [docs/troubleshooting.md](docs/troubleshooting.md) — common problems and how to diagnose them
-- [SECURITY.md](SECURITY.md) — the daemon's threat model and local-auth mechanism
-- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow and checklist
+- [DEVELOPMENT.md](DEVELOPMENT.md): setup, an "I want to change X" map, common architectural rules
+- [docs/architecture.md](docs/architecture.md): component responsibilities, runtime flow, trust boundaries, dependency graph
+- [docs/protocol-v1.md](docs/protocol-v1.md): the `AgentEvent` union, wire format, ordering guarantees, what's public/stable
+- [docs/client-sdk.md](docs/client-sdk.md): `@agent-dock/client`'s full public API and design decisions
+- [docs/providers.md](docs/providers.md): how the Claude/Codex adapters work, provider capabilities, how to add another, the shared contract test suite
+- [docs/daemon.md](docs/daemon.md): running the daemon standalone, routes, session lifecycle, discovery file
+- [docs/electron.md](docs/electron.md): the renderer/main/daemon boundary, IPC bridge, where to safely add native functionality
+- [docs/packaging.md](docs/packaging.md): electron-builder/NSIS specifics, verified commands, platform support
+- [docs/assets.md](docs/assets.md): brand sources, icon generation, renderer mapping and rebranding
+- [apps/desktop/DESIGN-TOKENS.md](apps/desktop/DESIGN-TOKENS.md): the design-token rules every component follows
+- [docs/troubleshooting.md](docs/troubleshooting.md): common problems and how to diagnose them
+- [docs/release-notes-v0.1.3.md](docs/release-notes-v0.1.3.md): what shipped, known limitations, privacy implications (earlier releases: [v0.1.0](docs/release-notes-v0.1.0.md), [v0.1.1](docs/release-notes-v0.1.1.md), [v0.1.2](docs/release-notes-v0.1.2.md))
+- [docs/privacy.md](docs/privacy.md): what data is stored, what leaves your machine and when, retention/deletion
+- [docs/release-checklist.md](docs/release-checklist.md): the repeatable pre-release verification checklist
+- [SECURITY.md](SECURITY.md): the daemon's threat model and local-auth mechanism
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow and checklist
+
+## Support and reporting issues
+
+Found a bug, or something doesn't work as documented? Search
+[existing issues](https://github.com/jortega0033/open-vacancy-radar/issues) first, then open a new
+one using the issue forms — see [CONTRIBUTING.md](CONTRIBUTING.md) for what to include. Report a
+security vulnerability privately through the repository's **Security** tab, never through a public
+issue or pull request (see [SECURITY.md](SECURITY.md)).
 
 ## License
 

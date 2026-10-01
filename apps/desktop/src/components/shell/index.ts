@@ -4,15 +4,19 @@ export { WorkspaceHeader } from './WorkspaceHeader.js';
 export type { WorkspaceHeaderProps, RuntimeState } from './WorkspaceHeader.js';
 export { EmptyState } from './EmptyState.js';
 export type { EmptyStateProps } from './EmptyState.js';
+export { PageLoading } from './PageLoading.js';
+export type { PageLoadingProps } from './PageLoading.js';
+export { ErrorBanner } from './ErrorBanner.js';
+export type { ErrorBannerProps } from './ErrorBanner.js';
 export { ConfirmDialog } from './ConfirmDialog.js';
 export type { ConfirmDialogProps } from './ConfirmDialog.js';
 export { UndoToast } from './UndoToast.js';
 export type { UndoToastProps } from './UndoToast.js';
+export { useEscapeToClose } from './useEscapeToClose.js';
 export { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 export type { OpenVacancyRadarMarkProps } from '../brand/OpenVacancyRadarMark.js';
 export { NavIcon } from './NavIcon.js';
 export {
-  EMPTY_COUNTS,
   NAV_PAGES,
   PRIMARY_NAV,
   SECONDARY_NAV,

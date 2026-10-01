@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: off-policy redirect destination</title>
+<!--
+  Test-only fixture. Deliberately NOT in FIXTURE_REVIEW_POLICY.exactFileUrls -- it stands in for
+  "wherever a same-tab redirect from redirect-attempt.html would land if the executor's runtime
+  navigation guard didn't block it." Its only job is to carry a field name distinct enough that a
+  test can tell, from a snapshot alone, whether the browser actually ended up here.
+-->
+</head>
+<body>
+  <input type="text" name="onNotATargetPage" />
+</body>
+</html>

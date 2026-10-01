@@ -1,0 +1,1433 @@
+# ADR: AgentDock v1 provenance and the v2 upgrade boundary
+
+This repository is not an independent implementation of the AgentDock runtime: `apps/daemon`,
+`packages/shared`, `packages/client`, and `packages/agent-runtime` are a copy-derived fork of the
+upstream [`jortega0033/agentdock`](https://github.com/jortega0033/agentdock) project, taken at a
+point in that project's history and then evolved independently ever since. Issues #119-#127
+("ADI-01" through "ADI-09") plan to port a "v2" architecture from that same upstream project into
+this repo's copy. Before any of that port work starts, this ADR records exactly what was copied,
+from where, how far it has since drifted, and which of that drift is safe to overwrite versus must
+be preserved. This is the artifact ADI-01 (issue #119) commits to producing; ADI-02 onward will cite
+it rather than re-deriving these facts.
+
+## Upstream reference points
+
+- **Upstream repository:** `jortega0033/agentdock`
+- **v2 target commit:** `5bc0b679…` (the commit the ADI tickets cite as the v2 architecture to port)
+- **Nearest upstream baseline to this repo's fork point:** `751341bcb452d2b5711d0d4c1f4d099bfb1d5b49`
+  ("chore: remove unused zod devDependency from apps/desktop") — confirmed by cloning upstream and
+  checking out this commit directly; it exists and checks out cleanly.
+- **This repo's initial commit:** `624247d60ce7d897303e40eb451451eae2df2504`
+  ("feat: initial OpenVacancyRadar desktop app", 2026-08-29) — the point this repo's history starts
+  from; it already contains the copy-derived packages, so the fork happened before this repo's own
+  history begins.
+
+## The copy-derived boundary
+
+Diffing this repo's file tree against the upstream baseline commit identifies exactly which
+directories are copy-derived, by finding the largest set of paths that exist verbatim (by path) in
+both trees:
+
+| Directory | File count |
+|---|---|
+| `apps/daemon` | 18 |
+| `packages/shared` | 10 |
+| `packages/client` | 8 |
+| `packages/agent-runtime` | 45 |
+| **Total** | **81** |
+
+This 81-file set is the "core" this ADR and the ADI tickets treat as copy-derived and in scope for
+provenance tracking. Four more files — `apps/desktop/electron/{main.ts, preload.ts,
+resolve-daemon-entry.ts, send-to-renderer.ts}` — also exist verbatim by path in the upstream tree,
+but are **excluded** from the 81-file core: they diverge far more heavily (whole new IPC
+namespaces, vacancy-radar-specific wiring) than the 81-file set does, so folding them in would blur
+a genuinely different kind of file under one number. Everything under `packages/vacancy-engine` and
+`apps/desktop/{src,assets,e2e,scripts}` is pure product code with no upstream counterpart at all.
+
+## Two valid, differently-scoped comparison numbers
+
+Diffing the 81-file core against upstream produces **two different, both-correct answers**,
+depending on which local commit you diff against — and conflating them would misstate what's
+actually shipped:
+
+**At this repo's fork point (`624247d`, the initial commit):**
+
+```
+TOTAL=81  IDENTICAL=69  MODIFIED=12  ADDED=0  DELETED=0  LINES=+84/-6
+```
+
+The 12 modified files at this point are exactly the Claude model-selection feature (see below) —
+nothing else had touched the copy yet. This is the number issue #119 originally cited, and it is
+accurate as a description of **provenance at the fork point**.
+
+**At current `master` (HEAD, as of this ADR):**
+
+```
+TOTAL=81  IDENTICAL=32  MODIFIED=49  ADDED=0  DELETED=0  LINES=+410/-159
+```
+
+Nothing was added or deleted from the 81-path set in either case (every upstream path still exists
+locally), but 17 more files have been modified since the fork, roughly quadrupling the line delta.
+**This ADR treats the current-state number as the actual, load-bearing provenance record** — it is
+what ADI-02 onward must diff the v2 target against — while keeping the fork-time number here as
+historical context for how issue #119 arrived at its original "81/69/12" claim.
+
+## What changed since the fork, and why
+
+Four same-day commits (2026-08-30, the day before issue #119 was filed) account for the full
+divergence between the two snapshots above:
+
+1. **`4f4f611` — "feat(mcp): add policy-gated vacancy source foundation".** Adds a vacancy-source
+   MCP client/connection-manager foundation: `apps/daemon/src/mcp/{cache, credential-store, manager,
+   sdk-connector, types}.ts`, `apps/daemon/src/routes/mcp.ts`, `packages/shared/src/mcp.ts`, plus
+   matching tests. These are net-new files *inside* the copy-derived directories but *outside* the
+   81-path set, so they don't appear in the "modified" count above — they only affect the small
+   number of core files that wire the new manager in (`apps/daemon/src/index.ts`,
+   `apps/daemon/src/server.ts`, `packages/shared/src/index.ts`, `packages/client/src/client.ts`).
+2. **`a6b7233` (PR #54) — "chore(copy): normalize project language".** A repo-wide sweep removing
+   em dashes from comments and docs across nearly every core file, including many with no logic
+   change at all. This single commit accounts for the bulk of the "modified file count" jump between
+   the two snapshots: 29 of the 49 currently-modified core files differ from upstream in comments or
+   docstrings only, with zero behavioral difference.
+3. **`44adc81` — "fix: address CodeQL alerts…" (issue #39 Phase 1).** Rate-limiting-finding dismissal
+   comments in `apps/daemon/src/routes/{providers,sessions}.ts`, and a real fix in
+   `packages/client/src/client.ts` replacing a ReDoS-shaped regex with `stripTrailingSlashes`.
+4. **`ca68c37` — "fix: repair packaged-app daemon crash and vacancy-engine path resolution".** Further
+   `apps/daemon` packaging/build-script changes (`package.json`, `scripts/build.mjs`).
+
+Of the 49 currently-modified core files, only **20 carry an actual behavioral difference** from
+upstream; the other 29 are comment-only (mostly from the em-dash sweep). The 20 real changes fall
+into three feature threads, none of which is a later, unrelated drift — all three were present by
+the fork-time snapshot or added in the four commits above:
+
+- **Claude model selection** (present since the fork): `packages/agent-runtime/src/providers/claude/
+  {build-args,capabilities,detect}.ts` (adds a `--model` flag and a `CLAUDE_MODELS`/
+  `availableModels` list), `packages/agent-runtime/src/types.ts` (`StartSessionOptions.model`),
+  `packages/shared/src/{provider,schemas,session}.ts` (the schema/type surface for it),
+  `apps/daemon/src/{routes/sessions,session-manager}.ts` (passthrough to the provider).
+- **MCP vacancy-source foundation** (added `4f4f611`): the daemon/client wiring for the new MCP
+  manager described above.
+- **CodeQL remediation** (added `44adc81`): the ReDoS fix and rate-limit comment updates described
+  above.
+
+## The MCP foundation ships dormant, on purpose
+
+`apps/daemon/src/index.ts` builds its `McpConnectionManager` (via the exported `buildMcpManager()`
+factory) with an **empty policy array**, on purpose: provider-specific policies (starting with #29)
+will inject an `OAuthClientProvider` there, and keeping the registry empty until then means an OAuth
+server can never be contacted before its redirect URI, PKCE/token persistence, terms, tool, and
+retention policy have all been reviewed together (see the comment on `buildMcpManager` itself for
+the full reasoning — it isn't repeated here to avoid this ADR drifting out of sync with the code it
+describes).
+
+The manager, SDK connector, credential store, and routes are fully built and unit-tested against
+fabricated policies, but **zero MCP providers are wired into the shipped daemon today** — this is
+scaffolding with the gate deliberately closed, not an oversight. This ADR records the decision that
+follow-on ADI work must respect: **treat the empty policy array as a real, shipped product
+invariant**, not a temporary state to silently fill in as a side effect of some other change. A
+regression test (`apps/daemon/test/index.test.ts`) now pins this by constructing the real manager via
+`buildMcpManager()` and asserting `providerIds()` is empty, rather than pattern-matching `index.ts`'s
+source text, so the test keeps working across any refactor that preserves the actual invariant.
+
+> **Update (#48, 2026-09-10):** the gate has now opened once, deliberately. InfoSec Job Board (#48)
+> is the first policy wired into `buildMcpManager()`, and the regression test above now asserts
+> `providerIds()` equals `['infosec_job_board']` rather than `[]`. It qualified as the reviewed change
+> this section anticipated — every field `docs/mcp-source-policy.md`'s "required review record"
+> demands was completed for it in #48 — and it needed no `OAuthClientProvider`, since its transport
+> is credential-free (`auth: 'none'`). The invariant this section protects is unchanged: **any**
+> provider addition, OAuth or not, must remain its own explicit, reviewed edit to `buildMcpManager()`,
+> never a side effect of something else. Only the pinned value moved, from empty to this one entry.
+
+## Preload surface vs. documentation (now reconciled)
+
+`apps/desktop/electron/preload.ts` exposes five `contextBridge` namespaces, only one of which
+(`agentDock`) is upstream-derived; the other four (`vacancyRadar`, `workspace`, `cv`, `system`) are
+product-specific additions. `docs/architecture.md`, `docs/client-sdk.md`, and `docs/electron.md`
+previously all claimed "seven narrow IPC capabilities" — accurate for `agentDock` at the fork point,
+but stale now that `agentDock` alone has 11 methods (4 added by the MCP foundation) and the other
+four namespaces (33 more methods across them) were never documented at all. All three docs have been
+corrected as part of this ADR to describe the real, current five-namespace surface; see
+[electron.md](electron.md#the-preload-bridge) for the authoritative list.
+
+## Golden/regression coverage added or confirmed for this ADR
+
+| Area | Status before this ADR | Action taken |
+|---|---|---|
+| v1 routes, SSE streaming, cancellation | Already covered (`apps/daemon/test/server.test.ts`) | None needed |
+| Claude model propagation | Covered at the schema/manager layer only; no full-HTTP-route test | Added a `POST /sessions` route-level test in `server.test.ts` asserting a `model` field in the request body reaches the provider's `startedOptions` |
+| Compiled vacancy-source MCP | Manager/routes/SDK-connector logic covered; the shipped-empty invariant was unpinned | Added `apps/daemon/test/index.test.ts` pinning the empty policy array |
+| Preload key allowlist | `agentDock`/`vacancyRadar`/`workspace`/`cv` covered; `system` had zero coverage | Added an exact-allowlist test for `system` in `apps/desktop/test/preload.test.ts` |
+| Payload validation, safe external URLs, product database schemas | Already covered | None needed |
+| Packaged resources | Path-resolution logic (`resolve-daemon-entry`, `resolve-vacancy-engine-paths`, `resolve-window-icon`) covered; nothing checked that `electron-builder.yml`'s `extraResources` actually matches what those resolvers expect | Added `apps/desktop/test/electron-builder-resources.test.ts`, a one-directional static check that the YAML declares the paths the resolvers expect. It cannot catch drift starting on the resolver side (a path literal renamed there without a matching yaml edit), since neither resolver exports its path segments as a constant this test could share instead of hardcoding its own copy — closing that direction is a real gap this ADR leaves open, not one it claims to close |
+
+One gap is explicitly **not** closed by this ADR and is called out for whoever picks it up: there is
+no automated check that `apps/desktop/electron/workspace/schema.ts` and
+`packages/vacancy-engine/src/db/schema.ts` stay in sync with their respective Drizzle migration
+folders — only manual `drizzle-kit generate` catches drift today. This is a real gap, but adding
+migration-diffing CI is a larger, separately-scoped change and out of bounds for ADI-01.
+
+## Reproducible asset-validation environment
+
+`pnpm run assets:validate` (`scripts/assets/validate_assets.py`, Pillow + CairoSVG) already has a
+documented, pinned Python environment in [assets.md](assets.md) (`python -m venv .venv-assets`,
+`scripts/assets/requirements.txt`). While verifying this criterion, a real, pre-existing bug was
+found and fixed: the validator's exact-file-set check for `assets/app-icons/` had not been updated
+after PR #89 added `installer.nsh` and `vc_redist.x64.exe` to that directory, so the validator
+failed on an unrelated, correct state. `check_exact_files` now accepts an `allow_extra` parameter,
+and the `ICON_ROOT` check allowlists those two files.
+
+## ADI-04: the v2 session supervisor over the v1 one-shot transport
+
+ADI-04 (issue #122) adds a v2 "session supervisor" that wraps the existing v1 provider adapters
+without changing them. Like ADI-03's `model-select.ts`, the supervisor itself ships with **no
+daemon caller** — nothing in `apps/daemon/src/session-manager.ts` constructs one, so no live
+session goes through it, and wiring it in is a later ticket. `session-manager.ts` does carry one
+small, deliberate change unrelated to the supervisor: `cancel()`, `remove()`, and `cancelAll()` now
+isolate a rejecting `handle.cancel()` (which can happen since `ProviderSessionHandle.cancel()` now
+awaits a confirmed process-tree reap, see below, rather than always resolving once it merely
+initiated termination) so one session's reap-confirmation timeout can never abort another session's
+cancellation, crash the daemon's shutdown handler, or turn a cancel/delete HTTP request into an
+unhandled 500. This is the one place ADI-04 touches existing v1 daemon code, and it is a strict
+robustness fix, not a behavior change to any session's actual lifecycle.
+
+### What was ported, and from which upstream commit
+
+| Ported into | From upstream | Fidelity |
+|---|---|---|
+| `apps/daemon/native/windows/AgentDock.JobHost.cs` | `8d0d9ef`, same path | Near-verbatim; only a provenance header comment added |
+| `packages/agent-runtime/src/process/windows-job-host.ts` | `8d0d9ef`, same path | Near-verbatim; comments expanded, logic unchanged |
+| `packages/agent-runtime/src/process/spawn-process.ts` | `8d0d9ef`, same path | Near-verbatim rewrite of this repo's existing file |
+| `apps/daemon/scripts/build-windows-job-host.mjs` | `8d0d9ef`, same path | Near-verbatim |
+| `test/fixtures/fake-orphaning-{leader,intermediate}.mjs`, `fake-marker-writer.mjs` | `8d0d9ef`, same paths | Verbatim |
+| `packages/agent-runtime/test/spawn-process.test.ts` | `8d0d9ef`, same path | Adapted, plus a Windows negative-control test not present upstream |
+| `packages/agent-runtime/src/providers/compatibility-manifest.ts` | `7aec0f1`, same path | Subsetted and re-pinned (see below) |
+
+The Windows Job Object host is the one genuinely hard piece here, and it was taken as-is on purpose.
+Windows has no process group that outlives its leader, so `taskkill /T` — which walks the *live*
+parent-PID chain — cannot reach a grandchild whose intermediate parent has already exited. That
+grandchild is not merely hard to find; it is no longer in the tree at all. The host closes this by
+creating the provider inside an unnamed Job Object at process-creation time (via
+`PROC_THREAD_ATTRIBUTE_JOB_LIST`, suspended then resumed, so there is no window in which the
+provider exists outside the job) with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and by holding the only
+handle to that job. Killing the host closes the handle, and the kernel terminates every job member
+atomically, orphans included.
+
+That this gap is real in *this* repo, and not merely in upstream's, is pinned by a **negative
+control** test that upstream does not have: `spawn-process.test.ts` runs the same orphan fixture
+chain through a plain `child_process.spawn` plus `taskkill /pid <pid> /T /F` — the mechanism this
+repo used before ADI-04 — and asserts the orphan **survives**. Without that control, the passing
+Job Host test could have been passing for a trivial reason.
+
+The host is compiled by `apps/daemon/scripts/build-windows-job-host.mjs` through PowerShell's
+`Add-Type -OutputType ConsoleApplication`, which drives the in-box .NET Framework C# compiler, so
+building the daemon does not require a .NET SDK. It is written to `apps/daemon/dist/`, which
+`apps/desktop/electron-builder.yml` already ships wholesale to `resources/daemon` as an
+`extraResources` entry — the same ride-along the `@napi-rs/keyring` native binding gets — so **no
+new packaging entry was needed**.
+
+### The three-way scope split
+
+Upstream's v2 work divides into three parts. At the time this ADR was written, only the first was
+in scope for this ticket:
+
+1. **Legacy-supervisor-compatible core (ported).** The compatibility manifest, accepted-work
+   boundaries, launch-scope freezing, the fallback-authorization gate, the bounded unknown-frame
+   ledger, and process-tree-aware cancellation. All of it was meaningful over a one-shot CLI
+   transport even before this repo had any other kind.
+2. **App-server / SDK-specific.** `providers/claude/sdk/**` and the Claude Agent SDK integration it
+   would need remain not ported -- this repo has no interactive transport for Claude, and that
+   scope is deliberately deferred (see issue #144/ADI-08c). **The Codex half of this line item is no
+   longer accurate**: ADI-08 (#126) built and shipped `providers/codex/app-server/**` as a real,
+   internal transport inside `CodexProvider`, explicitly overriding AD-21's standing "stay on
+   `codex exec --json`" decision (see [providers.md](providers.md)'s AD-21 section, superseding
+   update). It is not upstream's rich interactive-transport machinery, though -- it produces the
+   same plain `AgentEvent`/`ProviderSessionHandle` contract every transport in this repo already
+   satisfies, shipped inert behind an operator opt-in (`AGENT_DOCK_CODEX_TRANSPORT`, default
+   `'exec'`) with a safe, automatic fallback to the legacy transport on startup failure.
+3. **Durable persistence / execution-graph store (not ported).** That is ADI-05's scope.
+
+### This supervisor is not upstream's supervisor
+
+Upstream's `session-supervisor.ts` is ~1,398 lines built around rich interactive transports,
+mid-turn commands, approval round-trips, and a durable execution graph. Porting it would have meant
+importing — and then maintaining — a large amount of machinery with no reachable caller in this repo.
+`packages/agent-runtime/src/providers/common/session-supervisor.ts` is instead a new, much smaller
+supervisor written to the same *contracts* over the one transport that exists here. **ADI-06+ will
+replace its internals when rich transports land**; the exported shapes are the part intended to
+survive that, which is why they are exported from `index.ts` despite having no caller yet.
+
+Its one hard constraint is that the supervised event stream is byte-identical to the unsupervised
+one: no event is added, dropped, reordered, or rewritten. This is proven, not asserted —
+`test/support/supervisor-contract.ts` deep-equals the full `AgentEvent[]` from a bare
+`provider.startSession()` against the one from `superviseProviderSession()` for the same fixture,
+per provider. Everything the supervisor learns, it learns either by reading events it is passing
+through anyway, or through an `@internal`, optional `launchProbe` seam on `StartSessionOptions`.
+
+That seam was added rather than approximated. The alternative considered was treating "first
+observed event" as the acceptance signal, which needs no new field — but it collapses the
+accepted-work boundary into a heuristic that cannot tell the two transports apart at all. With the
+probe, the boundary is derived from what the adapter actually did: `'accepted'` is recorded at the
+observed stdin flush for a stdin-transport adapter, and at the spawn attempt itself for an
+argv-transport one (an argv-embedded prompt is delivered unconditionally the instant the process
+exists). Either way the conformance suite asserts the session reaches `'accepted'` rather than
+settling for the weaker `'unknown'` — `AcceptedWorkState` measures delivery, not whether the CLI has
+acted on the prompt yet, and delivery is certain in both cases, just observed at a different moment.
+An earlier draft of this mechanism read the accepted-work timing off the manifest's
+`acceptedWorkBoundary` field instead of the probe's own `viaStdin` evidence, and got the
+argv-transport case wrong (marking it `'unknown'`) before an adversarial review caught it — see the
+note directly below for why that approach was replaced.
+
+**Updated by ADI-14.** When this section was written, Claude was the stdin-transport adapter and
+Codex was the argv-transport one, and the two boundaries were described as a Claude-versus-Codex
+distinction. That is no longer true: `providers/codex/build-args.ts` now emits Codex's documented
+`-` stdin placeholder instead of the prompt and `providers/codex/adapter.ts` sets
+`promptViaStdin: true`, so **both** shipped adapters now latch `'accepted'` at the stdin flush, and
+`CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary` reads `'first-prompt-byte-to-stdin'` to match. The
+argv boundary survives only as `acceptedWorkBoundaryFor`'s fail-closed default for an unrecognized
+CLI build. Codex moved for the reasons in `providers/codex/build-args.ts`: a 200,000-character
+prompt cap cannot fit Windows' ~32,767-character `CreateProcess` command line, and an argv-embedded
+prompt containing a user's CV and a scraped vacancy description is readable by any same-user process
+for the whole life of the child.
+
+This migration is also the mechanism below working exactly as designed, which is why it needed no
+change to `run-session.ts` or `session-supervisor.ts`: flipping one `promptViaStdin` flag moved both
+what the adapter does and what the supervisor concludes, in lockstep, because they are the same
+flag. Had the manifest column been left stale in that same change, the supervisor would still have
+been correct and would have logged the disagreement rather than mis-classifying the session. The
+timing change is proven rather than asserted — `test/support/supervisor-contract.ts`'s
+"accepted-work boundary timing" section samples the latch from inside the probe callbacks and
+requires Codex to still read `not_accepted` immediately after the spawn attempt, reaching
+`'accepted'` only once the stdin write is flushed.
+
+### Fixed: a manifest hit can fail open where a manifest miss fails closed
+
+The compatibility manifest's `acceptedWorkBoundary` field is a fact about a *specific, fixture-verified
+CLI build* — it does not, and structurally cannot, track whether this repo's own adapter code still
+transports the prompt the way that build was verified against. If an adapter's `promptViaStdin`
+config were ever changed (e.g. `build-args.ts` switched a provider from argv to stdin) without the
+manifest being updated to match, the manifest lookup would still find its entry (the CLI version
+didn't change) and confidently report the *old* boundary — a **hit that fails open**, which is worse
+than a miss: `acceptedWorkBoundaryFor(undefined)` already fails closed for an unrecognized version,
+but a recognized version with a stale boundary claim had no equivalent protection. Concretely, a
+`'first-prompt-byte-to-stdin'`-classified session whose adapter actually embeds the prompt in argv
+would sit at `'not_accepted'` for the session's entire life, even after definitely delivering the
+prompt — the exact "safe to retry" answer for work that already ran.
+
+The fix (see `SessionLaunchProbe.onSpawnAttempt`'s `evidence.viaStdin` in `types.ts`, and
+`session-supervisor.ts`'s launch-probe wiring) drives the accepted-work decision from
+`runProviderSession`'s own, real `promptViaStdin` flag, reported at the exact call site that also
+decides whether to write stdin — not from a separately-maintained manifest field. This makes the
+drift structurally impossible: there is only one flag governing both what the adapter actually does
+and what the supervisor assumes it did. The manifest's `acceptedWorkBoundary` column remains useful
+documentation (see `docs/providers.md`) and drives fixture-set classification, but is no longer the
+safety-critical input.
+
+### Limitation: accepted-work state is in memory only
+
+`AcceptedWorkLatch` lives in the supervisor object. **A daemon crash or restart loses it**, and a
+session recovered after such a crash has no way to learn whether its provider had already accepted
+work. That is a real gap, not a theoretical one: it is precisely the window in which an automatic
+retry could duplicate a side effect in the user's working directory. Persisting acceptance across
+restarts is **ADI-05's job**, and the ticket that does it should treat this paragraph as the
+requirement.
+
+**Closed by ADI-05.** `apps/daemon/src/session-lineage-store.ts` now persists accepted-work state
+across a restart, driven by the same `SessionLaunchProbe` seam described above, and
+`session-manager.ts` wires that seam on every session. See
+[ADI-05's section below](#adi-05-durable-session-state-active-session-limits-and-the-v2-read-surface)
+for what it records and for the one deliberate narrowing it makes: `'not_accepted'` is never written
+to disk, because it is a positive safety claim that stops being provable the moment a record exists
+at all.
+
+### Limitation: `accountEvidence: 'cli_owned'` is not an account fingerprint
+
+`FrozenLaunchScope` carries the literal `accountEvidence: 'cli_owned'`. This is a documented
+limitation marker, not a capability. The strongest identity claim this repo can make is "the same
+CLI binary, at the same version, reporting the same auth state", because `ProviderStatus`
+(`packages/shared/src/provider.ts`) has no account identifier, no `authSource` discriminator, and
+no `accountFingerprint` — and this repo's adapters never read a provider's credential storage, by
+design (see [SECURITY.md](../SECURITY.md)).
+
+Concretely: the scope **cannot** distinguish "the same CLI, still logged into the same account"
+from "the same CLI, logged out and logged back into a *different* account between two launches".
+Closing that needs new `ProviderStatus` fields that do not exist yet. The literal type keeps the gap
+visible at every use site rather than letting a reader assume the scope binds to an account.
+
+### The fallback gate is provably always-deny in the shipped configuration
+
+`FallbackGate.authorize()` denies with `no_alternate_transport` whenever `alternateTransportIds` is
+empty. As of ADI-08 stage 6, `compatibility-manifest.ts` registers a **second** transport id
+(`codex-app-server`, alongside `legacy-one-shot`) — but `FallbackGate` still has no real caller
+anywhere in this repo (every construction and every `.authorize()` call lives in test code), so a
+second manifest entry existing is not the same claim as the gate ever returning `allowed: true` in
+production. Every reachable call today still denies. This is enforced by code and pinned by tests,
+not merely asserted in a comment: `test/fallback-gate.test.ts` exhausts the full
+`AcceptedWorkState x ProviderDeliveryState x terminal` product (18 cases) against an empty alternate
+list, and — since stage 6 — a second, parallel 17-case run of the same product against a real,
+non-empty `alternateTransportIds` populated from the manifest's actual transport ids, proving the
+manifest change alone creates no new allow path for anything but the one genuinely safe combination.
+The rest of the gate's rules are implemented and tested anyway, so that the ticket giving the gate its
+first real caller (ADI-08 stage 7) turns it on against already-reviewed logic rather than writing
+safety rules under deadline.
+
+### One behavioral change that is not purely additive
+
+`ProviderSessionHandle.cancel()` previously resolved once a kill signal had been *sent*, so a caller
+that immediately cleaned up the working directory was racing a still-running process tree. It now
+resolves only once the owned tree is **confirmed** reaped (POSIX polls the process group until
+`ESRCH`; Windows waits on the Job Host's exit) and rejects on a reap timeout. The supervisor catches
+that rejection and reports it as `SupervisedOutcome.reaped: false` rather than rethrowing, so a
+caller learns the working directory may still be occupied instead of receiving an exception it is
+likely to log and discard. Every pre-existing test in `packages/agent-runtime/test/`,
+`apps/daemon/test/`, and `apps/desktop/test/` passes unchanged against this.
+
+## ADI-05: durable session state, active-session limits, and the v2 read surface
+
+ADI-05 (issue #123) is the ticket the ADI-04 limitation note above pointed at: it makes
+accepted-work state survive a daemon restart. It also adds the first v2 HTTP surface this repo has,
+and the first admission control on session creation.
+
+Unlike ADI-03 and ADI-04, **this ticket is wired in**. `apps/daemon/src/index.ts` constructs the
+store and the limiter, `session-manager.ts` uses both on every session, and the v2 routes are
+registered whenever the store opened successfully. This is the first ADI change that alters the
+behavior of a live session, and the shipped-dormant pattern the previous two used no longer applied:
+a persistence layer with no caller persists nothing.
+
+### What was ported, and what was reinvented smaller
+
+| Area | Provenance |
+|---|---|
+| `apps/daemon/src/state-directory.ts` | **Ported in shape** from upstream's state-directory resolution (env override, then platform-native per-app-id root, 0700 creation). The product-database overlap guard is this repo's own: upstream has no `workspace.db`/`vacancy-engine.db` to collide with. App-id validation reuses `discovery-file.ts`'s existing `sanitizeAppId` rather than adding a second rule |
+| `apps/daemon/src/durable-store/atomic-fs.ts` | **Ported in shape**: the temp-write / fsync / rename / fsync-parent sequence and the quarantine-never-delete rule are upstream's mechanics. The short-write retry loop and the `assertContainedIn` traversal guard are additions |
+| `apps/daemon/src/session-lineage-store.ts` | **Reinvented, much smaller.** Upstream's equivalent is an execution-graph store built around interactive transports, mid-turn commands, and approval round-trips. This is a lineage-of-sessions store over the one transport this repo has, with the same durability contract and none of the graph |
+| `apps/daemon/src/persisted-session-schema.ts` | **New.** There is no upstream counterpart: upstream persists richer event payloads, and this repo's rule is that no event content reaches the disk at all |
+| `apps/daemon/src/active-session-limiter.ts` | **New.** Upstream's concurrency control is bound up with its session facade; this is a standalone, synchronous admission gate |
+| `apps/daemon/src/routes/v2-providers.ts`, `routes/v2-sessions.ts`, `v2-legacy-provider.ts` | **Reinvented, much smaller.** Read-only projections over v1 data, with none of upstream's capability catalog |
+| `packages/shared/src/session-v2.ts` | **New**, and deliberately not a port of upstream's `protocol-v2.ts` (see below) |
+
+### What was explicitly deferred, and why
+
+- **`POST /v2/sessions`.** Creating a session over v2 means accepting a capability-negotiation
+  request schema. This repo has `capabilities-v2.ts` and `negotiation-v2.ts` from ADI-02, but no
+  reviewed *request* shape for "start a session with these negotiated capabilities" — and inventing
+  one inside a persistence ticket would freeze a public contract nobody scoped. Session creation
+  stays on `POST /sessions` (v1), which now carries an optional `protocolVersion` internally so a
+  future v2 create path shares one active-session budget with v1 rather than getting its own.
+- **`v2-session-facade.ts` and `provider-v2.ts`.** Both exist upstream to mediate between rich
+  transports and the store. With exactly one transport (`legacy-one-shot`) there is nothing to
+  mediate, and `v2-legacy-provider.ts` — roughly seventy lines mapping a `ProviderStatus` plus a
+  compatibility-manifest lookup into a read view — covers everything a read-only client can act on.
+- **Upstream's `protocol-v2.ts`.** `session-v2.ts` models only the *read view* the five shipped
+  routes return. Importing upstream's full v2 protocol would have brought a session-creation
+  vocabulary with no producer, no consumer, and no test able to distinguish a correct implementation
+  from a plausible one.
+
+### ADI-04's accepted-work handoff is now closed
+
+The "Limitation: accepted-work state is in memory only" section above records the gap this ticket
+was asked to close: `AcceptedWorkLatch` lived in the supervisor object, and a crash lost it, leaving
+a recovered session unable to say whether its provider had already been handed the prompt.
+
+That is now resolved, with one deliberate narrowing. On disk, `acceptedWork` has only **two**
+values, not three: `'unknown'` and `'accepted'`. `'not_accepted'` is structurally absent, and its
+absence is the safety property. `'not_accepted'` is a positive claim that nothing was delivered and
+retrying is safe, and the only moment that claim is provable is *before the record exists at all* --
+by the time a record is on disk the daemon has already committed to launching, and a crash in the
+next microsecond leaves nobody able to prove the prompt did not reach the CLI. So a record is
+created `'unknown'` (fail-closed) and the single permitted transition is `unknown -> accepted`,
+driven by the same `SessionLaunchProbe` seam ADI-04 added. Recovery carries the value across
+verbatim and never downgrades it.
+
+`session-manager.ts` wires the probe directly rather than going through
+`superviseProviderSession()`. The supervisor's remaining machinery — the fallback gate, the frozen
+scope comparison — still has no daemon-side consumer, and routing every live session through it to
+reach one latch would have changed far more of the running system than this ticket needed. Wiring
+the full supervisor in remains a later ticket; the seam it introduced is what made this one small.
+
+The unknown-frame ledger is the one piece of that machinery the daemon does now consume, and it
+consumes it the same way: `SessionManager` builds its own `UnknownFrameLedger` per session and
+feeds it from the probe's `onUnknownFrame` callback, then writes `ledger.entries()` into the record
+immediately before finalizing it. That keeps the persisted `unknownFrames` field honest (it was
+otherwise designed, schema'd, and served by the v2 read routes while being permanently empty)
+without a second copy of the bounding and hashing rules that make the field safe to store at all.
+
+### Two stop conditions, both proven rather than asserted
+
+1. **No event content on disk.** Enforced three ways: a `never` check in `redactEnvelope`'s default
+   branch (a new `AgentEvent` variant without a redaction rule is a compile error), a runtime test
+   that extracts the literal `type` values out of `agentEventEnvelopeSchema` and requires the
+   redactor's covered set to match exactly, and `.strict()` Zod schemas that reject a record
+   carrying `prompt` or `error`. A sentinel sweep fills every string field of every variant with a
+   unique marker, runs it through the real store, and greps the entire on-disk tree.
+
+   Digesting is not the only mechanism, because not every kept field *can* be digested. `model`,
+   `providerSessionId`, and `toolCallId` are identifiers a reader acts on, so they are kept — and
+   therefore **byte-capped at 256**, everywhere they are copied, exactly as `status` and `toolName`
+   already were. A field that is kept verbatim and unbounded is a place to put content, however
+   short its legitimate values are; the sentinel sweep covers these three too, asserting the
+   oversized value is truncated to its cap rather than merely absent.
+2. **A future schema version mutates nothing.** The store's constructor runs a read-only preflight
+   before creating a directory or opening any file for writing.
+   `session-lineage-store.schema.test.ts` asserts this with a recursive content+mtime snapshot
+   *and* with `node:fs` spies showing zero write, rename, or unlink calls — including in the case
+   where corruption is present alongside the future version, where the corrupt file must be left
+   un-quarantined because quarantining is itself a mutation.
+
+   The preflight's coverage is defined by what the *rest of startup* would touch, not by what is
+   convenient to parse: the manifest, every record, every tombstone, every stray `.tmp`, every
+   `events/*.jsonl`, and everything staged under `.trash/`. The last two are the ones a
+   `schemaVersion`-only sweep misses. An event log carries `v` per line rather than a top-level
+   `schemaVersion`, and a newer build's lines would fail *this* build's line schema — which
+   `#repairEventLog` would read as a torn tail and rewrite. A `.trash/` entry is an eviction the
+   newer build had not committed, which recovery either renames back into `lineages/` or deletes
+   outright. Both are mutations on state belonging to software this build does not understand, so
+   both are now scanned first. Lines that merely fail to parse, or that carry no numeric `v`, are
+   deliberately *not* treated as a version conflict: that is ordinary corruption, and the corruption
+   path is where it belongs.
+
+### The event counter keeps its meaning past the truncation cap
+
+`eventCount` is documented to answer "how many events did this session emit", which is a different
+question from "how many lines are on disk" — the pair `eventCount: 40000, eventsTruncated: true`
+means something a line count cannot say. Below the 5,000-line cap the record is only checkpointed
+(at the truncation flip, accepted-work, scope refinement, finalization) and recovery reconciles with
+`max(persisted eventCount, lines on disk)`, because the log is durable per line and can speak for
+the counter.
+
+Above the cap that stops being true: no line is appended, so `max(...)` would freeze at exactly
+5,000 forever no matter how many more events arrived, collapsing the distinction back into the line
+count. So every *suppressed* event now checkpoints the record. The cost lands only on a session that
+has already persisted 5,000 events, and it replaces an append to a growing log with a replace of one
+small fixed-size record; the common case is untouched.
+
+### Known limitation: the state-directory overlap guard is not enforced for the daemon's own default
+
+`resolveStateDirectory` refuses a state root that overlaps `workspace.db` or `vacancy-engine.db` --
+but only for a caller that can name those paths. The daemon cannot: both live under Electron's
+`app.getPath('userData')`, which is not resolvable from a plain Node process. What actually keeps
+them apart in the shipped app is `apps/desktop/electron/main.ts` setting `AGENT_DOCK_STATE_DIR` to a
+dedicated `agentdock-state/` subdirectory. `open-durable-store.ts` passes no reserved paths and says
+so in a comment rather than inventing a check against guessed paths, which would look like
+protection while verifying nothing. Closing this properly needs the desktop app to pass its database
+paths to the daemon explicitly; that is a real gap this ticket leaves open, not one it claims to
+close.
+
+## ADI-06: workspace identity, trust grants, leases, audit, and exact approvals
+
+ADI-06 (issue #124) is the trust boundary: it decides whether a v2 session may touch a real
+directory of the user's, and it is the first ADI ticket whose failure mode is a security failure
+rather than a lost feature. Four things ship wired in (workspace identity, the trust store, the
+audit log, and the workspace/audit HTTP routes), one ships dormant (the execution-lease manager),
+and one is deliberately not built at all (the approval/interaction-broker trio).
+
+### The ten-step grant contract is this repo's invention
+
+Upstream AgentDock permits **renderer-asserted trust**. Its renderer sends
+`{ cwd, incarnation, state: 'trusted' }` to a trust route and the daemon writes exactly that, which
+means any process that can reach the route can grant itself access to any directory it can name. In
+an Electron app the renderer is the least trustworthy process in the system, so that is the wrong
+place for the decision to originate.
+
+This repo replaces it with a grant contract that runs entirely in the main process
+(`apps/desktop/electron/workspace-grant.ts`):
+
+1. the renderer asks for a grant, naming only a **provider id**;
+2. main opens the native directory picker, so only the user can choose the folder;
+3. main asks the daemon to inspect that path (identity, Git binding, dirty state, trust state);
+4. main shows a native confirmation dialog whose default and cancel buttons are both Cancel;
+5. main mints a 32-random-byte handle, bound to the requesting `WebContents` **and** to the daemon
+   instance that answered step 3;
+6. the daemon records `grant.issued` durably before main returns anything;
+7. main returns `{ grantHandle, display }` and nothing else: no path, no `workspaceId`, no
+   `incarnation`;
+8. navigation, `WebContents` destruction, a daemon restart, a trust revocation, or a five-minute TTL
+   expires the grant;
+9. consumption deletes the record **synchronously, before any await**, so exactly one caller wins;
+10. the daemon re-resolves the identity from the path, refuses on any drift, writes both audit
+    entries (`grant.consumed` and `trust.granted`) and awaits their fsync, and only then marks the
+    workspace trusted.
+
+**There is no atomicity between the audit write and the trust write, and the ordering is what stands
+in for it.** A durable append and a durable file replace are two operations on a filesystem that
+offers no transaction across them, so one of them is necessarily observable first, and the only real
+decision is *which*. The audit entry goes first: `trust.granted` means "this daemon has decided to
+trust this workspace and is about to persist that", not "the trust file has been written". A crash
+between the two therefore leaves an audit line for a grant that did not take effect -- a
+conservative, readable discrepancy in which the log claims more authority was given than actually
+was. The other order leaves the opposite: a permanently trusted workspace with no record of anyone
+ever granting it, which is precisely the state the audit store exists to make impossible, and which
+no rollback code can repair because the process that would run it is gone. An earlier draft of this
+section claimed the two happened "atomically"; they never did, and the claim is now removed rather
+than restated.
+
+Between the audit writes and the mutation the daemon re-reads `SessionManager`'s revocation epoch,
+and it re-reads it again between the mutation and `allowWorkspace()`, with no await between either
+re-read and the statement it guards. This is the same bracketing `SessionManager.workspaceIsTrusted`
+applies and exists for the same reason: `blockWorkspace()` is synchronous, so a revocation racing
+this request lands entirely inside one of the awaits, and an unconditional `allowWorkspace()` at the
+end would clear the very block that revocation installed -- turning a revocation into a grant. A
+revocation observed at either re-read denies the consumption (`grant.denied`, reason `trust_revoked`)
+and rolls back anything already persisted.
+
+**D3, the invariant the whole ticket turns on:** `PUT /v2/workspaces/:id/trust` cannot express
+`'trusted'` at all. The schema's enum is `['untrusted', 'revoking']`, and a body naming `'trusted'`
+is answered with a specific `400 { code: 'trust_not_self_assertable' }` rather than being ignored,
+so a caller that believed it could set trust finds out it cannot. The route can only *lower* trust.
+The single path to `trusted` is `POST /v2/workspaces/consume-grant`, and reaching it is not enough:
+a caller cannot assert trust by naming a state (no route accepts one), cannot assert it by naming an
+identity pair (the pair is re-derived from the filesystem and compared), and cannot assert it by
+naming a path (the path must produce the pair it already claimed). `v2-workspaces.routes.test.ts`
+pins this with an exhaustive negative that fires every method/URL combination carrying
+`state: 'trusted'` and asserts the workspace stays untrusted after each.
+
+Step 9 is pinned separately, because it is the kind of correctness that reads fine and is wrong:
+`workspace-grant.test.ts` fires two (and then twenty) genuinely concurrent consumptions of one handle
+and requires exactly one success and exactly one daemon round trip. This mirrors
+`ActiveSessionLimiter.reserve()`'s await-free critical section, and for the same reason: a check
+followed by an await followed by a mutation is not a check.
+
+### D1: `realpath` vs `realpath.native`, and why identity is keyed on `dev`+`ino`
+
+Upstream derives `workspaceId` from the **canonical path string**. On Windows that is a fail-open,
+and the failure is reachable without any exotic setup: a single physical directory has more than one
+canonical-looking string form. `C:\PROGRA~1\x` (an 8.3 short name) and `C:\Program Files\x` are the
+same object; so are two paths differing only in case. Two ids for one directory means two
+*exclusive write leases* over the same bytes, which is precisely what an exclusive lease exists to
+prevent.
+
+`apps/daemon/src/workspace-identity.ts` therefore keys on the filesystem object's own identity:
+
+```
+workspaceId = sha256("workspace-object-v1\0" + dev + "\0" + ino)                                  // non-Git
+            = sha256("workspace-git-object-v1\0" + worktree(dev,ino) + "\0" + common(dev,ino))    // Git
+incarnation = sha256("workspace-incarnation-v1\0" + dev, ino, birthtimeNs, canonical path, git keys)
+```
+
+`incarnation` keeps the canonical path, unchanged from upstream and on purpose: it answers a
+different question, and a rename genuinely *should* require re-confirmation even though the object is
+the same. The regression test proves both halves: renaming a directory keeps its `workspaceId` and
+changes its `incarnation`.
+
+The Windows finding that makes this work is worth recording on its own, because it is easy to get
+wrong twice. **`fs.realpath` (the JS implementation) does not expand 8.3 short names, and it throws
+`EISDIR` on a `\\?\` device path.** Only the OS resolver does both correctly. There is a second trap
+underneath it: `fs.promises.realpath` has **no** `.native` variant at all -- the native resolver is
+exposed only on the callback API (`fs.realpath.native`) and synchronously
+(`fs.realpathSync.native`), so this module promisifies the callback form rather than reaching for the
+promises API that looks like the modern choice. Every canonicalization in the module goes through
+that one helper.
+
+On this repo's own development machine 8.3 generation is enabled, so
+`workspace-identity.test.ts` obtains a real `PROGRA~1`-style path (via
+`Scripting.FileSystemObject.ShortPath`, fed over stdin so a directory name containing a space is not
+re-tokenized by PowerShell) and asserts it produces the identical `workspaceId` **and**
+`incarnation` as the long form. On a volume with 8.3 generation disabled there is no short form to
+resolve, and the test says so explicitly rather than skipping silently; the same property is also
+covered platform-independently by resolving two different path strings against one stubbed stat
+result.
+
+One further hardening over upstream: when the filesystem cannot give a stable object identity, both
+`workspaceId` **and** `incarnation` are random 32-byte values, not just the incarnation. On a
+filesystem reporting `dev: 0`/`ino: 0` for everything, a derived id would be identical for every
+directory on that mount, silently merging their trust and lease state. A random id can never be
+matched, trusted, or shared, which is the correct outcome for an identity the filesystem refused to
+provide. `WorkspaceTrustStore.setTrusted()` refuses such an identity outright rather than storing a
+record no later check could ever honor.
+
+### D6, and its honest limitation: UNC yes, mapped drives only fail-closed
+
+UNC roots are rejected outright at the boundary, before any filesystem access, with their own error
+type and code (`unc_workspace_unsupported`) and a message the app shows verbatim. The check runs
+against both the raw input and the `.native` canonical form, and again against anything Git reports,
+because a junction or symlink pointing at a share is only visible after canonicalization. `\\?\C:\`
+and `\\.\C:\` device paths for local volumes are deliberately *not* treated as UNC.
+
+**Mapped network drives are a documented gap, not a closed one.** D6 as approved says to reject them
+outright; no Node API can identify one. `GetDriveType`/`QueryDosDevice` are not exposed, `statfs`
+reports nothing usable on Windows, and shelling out to `net use` is locale-dependent. What ships
+instead is the fail-closed path: a mapped drive that reports unstable or zero `dev`/`ino` (the
+common case for SMB redirectors) gets a non-reusable identity, which can never revalidate and which
+the trust store refuses to remember. A mapped drive that *does* report a stable identity would be
+trustable. That is a narrower guarantee than "rejected outright" and is called out here rather than
+papered over.
+
+### Leases ship dormant; ADI-13 is the wiring ticket
+
+`apps/daemon/src/workspace-execution-lease.ts` is fully implemented and exhaustively unit-tested
+(write-vs-write, write-vs-read, read-vs-read on a clean tree, read-vs-read on a dirty tree without
+the opt-in, the pending-writer marker that closes the check-then-await window, idempotent release),
+and **nothing in the daemon calls `acquire()`**. Leases only mean something at the moment a session
+is created against a workspace, and this repo has no v2 session-creation path: `POST /v2/sessions` is
+ADI-13's ticket, and v1's `POST /sessions` is explicitly out of scope for ADI-06.
+
+This is the same shipped-dormant pattern as ADI-04's `FallbackGate` and ADI-03's `model-select.ts`,
+adopted for the same reason: the ticket that turns leasing on does so against already-reviewed
+concurrency rules instead of writing safety logic under deadline. **ADI-13 is named here as the
+ticket that gives this a real caller**, and it inherits one more obligation: replacing
+`workspaceLeaseModeFor()`, which returns `'write'` unconditionally today because over
+`legacy-one-shot` every session is a writer. Upstream's `workspaceLeaseMode(selection)` derives the
+mode from a negotiated `CapabilitySelection` over an `Effect` catalog, and porting it would have
+meant importing a vocabulary with no producer and no consumer.
+
+`isWorkspaceDirty()` fails closed and the direction matters: `git status` failing (not a repository,
+Git missing, a timeout) answers `true`. "We could not check" must never authorize the read-sharing
+that only a provably clean tree earns.
+
+### The approval trio is deferred to ADI-08
+
+No `Effect` catalog, no `CapabilitySelection`, no `permission-policy.ts`, no `interaction-state.ts`,
+no `interaction-broker.ts`, no turn algebra, and no execution graph. Those need `approval.requested`
+frames, a turn protocol, and an effect vocabulary that do not exist in this repo, and that ADI-13
+explicitly refused to invent early. `packages/shared/src/workspace-v2.ts` is a local schema module
+for exactly the shapes the three shipped routes carry, not a port of upstream's `policy-v2.ts`.
+
+**D4 falls out of that deferral, and is a security property rather than a placeholder.** A grant
+carries the literal `'unbounded_cli'`, and the confirmation dialog spells it out in plain language:
+"read, write, run commands, and access the network within this folder". Over `legacy-one-shot` the
+CLI is spawned with the workspace as its `cwd` and is not constrained afterwards, so a narrowed
+`['read', 'write']`-style array would be a **false claim in a security confirmation dialog**, which
+is worse than no claim at all. This mirrors the `accountEvidence: 'cli_owned'` honesty precedent
+ADI-04 set. The preload bridge replaces whatever `effects` value main sent with the literal, so a
+future widening cannot reach the UI silently.
+
+### D5: no hash chain, and why that is the honest choice
+
+The audit log validates **contiguous sequence numbers from zero** on load, and quarantines (never
+deletes) the file on any gap, any non-zero first sequence, any unparseable line, or any entry this
+build cannot validate. That detects truncation and deletion, and it does not detect editing.
+
+A hash chain would not change that. This repo's own threat model (SECURITY.md) names a **same-user
+local attacker**, who can read and write the log, the chain, and the code that verifies it. Shipping
+one would look like tamper-evidence while providing none, so the smaller claim that can actually be
+kept is the one that ships.
+
+### The audit store's retention policy is the inverse of `SessionLineageStore`'s
+
+`SessionLineageStore` evicts oldest-first at its quota, because losing old session history degrades a
+feature. `apps/daemon/src/audit-store.ts` **throws** at its 64 MB cap, because an audit log that
+silently forgets is not an audit log. The consequence is the design, not a side effect: when the log
+cannot record a decision, the decision is refused. Refusing access to a folder is a recoverable
+inconvenience; granting access that nothing recorded is not.
+
+Three further properties, each enforced rather than intended:
+
+- **Ordering.** Writes are serialized on a promise tail, so sequence assignment and the append that
+  carries it cannot interleave.
+- **No entry after a failure.** One failed write or a `close()` latches the store unhealthy, and
+  every later `append()` throws -- even after the underlying fault clears, because the position of
+  the next entry on disk is unknowable once one write failed halfway.
+- **Audit before allow.** Every route that changes trust awaits its append (and therefore its fsync)
+  before responding. `v2-workspaces.routes.test.ts` asserts the exact order
+  `audit:grant.consumed -> trust:set -> audit:trust.granted -> responded`, and
+  `audit-store.durability.test.ts` instruments `node:fs` to prove the fsync precedes the resolved
+  promise.
+
+It is built on ADI-05's `appendDurably`/`quarantine` rather than ported from upstream's hand-rolled
+append, which has a real bug this repo already fixed once: a single `writeFile` with no short-write
+loop can tear a line.
+
+The entry shape is `.strict()` and holds only digests, enums, a uuid, and a timestamp. There is
+deliberately **no `displayName`**, even though the trust view has one: a directory's own name is the
+user's data (a project name, a client name, an employer name), and ADI-05's no-content-on-disk
+discipline applies here too. A sentinel sweep runs the full issue-consume-revoke cycle and greps
+every byte the two stores wrote for a path substring, a drive letter, and both separator characters.
+
+### `SessionManager`: the epoch-bracketed re-check
+
+`SessionManager` gains a `blockedWorkspaces` set, a `workspaceRevocationEpochs` counter map, a
+`workspaceId`-keyed session index, and `allowWorkspace`/`blockWorkspace`/`revokeWorkspace`/
+`workspaceIsTrusted`.
+
+`blockWorkspace()` is **fully synchronous**, and that ordering is the security property: the set
+membership and the epoch bump both complete before it returns, before any persistence is even
+scheduled, so a concurrent admission decision either reads the new state directly or fails its
+post-await re-check. `workspaceIsTrusted()` re-reads the epoch after **every single await** --
+entry, after identity revalidation, after the trust-store inspection, and once more before returning.
+Those re-checks are not decorative: `session-manager.workspace.test.ts` injects a revocation at each
+of the three distinct gaps and requires `false` from each, so deleting any one re-check breaks
+exactly one test. The counter is a counter and not a boolean specifically so that a
+block-then-allow cycle straddling the whole check is still visible.
+
+`create()` remains **100% synchronous and `await`-free**, the structural constraint ADI-05 pinned.
+None of the new async trust logic runs inside it; the only thing `create()` gained is a synchronous
+blocked-workspace check and an index write, both await-free, and both no-ops for a v1 caller that
+passes no `workspaceId`.
+
+### D7: `daemonInstanceId` on `/health`
+
+A UUID minted once per daemon process, added to the health response. `healthResponseSchema` is not
+`.strict()` and the field is optional, so a pre-ADI-06 daemon's response still validates -- but the
+field had to be *declared* in the schema regardless, because Zod strips undeclared keys and the
+desktop app would otherwise never see it. Its whole purpose is on the client side: main captures it
+at readiness and expires every outstanding grant when it changes, because the successor daemon never
+saw the approval those grants record. Without a per-process id there is nothing to notice, since the
+port, the token, and the discovery file can all be identical across a restart.
+
+### What ADI-06 deliberately did not touch
+
+v1 `POST /sessions`, `createSessionRequestSchema`, and `daemon:create-session` are unchanged,
+including v1's still-unvalidated `cwd` passthrough. The CV/Letters `ai-workspace` scratch flows get
+no trust gate, no lease, and no new dialog. `dialog:select-directory` and `system:save-file` keep
+their existing behavior: they are grandfathered pre-v2 bridges per ADI-07's own framing, and
+retrofitting them into the grant system would change v1 behavior this ticket promises to leave
+byte-identical. The workspace-grant surface is a **sixth** preload namespace rather than an
+extension of `agentDock`, and `preload.test.ts` asserts all five pre-existing namespaces are
+key-for-key unchanged against literal key lists recorded before this ticket.
+
+**Correction (issue #175):** "v1's still-unvalidated `cwd` passthrough" above was true at the time
+and was also a real gap -- a renderer could name an arbitrary existing directory on
+`daemon:create-session` with no grant at all, contradicting this section's own "the renderer never
+names a folder" framing. `main.ts`'s handler now omits `cwd` from the parsed input and substitutes
+its own app-owned scratch directory unconditionally; `CreateSessionInput` no longer has a `cwd`
+field. v1's HTTP route and schema are otherwise still exactly as this section describes -- the fix
+lives entirely at the Electron IPC layer, since the daemon's own route is not reachable by anything
+except that layer (127.0.0.1 + the per-launch bearer token).
+
+### D8: environment for `workspace-identity.ts`'s Git invocations
+
+Upstream's mechanic (see this module's own header) is scrubbing every `GIT_*` variable before
+invoking Git and forwarding everything else -- a denylist of the one namespace that can redirect a
+Git command (`GIT_DIR`, `GIT_CONFIG`, `GIT_SSH_COMMAND`, and others that grow between Git releases).
+Issue #176 found that leaves the daemon's entire non-`GIT_*` environment reaching the `git` child,
+secrets included: `AI_API_KEY`, `ANTHROPIC_API_KEY`, and everything else ADI-15/ADI-21 already
+withdraw from provider CLIs and the daemon's own children.
+
+`gitSafeEnv()` now builds on ADI-15's `buildProviderEnvironment` (exported from
+`@agent-dock/agent-runtime`'s barrel specifically for this, per that file's own "trimmed to what
+apps/daemon genuinely needs" principle) instead of a `GIT_*`-prefix denylist: a positive allowlist
+of platform and provider-config variables, plus the always-enforced credential-shaped deny list.
+This closes the original scrubbing goal as a side effect rather than a special case -- no `GIT_*`
+name is on the allowlist, so every redirect-capable variable is already absent, with no need to
+track which ones Git adds release to release -- while also closing the secret-leak gap the original
+mechanic never addressed. `GIT_TERMINAL_PROMPT=0` is set after, unchanged from upstream's reasoning.
+This is a deliberate divergence from upstream for the same class of reason D1 and D6 are: a real gap
+upstream's mechanic did not need to consider for its own threat model, closed here without changing
+what `runGit`'s callers observe (`isWorkspaceDirty` and branch resolution are read-only, local,
+`git`-only operations that need no secret and no proxy/SSH access).
+
+## ADI-13: `POST /v2/sessions`, the grant-to-session handoff, and the asymmetric schema bump
+
+ADI-13 (issue #140) is the ticket that gives ADI-06's dormant machinery a caller. ADI-06 built the
+grant contract, the trust store, the audit log, and the execution-lease manager, and deliberately
+shipped the last of those with no caller at all; ADI-13 adds the route that consumes a grant and
+starts a session, which is what turns a folder approval into a running agent.
+
+### Where the boundary actually is
+
+The renderer never names a folder, and after ADI-13 it never learns one either. The chain is:
+
+1. `workspaceGrant.requestGrant(provider)` returns `{ grantHandle, display }`, no path (ADI-06);
+2. `workspaceGrant.consumeGrant(handle)` spends the one-shot handle and returns an opaque
+   `workspaceSessionRef`, again no path;
+3. `workspaceGrant.startSession({ workspaceSessionRef, prompt })` sends that ref to main, which
+   resolves it to a canonical path **in the main process** and puts the real `cwd` on the daemon
+   request;
+4. main rebuilds the daemon's response field by field into `{ sessionId, provider, status, model }`,
+   and `preload.ts` rebuilds it a **second time, independently**.
+
+The double rebuild is the ticket's characteristic move and it is not redundancy. Main and preload
+are different processes with different threat models, and the rule is that preload does not trust
+main blindly: for a `cwd` to reach the renderer, two files in two processes would both have to be
+wrong. `preload.test.ts` asserts the rebuild directly, against a payload carrying `cwd`,
+`workspaceId`, `incarnation`, and a `canonicalPath`.
+
+### The asymmetric schema-version bump
+
+`POST /v2/sessions` accepts an optional capability `selection`, which the durable session record has
+to carry. That is a new field on a persisted shape, so it needed a version bump, and the bump was
+made **asymmetric on purpose**:
+
+- `PERSISTED_SCHEMA_VERSION` is now `2`: every record this build writes is a v2 record.
+- `READABLE_SCHEMA_VERSIONS` is `[1, 2]`: a v1 record on disk, written before this ticket, is still
+  a valid record, because `selection` is optional and its absence is exactly what a v1 record means.
+
+The alternative (bump both, quarantine every existing record) would have discarded a user's real
+session history for a field none of those sessions could have had. The upgrade suite
+(`session-lineage-store.upgrade.test.ts`) is the guard, and it was verified by mutation rather than
+by a green run: narrowing `schemaVersion` to `z.literal(2)` fails 7 of its assertions with the
+records genuinely moved to quarantine, and narrowing `READABLE_SCHEMA_VERSIONS` to `[2]` fails 4.
+
+### Audit before effect, and the re-check after the await
+
+`SessionManager.create()`'s ordering is load-bearing: the `session.workspace_allowed` audit write is
+**awaited, and therefore fsynced, before** a lease is taken or a record is written, so a session
+cannot exist without a durable record that it was allowed. An audit failure is a refusal, not a
+warning. Because that await is a suspension point, step 12 re-checks the workspace epoch immediately
+afterwards, with no await between the check and the lease acquisition it guards, so a revocation
+racing the request lands entirely inside one of the earlier awaits. Two audit-ordering tests bracket
+the whole of `create()` rather than spying on `startSession`, which would still have passed if a
+later edit moved the limiter reservation or the record write ahead of the audit.
+
+### Model-select stopped being dormant
+
+ADI-03 built the `ext.open_vacancy_radar.model_select` capability extension with no route to
+negotiate it. ADI-13 activated it in `capabilities-v2.ts` and wired `resolveModelSelection` into the
+create route. Its `invalid_request` outcome carries a human-readable reason string, and that string
+is deliberately **not** representable in the persisted record's `capabilityUnavailableReasonV2`
+enum: `invalid_request` is a malformed request (a 400), and quoting a Zod message into a persisted
+field would be the leak the no-content rule exists to prevent.
+
+## ADI-07: the concurrent AI Workspace, and a live relay that carries no identifiers
+
+ADI-07 (issue #125) is the first ticket in this series whose deliverable is a screen. Everything
+before it built routes, stores, and boundaries with no user in front of them; this is where a user
+starts two agent sessions in two folders and watches both of them work.
+
+It is also the ticket where a redaction boundary gets its hardest case, because the two things the
+screen has to do pull in opposite directions: show the user what the agent is saying, and never let
+the renderer learn where the agent is saying it.
+
+### The sanitized live-activity relay, and why it has to exist
+
+ADI-05's v2 read routes are **content-free by design**: the durable session store never writes a
+character of model output, so `GET /v2/sessions/:id/events` can only ever answer with SHA-256
+digests and byte counts. That is the right rule for a file on disk and the wrong answer for a live
+timeline. A user watching a session run wants to read the agent's messages, not a list of hashes.
+
+So ADI-07 relays the **live v1 SSE stream**, per v2 session id, through
+`electron/agent-activity-sanitize.ts`. That function is the ADI-07 counterpart of ADI-05's
+`redactEnvelope`, with exactly one rule inverted and every other rule identical:
+
+| field | `redactEnvelope` (to disk) | `toActivityEntry` (to renderer) |
+|---|---|---|
+| `assistant.message.text`, `thinking.delta.text` | digested | **kept**, byte-capped, flagged |
+| `providerSessionId` | kept (bounded) | **dropped** |
+| `toolCallId` | kept (bounded) | **replaced with a local alias** |
+| `tool.*` input/result | digested | digested |
+| `status.detail` | digested | dropped |
+| `error.message`, `session.failed.message` | digested | dropped |
+
+The prose is kept because the renderer is what it is *for*: it is the user's own model output, on
+the user's own screen, in the same process that already renders their CV text. The two identifier
+columns go the other way for the opposite reason. A native provider thread id is a **resume
+capability**, and a native tool-call id is a correlation key the local `t1`/`t2` alias already
+provides, so neither has a legitimate reader in the renderer and neither crosses.
+
+Exhaustiveness is enforced twice, deliberately, because the two checks fail for different reasons.
+The switch's `default` branch is a `never` assertion, so a variant added to the TypeScript union
+without a branch is a **compile error**. That still leaves the Zod schema in `packages/shared` free
+to gain a variant independently, so `agent-activity-sanitize.test.ts` extracts the literal `type`
+values out of `agentEventEnvelopeSchema` **at runtime** and requires the switch's declared inventory
+to match exactly, in both directions. Between the two, a variant cannot be added to either
+declaration without something failing. This mirrors ADI-05's `REDACTED_V1_EVENT_TYPES` check rather
+than importing it: that constant lives in `apps/daemon`, which the desktop app has no dependency on.
+
+The durable-history half (`toHistoryEntry`) is deliberately **not** compile-exhaustive, and the
+asymmetry is the point. The durable log may have been written by a different daemon build, so a
+record with an unrecognized `type` is a thing to skip, not a thing to crash a timeline over. The
+compile-time exhaustiveness belongs on the live switch, which is the only path that ever sees raw
+content.
+
+### `content-digest.ts` moved to `@agent-dock/shared` rather than being copied
+
+ADI-05 wrote the digesting helpers privately inside `apps/daemon/src/persisted-session-schema.ts`.
+ADI-07 needs the same mechanism on the other side of the app, and the desktop app cannot import from
+`apps/daemon` at all. A second copy would have been two security-relevant implementations that look
+correct while drifting: a change to how an unserializable value is digested, or to how a multi-byte
+character is truncated, would silently apply to only one of the two redaction boundaries. So the
+helpers moved to `packages/shared/src/content-digest.ts` verbatim, with the daemon's behavior and
+tests unchanged, and both boundaries now import the one implementation.
+
+### `activeStreamAbort` and `activeSessionId` are gone
+
+`main.ts` held two module-level globals. `forwardSessionEvents` overwrote **both** on every new
+session, which made it a single-slot relay: starting a second session silently orphaned the first
+one's `AbortController`, so `killDaemon()`'s `activeStreamAbort?.abort()` reached only whichever
+stream happened to have started last, and every other one was left open against a daemon about to
+be killed.
+
+`activeSessionId` was worse in a quieter way: it was **write-only state**. It was assigned by
+`daemon:create-session` and cleared at a terminal event, and nothing ever read it. The shutdown path
+had already moved to `sessions.cancelAll()` for exactly this reason (AD-12), so the variable was a
+leftover that still looked like the app's model of "the session".
+
+ADI-07 replaces both with two keyed registries:
+
+- `v1EventForwards: Map<sessionId, AbortController>` for the v1 CV/Letters path, whose *behavior* is
+  untouched (same `daemon:session-event` channel, same raw envelope, same synthesized error event);
+- `AgentWorkspaceRelay`'s own `Map<sessionId, AbortController>` for the new sanitized v2 relay.
+
+`killDaemon()` now aborts every entry in both, which is what that line always claimed to do. The two
+mechanisms stay parallel rather than being folded together because they serve genuinely different
+consumers over different contracts: v1 hands raw envelopes to a one-shot text runner inside an
+app-owned scratch directory, while the relay carries sanitized entries for concurrent sessions
+running in the user's real folders. Merging them would either redact v1 (breaking `useAgentRun`) or
+un-redact v2 (removing the boundary this ticket exists to add).
+
+The same "no single slot" rule is applied one layer up, in the renderer. `workspace-reducer.ts` has
+no active-session concept: `sessions` is a genuine map, `order` is the daemon's listing order, and
+`selectedId` is a **render pointer** read in exactly one place (an unread badge). The decisive test
+is a reference-identity assertion rather than a deep-equality one: dispatching a session-scoped
+action for session B while A is selected must leave `next.sessions.A` **`toBe`** `prev.sessions.A`.
+A reducer that rebuilt every entry on every action would produce deep-equal objects with new
+identities, which is exactly the shape a coupling bug takes.
+
+### Two concurrent sessions need two folders, not one
+
+The most important thing this UI has to communicate honestly is a constraint it did not choose.
+`workspaceLeaseModeFor('legacy-one-shot')` returns `'write'` unconditionally (ADI-13, D4): over this
+repo's one transport the CLI is spawned into the workspace and is not constrained afterwards, so
+every session is an exclusive writer. Two concurrent v2 sessions therefore require **two different
+granted folders**. This is not a limitation of the UI's concurrency; the concurrency is real, and
+the folder is the thing that cannot be shared.
+
+That makes `409 active_session_limit` and `409 workspace_lease_conflict` two different problems
+arriving with the same status code from the same route, and a UI that showed one message for both
+would tell at least half of its users to do something that cannot work:
+
+- **`active_session_limit`**: too many sessions are running *anywhere*. Waiting or stopping one
+  fixes it; changing folder does not. So `NewSessionPanel` shows the live capacity numbers (the
+  thing that has to change) and offers **no** folder action.
+- **`workspace_lease_conflict`**: another session already holds *this folder*. Choosing a different
+  folder fixes it; stopping an unrelated session does not. So the card offers "Choose a different
+  folder", which re-runs the whole native picker flow with the same prompt, and shows **no** capacity
+  numbers, because capacity is not the constraint being hit.
+
+Every refusal reason reaches the user through `refusal-copy.ts`, a closed table mapping a reason
+token to a sentence this repo wrote. That is the last step of a chain that starts at the daemon: the
+daemon answers with a machine-readable code, `daemon-session-refusals.ts` maps it to a reason token
+from a closed set and never forwards the daemon's own `error` text, and this table turns the token
+into prose. A refusal message the user reads has therefore never been near a path, a port, or a
+stack trace.
+
+### Preferences are SQLite-backed, not `localStorage`
+
+Three renderer-local fields (which session is selected, which are archived, per-session unread
+counts) live in `app_settings` alongside every other preference in this app, added by drizzle
+migration `0003`. `localStorage` is where a browser app would put "which row was selected", and it
+was rejected for one reason: this is not a browser app. A user who exports, resets, or backs up
+their workspace database reasonably expects that to carry their app state, and a second store inside
+Chromium's profile directory would silently not be part of any of those operations. The two
+collection-shaped fields are JSON columns, following `cv_documents.profile`'s existing precedent,
+rather than join tables for lists that are never queried, ordered, or joined by SQL. Both are bounded
+in `validate.ts` against a hostile renderer rather than against a product limit anyone will meet.
+
+### What ADI-07 deliberately did not touch
+
+The four grandfathered path-bearing bridges keep their exact behavior: `dialog:select-directory`,
+`cv:get-workspace-dir`, `cv:select-and-read`, and `system:save-file`. They are pre-v2 surfaces, and
+retrofitting them into the grant system would change v1 behavior this ticket promises to leave
+byte-identical.
+
+That grandfathering is precisely why the AI Workspace must not be able to reach any of them. A v2
+session's `cwd` has exactly one legitimate source in this system, and if this screen could obtain a
+path through a second, ungated route, the grant system would still be intact and the property it
+exists to provide would not be. So it is asserted directly rather than argued:
+`test/components/agent-workspace/bridge-isolation.test.tsx` installs all four as spies that
+**throw** (not spies that merely record, so a call from inside any effect surfaces as a failure
+rather than being stepped over) and drives the page through a full session lifecycle: listing, live
+activity for an unselected session, selection, the grant-to-start flow, and a cancel.
+
+Also unchanged: `useAgentRun.ts`, `daemon:create-session`, `daemon:session-event`, and the
+`workspaceGrant` namespace's four keys. There is no v2 cancel route and no new cancel bridge, because
+`agentDock.cancelSession` already reaches a v2 session (both live in the same `SessionManager`) and a
+second verb would be one more thing to keep in agreement with it. There is no `?provider=` query on
+`GET /v2/sessions`: the capacity aggregate reports the **busiest** provider rather than the one a
+particular session uses, and a UI that rendered spare capacity a `POST` would then refuse is worse
+than one that under-promises. The AI Workspace is a **seventh** preload namespace rather than four
+more methods on `workspaceGrant`: reading a session list is not a filesystem trust decision, and
+widening the trust namespace to hold it would mean every future review of "what can the renderer do
+about folders?" has to separate the two concerns again. `preload.test.ts` re-asserts all six earlier
+namespaces key-for-key after the seventh was added.
+
+## ADI-08b: hardening Claude's CLI transport, and the flag that was ruled out
+
+ADI-08b (issue #126) is the unblocked half of a ticket that was split twice. The original ADI-08
+bundled two structurally independent rich transports; its first split moved the Claude Agent SDK out
+to [ADI-08c](https://github.com/jortega0033/open-vacancy-radar/issues/144) on the finding that every
+restriction the ticket's rules demanded ("disable unapproved Bash/settings/MCP/plugins/skills/agents/
+hooks") was already an existing `claude` CLI flag, making a first third-party runtime dependency
+unnecessary. Its second split, recorded in the issue's comments, hit a real machine-level stop
+condition on the Codex half.
+
+**The Codex app-server transport remains blocked and no code exists for it.** This machine's
+standalone Codex 0.147.0 install is missing `codex-windows-sandbox-setup.exe`, so every sandboxed
+`command/exec` call fails before running anything, while `codex doctor` self-reports "ready"
+throughout. That is "incomplete sandbox evidence", one of the parent ticket's own stop conditions,
+and it is unblocked only by an ACL remediation across the user's home directory, a reinstall from the
+MSIX package, or a version bump that reopens the pin. Nothing in this section should be read as a
+claim that it shipped.
+
+> **Update (ADI-08, #126):** the sentence above described a real stop condition at the time it was
+> written, and stayed true through ADI-08b's own scope. It is no longer true of the *parent* ticket:
+> the blocker was resolved by an explicit decision (ship upstream's honest, unenforced sandbox
+> posture rather than requiring the black-box enforcement proof this repo originally demanded -- see
+> [providers.md](providers.md)'s AD-21 superseding update for the full reasoning), and the Codex
+> app-server transport shipped across nine staged PRs. This section is left as-written rather than
+> edited, since it is an accurate record of the state at the time ADI-08b was split out; see "The
+> three-way scope split" above for the current state.
+
+### What ADI-08b actually is
+
+No new transport, no SDK, no dependency. `transportId` is still `'legacy-one-shot'` for everything
+Claude does, and `CLAUDE_LEGACY_COMPATIBILITY` is unchanged. The entire change is an argv suffix,
+`CLAUDE_HARDENING_ARGS` in `providers/claude/build-args.ts`, appended when a new optional
+`StartSessionOptions.hardened` is set:
+
+```
+--safe-mode --strict-mcp-config --setting-sources "" --disable-slash-commands
+--tools Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch
+--disallowed-tools Bash,PowerShell
+```
+
+It is a frozen constant rather than a builder, and `hardened` is a boolean rather than a policy
+object, for the same reason: the restriction set takes no input from the request, so no caller can
+compose a weaker variant of it. A route that could tune the hardening would be a route that could
+turn it off.
+
+### Gated on `protocolVersion`, which already existed
+
+`SessionManager.create()` already takes the v1/v2 discriminator as its sixth positional parameter
+(defaulting to `1`), so hardening threads through with no new plumbing and no second source of truth
+that could disagree with the one the durable record is written with. The key is **spread away**, not
+set to `false`, for v1 -- so a v1 session's start options object is deep-equal to the one it produced
+before this ticket, not merely equivalent. `apps/daemon/test/session-manager.hardening.test.ts`
+asserts that by key set, and `packages/agent-runtime/test/claude-build-args.test.ts` asserts the
+resulting argv against the literal strings the *pre-change* suite pinned, transcribed rather than
+regenerated -- a test that built its expectation by calling the function under test would pass no
+matter what that function did. `apps/daemon/src/routes/sessions.ts` and
+`createSessionRequestSchema` have empty diffs.
+
+### Every value was verified against the real binary, and one assumption was wrong
+
+Claims here are quoted from `claude --help` on the pinned 2.1.228 build and were additionally checked
+end-to-end by reading the `system`/`init` frame of real hardened and unhardened sessions.
+
+The verification mattered. **`--safe-mode` does not disable `Bash`.** A session started with
+`--safe-mode --strict-mcp-config --setting-sources "" --disable-slash-commands` and no tool flags
+still reported both `Bash` *and* `PowerShell` in its init frame -- exactly as that flag's own help
+text says it would, since it promises "Auth, model selection, built-in tools, and permissions work
+normally". Had the tool flags been treated as belt-and-braces on top of `--safe-mode`, this ticket
+would have shipped believing shell access was disabled when it was not. `PowerShell` has to be named
+alongside `Bash` because this daemon's primary platform is Windows, where it is a second, equally
+capable shell that the rule's literal wording does not mention.
+
+The other verified findings:
+
+- `--setting-sources ""` is the most restrictive real value, and the flag is genuinely validated
+  rather than ignored: `--setting-sources bogus` is rejected with "Invalid setting source: bogus.
+  Valid options are: user, project, local", while `""` is accepted. Its effect is observable -- an
+  unhardened session in the same folder picked up the host user's configured model from
+  `settings.json`; the hardened one did not.
+- `--tools` is an allowlist and **fails closed**: an unrecognized name is silently dropped rather
+  than causing the flag to be ignored. So the list is stated positively, and a built-in tool added by
+  a future `claude` release is not granted by default.
+- A hardened session's init frame reports `"mcp_servers":[]`, `"slash_commands":[]`, `"skills":[]`,
+  `"plugins":[]`, and fires no `hook_started` frame -- where the unhardened baseline in the same
+  scratch folder picked up three MCP servers (one of them a remote one), fourteen MCP tools, roughly
+  seventy slash commands, the `Skill` tool, and an automatically-executed `SessionStart` hook.
+- `--strict-mcp-config` is redundant with `--safe-mode` today and is kept anyway: two independent
+  statements of "no MCP", so a future change to either cannot silently re-enable it alone.
+
+The allowlist excludes sub-agent and background-task machinery (`Task*`, `Monitor`, `ToolSearch`),
+anything that creates standing state outliving the session (`Cron*`, `ScheduleWakeup`,
+`RemoteTrigger`, `Workflow`), out-of-band egress channels (`Artifact`, `PushNotification`,
+`SendMessage`, `ReportFindings`, `DesignSync`), and `EnterWorktree`/`ExitWorktree` -- a git worktree
+is a second directory, and a v2 session's exclusive *workspace* lease cannot bound writes to it.
+`WebFetch`/`WebSearch` are the one egress it does permit, deliberately: read-only network reads are
+what this product's sessions exist to do.
+
+### The flag that is prohibited, and why the prohibition is a test
+
+There is a flag that reads like a stronger `--safe-mode` and is not interchangeable with it. Its own
+help text on the same 2.1.228 build:
+
+> Minimal mode: skip hooks, LSP, plugin sync, attribution, auto-memory, background prefetches,
+> keychain reads, and CLAUDE.md auto-discovery. Sets CLAUDE_CODE_SIMPLE=1. **Anthropic auth is
+> strictly ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and keychain are never read).**
+
+That last sentence is disqualifying. Under it the CLI stops reading the OAuth session the user
+already established, so the only way to make a session authenticate at all would be for this daemon
+to obtain and pass an `ANTHROPIC_API_KEY` -- the exact thing SECURITY.md's "What the daemon will
+never do" list forbids ("Read a Claude/Codex/any-provider credential file, keychain entry, or OAuth
+token directly") and that `providers/claude/adapter.ts` promises in its own doc comment. Adopting it
+would not be a tightening; it would convert an adapter that handles no credentials into one that must
+handle a long-lived secret. The properties it adds over `--safe-mode` (skipping LSP, attribution,
+background prefetches) are not security properties this ticket asked for, and `--safe-mode` was
+confirmed to preserve auth in practice: a hardened session reports `"apiKeySource":"none"`.
+
+A comment cannot stop a future maintainer from adding a flag, so
+`packages/agent-runtime/test/claude-bare-prohibition.test.ts` does it: an exhaustive matrix of
+`StartSessionOptions` shapes whose argv must never contain it, plus a repo-wide scan of every
+`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` file outside `node_modules` and build output. The scan looks for the
+flag only in **quoted** form -- an argv element is a string, so it cannot reach a spawned process
+otherwise -- which is what lets `build-args.ts` discuss the prohibition at length in prose without
+tripping its own test, and avoids trying to strip TypeScript comments with a regex. Both halves of
+the test were mutation-tested: adding it to `CLAUDE_HARDENING_ARGS` fails six assertions across both.
+The flag's name appears in this repo's source only in prose -- in that doc comment and in the test's
+own -- and the test assembles it at runtime rather than quoting it, so it has no occurrence of the
+string it is looking for.
+
+### What ADI-08b deliberately did not touch
+
+v1 in its entirety: `routes/sessions.ts`, `createSessionRequestSchema`, and the argv any v1 session
+constructs. The compatibility manifest is unchanged, because hardening does not create a second
+transport -- it is the same `legacy-one-shot` spawn with a stricter command line, and giving it its
+own manifest entry would be the thing that lets the fallback gate ever say "allowed". Codex's adapter
+ignores `hardened` (it has nothing reviewed to restrict), and the Codex app-server transport remains
+untouched and blocked per this section's opening.
+
+**Correction (issue #173):** the paragraph above was true at the time and was also the bug. Gating
+`hardened` on `protocolVersion === 2` meant every v1 caller -- which in practice is every shipped
+renderer feature (GapAnalysis, CoverLetter, CvAssistant, TailorCv all create sessions through v1's
+`routes/sessions.ts`, not v2) -- ran unhardened, with Bash/PowerShell/MCP/hooks/slash-commands live
+next to a prompt that embeds untrusted scraped vacancy text. The v1/v2 split was incidental plumbing
+convenience (`protocolVersion` was already the method's discriminator), never a deliberate security
+boundary, so `SessionManager.create()` now sets `hardened: true` unconditionally for every session
+it starts. v1's request schema and argv shape are otherwise still untouched.
+
+## ADI-14: moving Codex's prompt from argv to stdin
+
+Until this change `providers/codex/build-args.ts` returned `['exec', opts.prompt, ...]`: the user's
+prompt was a literal argv element of the spawned `codex exec` process. Claude's adapter had never
+done this (see the doc comment on `providers/claude/build-args.ts`, which this change is a straight
+port of), and the two reasons it gives applied to Codex identically:
+
+1. **Correctness on this repo's primary platform.** `packages/shared/src/schemas.ts` caps a session
+   prompt at 200,000 characters. Windows' `CreateProcess` caps the *entire* command line at ~32,767.
+   A long-enough request -- and for this product a prompt is a CV plus a scraped vacancy description
+   plus instructions, so "long enough" is an ordinary request, not a pathological one -- could
+   therefore truncate or fail to spawn. The cap is unchanged by this ticket; what changed is that it
+   is now safe to use for Codex.
+2. **Disclosure.** An argv element is readable by any same-user process for the entire lifetime of
+   the child: Task Manager's command-line column, `wmic process`, `ps`. That is a continuous
+   exposure of the user's CV text, not a transient one at spawn.
+
+The fix is the `-` placeholder the Codex CLI documents for exactly this. From `codex exec --help` on
+the pinned `codex-cli 0.147.0` build: *"Initial instructions for the agent. If not provided as an
+argument (or if `-` is used), instructions are read from stdin"*, and from `codex exec resume
+--help`: *"Prompt to send after resuming the session. If `-` is used, read from stdin"*. Both shapes
+were exercised against the real installed binary rather than trusted from help text alone: with an
+empty stdin, `codex exec - --json --skip-git-repo-check` and
+`codex exec resume <uuid> - --json --skip-git-repo-check` each parse their argv and then fail with
+Codex's own `No prompt provided via stdin.`, which is positive proof that the `-` was accepted as the
+`[PROMPT]` positional *and* that it switched the CLI to reading stdin. The placeholder occupies
+exactly the argv slot the raw prompt used to, so the only difference in the spawned command line is
+which string sits in the prompt position.
+
+(The exact argv shown above predates issue #174, which appended `--ignore-user-config` to both
+branches; see that section for what it closes and why `--sandbox` was deliberately not used instead.)
+
+### Why this needed no change to the shared machinery
+
+`run-session.ts` already implemented the stdin write generically behind
+`ProviderRunConfig.promptViaStdin` (AD-05), and ADI-04 already made the accepted-work latch derive
+from that same flag as reported at the real call site rather than from the compatibility manifest's
+hand-maintained column. So the whole runtime change is one `promptViaStdin: true` on
+`CodexProvider`, and the boundary moved with it automatically: `session-supervisor.ts` was not
+touched, and could not have gone stale, because there is only one flag governing both what the
+adapter does and what the supervisor concludes it did.
+`CODEX_LEGACY_COMPATIBILITY.acceptedWorkBoundary` was updated from `'process-spawn-attempt'` to
+`'first-prompt-byte-to-stdin'` in the same change so the documentation does not carry a now-false
+claim, but that column is documentation, not enforcement -- had it been left stale, the supervisor
+would still have been correct and would have logged the disagreement.
+
+This is a real, observable behavior change and is tested as one rather than asserted in a comment.
+`test/support/supervisor-contract.ts` gained an "accepted-work boundary timing" section that samples
+the latch from *inside* the two probe callbacks `runProviderSession` fires back to back -- the only
+interval in which the two boundaries differ, since both end a successful session at `'accepted'`.
+For Codex it now requires `not_accepted` immediately after the spawn attempt and `'accepted'` only
+after the stdin flush; running that same assertion against the pre-ADI-14 configuration fails with
+`expected 'accepted' to be 'not_accepted'`, which is the change stated as a failing test.
+
+`test/run-session.test.ts` adds an end-to-end section that spawns a real child whose argv is built by
+the real `buildCodexArgs` and which echoes back both its own argv and everything it read on stdin
+(`test/fixtures/fake-codex-stdin-echo.mjs`). It proves both acceptance criteria in one run: a
+200,000-character prompt -- roughly six times the Windows command-line limit, and the schema's own
+cap -- round-trips byte for byte over stdin while the spawned process's real argv stays a handful of
+short elements with `-` in the prompt position (four at the time of this ticket; issue #174 later
+added a fifth, `--ignore-user-config` -- see below).
+
+### What ADI-14 deliberately did not touch
+
+Claude's transport (already stdin, unchanged), the 200,000-character prompt cap, `run-session.ts`'s
+stdin-write mechanism, and the daemon's session-creation schema. No consumer outside the adapter
+depended on the old Codex argv shape.
+
+## Issue #174: Codex's argv gets `--ignore-user-config`; `--sandbox` is deliberately not used
+
+A repo-wide security audit found Codex sessions had no analogue of ADI-08b's Claude hardening
+(`#173` extended that to every session, not just v2's), and separately that `CODEX_HOME` is
+allowlisted through `provider-environment.ts`, so a session silently loads whatever
+`$CODEX_HOME/config.toml` exists on the host -- which can set `sandbox_permissions` or
+`shell_environment_policy` to anything.
+
+The obvious-looking fix, adding `-s/--sandbox read-only` to `buildCodexArgs`, was investigated and
+rejected: ADI-08a already found this machine's Codex install is missing
+`codex-windows-sandbox-setup.exe`, so every sandboxed `command/exec` call fails outright rather than
+restricting anything, while `codex doctor` self-reports "ready" throughout. Shipping `--sandbox` here
+would not be hardening -- it would be indistinguishable from a broken session and would never
+verifiably enforce the restriction it claims to. `opts.hardened` stays an intentional no-op for
+Codex, re-evaluate once ADI-08a's missing sandbox helper is resolved.
+
+The fix actually shipped is `--ignore-user-config`, appended unconditionally (fresh and resume, not
+gated behind `opts.hardened`, on the same reasoning #173 applied to Claude: no session should
+inherit an arbitrary host config unannounced). Verified against the real `codex-cli 0.147.0` binary
+with a poisoned `$CODEX_HOME/config.toml`: without the flag the session loaded the bad config and
+failed the turn; with it, the config was ignored and the session completed normally, with
+`CODEX_HOME`-based auth unaffected, exactly as `codex exec --help` documents ("Do not load
+`$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`"). The app ships no Codex `config.toml` of
+its own and depends on nothing in it (no MCP servers, model aliases, or other settings), so nothing
+is lost by ignoring it.
+
+## ADI-15: a default-deny environment allowlist for spawned provider processes
+
+Until this change `process/spawn-process.ts` ended in `env: opts.env ?? process.env`, and no caller
+in the repo ever set `opts.env` -- `StartSessionOptions.env`'s own doc comment said as much. Every
+`claude` and `codex` child therefore inherited the daemon's entire environment. SECURITY.md
+documented this as *"a deliberate tradeoff, not an oversight"*, and the reasoning it gave was sound
+as far as it went: a CLI that cannot find its own config reports a false "not authenticated", which
+for a project whose whole premise is "use the CLI's own auth" is a worse failure than an over-broad
+environment.
+
+What that argument never did was *measure* the safe subset. It reasoned that a hand-picked list
+"risks silently breaking legitimate CLI authentication" and stopped there, so the risk was accepted
+permanently on the strength of an untested assumption. This ticket tested it.
+
+### The measurement, which is the whole basis of the change
+
+Against the real installed binaries on the development machine (`claude` 2.1.228, `codex-cli`
+0.147.0 on Windows 11), an environment restricted to exactly the allowlist left every
+authentication-relevant path behaving identically to full inheritance: `where claude`/`where codex`
+(the PATH lookup `detect-executable.ts` itself performs), `claude --version`, `codex --version`,
+`claude auth status --json` returning `{"loggedIn": true, "authMethod": "claude.ai", ...}`, and
+`codex login status` returning `Logged in using ChatGPT`. OAuth authentication survives because it
+resolves through the CLI's own on-disk state, with no `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` present,
+which is the arrangement this repo wants.
+
+What was measured is OAuth, and the first draft of this section said "authentication is unaffected"
+without that qualifier. Independent review caught it. Environment-variable authentication is
+deliberately no longer supported: API-key auth, Bedrock routing and Vertex routing all stop working,
+and because a name must clear both lists, a user cannot re-enable them. That is the intended posture
+-- a long-lived key handed to a process that reads untrusted scraped content is the authority this
+ticket withdraws -- but the symptom is a false "not authenticated", so it is documented in
+SECURITY.md and on the deny list itself rather than left to be rediscovered.
+
+A per-variable removal sweep then asked which entries are actually load-bearing. `PATHEXT` is:
+without it `where` cannot match `claude.exe` and executable detection fails outright. The rest were
+individually removable *for those particular checks*, and are kept anyway -- a version/auth probe is
+a small fraction of what a real session does, they are non-secret platform paths, and the stop
+condition on this work is explicitly that over-restriction is a real regression. Reviewed breadth,
+not minimality, is the goal.
+
+An end-to-end real session was also run through the actual adapter as a negative control. It failed
+to authenticate -- and failed *identically* under old-style full inheritance, on the same machine,
+in the same minute. That comparison is the point: the failure is a property of the development
+machine's OAuth state (a nested CLI whose refresh channel belongs to a host session), not something
+the allowlist introduced. A verification that only ran the new path would not have been able to tell
+those two apart.
+
+### Two lists, and why the ordering is tested rather than assumed
+
+The same shape `providers/claude/build-args.ts` already uses for tool restriction: a positively
+stated allowlist so that a variable introduced by a future dependency is not granted by default
+(drift fails closed, visibly, rather than open), plus a deny list checked *after* it and able to
+override it.
+
+The two are disjoint in the shipped configuration, which means the deny branch never actually fires
+in production and its veto cannot be observed by ordinary use. Rather than assert the property in a
+comment, `buildProviderEnvironment` takes an `allowlistOverride` test seam whose only purpose is to
+construct the overlap and prove the deny list vetoes a granted name (`denyOverridesAllowlist`). It is
+worth being precise that this is a conjunction rather than an evaluation order -- a name must be
+granted *and* not denied, so testing deny first or second is unobservable, and the earlier phrasing
+of "checked after the allowlist so it overrides it" described a sequence with no consequence. The
+deny list also
+names this daemon's and this product's own internals explicitly -- `AGENT_DOCK_*`, `ELECTRON_*`, the
+vacancy-source credential names -- even though the allowlist would never have granted them, so that
+"a provider child never sees the daemon's own state" is a tested guarantee rather than a lucky
+consequence of the allowlist happening to be narrow.
+
+### The exposure this actually closed, which is not the one the ticket assumed
+
+The ticket suspected this product's keyring-backed credential store. That was checked and ruled out:
+`apps/daemon/src/mcp/credential-store.ts` (`@napi-rs/keyring`) never places a secret in any process
+environment, and the per-launch discovery token is not an environment variable either -- it is
+written to a `0600` discovery file and held in memory.
+
+The real path is duller and worse. `packages/vacancy-engine/src/config.ts` reads this product's
+vacancy-source credentials (`AI_API_KEY`, `BRAVE_SEARCH_API_KEY`, `ADZUNA_APP_ID`/`ADZUNA_APP_KEY`,
+`JOOBLE_API_KEY`, `REED_API_KEY`, `JOBSPIPE_API_KEY`) straight out of `process.env`, and
+`apps/desktop/electron/main.ts` spawns the daemon with `{ ...process.env, ... }`. On a machine where
+those are exported they reached every provider child verbatim. `ADZUNA_APP_ID` is the instructive
+one: it matches none of the credential-shaped deny patterns and is excluded only because the
+allowlist never granted it, which is precisely why the allowlist is the load-bearing half and the
+deny list is a backstop.
+
+### One policy point, not five
+
+The ticket listed five entry points to wire up (`spawn-process.ts`, `run-session.ts`,
+`exec-capture.ts`, both `detect.ts`). All five already funnel through `spawnProcess`, so the policy
+is applied once, at the single point where the process is actually created, and the other four
+inherit it structurally -- calling the builder again at each layer would have been the "several
+divergent copies" the ticket was trying to avoid. Their doc comments now say the policy applies and
+where it lives; tests verify each path rather than trusting the funnel.
+
+`SpawnOptions.env` and `StartSessionOptions.env` changed meaning as part of this: they now select
+*which* environment gets filtered rather than whether filtering happens. There is deliberately no
+opt-out, because no caller needs one -- every `spawnProcess` use in the repo is a provider CLI or a
+`where`/`which` lookup on behalf of one. The one test that had relied on passing a variable through
+`SpawnOptions.env` (the Job Host argv-fidelity test) was changed to write relative to its own cwd,
+which keeps it about argv fidelity, all it was ever about.
+
+### Two limits recorded rather than papered over
+
+**Windows re-adds eleven variables regardless of policy.** libuv's `make_program_env` merges its own
+`required_vars` in from the real parent environment, so even `spawn(..., { env: {} })` yields a child
+with `HOMEDRIVE`, `HOMEPATH`, `LOGONSERVER`, `PATH`, `SYSTEMDRIVE`, `SYSTEMROOT`, `TEMP`,
+`USERDOMAIN`, `USERNAME`, `USERPROFILE`, `WINDIR`. Verified directly by dumping a child's
+`process.env` under an empty env. The allowlist is deliberately *not* padded with these to make the
+"strict subset" assertion look tidier -- they are a separate documented constant, the subset test
+names them as a platform addition, and a test asserts the deny list never claims to block one of
+them, since the runtime would silently override it and the guarantee would be a fiction.
+
+**A proxy URL can embed credentials.** `HTTP_PROXY`/`HTTPS_PROXY` are allowlisted because without
+them a CLI behind a corporate proxy cannot reach its own auth endpoint, and no name-based pattern can
+distinguish `http://proxy.example` from `http://user:pass@proxy.example`. Named as a residual, the
+same way `build-args.ts` names the `WebFetch` egress residual, rather than left implicit.
+
+The POSIX allowlist is the one part not empirically re-verified -- no macOS or Linux machine was
+available, the same caveat this repo already carries for the POSIX process-group termination path.
+
+### What independent review changed
+
+The review found no bypass and no critical defect -- it verified independently that
+`spawn-process.ts` holds the only `spawn()` in the package, that the Job Host's `lpEnvironment =
+NULL` really does preserve the restriction across the second hop, and that `allowlistOverride` is
+unreachable from any spawn path. What it did find was that the *compatibility* surface was narrower
+than the confidence expressed about it, and two tests claimed more than they proved:
+
+- The API-key/Bedrock/Vertex breakage above was undocumented, and both the code and SECURITY.md said
+  "authentication is unaffected".
+- `POSIX_REQUIRED_VARIABLES` omitted `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which is the
+  most likely way the acknowledged "POSIX unverified" caveat would actually have bitten: a
+  libsecret/gnome-keyring lookup needs both, and without them a Linux user gets a false
+  not-logged-in. `ALL_PROXY` was likewise missing, breaking Codex behind a SOCKS proxy while the
+  surrounding comment claimed to cover proxied installs generally. Both added.
+- The `__proto__` test was vacuous: `{ __proto__: 'poison' }` in an object literal is the
+  prototype-setter syntax and creates no own property, so the builder's loop never saw the key. Now
+  written with a computed key, which does. (The code was correct either way; only the test's claim
+  was false.)
+- More importantly, **no test asserted that the allowlist grants anything.** Every sweep was an
+  absence assertion, and a `buildProviderEnvironment` that returned `{}` would have passed all of
+  them -- leaving the suite able to detect under-restriction only, and blind to the over-restriction
+  this design names as its primary feared failure mode. Positive-grant assertions were added at both
+  the unit level and against the real spawned child.
+- The Windows direct-spawn path (`useJobHostOnWindows: false`), which is the one *all* provider
+  detection actually takes, was never swept -- only the Job Host path was. Now both are.
+- The single-choke-point guarantee rested on convention, with nothing stopping a future `execFile`
+  import elsewhere in the package. Now enforced by an ESLint `no-restricted-imports` rule on
+  `node:child_process` scoped to `packages/agent-runtime/src/**`, exempting only `spawn-process.ts`.
+
+One review point was considered and deliberately not acted on: `dropped` is discarded at the only
+call site, so there is no runtime observability into over-restriction. `spawnProcess` takes no
+logger, and threading one through purely to log this would be a larger change than the diagnostic is
+worth while the tests cover the property directly.
+
+### What ADI-15 deliberately did not touch
+
+What the provider CLI reads from its own on-disk state once running (OAuth session files, keychain
+entries) -- this bounds only what the daemon hands a child, per the standing "never read a provider
+credential" invariant. The v1/v2 session-creation schemas and routes, which are untouched: this is
+purely a subprocess-environment-construction change and is invisible at the API level. And
+`apps/desktop/electron/main.ts`'s spawn of the *daemon*, which legitimately needs `AGENT_DOCK_*` to
+function and is not a provider child.

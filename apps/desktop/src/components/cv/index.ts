@@ -8,8 +8,21 @@ export { CvUpload } from './CvUpload.js';
 export { SaveCvToLibrary } from './SaveCvToLibrary.js';
 export { GapAnalysis } from './GapAnalysis.js';
 export { CoverLetter } from './CoverLetter.js';
+export { TailorCv } from './TailorCv.js';
 export { AiOutput } from './AiOutput.js';
-export { buildGapAnalysisPrompt, buildCoverLetterPrompt, formatVacancy } from './prompts.js';
+export {
+  buildGapAnalysisPrompt,
+  buildCoverLetterPrompt,
+  buildCvTailorPrompt,
+  buildSourceCvPrompt,
+  buildStructuredResumePrompt,
+  formatSourceCv,
+  formatVacancy,
+  wasCvTextTruncated,
+  MAX_SOURCE_CV_PROMPT_CHARS,
+} from './prompts.js';
+export { parseSourceCvResponse, sourceCvCompleteness, toCvSourceDocument } from './source-cv-response.js';
+export type { SourceCvCompleteness } from './source-cv-response.js';
 export { useAgentRun, describeError, RUN_TIMEOUT_MS } from './useAgentRun.js';
 export type { AgentRun, AgentRunStatus } from './useAgentRun.js';
 export type { CvDocument, VacancyLead } from './types.js';
@@ -18,3 +31,4 @@ export type { CvUploadProps } from './CvUpload.js';
 export type { SaveCvToLibraryProps } from './SaveCvToLibrary.js';
 export type { GapAnalysisProps } from './GapAnalysis.js';
 export type { CoverLetterProps } from './CoverLetter.js';
+export type { TailorCvProps } from './TailorCv.js';

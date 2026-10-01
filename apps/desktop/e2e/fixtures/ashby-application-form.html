@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fixture: Ashby-shaped application form</title>
+<!--
+  Test-only fixture (issue #201). This is NOT a real Ashby page and is never fetched from the
+  network -- it exists solely so packages/application-executor's ApplicationExecutor can be
+  exercised, over a real CDP connection, against a form shaped like a real applicant-tracking
+  system's without this repo ever scraping, redistributing, or depending on one.
+
+  Per the #197 terms-of-service register (docs/application-target-evidence.md), Ashby specifically
+  was found `insufficient_evidence` for automated interaction -- no ATS is currently cleanly
+  eligible. This fixture is explicitly NOT an eligible target and must never be pointed at a real
+  Ashby-hosted URL; it is local-only, loaded via a file:// URL, and stands in for "a form shaped
+  like the ones this feature will eventually operate against" for testing purposes only.
+
+  The field shapes below (text/email/tel/url inputs, a native <select>, radio buttons, a checkbox,
+  a <textarea>, and a file input) intentionally mirror the control types
+  packages/application-executor/src/dom-extract.ts classifies, so a real extraction pass produces a
+  realistic, multi-control FormSnapshot rather than a trivial one.
+-->
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+  .hint { font-weight: 400; color: #666; font-size: 0.85rem; }
+  input[type="text"], input[type="email"], input[type="tel"], input[type="url"], select, textarea {
+    width: 100%; padding: 0.5rem; box-sizing: border-box; font-size: 1rem;
+  }
+  .radio-group label, .consent label { font-weight: 400; display: inline-flex; align-items: center; gap: 0.4rem; margin-right: 1rem; }
+  fieldset { border: 1px solid #ccc; border-radius: 4px; }
+  .hidden-honeypot { display: none; }
+</style>
+</head>
+<body>
+  <h1>Apply: Senior Widget Engineer (fixture)</h1>
+  <form id="application-form">
+    <div class="field">
+      <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+      <input type="text" id="full-name" name="fullName" autocomplete="name" required />
+    </div>
+
+    <div class="field">
+      <label for="email">Email <span aria-hidden="true">*</span></label>
+      <input type="email" id="email" name="email" autocomplete="email" required />
+    </div>
+
+    <div class="field">
+      <label for="phone">Phone <span class="hint">(optional)</span></label>
+      <input type="tel" id="phone" name="phone" autocomplete="tel" />
+    </div>
+
+    <div class="field">
+      <label for="linkedin">LinkedIn profile URL <span class="hint">(optional)</span></label>
+      <input type="url" id="linkedin" name="linkedInUrl" />
+    </div>
+
+    <div class="field">
+      <label for="work-authorization">Are you authorized to work in this country? <span aria-hidden="true">*</span></label>
+      <select id="work-authorization" name="workAuthorization" required>
+        <option value="">Select one</option>
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+        <option value="sponsorship-required">Yes, with visa sponsorship</option>
+      </select>
+    </div>
+
+    <fieldset class="field radio-group">
+      <legend>Preferred work arrangement <span aria-hidden="true">*</span></legend>
+      <label><input type="radio" name="workArrangement" value="remote" required /> Remote</label>
+      <label><input type="radio" name="workArrangement" value="hybrid" /> Hybrid</label>
+      <label><input type="radio" name="workArrangement" value="onsite" /> On-site</label>
+    </fieldset>
+
+    <div class="field">
+      <label for="resume">Resume <span aria-hidden="true">*</span></label>
+      <input type="file" id="resume" name="resume" accept=".pdf" required />
+    </div>
+
+    <div class="field">
+      <label for="cover-letter">Cover letter <span class="hint">(optional)</span></label>
+      <textarea id="cover-letter" name="coverLetter" rows="6"></textarea>
+    </div>
+
+    <!-- A structurally hidden field: `dom-extract.ts` must skip this, never surface it as a
+         fillable field. -->
+    <div class="field hidden-honeypot">
+      <label for="referral-source">Referral source</label>
+      <input type="text" id="referral-source" name="referralSource" hidden />
+    </div>
+
+    <div class="field consent">
+      <label>
+        <input type="checkbox" name="agreeToTerms" required />
+        I agree to the processing of my data per the privacy policy. <span aria-hidden="true">*</span>
+      </label>
+    </div>
+
+    <button type="submit" id="submit-application">Submit Application</button>
+  </form>
+</body>
+</html>

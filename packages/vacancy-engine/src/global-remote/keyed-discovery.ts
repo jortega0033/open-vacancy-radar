@@ -1,9 +1,18 @@
 import type { AtsHttpClient } from '../ats/http.js';
 import { AtsResponseError, requireSuccessfulResponse } from '../ats/http.js';
 import {
+  attributeNetworkRequests,
+  networkAttemptFields,
+  newNetworkAttemptCounters,
+} from './discovery-attribution.js';
+import {
+  completeAudit,
   discoveryAudit,
   httpUrl,
   identifier,
+  incompleteAudit,
+  isoPostedAt,
+  isoPostedAtFromDdMmYyyy,
   numberValue,
   parseSalaryText,
   parsedRoot,
@@ -17,6 +26,7 @@ import type {
   DiscoveryVacancyAudit,
   GlobalRemoteConfig,
 } from './models.js';
+import { runNavArbeidsplassenDiscovery } from './nav-arbeidsplassen-discovery.js';
 
 function basicAuthHeader(apiKey: string): string {
   return `Basic ${Buffer.from(`${apiKey}:`, 'utf8').toString('base64')}`;
@@ -26,12 +36,15 @@ async function discoverAdzuna(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const { adzunaAppId, adzunaAppKey } = config.discovery;
   const vacancies: DiscoveryVacancyAudit[] = [];
   let requests = 0;
   let successfulRequests = 0;
   let status: DiscoverySourceAudit['status'] = 'success';
   let errorMessage: string | null = null;
+  let continuationCursor: string | null = null;
   let lastUrl = 'https://api.adzuna.com/v1/api/jobs/gb/search/1';
   try {
     for (let page = 1; page <= config.discovery.adzunaMaxPages; page += 1) {
@@ -39,7 +52,7 @@ async function discoverAdzuna(
       url.searchParams.set('app_id', adzunaAppId);
       url.searchParams.set('app_key', adzunaAppKey);
       url.searchParams.set('content-type', 'application/json');
-      url.searchParams.set('what', 'frontend developer');
+      if (config.discovery.roleQuery) url.searchParams.set('what', config.discovery.roleQuery);
       url.searchParams.set('results_per_page', '50');
       lastUrl = url.toString();
       requests += 1;
@@ -64,7 +77,9 @@ async function discoverAdzuna(
           currency: minimum !== null && minimum > 0 ? 'GBP' : null,
           salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
           advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+          salaryProvenance: 'reviewed_structured',
           description: stringValue(job.description),
+          postedAt: isoPostedAt(stringValue(job.created)),
           raw,
           minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
         }));
@@ -72,6 +87,7 @@ async function discoverAdzuna(
       if (root.results.length < 50) break;
       if (page === config.discovery.adzunaMaxPages) {
         status = 'partial';
+        continuationCursor = String(page + 1);
         errorMessage = `Stopped at the configured ${config.discovery.adzunaMaxPages}-page limit.`;
       }
     }
@@ -79,6 +95,7 @@ async function discoverAdzuna(
     const failure = sourceFailure(error);
     status = successfulRequests > 0 ? 'partial' : failure.status;
     errorMessage = failure.error;
+    continuationCursor = null;
   }
   return {
     sources: [{
@@ -89,6 +106,8 @@ async function discoverAdzuna(
       listings: vacancies.length,
       status,
       error: errorMessage,
+      ...networkAttemptFields(counters),
+      ...(status === 'success' ? completeAudit() : incompleteAudit(errorMessage ?? status, continuationCursor)),
     }],
     vacancies,
   };
@@ -98,9 +117,14 @@ async function discoverJooble(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = `https://jooble.org/api/${config.discovery.joobleApiKey}`;
   try {
-    const response = await http.postJson(url, { keywords: 'frontend developer', location: 'remote' });
+    const response = await http.postJson(url, {
+      ...(config.discovery.roleQuery ? { keywords: config.discovery.roleQuery } : {}),
+      location: 'remote',
+    });
     requireSuccessfulResponse('jooble', response);
     let root: unknown;
     try {
@@ -130,17 +154,36 @@ async function discoverJooble(
         salaryPeriod: salary.period,
         advertisedMinimum: salary.minimum,
         description: snippet,
+        postedAt: isoPostedAt(stringValue(job.updated)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
     });
     return {
-      sources: [{ id: 'jooble:frontend-remote', provider: 'jooble', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'jooble:frontend-remote',
+        provider: 'jooble',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'jooble:frontend-remote', provider: 'jooble', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'jooble:frontend-remote',
+        provider: 'jooble',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -150,7 +193,12 @@ async function discoverReed(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
-  const url = 'https://www.reed.co.uk/api/1.0/search?keywords=frontend+developer&resultsToTake=100';
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
+  const reedUrl = new URL('https://www.reed.co.uk/api/1.0/search');
+  if (config.discovery.roleQuery) reedUrl.searchParams.set('keywords', config.discovery.roleQuery);
+  reedUrl.searchParams.set('resultsToTake', '100');
+  const url = reedUrl.toString();
   try {
     const response = await http.get(url, { headers: { Authorization: basicAuthHeader(config.discovery.reedApiKey) } });
     requireSuccessfulResponse('reed', response);
@@ -181,18 +229,38 @@ async function discoverReed(
         currency: minimum !== null && minimum > 0 ? currency : null,
         salaryPeriod: minimum !== null && minimum > 0 ? 'annual' : null,
         advertisedMinimum: minimum !== null && minimum > 0 ? minimum : null,
+        salaryProvenance: 'reviewed_structured',
         description: stringValue(job.jobDescription),
+        postedAt: isoPostedAtFromDdMmYyyy(stringValue(job.date)),
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
     });
     return {
-      sources: [{ id: 'reed:frontend-developer', provider: 'reed', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'reed:frontend-developer',
+        provider: 'reed',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'reed:frontend-developer', provider: 'reed', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'reed:frontend-developer',
+        provider: 'reed',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -202,12 +270,14 @@ async function discoverJobsPipe(
   http: AtsHttpClient,
   config: GlobalRemoteConfig,
 ): Promise<DiscoveryRun> {
+  const counters = newNetworkAttemptCounters();
+  http = attributeNetworkRequests(http, counters);
   const url = 'https://api.jobspipe.dev/v1/jobs/search';
   try {
     const response = await http.postJson(
       url,
       {
-        job_title_or: ['frontend developer', 'frontend engineer', 'frontend architect'],
+        ...(config.discovery.roleQuery ? { job_title_or: [config.discovery.roleQuery] } : {}),
         remote: true,
         posted_at_max_age_days: 30,
         limit: 25,
@@ -240,18 +310,41 @@ async function discoverJobsPipe(
         currency: null,
         salaryPeriod: null,
         advertisedMinimum: null,
-        description: stringValue(job.seniority),
+        // `job.seniority` (a short level label, e.g. "Senior") used to be passed off as the job
+        // description -- silently corrupting CV-tailoring/cover-letter grounding with a single
+        // plausible-looking wrong word instead of the real posting text. This API has no free-text
+        // description field, so `null` (the "we don't have this" convention every other source uses
+        // when a description is genuinely absent) is the honest value here.
+        description: null,
         raw,
         minimumAnnualBaseUsd: config.minimumAnnualBaseUsd,
       })];
     });
     return {
-      sources: [{ id: 'jobspipe:frontend-remote', provider: 'jobspipe', url, requests: 1, listings: vacancies.length, status: 'success', error: null }],
+      sources: [{
+        id: 'jobspipe:frontend-remote',
+        provider: 'jobspipe',
+        url,
+        requests: 1,
+        listings: vacancies.length,
+        status: 'success',
+        error: null,
+        ...networkAttemptFields(counters),
+        ...completeAudit(),
+      }],
       vacancies,
     };
   } catch (error) {
     return {
-      sources: [{ id: 'jobspipe:frontend-remote', provider: 'jobspipe', url, requests: 1, listings: 0, ...sourceFailure(error) }],
+      sources: [{
+        id: 'jobspipe:frontend-remote',
+        provider: 'jobspipe',
+        url,
+        requests: 1,
+        listings: 0,
+        ...sourceFailure(error),
+        ...networkAttemptFields(counters),
+      }],
       vacancies: [],
     };
   }
@@ -268,6 +361,9 @@ export async function runKeyedDiscovery(
     ...(config.discovery.joobleApiKey.trim().length > 0 ? [discoverJooble(http, config)] : []),
     ...(config.discovery.reedApiKey.trim().length > 0 ? [discoverReed(http, config)] : []),
     ...(config.discovery.jobspipeApiKey.trim().length > 0 ? [discoverJobsPipe(http, config)] : []),
+    ...(config.discovery.navArbeidsplassenApiKey.trim().length > 0
+      ? [runNavArbeidsplassenDiscovery(http, config)]
+      : []),
   ]);
   return {
     sources: runs.flatMap((run) => run.sources),

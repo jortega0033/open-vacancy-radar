@@ -5,10 +5,10 @@ is the map of how the pieces fit together; this file is the walkthrough for maki
 
 ## Prerequisites
 
-- Node 20+ and pnpm (see the `packageManager` field in the root [package.json](package.json) for
+- Node >=22 <23 and pnpm (see the `packageManager` field in the root [package.json](package.json) for
   the exact version this repo was built against).
 - Optionally, a real, authenticated `claude` and/or `codex` CLI install if you want to exercise a
-  provider adapter against the real thing — see
+  provider adapter against the real thing, see
   [Manual provider smoke tests](#manual-provider-smoke-tests) below. **Not required** for normal
   development: the automated test suite never needs either CLI installed.
 
@@ -30,7 +30,7 @@ apps/
   daemon/         Standalone local Node.js service (Fastify), runnable without Electron
 packages/
   agent-runtime/  Provider-neutral runtime: process management, adapters, normalized events
-  client/         @agent-dock/client — typed daemon SDK (HTTP+SSE, auth, protocol version check)
+  client/         @agent-dock/client: typed daemon SDK (HTTP+SSE, auth, protocol version check)
   shared/         Types, Zod schemas, and the protocol v1 AgentEvent contract everything else uses
 ```
 
@@ -38,45 +38,64 @@ Dependencies only flow one direction: `shared ← agent-runtime ← daemon`, and
 `shared ← client ← desktop`. See [docs/architecture.md#dependency-graph](docs/architecture.md#dependency-graph)
 for the full picture and a "what belongs where" table.
 
-## "I want to change X" — where to start
+## "I want to change X": where to start
 
 | You want to... | Start here |
 |---|---|
-| Change what an `AgentEvent` looks like, or add a new event type | `packages/shared/src/events.ts` + `schemas.ts`, then read [docs/protocol-v1.md](docs/protocol-v1.md) — this is a protocol change, treat it as one |
+| Change what an `AgentEvent` looks like, or add a new event type | `packages/shared/src/events.ts` + `schemas.ts`, then read [docs/protocol-v1.md](docs/protocol-v1.md): this is a protocol change, treat it as one |
 | Add a new HTTP route or change an existing one's behavior | `apps/daemon/src/routes/*.ts`, then update [docs/daemon.md](docs/daemon.md) and [docs/protocol-v1.md](docs/protocol-v1.md) if the wire shape changed |
-| Add a new provider (a third CLI besides Claude/Codex) | [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider) — a self-contained checklist, no daemon/client/desktop changes needed |
+| Add a new provider (a third CLI besides Claude/Codex) | [docs/providers.md#adding-a-new-provider](docs/providers.md#adding-a-new-provider): a self-contained checklist, no daemon/client/desktop changes needed |
 | Change how a provider's output is parsed | `packages/agent-runtime/src/providers/<name>/parser.ts` + its test fixtures |
 | Change process spawning/cancellation behavior for every provider | `packages/agent-runtime/src/providers/common/run-session.ts` and `process/spawn-process.ts` |
-| Change the desktop UI | `apps/desktop/src/` — never add a daemon `fetch()` call here, see [docs/electron.md](docs/electron.md) |
-| Add a new Electron main-process/IPC capability | `apps/desktop/electron/main.ts` (handler) + `electron/preload.ts` (typed bridge function) — see [docs/electron.md#the-preload-bridge](docs/electron.md#the-preload-bridge) |
-| Change `@agent-dock/client`'s public API | `packages/client/src/index.ts` and `client.ts` — anything not exported from `index.ts` isn't public, see [docs/client-sdk.md](docs/client-sdk.md) |
-| Change packaging (electron-builder config, `resolveDaemonEntry`) | See [docs/packaging.md](docs/packaging.md) first — three real bugs were already found here, each only by actually running `pnpm package:win` |
-| Change the daemon's auth/origin/CORS behavior | `apps/daemon/src/server.ts` and `auth-token.ts` — read [SECURITY.md](SECURITY.md) fully before touching this; it's the load-bearing part of the whole project |
+| Change the desktop UI | `apps/desktop/src/`: never add a daemon `fetch()` call here, see [docs/electron.md](docs/electron.md) |
+| Add a new Electron main-process/IPC capability | `apps/desktop/electron/main.ts` (handler) + `electron/preload.ts` (typed bridge function), see [docs/electron.md#the-preload-bridge](docs/electron.md#the-preload-bridge) |
+| Change `@agent-dock/client`'s public API | `packages/client/src/index.ts` and `client.ts`: anything not exported from `index.ts` isn't public, see [docs/client-sdk.md](docs/client-sdk.md) |
+| Change packaging (electron-builder config, `resolveDaemonEntry`) | See [docs/packaging.md](docs/packaging.md) first: three real bugs were already found here, each only by actually running `pnpm package:win` |
+| Change the daemon's auth/origin/CORS behavior | `apps/daemon/src/server.ts` and `auth-token.ts`: read [SECURITY.md](SECURITY.md) fully before touching this; it's the load-bearing part of the whole project |
+| Change the Search->Apply application pipeline or its state machine | `apps/desktop/electron/application-pipeline.ts` (checkpoint state machine) and `apps/daemon/src/application-queue-store.ts` (queue state) -- these are two different state machines, not one, so check which side of the pipeline you're actually changing before editing |
 
 ## Normal development workflow
 
 ```bash
 pnpm dev:daemon    # daemon only, tsx watch, auto-restart on change
-pnpm dev:desktop   # full desktop app — spawns the daemon automatically
+pnpm dev:desktop   # full desktop app, spawns the daemon automatically
 pnpm daemon        # daemon only, no watch (matches how a packaged app would run it in dev mode)
 ```
 
 Before opening a PR, see [CONTRIBUTING.md](CONTRIBUTING.md#before-opening-a-pr) for the exact
 verification commands expected to pass.
 
+## Running vacancy-engine's CLI standalone
+
+`packages/vacancy-engine/src/cli.ts` runs the discovery pipeline directly, without the desktop app
+or daemon involved -- useful when you're iterating on the engine itself. Copy
+`packages/vacancy-engine/config/.env.example` to `.env` in that same directory (or wherever your
+shell's cwd resolves `dotenv/config` to when you run the script) and fill in the keys you need; every
+key has a working default, so an empty `.env` still runs.
+
+```bash
+pnpm scan            # global-remote:scan -- runs the full worldwide/remote discovery pipeline
+pnpm roster-import    # ats-roster:import -- imports the tracked ATS roster
+pnpm sponsor-sync     # sponsors:sync -- refreshes the IND sponsor baseline
+```
+
+These map to `cli.ts`'s `global-remote:scan`, `ats-roster:import`, and `sponsors:sync` commands
+respectively; `cli.ts` also has `db:migrate` and `ats-sources:import <file>`, run directly with
+`pnpm --filter @open-vacancy-radar/vacancy-engine exec tsx src/cli.ts <command>` if you need them.
+
 ## Testing without paid providers
 
 The automated test suite never calls a real Claude/Codex CLI and never spends real API credit.
 Provider adapters are tested two ways, both against fixtures:
 
-1. **Parser unit tests** (`test/claude-parser.test.ts`, `test/codex-parser.test.ts`) — feed each
+1. **Parser unit tests** (`test/claude-parser.test.ts`, `test/codex-parser.test.ts`): feed each
    adapter's `parseLine()` a realistic fixture of the CLI's native JSONL output and assert the
    normalized `AgentEvent[]` it produces.
-2. **Provider contract tests** (`test/claude-contract.test.ts`, `test/codex-contract.test.ts`) —
+2. **Provider contract tests** (`test/claude-contract.test.ts`, `test/codex-contract.test.ts`):
    `describeProviderContract()` (`packages/agent-runtime/test/support/provider-contract.ts`) runs
    the adapter's *real* `parseLine`/`buildArgs` against a small `node` fixture script standing in
    for the actual CLI binary, asserting the guarantees every adapter must uphold (terminal event
-   ordering, capability gating, etc.) — see [docs/providers.md#provider-contract-tests](docs/providers.md#provider-contract-tests).
+   ordering, capability gating, etc.), see [docs/providers.md#provider-contract-tests](docs/providers.md#provider-contract-tests).
 
 `pnpm test` from a clean checkout, with no `claude`/`codex` installed at all, passes.
 
@@ -95,14 +114,74 @@ curl -X POST http://127.0.0.1:<port>/sessions \
   -d '{"provider":"claude","cwd":"/path/to/a/real/project","prompt":"say hello"}'
 ```
 
-Then `curl` (or open in a browser — SSE is human-readable) `GET /sessions/:id/events` and confirm
+Then `curl` (or open in a browser, SSE is human-readable) `GET /sessions/:id/events` and confirm
 the session reaches `session.completed` with sensible normalized events. This is not part of CI and
-is not required for a PR that doesn't touch provider parsing — it's a manual check for exactly the
+is not required for a PR that doesn't touch provider parsing. It's a manual check for exactly the
 class of drift fixtures can't catch (a real CLI changing its own output format).
+
+## Manual QA: vacancy scan notifications
+
+`vacancy-scan-notify.ts`'s content and `app-background-state.ts`'s background/foreground policy are
+unit-tested, but whether a real OS notification actually appears is a platform behavior tests can't
+cover. Before shipping a change that touches either file, or the notification calls in
+`runVacancyScan()` (`electron/main.ts`), check by hand:
+
+- **Windows, packaged build**: `Notification.isSupported()` and toast delivery both depend on the
+  app having a Start Menu shortcut with an AppUserModelID; an unpackaged `pnpm dev` run may show
+  nothing, or show it under a generic "Electron" identity. Verify against an installed build
+  (`pnpm dist` or equivalent), not the dev server. If toasts still don't appear, check whether
+  `app.setAppUserModelId()` needs to run explicitly for that build.
+- **macOS, signed build**: notification delivery (and `Notification.isSupported()` itself, on some
+  macOS versions) can require a signed, notarized app; an ad-hoc or unsigned local build may silently
+  no-op. Verify against a signed build, and confirm Notification Center permission has been granted to
+  the app (System Settings > Notifications).
+- **Both platforms**: start a scan, then background the app (minimize, switch to another app, or
+  close to tray if `minimizeToTrayOnClose` is on) before it finishes, and confirm exactly one
+  notification appears for completion, capped completion, and a forced failure -- and that no
+  notification appears for a scan that finishes while the window is focused and visible.
+
+## Manual QA: DOCX CV import (packaged build)
+
+`cv-text.ts`'s DOCX extraction (via `mammoth`, a pure-JS dependency) is covered by
+`cv-text-docx.test.ts` against real, in-memory-built `.docx` fixtures, but whether the dependency is
+actually present and working inside a *packaged* Electron build is not something those tests can
+prove -- `pnpm dev`/`vitest` both run against `node_modules` directly. Before shipping a change that
+touches `cv-text.ts`'s DOCX path or the `mammoth` dependency itself, verify against a packaged build
+(`pnpm dist` or equivalent), not the dev server:
+
+- Upload a real `.docx` CV through "Upload CV" (CV Library or the CV assistant) and confirm it
+  parses to readable text and saves, the same as a `.pdf`/`.txt`/`.md` CV already does.
+- Confirm the packaged app did not need a native rebuild step for this: `mammoth` and its own
+  dependencies (`jszip` et al.) are pure JS, so nothing here should trigger `electron-rebuild` or
+  require a Python toolchain the way a native module would.
+
+## Manual QA: AI-transcription fallback for scanned PDFs (issue #396)
+
+The automated suite (`cv-text-pdf.test.ts`'s hand-built scanned-PDF fixture, `useCvPicker.test.tsx`,
+`cv-transcription-staging.test.ts`) never calls a real Claude/Codex CLI, so it cannot prove the
+attachment actually reaches a real provider process or that a real consent dialog reads well.
+Before shipping a change that touches `cv-text.ts`'s PDF path, `cv-transcription-staging.ts`,
+`useCvPicker.ts`, or `CvTranscriptionFlow.tsx`, verify against a real, installed provider CLI:
+
+- Upload a genuinely scanned/image-only PDF (a phone photo of a printed CV works) through both
+  upload entry points ("Upload CV" in the CV Library, and the Welcome modal's first-run upload,
+  which reuses the same `CvUploadAction`) and confirm the consent prompt appears, names the correct
+  configured provider, and that declining it leaves the picker back at its starting state with no
+  session ever started.
+- Confirm accepting it actually transcribes real text back, that the review step shows it before
+  anything is saved, and that editing the reviewed text before confirming is what actually gets
+  saved (not the original transcription).
+- Confirm the staged copy of the PDF under `<userData>/ai-workspace/cv-transcription-staging/` is
+  gone from disk once the session finishes, and again after declining consent without ever starting
+  a session.
+- Try a PDF with more pages than `MAX_TRANSCRIBABLE_PDF_PAGES` (`cv-text.ts`) and confirm the app
+  never offers transcription for it, only the existing re-export/paste guidance.
+- With no AI provider installed at all, confirm the same PDF falls back to that guidance instead of
+  offering transcription or hanging.
 
 ## Common architectural rules
 
-These aren't style preferences — breaking them tends to break the security model or the layering
+These aren't style preferences. Breaking them tends to break the security model or the layering
 the tests assume:
 
 - **Never build a shell command string.** Every process spawn uses `shell: false` and an argv
@@ -112,8 +191,8 @@ the tests assume:
 - **Never accept an executable path from a request.** The daemon always resolves the executable
   itself via `findExecutable()`.
 - **Never branch on provider id outside `packages/agent-runtime`.** The daemon, the client, and the
-  desktop UI all work only in terms of the normalized `AgentEvent` union and `ProviderCapabilities`
-  — see [docs/protocol-v1.md](docs/protocol-v1.md).
+  desktop UI all work only in terms of the normalized `AgentEvent` union and `ProviderCapabilities`,
+  see [docs/protocol-v1.md](docs/protocol-v1.md).
 - **Never add a generic IPC passthrough** to the preload bridge. Each capability the renderer needs
   is its own narrow, typed function.
 - **Don't add persistence, a new provider mode, or a new heavy dependency without opening an issue

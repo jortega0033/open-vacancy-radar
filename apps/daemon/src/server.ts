@@ -1,16 +1,96 @@
+import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import type { Logger, ProviderRegistry } from '@agent-dock/agent-runtime';
 import { extractBearerToken, tokensMatch } from './auth-token.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { registerApplicationGenerationRoutes } from './routes/application-generation.js';
+import { registerVacancyWebDiscoveryRoutes } from './routes/vacancy-web-discovery.js';
 import type { SessionManager } from './session-manager.js';
+import { registerMcpRoutes } from './routes/mcp.js';
+import type { McpConnectionManager } from './mcp/manager.js';
+import { registerV2ProviderRoutes } from './routes/v2-providers.js';
+import { registerV2StageRoutingRoutes } from './routes/v2-stage-routing.js';
+import { registerV2SessionRoutes } from './routes/v2-sessions.js';
+import type { ActiveSessionLimiter } from './active-session-limiter.js';
+import type { SessionLineageStore } from './session-lineage-store.js';
+import { registerV2WorkspaceRoutes } from './routes/v2-workspaces.js';
+import { registerV2SessionCreateRoute } from './routes/v2-sessions-create.js';
+import { registerV2AuditRoutes } from './routes/v2-audit.js';
+import type { WorkspaceTrustStore } from './workspace-trust-store.js';
+import type { AuditStore } from './audit-store.js';
+import type { WorkspaceExecutionLeaseManager } from './workspace-execution-lease.js';
+import { registerV2ApplicationRoutes } from './routes/v2-applications.js';
+import type { ApplicationQueueStore } from './application-queue-store.js';
+import type { AttachmentStore } from './attachment-store.js';
+
+/**
+ * Present only when the daemon has a working durable store this run.
+ *
+ * Its absence is the whole downgrade mechanism: when `index.ts` cannot open the store (because it
+ * was written by a newer build), it omits this option, and the consequence is not a flag check
+ * scattered through handlers but the v2 routes never being registered at all. `GET /v2/...` then
+ * 404s through the ordinary not-found handler, and `/health` advertises `[1]`. There is no path by
+ * which a v2 route can exist without the store it reads from.
+ */
+export interface BuildServerV2Options {
+  store: SessionLineageStore;
+  limiter: ActiveSessionLimiter;
+  /**
+   * ADI-29. Independent of `store`/`limiter` -- the attachment store opens on its own regardless of
+   * whether the durable session store did -- but its retrieval route registers only alongside the
+   * other v2 session routes, so it shares their downgrade path: absent, `GET
+   * /v2/sessions/:sessionId/attachments/:attachmentId` 404s through the ordinary not-found handler
+   * exactly like the rest of `v2`.
+   */
+  attachments?: AttachmentStore;
+  /**
+   * The ADI-06 workspace-trust pair, present only when **both** stores opened.
+   *
+   * Nested inside `v2` rather than beside it, and required together rather than individually, for
+   * the same reason `v2` itself is optional: the workspace routes cannot function without either one
+   * of them. A trust store with no audit store would grant access it could not record, which is the
+   * exact failure mode the audit store exists to prevent; an audit store with no trust store would
+   * record decisions nothing can act on. Absence of the pair is the downgrade path -- the workspace
+   * and audit routes are simply never registered, and every `/v2/workspaces/...` call 404s through
+   * the ordinary not-found handler.
+   */
+  workspace?: {
+    trustStore: WorkspaceTrustStore;
+    auditStore: AuditStore;
+    /**
+     * ADI-13. Required alongside the pair above rather than optional, for the same reason they are
+     * required together: `POST /v2/sessions` cannot admit a session without taking an exclusive
+     * lease on the folder it will run in, and a create route that skipped leasing would let two
+     * agents write the same directory at once -- precisely what the lease manager exists to stop.
+     *
+     * It must be the **same instance** the `SessionManager` was constructed with, because that is
+     * where every release happens; two instances would mean leases that are acquired and never
+     * freed. `index.ts` constructs one and passes it to both.
+     */
+    leaseManager: WorkspaceExecutionLeaseManager;
+  };
+}
 
 export interface BuildServerOptions {
   registry: ProviderRegistry;
   sessionManager: SessionManager;
   token: string;
   logger: Logger;
+  mcpManager?: McpConnectionManager;
+  v2?: BuildServerV2Options;
+  /**
+   * The #200 application queue store. Deliberately a sibling of `v2` rather than nested inside it:
+   * `v2.store`/`v2.limiter` are required fields tied to the AI-session durable store's own health,
+   * and this queue has no dependency on either -- a session-schema-mismatch rollback that disables
+   * `v2` entirely (see `open-durable-store.ts`) must not also silently disable an unrelated,
+   * perfectly healthy queue store. Its own absence is its own downgrade path:
+   * `/v2/applications/*` simply isn't registered, and every other route is unaffected.
+   */
+  applicationQueue?: ApplicationQueueStore;
+  /** Overridable only for tests that assert the value round-trips; production mints a fresh UUID. */
+  daemonInstanceId?: string;
 }
 
 /**
@@ -29,13 +109,13 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
   const startedAt = Date.now();
 
   app.addHook('onRequest', async (req, reply) => {
-    // AD-04: any Origin header at all is treated as browser-authored and rejected outright — a
+    // AD-04: any Origin header at all is treated as browser-authored and rejected outright: a
     // non-browser client (curl, Electron main's own fetch, another local process) never sends
     // one. The previous version only recognized the literal `null` and `http(s)://` schemes, so a
     // `chrome-extension://` origin (or any other future scheme) fell straight through
-    // unrecognized. There is no legitimate browser-originated caller of this API today — the
-    // renderer talks to the daemon only through Electron main, never directly (see SECURITY.md)
-    // — so there's nothing to allowlist. An `AGENT_DOCK_ALLOWED_ORIGINS` escape hatch used to
+    // unrecognized. There is no legitimate browser-originated caller of this API today: the
+    // renderer talks to the daemon only through Electron main, never directly (see SECURITY.md),
+    // so there's nothing to allowlist. An `AGENT_DOCK_ALLOWED_ORIGINS` escape hatch used to
     // exist for a hypothetical dev-server case, but nothing ever paired it with a real CORS
     // response header, so an allowlisted origin still couldn't complete a request; it was dead
     // configuration and has been removed rather than fixed, since nothing currently needs it.
@@ -55,13 +135,52 @@ export function buildServer(opts: BuildServerOptions): FastifyInstance {
     }
   });
 
-  registerHealthRoute(app, startedAt);
+  registerHealthRoute(app, startedAt, {
+    v2Enabled: !!opts.v2,
+    daemonInstanceId: opts.daemonInstanceId ?? randomUUID(),
+  });
   registerProviderRoutes(app, opts.registry);
   registerSessionRoutes(app, opts.sessionManager, opts.registry);
+  registerApplicationGenerationRoutes(app, opts.sessionManager, opts.registry);
+  registerVacancyWebDiscoveryRoutes(app, opts.sessionManager, opts.registry);
+  if (opts.mcpManager) registerMcpRoutes(app, opts.mcpManager);
+  if (opts.v2) {
+    registerV2ProviderRoutes(app, opts.registry, opts.v2.limiter);
+    // Issue #284. Read-only and registered beside the other v2 read routes: it reports which
+    // providers are eligible for which generation stage and starts nothing. Deleting this one line
+    // removes the surface entirely and changes no other route's behavior, since nothing else in the
+    // daemon consults the stage router -- in particular not
+    // `POST /sessions/application-field-map`, whose own literal provider check is deliberately
+    // independent of any capability a provider adapter declares about itself.
+    registerV2StageRoutingRoutes(app, opts.registry);
+    registerV2SessionRoutes(app, opts.v2.store, opts.v2.limiter, opts.v2.attachments);
+    if (opts.v2.workspace) {
+      registerV2WorkspaceRoutes(app, {
+        trustStore: opts.v2.workspace.trustStore,
+        auditStore: opts.v2.workspace.auditStore,
+        sessionManager: opts.sessionManager,
+      });
+      registerV2AuditRoutes(app, opts.v2.workspace.auditStore);
+      // ADI-13, and deliberately its own registration call rather than a fourth argument to
+      // `registerV2SessionRoutes` above: this route needs the trust store, the audit store, and the
+      // lease manager, which the read-only v2 session routes have no business holding. Removing
+      // exactly this line rolls session creation back to v1-only and leaves v1, the v2 read routes,
+      // and the workspace/audit routes untouched -- which
+      // `apps/daemon/test/v2-sessions-create.rollback.test.ts` asserts by doing precisely that.
+      registerV2SessionCreateRoute(app, {
+        registry: opts.registry,
+        sessionManager: opts.sessionManager,
+        store: opts.v2.store,
+        auditStore: opts.v2.workspace.auditStore,
+        leaseManager: opts.v2.workspace.leaseManager,
+      });
+    }
+  }
+  if (opts.applicationQueue) registerV2ApplicationRoutes(app, opts.applicationQueue);
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
     // Fastify's own body-parsing errors (malformed JSON, payload-too-large, ...) carry a real
-    // 4xx statusCode already — preserving it (rather than flattening everything to 500) keeps
+    // 4xx statusCode already. Preserving it (rather than flattening everything to 500) keeps
     // client-error semantics correct without risking leaking anything: these messages describe
     // the malformed request, never internal state. Anything without a 4xx statusCode is treated
     // as unexpected and sanitized to a generic 500, same as before.

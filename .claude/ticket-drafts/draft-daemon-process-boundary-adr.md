@@ -1,0 +1,30 @@
+## Goal
+Write an ADR documenting the decision to keep the daemon as a separate OS process from Electron main, capturing the real justification for that boundary -- because the justification currently written down (SECURITY.md) is not it.
+
+## Why now
+Surfaced by this session's automation/AI architecture audit and its adversarial re-review. SECURITY.md:15-18 and 31-33 give the daemon-boundary's rationale purely in terms of main/renderer secrecy -- the daemon's bearer token and base URL never crossing into the renderer -- and SECURITY.md:66-67 states outright "this is a localhost trust boundary, not a sandbox between OS users or processes." Taken literally, that rationale does not require an OS-process boundary at all: a bearer token held in a `main.ts` module variable, with no daemon process, would be exactly as invisible to the renderer as it is today. So the documented reason for a decision this consequential (a whole second long-running process, its own HTTP contract, its own lifecycle) is not actually load-bearing for the architecture as built -- and nothing else in the repo currently writes down why the separate-process boundary exists. That gap is worth closing before anyone (including future work on ADI-tagged daemon tickets, e.g. the now-safe-to-add daemon auto-respawn work) reasons about the daemon's process topology as if SECURITY.md's stated rationale is the actual design driver.
+
+Verified this session, independent of SECURITY.md's stated rationale, three properties that are real and load-bearing:
+- Crash isolation: `main.ts:491-499`'s daemon exit handler turns a daemon crash into a renderer-visible status rather than crashing all of Electron main. (Today `spawnDaemon()` has only one call site, `main.ts:2595`, with no respawn -- separately ticketed, and now safe to add given this isolation already exists.)
+- Process-tree-kill-on-cancel: SECURITY.md:234-238 documents that the whole child process tree (the CLI plus any grandchild tool subprocess) is killed as a group on cancellation (`taskkill /T /F` on Windows, negative-pid `SIGTERM` on POSIX), verified by a dedicated test fixture. This depends on the CLI being a grandchild of Electron main -- true regardless of whether the daemon itself is a separate process -- but is implemented today assuming the current process topology.
+- Potential upstream/multi-frontend reuse: `main.ts:420-426`'s `APP_ID` comment, together with `apps/daemon/package.json` (an independently runnable `@agent-dock/daemon` package with zero Electron dependency and its own `dev`/`start`/`test`/`smoke:live-providers` scripts), suggest the daemon is deliberately built as a standalone, HTTP-contracted runtime meant to be reusable across AgentDock-based frontends -- consistent with this repo's own convention (runtime-level features land in the upstream `jortega0033/agentdock` fork first, per the agentdock-upstream-fork-workflow memory) of treating the daemon as shared, not desktop-app-private, infrastructure.
+
+## Scope
+- Add an ADR to `docs/`. Check the existing convention first: `docs/` already holds several flat `adr-*.md` files (e.g. `adr-agentdock-v2-provenance.md`, `adr-application-reconciliation.md`, `adr-generic-mcp-reconsideration.md`) at the top level -- there is no `docs/adr/` subdirectory today. Match that convention (a new `docs/adr-daemon-process-boundary.md`) unless whoever picks this up finds a reason to introduce a subfolder; do not invent a new layout unilaterally. `docs/architecture.md` also exists and may be the right place for a short pointer/summary even if the full ADR lives in its own file -- writer's judgment, but link the two.
+- The ADR must state the decision (keep the daemon as a separate OS process), then document the three properties above (crash isolation, process-tree-kill-on-cancel, upstream/multi-frontend reuse) as the actual justification.
+- The ADR must explicitly note that SECURITY.md's stated rationale (main/renderer token secrecy) does NOT require a process boundary, and say so plainly rather than silently dropping it -- so a future reader does not reintroduce the same false justification.
+- The ADR must include an explicitly flagged OPEN QUESTION: is the upstream/multi-frontend reuse goal (property (c) above) active today -- does another real consumer of the daemon's HTTP contract exist -- or is it aspirational? This is not something to guess at; it changes whether the boundary is earning its keep or is unexamined inherited complexity, and needs the product owner's answer.
+
+## Non-goals
+- No code changes. This is a documentation-only ticket.
+- No decision to remove or collapse the daemon/main process boundary -- the ADR documents and justifies keeping the current architecture, it does not propose changing it.
+- Does not resolve the OPEN QUESTION itself; that answer comes from the product owner, not from further code archaeology.
+- Does not re-litigate or rewrite SECURITY.md's main/renderer secrecy rationale, which remains true and relevant to that separate concern -- it is just not the reason for the process boundary.
+
+## Acceptance criteria
+- A new ADR exists (as `docs/adr-daemon-process-boundary.md`, or wherever the writer confirms matches repo convention after checking) stating the decision, the three real justifying properties with their file:line evidence, the explicit note that SECURITY.md's rationale does not require the boundary, and the flagged OPEN QUESTION about upstream/multi-frontend reuse.
+- The ADR is discoverable from `docs/architecture.md` (a link or short summary section), matching how other cross-cutting decisions are surfaced there.
+- No source files outside `docs/` are touched.
+
+## Risk
+Low. Documentation-only change with no runtime effect. The main risk is scope creep into re-justifying or second-guessing the architecture itself rather than writing down why it already is what it is -- keep the ADR descriptive of the real, verified justification and clearly separate the flagged open question from settled fact.

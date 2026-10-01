@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LetterGenerator, MAX_INSTRUCTION_CHARS } from '../../../src/components/letters/index.js';
 import { installBridges } from '../../cv-bridges.js';
-import { installWorkspaceBridge } from '../../workspace-bridge.js';
-import { LETTER_VACANCY, makeCv, makeLetter } from './fixtures.js';
+import { DEFAULT_SETTINGS, installSystemBridge, installWorkspaceBridge } from '../../workspace-bridge.js';
+import { FACT_SELECTION, LETTER_VACANCY, makeCv, makeLetter, makeUnreviewedCv } from './fixtures.js';
 
 /**
  * `installBridges` installs a *default* workspace bridge of its own (the CV assistant saves to the
@@ -15,7 +15,14 @@ function setup(workspace: Parameters<typeof installWorkspaceBridge>[0] = {}) {
     listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
     ...workspace,
   });
-  return { ...bridges, workspace: ws };
+  const system = installSystemBridge();
+  return { ...bridges, workspace: ws, system };
+}
+
+/** jsdom has no clipboard implementation, so install one we can assert against. */
+function installClipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
+  return writeText;
 }
 
 /** The Generate button only enables once a CV and a job are both resolved. */
@@ -30,7 +37,7 @@ afterEach(() => {
 });
 
 describe('LetterGenerator', () => {
-  it('builds the prompt from the chosen CV, job and document settings, then streams the draft in', async () => {
+  it('asks the run for a fact selection, never for prose, and assembles the answer into the editor', async () => {
     const bridges = setup();
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
@@ -54,20 +61,108 @@ describe('LetterGenerator', () => {
     expect(prompt).toContain('Redwood Software');
     expect(prompt).toContain('Angular architect. Eight years of frontend work.');
     expect(prompt).toContain('Mention the referral from Marta.');
+    // The selection contract, not a request for a draft.
+    expect(prompt).toContain('{"factIds": [string]}');
+    expect(prompt).toContain('Do not return prose, a draft, a rewritten fact');
+    expect(prompt).toContain('experience-1');
     // The safety layer shared with the CV assistant travels with it.
-    expect(prompt).toContain('Do not invent a hiring manager');
+    expect(prompt).toContain('Never invent an employer, job title, date');
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Hi — I saw the frontend role.' });
-    expect(await screen.findByRole('log', { name: /letter being generated/i })).toHaveTextContent(
-      'Hi — I saw the frontend role.',
-    );
-
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
-    // On completion the stream hands over to an editable document.
+    // On completion the selection is assembled into an editable document, in the tone that was
+    // chosen, citing only facts the reviewed CV actually carries.
     const body = await screen.findByRole('textbox', { name: /letter body/i });
-    expect(body).toHaveValue('Hi — I saw the frontend role.');
+    const assembled = (body as HTMLTextAreaElement).value;
+    expect(assembled).toContain('Dear Redwood Software hiring team,'); // 'concise' salutation
+    expect(assembled).toContain('I am applying for the Senior Frontend Engineer role at Redwood Software.');
+    expect(assembled).toContain('My reviewed CV lists Senior Frontend Engineer at Northwind Digital (2021 - present).');
+    expect(assembled).toContain('My reviewed CV lists Angular as a skill.');
+    expect(assembled).toContain('I am available to discuss the role.'); // 'concise' closing
+    // A recruiter message carries no formal sign-off, whatever the tone.
+    expect(assembled).not.toContain('Robin Vega');
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
+  });
+
+  it('assembles a different letter for a different tone from the same facts', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.change(await screen.findByLabelText(/^tone$/i), { target: { value: 'formal' } });
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    const body = await screen.findByRole('textbox', { name: /letter body/i });
+    const assembled = (body as HTMLTextAreaElement).value;
+    // The tone moved this app's own lines; the cited facts are word for word the same ones.
+    expect(assembled).toContain('Dear Redwood Software hiring team,');
+    expect(assembled).toContain('I would welcome the opportunity to discuss the role');
+    expect(assembled).toContain('Sincerely,\nRobin Vega'); // a motivation letter does sign off
+    expect(assembled).toContain('My reviewed CV lists Angular as a skill.');
+  });
+
+  it('rejects a malformed selection instead of showing it as a letter', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, I am the ideal candidate.' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('returned invalid JSON');
+    // The prose the run actually produced is nowhere on screen, in a textbox or otherwise.
+    expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/I am the ideal candidate/)).not.toBeInTheDocument();
+  });
+
+  it('rejects a selection naming a fact the reviewed CV does not carry', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: '{"factIds":["certification-cissp"]}' });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'unsupported source facts: certification-cissp',
+    );
+    expect(screen.queryByRole('textbox', { name: /letter body/i })).not.toBeInTheDocument();
+  });
+
+  it('rejects a reply that smuggles a claim alongside a valid selection', async () => {
+    const bridges = setup();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    fireEvent.click(await waitForGenerateEnabled());
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+
+    bridges.emit('sess-cv-1', {
+      type: 'assistant.message',
+      text: '{"factIds":["skill-1"],"claim":"I am CISSP certified."}',
+    });
+    bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'candidate claims outside the source-fact selection',
+    );
+    expect(screen.queryByText(/CISSP/)).not.toBeInTheDocument();
+  });
+
+  it('refuses to generate from a CV whose source has never been reviewed, and says what would fix it', async () => {
+    const bridges = setup({ listCvDocuments: vi.fn().mockResolvedValue([makeUnreviewedCv()]) });
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    await waitFor(() => expect(bridges.workspace.listCvDocuments).toHaveBeenCalled());
+    expect(await screen.findByText(/no reviewed source record yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^generate$/i })).toBeDisabled();
   });
 
   it('surfaces a failed generation without destroying the letter already open', async () => {
@@ -99,7 +194,7 @@ describe('LetterGenerator', () => {
   });
 
   it('creates a new row on the first save', async () => {
-    const created = makeLetter({ id: 'created-1', body: 'Dear hiring team, generated text.' });
+    const created = makeLetter({ id: 'created-1', body: 'Hello Redwood Software hiring team,' });
     const createLetter = vi.fn().mockResolvedValue(created);
     const updateLetter = vi.fn();
     const bridges = setup({ createLetter, updateLetter });
@@ -108,7 +203,7 @@ describe('LetterGenerator', () => {
     fireEvent.click(await waitForGenerateEnabled());
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
 
-    bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Dear hiring team, generated text.' });
+    bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
 
     fireEvent.click(await screen.findByRole('button', { name: /save letter/i }));
@@ -116,7 +211,7 @@ describe('LetterGenerator', () => {
     await waitFor(() => expect(createLetter).toHaveBeenCalledTimes(1));
     expect(createLetter).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: 'Dear hiring team, generated text.',
+        body: expect.stringContaining('My reviewed CV lists Angular as a skill.'),
         company: 'Redwood Software',
         role: 'Senior Frontend Engineer',
         type: 'motivation_letter',
@@ -199,5 +294,98 @@ describe('LetterGenerator', () => {
     fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /regenerate anyway/i }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+  });
+
+  it('copies the letter body to the clipboard and confirms it', async () => {
+    setup();
+    const writeText = installClipboard();
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(makeLetter().body));
+    expect(await screen.findByText(/copied to clipboard/i)).toBeInTheDocument();
+  });
+
+  it('reports a clipboard failure instead of silently claiming success', async () => {
+    setup();
+    installClipboard(vi.fn().mockRejectedValue(new Error('permission denied')));
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^copy$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('permission denied');
+    expect(screen.queryByText(/copied to clipboard/i)).not.toBeInTheDocument();
+  });
+
+  it('exports the letter as a real file through the native save dialog', async () => {
+    const { system } = setup();
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /markdown \(\.md\)/i }));
+
+    await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(system.saveFile).mock.calls[0]?.[0];
+    expect(call?.suggestedName).toMatch(/\.md$/);
+    expect(call?.encoding).toBe('utf8');
+    expect(call?.data).toContain(makeLetter().body);
+    expect(await screen.findByText(/^exported\.$/i)).toBeInTheDocument();
+  });
+
+  it('does not report an error when the user cancels the save dialog', async () => {
+    const { system } = setup();
+    vi.mocked(system.saveFile).mockResolvedValue({ saved: false });
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /word \(\.docx\)/i }));
+
+    await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/^exported\.$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('reports an export failure without losing the letter', async () => {
+    const { system } = setup();
+    vi.mocked(system.saveFile).mockRejectedValue(new Error('disk is full'));
+    render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /pdf \(\.pdf\)/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk is full');
+    expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(makeLetter().body);
+  });
+
+  it("names the actually-configured provider in its CLI disclosure and 'starting' status, not a hardcoded Claude Code", async () => {
+    // Real regression: this copy (and AiOutput's "Starting Claude Code…" status line) used to
+    // hardcode Claude Code regardless of which CLI the run actually goes through.
+    const bridges = installBridges({
+      agentDock: {
+        // Never resolves, so the run stays in the 'starting' state deterministically instead of
+        // racing straight through to 'streaming' once the mocked session "starts".
+        createSession: vi.fn(() => new Promise<never>(() => {})),
+        // Codex reported installed, matching the machine this configured preference describes,
+        // so the effective provider resolves to it rather than falling back to Claude Code.
+        listProviders: vi.fn().mockResolvedValue([
+          { id: 'claude', name: 'Claude Code', installed: false, authenticated: 'unknown', capabilities: {} },
+          { id: 'codex', name: 'Codex', installed: true, authenticated: 'authenticated', capabilities: {} },
+        ]),
+      },
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
+      getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, defaultProvider: 'codex' }),
+    });
+    render(<LetterGenerator vacancy={LETTER_VACANCY} />);
+
+    expect(await screen.findByText(/Generated on your own Codex CLI/)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code CLI/)).not.toBeInTheDocument();
+
+    fireEvent.click(await waitForGenerateEnabled());
+    expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
+
+    expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
   });
 });

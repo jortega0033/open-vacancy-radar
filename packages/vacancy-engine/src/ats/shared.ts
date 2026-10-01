@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { decodeHTML } from 'entities';
 
 import type {
   CareerSourceDescriptor,
@@ -34,9 +35,35 @@ export function parseJson(body: string, provider: string): unknown {
   }
 }
 
+/**
+ * Decodes HTML/XML character entities (`&amp;`, `&#038;`, `&quot;`, ...) that arrive verbatim in a
+ * raw string pulled out of external feed data. A `JSON.parse` (every ATS board API, and every
+ * JSON-based `global-remote` discovery source) never does this on its own -- it only unescapes
+ * JSON's own `\"`/`\\`/`\n` syntax, not HTML entities sitting inside a string value -- so a board
+ * that HTML-escapes its `title`/`company_name` fields (real example: a Greenhouse/WordPress-style
+ * source rendering `"J. J. Keller &#038; Associates, Inc."`) leaves that escape sequence in the
+ * string forever unless something does this explicitly. A raw XML/RSS source doesn't have this gap
+ * (`saxes` in `global-remote/workable-feed.ts` and cheerio's own XML-mode parsing already decode
+ * standard entities as part of parsing), so this only needs calling where text is read out of
+ * already-parsed JSON or attribute/text values, which is exactly what `optionalString` below and
+ * `discovery-shared.ts`'s `stringValue` do for every source in this package.
+ *
+ * Deliberately not a full HTML/XML parse (contrast `decodeEscapedMarkup`/`htmlToText` above, which
+ * intentionally re-parse markup): `decodeHTML` only replaces recognized `&name;` / `&#NNN;` /
+ * `&#xHHH;` runs and leaves every other character -- including a literal `<` or `>` that isn't part
+ * of a real entity -- untouched. Round-tripping arbitrary plain text through an HTML parser instead
+ * (e.g. `cheerio.load`) would silently swallow a title that happens to contain an unescaped `<`
+ * (a real risk: `cheerio.load('<div>C++ Developer <script>x</script></div>').text()` drops the tag
+ * *and* its content), which is exactly the failure mode this avoids. The output stays plain text
+ * with no markup semantics, so it is exactly as safe to render as the un-decoded string was.
+ */
+export function decodeFeedEntities(value: string): string {
+  return decodeHTML(value);
+}
+
 export function optionalString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const normalized = value.trim();
+  const normalized = decodeFeedEntities(value).trim();
   return normalized.length === 0 ? null : normalized;
 }
 
