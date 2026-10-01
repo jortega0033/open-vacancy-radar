@@ -464,7 +464,7 @@ const SOURCE_CV: CvSourceDocument = {
   },
   summary: 'Synthetic summary for a synthetic candidate.',
   experience: [
-    { company: 'Redwood Software', title: 'Senior Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
+    { id: 'experience-1', company: 'Redwood Software', title: 'Senior Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: ['Built things.'] },
   ],
   education: [],
   projects: [],
@@ -1669,12 +1669,27 @@ describe('acceptance 6: an abandoned preparation frees the lease and cannot writ
 
     const stuckNavigation = holdNextCdpCommand('Page.navigate');
     queueApplicationDocumentRenders();
-    const first = await pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 1_000, log });
+
+    // The 1s ceiling only has to fire once the run is genuinely parked on `Page.navigate`, not
+    // whenever wall-clock time happens to reach 1s: the real tailoring, PDF rendering and SQLite
+    // writes ahead of it can occasionally take longer than that on a loaded machine, and a real
+    // timer racing against them would make this test flake without the pipeline being wrong. Fake
+    // timers let this wait for `stuckNavigation.entered` -- an actual signal that the run reached
+    // the hold -- before the ceiling's clock is ever allowed to move.
+    vi.useFakeTimers();
+    let first: Awaited<ReturnType<typeof pipeline.runNextApplicationAttempt>>;
+    try {
+      const pending = pipeline.runNextApplicationAttempt({ ...deps, abandonPreparationAfterMs: 1_000, log });
+      await stuckNavigation.entered;
+      // The run really did get as far as opening a page, which is what makes this the right case.
+      expect(createApplicationView).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      first = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(first.abandoned).toBe(true);
-    // The run really did get as far as opening a page, which is what makes this the right case.
-    expect(createApplicationView).toHaveBeenCalledTimes(1);
-    await stuckNavigation.entered;
     expect(views[0]!.destroy).toHaveBeenCalledTimes(1);
 
     // The replacement run builds its own view and finishes normally.

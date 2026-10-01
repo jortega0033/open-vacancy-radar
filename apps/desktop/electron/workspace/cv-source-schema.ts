@@ -45,6 +45,14 @@ export interface CvSourceContact {
 }
 
 export interface CvSourceExperienceEntry {
+  /** Stable across edits, the same guarantee `CvSourceProjectEntry.id` makes and for the same
+   * reason (issue #419): a clarification answer or an approved wording variant has to keep
+   * pointing at the right role even after the list is reordered or re-extracted. Assigned by the
+   * app, never by the model. Absent on every record written before #419 -- `withStableExperienceIds`
+   * below backfills a fallback keyed on position, on both the read path (`repository.ts`'s
+   * `toCvSource`) and the write path (`validate.ts`'s `parseSourceExperience`), so a caller never
+   * observes an entry with no id. */
+  id: string;
   /** The direct employer, agency, or own company -- never the end client of a contract. */
   company: string;
   title: string;
@@ -205,4 +213,43 @@ export function describeCvSourceContentGaps(source: CvSourceDocument): string[] 
 
 export function isCvSourceExportable(source: CvSourceDocument): boolean {
   return describeCvSourceGaps(source).length === 0;
+}
+
+/** Assigns a stable, position-keyed fallback id to any experience entry that has none -- every
+ * record written before #419 existed. Position is stable here for the same reason it already is
+ * for `CvSourceProjectEntry`'s own fallback (`project-${index + 1}` in `validate.ts`): this array
+ * is replaced wholesale on every edit (see `parseCvDocumentPatch`'s comment on `source`), never
+ * spliced, so an entry's index does not shift out from under a reference that was taken from an
+ * earlier read. */
+export function withStableExperienceIds(experience: CvSourceExperienceEntry[]): CvSourceExperienceEntry[] {
+  return experience.map((entry, index) =>
+    entry.id && entry.id.trim().length > 0 ? entry : { ...entry, id: `experience-${index + 1}` },
+  );
+}
+
+/**
+ * `JSON.stringify` with every object's keys sorted, recursively. Plain `JSON.stringify` preserves
+ * insertion order, which is exactly wrong for hashing: a record backfilled by
+ * `withStableExperienceIds` above gets its `id` key appended at the end (a genuinely new key on an
+ * existing object), while the same content freshly written by `validate.ts`'s `parseSourceExperience`
+ * has `id` first (the object is built with `id` as the first property) -- two byte-identical-in-
+ * content records would hash to two different digests. `CvEvidenceOverlay.sourceCvContentHash` and
+ * `CvApprovedWording.sourceRevision` (#419) exist specifically to detect *content* drift, not key-
+ * order accidents, so every hash of a `CvSourceDocument` in this app -- renderer (`content-hash.ts`)
+ * and main process (`main.ts`'s export handler) alike -- must stringify through this function, never
+ * through a bare `JSON.stringify`.
+ */
+export function stableCvSourceJson(source: CvSourceDocument): string {
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === 'object') {
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
+      }
+      return sorted;
+    }
+    return value;
+  };
+  return JSON.stringify(sortKeys(source));
 }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport } from '@open-vacancy-radar/vacancy-engine';
@@ -6,6 +6,20 @@ import { App } from '../src/App.js';
 import type { AgentDockBridge, DaemonStatus, VacancyEngineStatus } from '../src/window.js';
 import { installVacancyRadarBridge, installWorkspaceBridge } from './workspace-bridge.js';
 import type { WorkspaceCounts } from '../src/window.js';
+
+/**
+ * This file's own `waitFor`s mount the whole `App` shell and, for most of them, a worldwide report
+ * of up to 30 vacancies through the real Search page -- no logic here is slow, but React committing
+ * that tree competes with every other test file vitest is running in parallel, and the default
+ * `asyncUtilTimeout` (1000ms) has been observed to run out under that contention alone, well before
+ * the work itself has actually stalled. Scoped to this file's own module registry (vitest gives each
+ * test file a fresh one), so it does not loosen the default anywhere else.
+ *
+ * Vitest's own per-test timeout (5000ms) has to widen to match, or a `waitFor` using the new budget
+ * would just get cut off by the outer test instead.
+ */
+configure({ asyncUtilTimeout: 10_000 });
+vi.setConfig({ testTimeout: 15_000 });
 
 /**
  * One worldwide vacancy, enough to drive the "Generate Letter" handoff tests below. Matches

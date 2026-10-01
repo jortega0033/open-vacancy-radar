@@ -102,7 +102,7 @@ describe('SettingsPage', () => {
     expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
 
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['AI runtime', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Local AI assistant access (MCP)', 'Data management', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {

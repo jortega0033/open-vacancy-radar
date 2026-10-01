@@ -148,6 +148,34 @@
       "when": 1790002904163,
       "tag": "0020_lucky_union_jack",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1790784591423,
+      "tag": "0021_even_slapstick",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1790805398628,
+      "tag": "0022_flashy_grey_gargoyle",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1790810274733,
+      "tag": "0023_wakeful_maestro",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790835556993,
+      "tag": "0024_slow_jetstream",
+      "breakpoints": true
     }
   ]
 }

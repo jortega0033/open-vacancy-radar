@@ -84,10 +84,14 @@ describe('recovering sessions left non-terminal by a restart', () => {
   });
 
   it('leaves an already-terminal record completely untouched', () => {
+    // Recent-but-fixed, not a hardcoded calendar date: this record must stay inside
+    // DEFAULT_RETENTION.maxAgeMs (30 days) no matter when the suite runs, or #enforceRetention
+    // legitimately evicts it as stale before the test can read it back.
+    const completedAt = new Date(Date.now() - 60_000).toISOString();
     const record = makeRecord({
       status: 'completed',
       terminalReason: 'provider_completed',
-      completedAt: '2026-08-30T10:00:00.000Z',
+      completedAt,
       eventCount: 1,
     });
     seedRecord(stateRoot, record, [eventLine(0, 'session.failed')]);
@@ -98,7 +102,7 @@ describe('recovering sessions left non-terminal by a restart', () => {
     const loaded = store.get(record.session.id);
     expect(loaded?.session.status).toBe('completed');
     expect(loaded?.session.terminalReason).toBe('provider_completed');
-    expect(loaded?.session.completedAt).toBe('2026-08-30T10:00:00.000Z');
+    expect(loaded?.session.completedAt).toBe(completedAt);
     expect(readFileSync(eventLogPath(record.session.rootSessionId, record.session.id), 'utf8')).toBe(before);
   });
 

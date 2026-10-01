@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  DAEMON_EXIT_CODE_LOCK_CONFLICT,
   createSessionRequestSchema,
   mcpCredentialInputSchema,
   mcpProviderIdSchema,
@@ -117,6 +118,7 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
+import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
 import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
 import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
@@ -128,7 +130,7 @@ import {
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
-import type { CvExportResult } from './workspace/types.js';
+import type { CvExportFormat, CvExportResult } from './workspace/types.js';
 import {
   parseApplicationAnswerInput,
   parseApplicationAnswerPatch,
@@ -136,14 +138,22 @@ import {
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
+  parseCaseIdEnvelope,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
+  parseCvEvidenceOverlayExportInput,
+  parseCvEvidenceOverlayInput,
+  parseCvEvidenceOverlayLookup,
+  parseCvEvidenceOverlayPatch,
   parseCvExportInput,
+  parseCvIdEnvelope,
   parseId,
   parseIdAndPatch,
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
@@ -153,6 +163,9 @@ import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportF
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
+import { composeApprovedTailoredResume } from './resume-source.js';
+import { startMcpServer, type McpServerHandle } from './mcp-server.js';
+import type { TailoredResume } from './resume-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -214,6 +227,10 @@ let isQuitting = false;
  * every 5-minute tick is needless DB traffic when this mirror is already kept current.
  */
 let autoScanEnabled = false;
+/** #421's local MCP endpoint, non-`null` only while actually listening. Started/stopped by
+ * `syncMcpServer` below, never constructed directly elsewhere -- that function is the single
+ * place that decides whether one should be running right now. */
+let mcpServerHandle: McpServerHandle | null = null;
 /**
  * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
  * this file will answer (ADI-16).
@@ -429,6 +446,7 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     // -- that module stays in its refusing state, so the failure mode is "nothing is automatically
     // submittable", never the reverse.
     setAutoApplyEnabled(settings.autoApplyEnabled);
+    void syncMcpServer(settings.mcpEndpointEnabled);
     return db;
   })();
 
@@ -437,6 +455,30 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
   } catch (error) {
     workspaceInit = undefined;
     throw error;
+  }
+}
+
+/**
+ * The single place that decides whether #421's local MCP endpoint should be running right now,
+ * called after every read or write of `mcpEndpointEnabled` (startup hydration, a settings update,
+ * a data reset). Never throws: a bind failure is logged and leaves the endpoint off rather than
+ * failing whatever caller triggered this (app startup, a settings save) -- the same "a pre-warm
+ * failure must not become an unhandled rejection" reasoning `ensureVacancyEngine`'s own callers
+ * already follow at the call sites below.
+ */
+async function syncMcpServer(enabled: boolean): Promise<void> {
+  if (enabled && !mcpServerHandle) {
+    try {
+      mcpServerHandle = await startMcpServer(ensureWorkspaceDb);
+    } catch (err) {
+      console.error('failed to start the MCP endpoint', err instanceof Error ? err.message : err);
+    }
+    return;
+  }
+  if (!enabled && mcpServerHandle) {
+    const handle = mcpServerHandle;
+    mcpServerHandle = null;
+    await handle.close();
   }
 }
 
@@ -555,10 +597,27 @@ function spawnDaemon(): void {
     rejectOnEarlyExit = reject;
   });
 
+  const earlyExitMessage = (code: number | null, signal: NodeJS.Signals | null): string => {
+    const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
+    return `process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`;
+  };
+
   daemonChild.on('exit', (code, signal) => {
     if (!client) {
-      const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
-      rejectOnEarlyExit(new Error(`process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`));
+      // A lock conflict means another instance of this same app already won the discovery-file
+      // race and is alive and reachable right now (see `discoveryFilePath`'s own comment): attach
+      // to it instead of spending this generation's whole respawn budget losing the same race
+      // again on every retry.
+      if (code === DAEMON_EXIT_CODE_LOCK_CONFLICT) {
+        void attachToDaemonAfterLockConflict(generation).then((attached) => {
+          if (attached) return;
+          // The winning daemon exited, or its discovery file was stale/corrupt, in the time it
+          // took to read it: nothing left to attach to, so this is a genuine failure after all.
+          rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
+        });
+        return;
+      }
+      rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
       return;
     }
     client = undefined;
@@ -570,16 +629,149 @@ function spawnDaemon(): void {
   });
 }
 
+/**
+ * Settled once per `generation` by whichever of `waitForDaemonReady`'s own poll loop or
+ * `attachToDaemonAfterLockConflict` reaches a final outcome first for that generation (adoption via
+ * `finishDaemonAdoption`, or giving up on this generation via `quitAsDuplicateInstance`). Both run
+ * concurrently for the same generation (the lock-conflict exit fires without cancelling the
+ * sibling poll loop already in flight from the same `spawnDaemon()` call), so without this guard
+ * both could independently reach a conclusion for the same generation -- and `waitForDaemonReady`
+ * specifically needs it to recognize that its generation was already settled by the *other* path,
+ * rather than spending its full 15s timeout polling for a file freshness condition that can no
+ * longer be satisfied, then throwing a bogus "timed out" failure after the app already decided to
+ * quit.
+ */
+let adoptedGeneration: number | undefined;
+
+/**
+ * Everything this process's own freshly-spawned daemon child does once it becomes ready (reachable
+ * `baseUrl`/`token`/`daemonInstanceId` in hand). A no-op if `generation` was already adopted or
+ * abandoned by a concurrent lock-conflict outcome for the same generation (see `adoptedGeneration`
+ * and `quitAsDuplicateInstance`).
+ */
+function finishDaemonAdoption(
+  connectedClient: AgentDockClient,
+  baseUrl: string,
+  token: string,
+  daemonInstanceId: string | undefined,
+  generation: number,
+): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  // Reuses the exact client instance the caller already called `.health()` on, rather than
+  // building a fresh one: `AgentDockClient` memoizes its protocol-compatibility check per
+  // instance, so a fresh client here would silently repeat that `/health` round trip on this
+  // client's first real call.
+  client = connectedClient;
+  daemonConnection = { baseUrl, token };
+  // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
+  // different process, so every outstanding approval is void. Done before the status goes
+  // `ready`, so no renderer can consume a stale grant against the new daemon.
+  adoptDaemonInstance(daemonInstanceId);
+  daemonRespawn.resetAttempts();
+  sendStatus({ state: 'ready' });
+  // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
+  // request), there is exactly one application queue and no per-session redaction concern,
+  // so this attaches proactively -- "reopening the window reflects current queue state"
+  // needs the stream live before any renderer even asks.
+  applicationQueueRelay.attach();
+  // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+  // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+  // must not wait on workspace recovery.
+  void recoverApplicationPipelineOnStartup();
+}
+
+/** Reads and parses a discovery file into the `{baseUrl, token}` shape `AgentDockClient` wants.
+ * Shared by `waitForDaemonReady` and `attachToDaemonAfterLockConflict` so the discovery file's
+ * on-disk shape is only decoded in one place. `undefined` for anything that isn't a daemon to
+ * connect to: missing, mid-write, or left behind corrupt. */
+function readDiscoveryFileConnection(file: string): DiscoveredDaemon | undefined {
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
+    return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A `DAEMON_EXIT_CODE_LOCK_CONFLICT` child exit (see `assertNoLiveDaemon` in
+ * `apps/daemon/src/discovery-file.ts`) means another daemon with this same app id is alive right
+ * now -- and by construction that can only exist if a sibling Electron *main process* is also
+ * alive, since this process's own daemon-spawn is gated behind `app.requestSingleInstanceLock()`
+ * already having refused every other instance (see `gotSingleInstanceLock`'s call site). In other
+ * words, reaching this function at all means that guard was already defeated for this launch --
+ * Electron's own single-instance lock has a narrow, OS-level race on an ungraceful kill-and-
+ * relaunch (observed via vite-plugin-electron's dev-server hot restart, which force-kills the old
+ * main process rather than letting it quit cleanly) that can let two live instances both pass it.
+ * This process is the half of that pair that lost the daemon-spawn race too, so rather than try to
+ * recover and run on as a second full instance -- its own window, tray icon, background-scan/
+ * auto-apply/application-pipeline timers, and SQLite connections to workspace.db/vacancy-engine.db
+ * alongside the sibling's -- it quits (`quitAsDuplicateInstance`) once it confirms the sibling's
+ * daemon is actually reachable. Returns `false` when there is nothing valid to confirm (the
+ * sibling's discovery file is stale or its daemon isn't actually there), so the caller falls back
+ * to treating the exit as an ordinary failure instead of quitting over a false alarm.
+ */
+async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
+  if (isQuitting) return false; // already shutting down; nothing left to confirm or act on
+  const attached = await tryAttachToWinningDaemon({
+    readDiscoveryFile: () => readDiscoveryFileConnection(discoveryFilePath()),
+    checkHealth: async (daemon) => {
+      try {
+        // health() also verifies protocol compatibility (see @agent-dock/client).
+        return await new AgentDockClient(daemon).health();
+      } catch {
+        return undefined; // stale file from a daemon that already exited, or not listening yet
+      }
+    },
+  });
+  if (!attached) return false;
+  if (isQuitting || !daemonRespawn.isCurrentGeneration(generation)) {
+    // Superseded, or the app started quitting while the check was in flight: either way this
+    // generation has nothing left to retry, so report "handled" without taking further action.
+    console.warn('[daemon] ignoring stale lock-conflict result from a superseded or quitting spawn attempt');
+    return true;
+  }
+  quitAsDuplicateInstance(generation);
+  return true;
+}
+
+/**
+ * Called once `attachToDaemonAfterLockConflict` confirms a sibling instance's daemon is alive and
+ * reachable: this process is a duplicate Electron instance that should never have started
+ * alongside it (see that function's own comment for how `app.requestSingleInstanceLock()` can
+ * still let this happen). `app.quit()` routes through the existing quit handlers further down this
+ * file: a `before-quit` listener sets `isQuitting` before any window's `close` handler can
+ * intercept it into hiding to the tray instead of actually closing, and another `before-quit`
+ * listener runs `killDaemon()` against this process's own (already-exited) `daemonChild` -- safe,
+ * since `client` was never assigned here and `killDaemon`'s session-cancel call is gated on it.
+ */
+function quitAsDuplicateInstance(generation: number): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  console.warn(
+    '[daemon] lost a discovery-file lock conflict to a sibling instance\'s already-running daemon -- ' +
+      'quitting this duplicate instance rather than running alongside it',
+  );
+  app.quit();
+}
+
 async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const file = discoveryFilePath();
 
   while (Date.now() < deadline) {
+    // The daemon-exit handler's lock-conflict path (`attachToDaemonAfterLockConflict`) runs
+    // concurrently with this same loop, for this same generation, without cancelling it: if that
+    // path already settled this generation, stop polling for a freshness condition it may never
+    // satisfy instead of spending the rest of the timeout only to throw a bogus failure below.
+    if (adoptedGeneration === generation) return;
     if (existsSync(file) && statSync(file).mtimeMs >= spawnedAt - 1000) {
       try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        const baseUrl = `http://127.0.0.1:${parsed.port}`;
-        const candidate = new AgentDockClient({ baseUrl, token: parsed.token });
+        const daemon = readDiscoveryFileConnection(file);
+        if (!daemon) throw new Error('discovery file mid-write'); // caught below; keep polling
+        const candidate = new AgentDockClient(daemon);
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
         const health = await candidate.health();
@@ -589,23 +781,7 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
           return;
         }
-        client = candidate;
-        daemonConnection = { baseUrl, token: parsed.token };
-        // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
-        // different process, so every outstanding approval is void. Done before the status goes
-        // `ready`, so no renderer can consume a stale grant against the new daemon.
-        adoptDaemonInstance(health.daemonInstanceId);
-        daemonRespawn.resetAttempts();
-        sendStatus({ state: 'ready' });
-        // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
-        // request), there is exactly one application queue and no per-session redaction concern,
-        // so this attaches proactively -- "reopening the window reflects current queue state"
-        // needs the stream live before any renderer even asks.
-        applicationQueueRelay.attach();
-        // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
-        // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
-        // must not wait on workspace recovery.
-        void recoverApplicationPipelineOnStartup();
+        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -614,6 +790,10 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // One last check: the lock-conflict path may have settled this generation during the final
+  // 200ms sleep above, after the loop's own condition check but before the deadline formally
+  // elapsed.
+  if (adoptedGeneration === generation) return;
   throw new Error('timed out waiting for daemon to become ready');
 }
 
@@ -2606,6 +2786,7 @@ guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
     minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
     autoScanEnabled = updated.autoScanEnabled;
     setAutoApplyEnabled(updated.autoApplyEnabled);
+    void syncMcpServer(updated.mcpEndpointEnabled);
     return updated;
   });
 });
@@ -2670,6 +2851,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
     minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
     autoScanEnabled = result.settings.autoScanEnabled;
     setAutoApplyEnabled(result.settings.autoApplyEnabled);
+    void syncMcpServer(result.settings.mcpEndpointEnabled);
     return result;
   });
 });
@@ -2773,22 +2955,63 @@ guardedIpc.handle('workspace:cv-documents:set-default', async (_event, input: un
 );
 
 /**
+ * Renders one `TailoredResume` to PDF or DOCX and saves it via the native save dialog -- the one
+ * place either of those two things happens, shared by `workspace:cv-documents:export` (#156, a
+ * persisted CV Library record's own content) and `workspace:cv-evidence-overlays:export` (#419,
+ * the candidate-approved composition). What differs between those two callers is entirely how the
+ * `resume` argument was built; everything from "render it" onward is identical, so it lives here
+ * once instead of twice risking drift (a PDF-validation fix, a new format, a save-dialog option
+ * applied to one caller and missed in the other).
+ *
+ * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
+ * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
+ * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
+ * `BrowserWindow` that only this process has. Returns `{ saved: false }`, not a throw, when there
+ * is no window to show the dialog on or when the user cancels it -- neither is a failure.
+ */
+async function renderTailoredResumeToFile(
+  resume: TailoredResume,
+  format: CvExportFormat,
+  options: { title: string; defaultFileName: string },
+): Promise<CvExportResult> {
+  if (!mainWindow) return { saved: false };
+
+  let buffer: Buffer;
+  let filter: { name: string; extensions: string[] };
+  if (format === 'pdf') {
+    buffer = await printHtmlToPdf(renderResumeHtml(resume));
+    const validation = await validateRenderedResumePdf(buffer, resume);
+    if (!validation.ok) {
+      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
+    }
+    filter = { name: 'PDF document', extensions: ['pdf'] };
+  } else {
+    buffer = await renderResumeDocx(resume);
+    filter = { name: 'Word document', extensions: ['docx'] };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: options.title,
+    defaultPath: `${options.defaultFileName}.${format}`,
+    filters: [filter],
+  });
+  if (result.canceled || !result.filePath) return { saved: false };
+
+  await writeFile(result.filePath, buffer);
+  return { saved: true, path: result.filePath };
+}
+
+/**
  * #156: the manual "export my CV as PDF/DOCX with the default app-authored template" action.
  * Reuses the same rendering machinery #199 built for the unattended auto-apply pipeline
  * (`resume-html.ts`/`resume-docx.ts`/`resume-pdf-validation.ts`/`printHtmlToPdf`) rather than a
  * second implementation of either the template or the PDF step, and reads the candidate's name
  * from the Search page's own candidate profile (the one place in this app that is real,
  * user-entered identity data) rather than inventing one -- see `cv-export.ts`'s doc comment.
- *
- * Renders, validates (PDF only -- `renderResumeDocx` has no equivalent unattended-staging
- * counterpart to mirror), and saves in one round trip: unlike `system:save-file`, the content does
- * not yet exist on the renderer side for this to hand across, since PDF rendering needs a real
- * `BrowserWindow` that only this process has.
  */
 guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown): Promise<CvExportResult> => {
   const { id, format } = parseCvExportInput(input);
   const doc = workspace.getCvDocument(await ensureWorkspaceDb(), id);
-  if (!mainWindow) return { saved: false };
 
   // #274: a CV whose structured source was never read to the end must not produce a document that
   // looks complete. Refused here, before anything is rendered, with the reasons the user needs to
@@ -2807,31 +3030,152 @@ guardedIpc.handle('workspace:cv-documents:export', async (_event, input: unknown
     candidate = null;
   }
   const resume = cvDocumentToTailoredResume(doc, candidate);
+  return renderTailoredResumeToFile(resume, format, {
+    title: 'Export CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
+  });
+});
 
-  let buffer: Buffer;
-  let filter: { name: string; extensions: string[] };
-  if (format === 'pdf') {
-    buffer = await printHtmlToPdf(renderResumeHtml(resume));
-    const validation = await validateRenderedResumePdf(buffer, resume);
-    if (!validation.ok) {
-      throw new Error(`the rendered resume PDF failed validation: ${validation.reasons.join('; ')}`);
-    }
-    filter = { name: 'PDF document', extensions: ['pdf'] };
-  } else {
-    buffer = await renderResumeDocx(resume);
-    filter = { name: 'Word document', extensions: ['docx'] };
+// #419, slice 1: plain CRUD, the same shape every other entity's four/five verbs already follow.
+guardedIpc.handle('workspace:cv-evidence-overlays:list', async (_event, input: unknown) =>
+  workspace.listCvEvidenceOverlays(await ensureWorkspaceDb(), parseCvIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:get', async (_event, input: unknown) => {
+  const { cvId, vacancyKey } = parseCvEvidenceOverlayLookup(input);
+  return workspace.getCvEvidenceOverlay(await ensureWorkspaceDb(), cvId, vacancyKey);
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:create', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.createCvEvidenceOverlay(await ensureWorkspaceDb(), parseCvEvidenceOverlayInput(input)),
+  ),
+);
+
+guardedIpc.handle('workspace:cv-evidence-overlays:update', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, patch } = parseIdAndPatch(input);
+    return workspace.updateCvEvidenceOverlay(await ensureWorkspaceDb(), id, parseCvEvidenceOverlayPatch(patch));
+  });
+});
+
+/**
+ * #421's case contract: the only channel that may move an overlay's `state` to
+ * `'candidate_approved'` -- see `workspace.approveCvEvidenceOverlay`'s own doc comment for why this
+ * is a dedicated verb rather than another `:update` patch.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:approve', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, expectedCaseRevision } = parseCvEvidenceOverlayApproveInput(input);
+    return workspace.approveCvEvidenceOverlay(await ensureWorkspaceDb(), id, expectedCaseRevision);
+  });
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () =>
+    workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+  ),
+);
+
+/**
+ * #419, slice 4: exports the *candidate-approved* composition, not a persisted CV Library record.
+ * Reuses exactly the rendering/validation/save machinery `workspace:cv-documents:export` (#156)
+ * already established -- the difference is entirely in what builds the `TailoredResume`:
+ * `composeApprovedTailoredResume` (#419) instead of `cvDocumentToTailoredResume` (#274/#156), built
+ * fresh against the CV's *current* reviewed source rather than trusting the overlay's own stored
+ * hash, so a source re-reviewed after the overlay's last save cannot export stale. A blocked
+ * composition refuses the same way `describeCvExportBlockers` already does for the other path --
+ * before anything is rendered, with the reasons, never a silent partial export.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvExportResult> => {
+  const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
+  const db = await ensureWorkspaceDb();
+  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
+  const doc = workspace.getCvDocument(db, overlay.cvId);
+
+  // The renderer only ever offers this action once `overlay.state` reaches `'candidate_approved'`
+  // (`ComposedCvReview.tsx`), but that is a UI gate, not a security boundary -- this channel is the
+  // actual enforcement point, the same reasoning `describeCvExportBlockers` already applies to the
+  // #156 export path.
+  if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+    throw new Error('this CV has not been approved yet: open the Approved CV panel and approve it before exporting');
+  }
+  if (!doc.source) {
+    throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+  }
+  const currentSourceCvContentHash = workspace.computeSourceCvContentHash(doc.source);
+  const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
+  if (blockers.length > 0) {
+    throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);
   }
 
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export CV',
-    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
-    filters: [filter],
+  const outcome = await renderTailoredResumeToFile(resume, format, {
+    title: 'Export approved CV',
+    defaultFileName: sanitizeCvExportFileName(doc.name),
   });
-  if (result.canceled || !result.filePath) return { saved: false };
+  if (!outcome.saved) return outcome;
 
-  await writeFile(result.filePath, buffer);
-  return { saved: true, path: result.filePath };
+  // The terminal state (#419): "CV approval and application/submission readiness are separate
+  // states" -- candidate_approved says the content is right, artifact_approved says a real,
+  // validated file now exists from it.
+  await applicationDataResetGate.runMutation(async () =>
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' }),
+  );
+  return outcome;
 });
+
+// #421: named local-client grants for the local MCP endpoint.
+guardedIpc.handle('workspace:mcp-client-grants:list', async () => workspace.listMcpClientGrants(await ensureWorkspaceDb()));
+
+/**
+ * The one-time credential `workspace.createMcpClientGrant` mints is delivered here, entirely
+ * inside main, and deliberately never placed on the object this handler returns: whatever this
+ * function resolves to crosses `ipcMain.handle`'s structured-clone boundary into the renderer, and
+ * the credential must not (#421: "without sending the secret to the renderer", the same rule
+ * SECURITY.md already states for the daemon's own bearer token). `clipboard.writeText` plus a
+ * native `dialog.showMessageBox` (its message text is selectable, so the candidate can also copy
+ * it directly from the dialog if the clipboard write is later overwritten) are both main-process
+ * APIs with no renderer round trip of their own.
+ */
+guardedIpc.handle('workspace:mcp-client-grants:create', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { grant, credential } = workspace.createMcpClientGrant(await ensureWorkspaceDb(), parseMcpClientGrantInput(input));
+    clipboard.writeText(credential);
+    void dialog.showMessageBox({
+      type: 'info',
+      title: 'New MCP client credential',
+      message: `Credential for "${grant.name}" (copied to your clipboard):`,
+      detail: `${credential}\n\nThis is shown once. If you lose it, revoke this grant and create a new one.`,
+    });
+    return grant;
+  });
+});
+
+guardedIpc.handle('workspace:mcp-client-grants:revoke', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.revokeMcpClientGrant(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+/** The port is not itself a secret -- useless without a valid grant credential, and the ticket's
+ * own text asks that "the UI shows the current endpoint" -- so this is a plain read, unlike the
+ * daemon's own base URL/token pair which never crosses into the renderer at all. */
+guardedIpc.handle('workspace:mcp-server:status', async () => ({
+  running: mcpServerHandle !== null,
+  port: mcpServerHandle?.port ?? null,
+}));
+
+// #421's proposal review surface. `createCvTailoringProposal` has no IPC channel at all -- only
+// the (not yet wired, slice 3) MCP tool handlers create one, directly in-process.
+guardedIpc.handle('workspace:cv-tailoring-proposals:list', async (_event, input: unknown) =>
+  workspace.listCvTailoringProposals(await ensureWorkspaceDb(), parseCaseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:accept', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.acceptCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:reject', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.rejectCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 
@@ -2973,6 +3317,10 @@ if (gotSingleInstanceLock) {
   app.on('will-quit', () => {
     closeWorkspaceDb?.();
     closeWorkspaceDb = undefined;
+    // Best-effort, not awaited: `will-quit` is not awaited by Electron either, and the OS frees
+    // the socket on process exit regardless. #421: "closing OVR removes the endpoint."
+    void mcpServerHandle?.close();
+    mcpServerHandle = null;
   });
 
   let shuttingDown = false;

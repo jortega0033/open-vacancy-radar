@@ -318,6 +318,20 @@ describe('electron/preload.ts: workspace bridge', () => {
     'deleteCvDocument',
     'setDefaultCvDocument',
     'exportCvDocument',
+    'listCvEvidenceOverlays',
+    'getCvEvidenceOverlay',
+    'createCvEvidenceOverlay',
+    'updateCvEvidenceOverlay',
+    'approveCvEvidenceOverlay',
+    'deleteCvEvidenceOverlay',
+    'exportCvEvidenceOverlay',
+    'listMcpClientGrants',
+    'createMcpClientGrant',
+    'revokeMcpClientGrant',
+    'getMcpServerStatus',
+    'listCvTailoringProposals',
+    'acceptCvTailoringProposal',
+    'rejectCvTailoringProposal',
     'listLetters',
     'createLetter',
     'updateLetter',
@@ -382,6 +396,13 @@ describe('electron/preload.ts: workspace bridge', () => {
     const api = await loadPreload('workspace');
     await (api.updateSavedJob as (id: string, patch: unknown) => Promise<unknown>)('job-1', { notes: 'hi' });
     expect(invoke).toHaveBeenCalledWith('workspace:saved-jobs:update', { id: 'job-1', patch: { notes: 'hi' } });
+  });
+
+  it('approveCvEvidenceOverlay (#421) sends an { id, expectedCaseRevision } envelope to workspace:cv-evidence-overlays:approve', async () => {
+    invoke.mockResolvedValue({ id: 'overlay-1', state: 'candidate_approved' });
+    const api = await loadPreload('workspace');
+    await (api.approveCvEvidenceOverlay as (id: string, expectedCaseRevision: string) => Promise<unknown>)('overlay-1', '3');
+    expect(invoke).toHaveBeenCalledWith('workspace:cv-evidence-overlays:approve', { id: 'overlay-1', expectedCaseRevision: '3' });
   });
 
   it('wraps id-only verbs in a { id } envelope', async () => {
@@ -697,6 +718,22 @@ const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
     // (a manual CV export action, alongside the CV library verbs it belongs next to), so the
     // literal is updated rather than left blocking real growth.
     'exportCvDocument',
+    // Added by issue #419, same reasoning: the CRUD verbs for one CV's per-vacancy tailoring
+    // overlays belong in this namespace next to the CV library verbs above.
+    'listCvEvidenceOverlays',
+    'getCvEvidenceOverlay',
+    'createCvEvidenceOverlay',
+    'updateCvEvidenceOverlay',
+    'approveCvEvidenceOverlay',
+    'deleteCvEvidenceOverlay',
+    'exportCvEvidenceOverlay',
+    'listMcpClientGrants',
+    'createMcpClientGrant',
+    'revokeMcpClientGrant',
+    'getMcpServerStatus',
+    'listCvTailoringProposals',
+    'acceptCvTailoringProposal',
+    'rejectCvTailoringProposal',
     'listLetters',
     'createLetter',
     'updateLetter',
