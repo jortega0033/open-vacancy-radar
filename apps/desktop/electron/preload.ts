@@ -421,6 +421,19 @@ const workspaceApi: WorkspaceBridge = {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:export', { overlayId, format });
   },
 
+  listMcpClientGrants() {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:list');
+  },
+  createMcpClientGrant(input) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:create', input);
+  },
+  revokeMcpClientGrant(id) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:revoke', { id });
+  },
+  getMcpServerStatus() {
+    return ipcRenderer.invoke('workspace:mcp-server:status');
+  },
+
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');
   },

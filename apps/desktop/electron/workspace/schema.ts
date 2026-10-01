@@ -11,6 +11,7 @@ import {
   type CvJdRevision,
   type CvRequirementMapping,
 } from './cv-evidence-schema.js';
+import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -158,6 +159,49 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
     .default(null),
   capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421: a named local client's authorization to act on the local MCP endpoint. See
+ * `mcp-grant-schema.ts`'s own header for why this lives in its own module rather than beside
+ * `cvEvidenceOverlays` above. */
+export const mcpClientGrants = sqliteTable('mcp_client_grants', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  name: text('name').notNull(),
+  scopeType: text('scope_type', { enum: MCP_GRANT_SCOPE_TYPES as unknown as [string, ...string[]] }).notNull(),
+  /** Set only when `scopeType === 'source_cv'`; `''` otherwise. */
+  sourceCvId: text('source_cv_id').notNull().default(''),
+  /** Set only when `scopeType === 'case_ids'` at creation, or appended to over time for a
+   * `source_cv` grant -- a JSON column rather than a join table, since nothing ever queries across
+   * it in SQL, the same reasoning `cvEvidenceOverlays.requirements` above already documents. */
+  caseIds: text('case_ids', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  canReadFinalSnapshot: integer('can_read_final_snapshot', { mode: 'boolean' }).notNull().default(false),
+  /** SHA-256 hex of the one-time credential value shown to the candidate at creation and never
+   * itself stored -- this column can verify a presented credential but can never reproduce it, the
+   * same discipline a password hash follows. */
+  credentialVerifierHash: text('credential_verifier_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Null while active. Never deleted once revoked -- the same `automationGrants.revokedAt`
+   * reasoning: a revoked grant is itself part of the record #421's audit trail exists to keep. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+/** #421's audit trail. Every call attempt through the local MCP endpoint writes exactly one row
+ * here, successful or not -- see `mcp-grant-schema.ts`'s own doc comment on why every column here
+ * is structurally incapable of carrying raw CV/JD text or a credential. Append-only: nothing in
+ * this module ever updates or deletes a row here once written. */
+export const mcpAuditLogEntries = sqliteTable('mcp_audit_log_entries', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `null` when no grant could be matched at all. `onDelete: 'set null'`, not `'cascade'`: deleting
+   * a grant record is not a thing this app does (grants are revoked, never deleted -- see above),
+   * but if it ever happened, the audit history of what that client did must outlive the grant row
+   * it once pointed to, not vanish with it. */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  toolName: text('tool_name').notNull(),
+  caseId: text('case_id'),
+  outcome: text('outcome', { enum: MCP_AUDIT_OUTCOMES as unknown as [string, ...string[]] }).notNull(),
+  revision: text('revision'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 
 export const letters = sqliteTable('letters', {
@@ -580,6 +624,13 @@ export const appSettings = sqliteTable('app_settings', {
   confirmApplicationDelete: integer('confirm_application_delete', { mode: 'boolean' }).notNull().default(true),
   autoArchiveRejected: integer('auto_archive_rejected', { mode: 'boolean' }).notNull().default(false),
   defaultProvider: text('default_provider', { enum: ['claude', 'codex'] }).notNull().default('claude'),
+  /** #421: whether the local MCP endpoint listens at all. Off by default, the same reasoning
+   * `autoApplyEnabled` above already states for a feature that expands what an outside actor may
+   * do on the candidate's behalf -- this one is a literal new network listener in Electron main,
+   * so the default-off posture matters even more than usual. Closing the app removes the endpoint
+   * regardless of this setting; it only controls whether one is stood up on the next launch or
+   * settings change. */
+  mcpEndpointEnabled: integer('mcp_endpoint_enabled', { mode: 'boolean' }).notNull().default(false),
   /*
    * ADI-07: the AI Workspace's renderer-local view state.
    *

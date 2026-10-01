@@ -26,6 +26,7 @@ import {
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
@@ -233,6 +234,58 @@ describe('workspace settings patch', () => {
 
   it('ignores keys that are not settings at all', () => {
     expect(parseSettingsPatch({ id: 2, theme: 'light', databasePath: '/etc/passwd' })).toEqual({ theme: 'light' });
+  });
+
+  it('accepts mcpEndpointEnabled -- the candidate\'s own on/off switch, unlike autoApplyEnabled (#421)', () => {
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+    expect(() => parseSettingsPatch({ mcpEndpointEnabled: 'yes' })).toThrow(/"mcpEndpointEnabled" must be a boolean/);
+    // Still refuses the kill switch even sent alongside a legitimate field.
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true, autoApplyEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+  });
+});
+
+describe('workspace mcp client grant input (#421)', () => {
+  const FUTURE = '2099-01-01T00:00:00.000Z';
+
+  it('parses a source_cv grant, defaulting canReadFinalSnapshot to false', () => {
+    expect(parseMcpClientGrantInput({ name: 'Claude Desktop', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toEqual({
+      name: 'Claude Desktop',
+      scopeType: 'source_cv',
+      sourceCvId: 'cv-1',
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('parses a case_ids grant with its caseIds list', () => {
+    expect(parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a', 'b'], expiresAt: FUTURE })).toEqual({
+      name: 'x',
+      scopeType: 'case_ids',
+      caseIds: ['a', 'b'],
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('rejects mixing the two scopes\' fields', () => {
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', caseIds: ['a'], expiresAt: FUTURE }),
+    ).toThrow(/"caseIds" must not be set for a "source_cv" grant/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a'], sourceCvId: 'cv-1', expiresAt: FUTURE }),
+    ).toThrow(/"sourceCvId" must not be set for a "case_ids" grant/);
+  });
+
+  it('requires a name and a well-formed expiresAt', () => {
+    expect(() => parseMcpClientGrantInput({ scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" must be a string/);
+    expect(() => parseMcpClientGrantInput({ name: '   ', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" is required/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: 'not-a-date' }),
+    ).toThrow(/"expiresAt" must be an ISO-8601 date-time/);
+  });
+
+  it('rejects an unknown scopeType', () => {
+    expect(() => parseMcpClientGrantInput({ name: 'x', scopeType: 'everything', expiresAt: FUTURE })).toThrow(/"scopeType" must be one of/);
   });
 });
 

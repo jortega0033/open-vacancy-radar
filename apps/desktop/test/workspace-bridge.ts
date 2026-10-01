@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
   defaultProvider: 'claude',
+  mcpEndpointEnabled: false,
   agentSelectedSessionId: null,
   agentArchivedSessionIds: [],
   agentUnreadCounts: {},
@@ -114,6 +115,11 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     approveCvEvidenceOverlay: vi.fn(),
     deleteCvEvidenceOverlay: vi.fn().mockResolvedValue({ deleted: true }),
     exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
+
+    listMcpClientGrants: vi.fn().mockResolvedValue([]),
+    createMcpClientGrant: vi.fn(),
+    revokeMcpClientGrant: vi.fn(),
+    getMcpServerStatus: vi.fn().mockResolvedValue({ running: false, port: null }),
 
     listLetters: vi.fn().mockResolvedValue([]),
     createLetter: vi.fn(),

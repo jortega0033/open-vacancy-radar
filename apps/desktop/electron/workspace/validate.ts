@@ -45,6 +45,7 @@ import type {
   CvEvidenceOverlayState,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
+import { MCP_GRANT_LIMITS, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import type {
   ApplicationAnswerInput,
   ApplicationAnswerPatch,
@@ -76,6 +77,7 @@ import type {
   LetterStatus,
   LetterTone,
   LetterType,
+  McpClientGrantInput,
   SavedJobInput,
   SavedJobPatch,
   SavedJobStatus,
@@ -183,6 +185,13 @@ function nullableIsoDate(value: unknown, field: string): string | null {
   const parsed = new Date(text);
   if (Number.isNaN(parsed.valueOf())) fail(`"${field}" must be an ISO-8601 date-time`);
   return parsed.toISOString();
+}
+
+/** Same as `nullableIsoDate`, but the field is required. */
+function requiredIsoDate(value: unknown, field: string): string {
+  const parsed = nullableIsoDate(value, field);
+  if (parsed === null) fail(`"${field}" is required`);
+  return parsed;
 }
 
 /**
@@ -706,6 +715,35 @@ export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: 
   return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
 }
 
+/**
+ * #421's local-client grant. `sourceCvId`/`caseIds` are required or forbidden depending on
+ * `scopeType` rather than both simply optional: a `source_cv` grant given a `caseIds` list (or
+ * vice versa) is a caller confusing the two scope types, which fails loudly here rather than
+ * silently keeping only the field that matched.
+ */
+export function parseMcpClientGrantInput(value: unknown): McpClientGrantInput {
+  const input = asRecord(value, 'MCP client grant');
+  const scopeType = oneOf(input.scopeType, 'scopeType', MCP_GRANT_SCOPE_TYPES);
+  if (scopeType === 'source_cv') {
+    if (input.caseIds !== undefined) fail('"caseIds" must not be set for a "source_cv" grant');
+    return {
+      name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+      scopeType,
+      sourceCvId: parseId(input.sourceCvId),
+      canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+      expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+    };
+  }
+  if (input.sourceCvId !== undefined) fail('"sourceCvId" must not be set for a "case_ids" grant');
+  return {
+    name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+    scopeType,
+    caseIds: stringList(input.caseIds ?? [], 'caseIds', MCP_GRANT_LIMITS.caseIdsPerGrant, LIMITS.short),
+    canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+    expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+  };
+}
+
 // ------------------------------------------------------------------------------- letters
 
 export function parseLetterInput(value: unknown): LetterInput {
@@ -916,6 +954,9 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
   patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
+  // #421: the candidate's own on/off switch for the local MCP endpoint -- unlike `autoApplyEnabled`
+  // above, this one is meant to be renderer-writable.
+  patch(input, out, 'mcpEndpointEnabled', (v) => bool(v, 'mcpEndpointEnabled'));
   // ADI-07's three AI Workspace preferences. See `AGENT_WORKSPACE_PREF_LIMITS` for why these live
   // in SQLite alongside every other setting rather than in localStorage.
   patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));

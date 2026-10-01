@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, Tray, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -150,6 +150,7 @@ import {
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
@@ -160,6 +161,7 @@ import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import { composeApprovedTailoredResume } from './resume-source.js';
+import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import type { TailoredResume } from './resume-schema.js';
 import { stableCvSourceJson } from './workspace/cv-source-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -223,6 +225,10 @@ let isQuitting = false;
  * every 5-minute tick is needless DB traffic when this mirror is already kept current.
  */
 let autoScanEnabled = false;
+/** #421's local MCP endpoint, non-`null` only while actually listening. Started/stopped by
+ * `syncMcpServer` below, never constructed directly elsewhere -- that function is the single
+ * place that decides whether one should be running right now. */
+let mcpServerHandle: McpServerHandle | null = null;
 /**
  * The `WebContents` id of the window `createWindow()` built, and the only sender any IPC handler in
  * this file will answer (ADI-16).
@@ -438,6 +444,7 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
     // -- that module stays in its refusing state, so the failure mode is "nothing is automatically
     // submittable", never the reverse.
     setAutoApplyEnabled(settings.autoApplyEnabled);
+    void syncMcpServer(settings.mcpEndpointEnabled);
     return db;
   })();
 
@@ -446,6 +453,30 @@ async function ensureWorkspaceDb(): Promise<WorkspaceDb> {
   } catch (error) {
     workspaceInit = undefined;
     throw error;
+  }
+}
+
+/**
+ * The single place that decides whether #421's local MCP endpoint should be running right now,
+ * called after every read or write of `mcpEndpointEnabled` (startup hydration, a settings update,
+ * a data reset). Never throws: a bind failure is logged and leaves the endpoint off rather than
+ * failing whatever caller triggered this (app startup, a settings save) -- the same "a pre-warm
+ * failure must not become an unhandled rejection" reasoning `ensureVacancyEngine`'s own callers
+ * already follow at the call sites below.
+ */
+async function syncMcpServer(enabled: boolean): Promise<void> {
+  if (enabled && !mcpServerHandle) {
+    try {
+      mcpServerHandle = await startMcpServer(ensureWorkspaceDb);
+    } catch (err) {
+      console.error('failed to start the MCP endpoint', err instanceof Error ? err.message : err);
+    }
+    return;
+  }
+  if (!enabled && mcpServerHandle) {
+    const handle = mcpServerHandle;
+    mcpServerHandle = null;
+    await handle.close();
   }
 }
 
@@ -2615,6 +2646,7 @@ guardedIpc.handle('workspace:settings:update', async (_event, input: unknown) =>
     minimizeToTrayOnClose = updated.minimizeToTrayOnClose;
     autoScanEnabled = updated.autoScanEnabled;
     setAutoApplyEnabled(updated.autoApplyEnabled);
+    void syncMcpServer(updated.mcpEndpointEnabled);
     return updated;
   });
 });
@@ -2679,6 +2711,7 @@ guardedIpc.handle('workspace:data:reset', async () => {
     minimizeToTrayOnClose = result.settings.minimizeToTrayOnClose;
     autoScanEnabled = result.settings.autoScanEnabled;
     setAutoApplyEnabled(result.settings.autoApplyEnabled);
+    void syncMcpServer(result.settings.mcpEndpointEnabled);
     return result;
   });
 });
@@ -2951,6 +2984,45 @@ guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input:
   return outcome;
 });
 
+// #421: named local-client grants for the local MCP endpoint.
+guardedIpc.handle('workspace:mcp-client-grants:list', async () => workspace.listMcpClientGrants(await ensureWorkspaceDb()));
+
+/**
+ * The one-time credential `workspace.createMcpClientGrant` mints is delivered here, entirely
+ * inside main, and deliberately never placed on the object this handler returns: whatever this
+ * function resolves to crosses `ipcMain.handle`'s structured-clone boundary into the renderer, and
+ * the credential must not (#421: "without sending the secret to the renderer", the same rule
+ * SECURITY.md already states for the daemon's own bearer token). `clipboard.writeText` plus a
+ * native `dialog.showMessageBox` (its message text is selectable, so the candidate can also copy
+ * it directly from the dialog if the clipboard write is later overwritten) are both main-process
+ * APIs with no renderer round trip of their own.
+ */
+guardedIpc.handle('workspace:mcp-client-grants:create', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { grant, credential } = workspace.createMcpClientGrant(await ensureWorkspaceDb(), parseMcpClientGrantInput(input));
+    clipboard.writeText(credential);
+    void dialog.showMessageBox({
+      type: 'info',
+      title: 'New MCP client credential',
+      message: `Credential for "${grant.name}" (copied to your clipboard):`,
+      detail: `${credential}\n\nThis is shown once. If you lose it, revoke this grant and create a new one.`,
+    });
+    return grant;
+  });
+});
+
+guardedIpc.handle('workspace:mcp-client-grants:revoke', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.revokeMcpClientGrant(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+/** The port is not itself a secret -- useless without a valid grant credential, and the ticket's
+ * own text asks that "the UI shows the current endpoint" -- so this is a plain read, unlike the
+ * daemon's own base URL/token pair which never crosses into the renderer at all. */
+guardedIpc.handle('workspace:mcp-server:status', async () => ({
+  running: mcpServerHandle !== null,
+  port: mcpServerHandle?.port ?? null,
+}));
+
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 
 guardedIpc.handle('workspace:letters:create', async (_event, input: unknown) =>
@@ -3091,6 +3163,10 @@ if (gotSingleInstanceLock) {
   app.on('will-quit', () => {
     closeWorkspaceDb?.();
     closeWorkspaceDb = undefined;
+    // Best-effort, not awaited: `will-quit` is not awaited by Electron either, and the OS frees
+    // the socket on process exit regardless. #421: "closing OVR removes the endpoint."
+    void mcpServerHandle?.close();
+    mcpServerHandle = null;
   });
 
   let shuttingDown = false;

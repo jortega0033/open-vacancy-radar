@@ -10,7 +10,7 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
 import {
@@ -34,6 +34,8 @@ import {
   cvDocuments,
   cvEvidenceOverlays,
   letters,
+  mcpAuditLogEntries,
+  mcpClientGrants,
   savedJobs,
 } from './schema.js';
 import {
@@ -72,6 +74,10 @@ import {
   type LetterInput,
   type LetterPatch,
   type LetterRecord,
+  type McpAuditLogEntry,
+  type McpAuditLogEntryInput,
+  type McpClientGrantInput,
+  type McpClientGrantRecord,
   type PreparedApplicationField,
   type PreparedApplicationFields,
   type PreparedFieldProvenance,
@@ -761,6 +767,136 @@ export function approveCvEvidenceOverlay(
 export function deleteCvEvidenceOverlay(db: WorkspaceDb, id: string): DeleteResult {
   const removed = db.delete(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).returning({ id: cvEvidenceOverlays.id }).all();
   return { deleted: removed.length > 0 };
+}
+
+// --------------------------------------------------------------------- mcp client grants (#421)
+
+type McpClientGrantRow = typeof mcpClientGrants.$inferSelect;
+
+function toMcpClientGrant(row: McpClientGrantRow): McpClientGrantRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    scopeType: row.scopeType as McpClientGrantRecord['scopeType'],
+    sourceCvId: row.sourceCvId,
+    caseIds: row.caseIds ?? [],
+    canReadFinalSnapshot: row.canReadFinalSnapshot,
+    createdAt: iso(row.createdAt),
+    expiresAt: iso(row.expiresAt),
+    revokedAt: row.revokedAt ? iso(row.revokedAt) : '',
+  };
+}
+
+export function listMcpClientGrants(db: WorkspaceDb): McpClientGrantRecord[] {
+  return db.select().from(mcpClientGrants).orderBy(desc(mcpClientGrants.createdAt)).all().map(toMcpClientGrant);
+}
+
+/**
+ * Mints a fresh one-time credential, stores only its SHA-256 verifier, and returns the plaintext
+ * exactly once. The caller (main.ts's IPC handler) is responsible for delivering it to the
+ * candidate through a native dialog or the clipboard and must never let it reach the resolved IPC
+ * value the renderer receives -- #421: "a one-time client credential is delivered ... without
+ * sending the secret to the renderer." This function has no opinion on delivery; it only
+ * guarantees the plaintext is never written to the database and never returned a second time (no
+ * other function in this module can read it back).
+ */
+export function createMcpClientGrant(db: WorkspaceDb, input: McpClientGrantInput): { grant: McpClientGrantRecord; credential: string } {
+  if (input.scopeType === 'source_cv') {
+    const cv = db.select({ id: cvDocuments.id }).from(cvDocuments).where(eq(cvDocuments.id, input.sourceCvId ?? '')).get();
+    if (!cv) throw new WorkspaceNotFoundError('CV document', input.sourceCvId ?? '');
+  }
+  const credential = randomBytes(32).toString('hex');
+  const credentialVerifierHash = createHash('sha256').update(credential).digest('hex');
+  const [row] = db
+    .insert(mcpClientGrants)
+    .values({
+      name: input.name,
+      scopeType: input.scopeType,
+      sourceCvId: input.scopeType === 'source_cv' ? input.sourceCvId ?? '' : '',
+      // A `source_cv` grant starts with no cases at all -- it earns them one at a time as its own
+      // `start_tailoring_case` calls succeed (#421: "covers only the cases that this client
+      // creates from that CV, not other cases linked to the same CV"), never every case that CV
+      // already has.
+      caseIds: input.scopeType === 'case_ids' ? input.caseIds ?? [] : [],
+      canReadFinalSnapshot: input.canReadFinalSnapshot ?? false,
+      credentialVerifierHash,
+      expiresAt: new Date(input.expiresAt),
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to insert MCP client grant');
+  return { grant: toMcpClientGrant(row), credential };
+}
+
+/** Idempotent: revoking an already-revoked grant returns it unchanged rather than stamping a new
+ * `revokedAt` over the original one, so the record keeps saying *when* it was actually revoked. */
+export function revokeMcpClientGrant(db: WorkspaceDb, id: string): McpClientGrantRecord {
+  const existing = db.select().from(mcpClientGrants).where(eq(mcpClientGrants.id, id)).get();
+  if (!existing) throw new WorkspaceNotFoundError('MCP client grant', id);
+  if (existing.revokedAt) return toMcpClientGrant(existing);
+  const [row] = db.update(mcpClientGrants).set({ revokedAt: new Date() }).where(eq(mcpClientGrants.id, id)).returning().all();
+  if (!row) throw new WorkspaceNotFoundError('MCP client grant', id);
+  return toMcpClientGrant(row);
+}
+
+/**
+ * Finds the grant, if any, whose stored verifier matches `credential`. Authentication only -- a
+ * match here says nothing about whether the grant is still active; a caller needing that checks
+ * `describeMcpGrantBlockers` (`mcp-grant-schema.ts`) against the returned record itself. Every
+ * stored hash is compared with `timingSafeEqual` rather than stopping at the first `===` mismatch,
+ * the same discipline the daemon's own `tokensMatch` already follows for its single token.
+ */
+export function findMcpClientGrantByCredential(db: WorkspaceDb, credential: string): McpClientGrantRecord | null {
+  const providedHash = Buffer.from(createHash('sha256').update(credential).digest('hex'), 'utf8');
+  for (const row of db.select().from(mcpClientGrants).all()) {
+    const storedHash = Buffer.from(row.credentialVerifierHash, 'utf8');
+    if (storedHash.length === providedHash.length && timingSafeEqual(storedHash, providedHash)) {
+      return toMcpClientGrant(row);
+    }
+  }
+  return null;
+}
+
+// ----------------------------------------------------------------------- mcp audit trail (#421)
+
+type McpAuditLogEntryRow = typeof mcpAuditLogEntries.$inferSelect;
+
+function toMcpAuditLogEntry(row: McpAuditLogEntryRow): McpAuditLogEntry {
+  return {
+    id: row.id,
+    grantId: row.grantId ?? '',
+    toolName: row.toolName,
+    caseId: row.caseId ?? '',
+    outcome: row.outcome as McpAuditLogEntry['outcome'],
+    revision: row.revision ?? '',
+    createdAt: iso(row.createdAt),
+  };
+}
+
+/**
+ * Appends one row. Takes a plain `WorkspaceDb`, which a `db.transaction` callback's `tx` also
+ * satisfies -- a future tool handler that must record its own audit entry atomically with its
+ * mutation (#421: "a failed audit write blocks a mutating call") calls this with `tx`, the same way
+ * `approveCvEvidenceOverlay` above calls `getCvDocument(tx, ...)` from inside its own transaction.
+ */
+export function appendMcpAuditLogEntry(db: WorkspaceDb, entry: McpAuditLogEntryInput): McpAuditLogEntry {
+  const [row] = db
+    .insert(mcpAuditLogEntries)
+    .values({
+      grantId: entry.grantId || null,
+      toolName: entry.toolName,
+      caseId: entry.caseId || null,
+      outcome: entry.outcome,
+      revision: entry.revision || null,
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to append MCP audit log entry');
+  return toMcpAuditLogEntry(row);
+}
+
+export function listMcpAuditLogEntries(db: WorkspaceDb, limit = 500): McpAuditLogEntry[] {
+  return db.select().from(mcpAuditLogEntries).orderBy(desc(mcpAuditLogEntries.createdAt)).limit(limit).all().map(toMcpAuditLogEntry);
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -1803,6 +1939,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     confirmApplicationDelete: row.confirmApplicationDelete,
     autoArchiveRejected: row.autoArchiveRejected,
     defaultProvider: row.defaultProvider,
+    mcpEndpointEnabled: row.mcpEndpointEnabled,
     // ADI-07. Defended against a null/legacy JSON value rather than trusted: a row written before
     // migration 0003 has no column at all, and better-sqlite3 hands back whatever is there.
     agentSelectedSessionId: row.agentSelectedSessionId,
@@ -1855,6 +1992,8 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
       applicationAnswers: tx.select({ id: applicationAnswers.id }).from(applicationAnswers).all().length,
       cvEvidenceOverlays: tx.select({ id: cvEvidenceOverlays.id }).from(cvEvidenceOverlays).all().length,
+      mcpClientGrants: tx.select({ id: mcpClientGrants.id }).from(mcpClientGrants).all().length,
+      mcpAuditLogEntries: tx.select({ id: mcpAuditLogEntries.id }).from(mcpAuditLogEntries).all().length,
     };
 
     tx.delete(applicationAttempts).run();
@@ -1869,6 +2008,12 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
     tx.delete(cvDocuments).run();
     tx.delete(automationGrants).run();
     tx.delete(applicationAnswers).run();
+    // #421: a full reset must not leave a client grant pointing at a (cvId, caseId) pair that no
+    // longer exists. Audit entries deleted explicitly too, ahead of the grant rows they reference
+    // via `onDelete: 'set null'` -- deleting grants first would only null out `grantId` here, not
+    // remove the rows, so this reset would otherwise leave every past audit entry behind.
+    tx.delete(mcpAuditLogEntries).run();
+    tx.delete(mcpClientGrants).run();
 
     const [settings] = tx.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
     if (!settings) throw new Error('failed to restore default app settings');

@@ -162,6 +162,13 @@
       "when": 1790805398628,
       "tag": "0022_flashy_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1790810274733,
+      "tag": "0023_wakeful_maestro",
+      "breakpoints": true
     }
   ]
 }

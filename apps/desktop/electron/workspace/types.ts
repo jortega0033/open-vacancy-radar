@@ -24,6 +24,7 @@ import type {
   CvListingStatus,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
+import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -98,6 +99,10 @@ export type {
   CvRequirementMapping,
   CvWordingApprovalStatus,
 } from './cv-evidence-schema.js';
+
+/** #421's MCP client grants and audit trail, re-exported for the same reason the CV-tailoring
+ * types above are. */
+export type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
 
 export interface SavedJobRecord {
   id: string;
@@ -309,6 +314,63 @@ export interface CvEvidenceOverlayPatch {
   requirements?: CvRequirementMapping[];
   facts?: CvEvidenceFact[];
   wordingVariants?: CvApprovedWording[];
+}
+
+/** #421: a named local client's authorization to act on the local MCP endpoint. See
+ * `mcp-grant-schema.ts`'s `McpClientGrant` for the full shape this mirrors -- this record never
+ * carries the credential itself, only that a verifier exists, since the credential crosses into
+ * the renderer at no point (see `createMcpClientGrant` below). */
+export interface McpClientGrantRecord {
+  id: string;
+  name: string;
+  scopeType: McpGrantScopeType;
+  sourceCvId: string;
+  caseIds: string[];
+  canReadFinalSnapshot: boolean;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601 */
+  expiresAt: string;
+  /** ISO-8601, or `''` while active. */
+  revokedAt: string;
+}
+
+export interface McpClientGrantInput {
+  name: string;
+  scopeType: McpGrantScopeType;
+  /** Required when `scopeType === 'source_cv'`, ignored otherwise. */
+  sourceCvId?: string;
+  /** Required when `scopeType === 'case_ids'`, ignored otherwise -- the candidate names the exact
+   * existing cases this grant may work on. */
+  caseIds?: string[];
+  canReadFinalSnapshot?: boolean;
+  /** ISO-8601 */
+  expiresAt: string;
+}
+
+/** #421's audit trail entry. See `mcp-grant-schema.ts`'s own doc comment on why every field here
+ * is structurally incapable of carrying raw CV/JD text or a credential. */
+export interface McpAuditLogEntry {
+  id: string;
+  /** `''` when no grant matched at all. */
+  grantId: string;
+  toolName: string;
+  /** `''` when no case was involved. */
+  caseId: string;
+  outcome: McpAuditOutcome;
+  /** `''` when not applicable. */
+  revision: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+export interface McpAuditLogEntryInput {
+  /** `''` when no grant matched at all. */
+  grantId: string;
+  toolName: string;
+  caseId?: string;
+  outcome: McpAuditOutcome;
+  revision?: string;
 }
 
 
@@ -794,6 +856,10 @@ export interface AppSettingsRecord {
   confirmApplicationDelete: boolean;
   autoArchiveRejected: boolean;
   defaultProvider: DefaultAiProvider;
+  /** #421: whether the local MCP endpoint listens at all. See `schema.ts`'s comment on the column
+   * for the full reasoning; unlike `autoApplyEnabled` above, `parseSettingsPatch` does accept this
+   * one -- it is the literal on/off switch the candidate flips in Settings. */
+  mcpEndpointEnabled: boolean;
   /**
    * ADI-07: the AI Workspace's renderer-local view state, persisted here rather than in
    * `localStorage` so it travels with the workspace database like every other preference. See
@@ -835,6 +901,8 @@ export interface ApplicationDataResetResult {
     automationGrants: number;
     applicationAnswers: number;
     cvEvidenceOverlays: number;
+    mcpClientGrants: number;
+    mcpAuditLogEntries: number;
   };
 }
 
@@ -948,6 +1016,21 @@ export interface WorkspaceBridge {
    * approval and application/submission readiness are separate states").
    */
   exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvExportResult>;
+
+  /**
+   * #421: named local-client grants for the local MCP endpoint. Deliberately never returns a
+   * credential value -- `createMcpClientGrant`'s one-time secret is delivered to the candidate
+   * through a main-process-owned native dialog or clipboard action and never crosses into the
+   * renderer at all (the same "the daemon's bearer token never crosses into the renderer" rule
+   * SECURITY.md already states, generalized to a per-client credential). This resolved value is
+   * only ever the grant record itself.
+   */
+  listMcpClientGrants(): Promise<McpClientGrantRecord[]>;
+  createMcpClientGrant(input: McpClientGrantInput): Promise<McpClientGrantRecord>;
+  revokeMcpClientGrant(id: string): Promise<McpClientGrantRecord>;
+  /** `port` is `null` whenever `running` is `false`. Not itself a secret -- see `main.ts`'s own
+   * comment on this channel for why this is a plain read, unlike the daemon's base URL/token. */
+  getMcpServerStatus(): Promise<{ running: boolean; port: number | null }>;
 
   /**
    * The reusable application-answer library (#372). See `schema.ts`'s comment on

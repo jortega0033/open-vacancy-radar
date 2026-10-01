@@ -118,6 +118,13 @@ describe('settings', () => {
       sourceCvContentHash: 'a'.repeat(64),
       jdSnapshotHash: 'b'.repeat(64),
     });
+    const { grant } = workspace.createMcpClientGrant(db, {
+      name: 'Fixture client',
+      scopeType: 'source_cv',
+      sourceCvId: cv.id,
+      expiresAt: '2026-12-01T00:00:00.000Z',
+    });
+    workspace.appendMcpAuditLogEntry(db, { grantId: grant.id, toolName: '', outcome: 'success' });
 
     const result = workspace.resetApplicationData(db);
 
@@ -132,8 +139,10 @@ describe('settings', () => {
       automationGrants: 1,
       applicationAnswers: 0,
       cvEvidenceOverlays: 1,
+      mcpClientGrants: 1,
+      mcpAuditLogEntries: 1,
     });
-    expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null });
+    expect(result.settings).toMatchObject({ theme: 'system', defaultCvId: null, mcpEndpointEnabled: false });
     expect(workspace.listSavedJobs(db)).toEqual([]);
     expect(workspace.listApplications(db)).toEqual([]);
     expect(workspace.listCvDocuments(db)).toEqual([]);
@@ -143,6 +152,13 @@ describe('settings', () => {
     expect(db.select().from(schema.applicationArtifacts).all()).toEqual([]);
     expect(db.select().from(schema.applicationSubmissionReceipts).all()).toEqual([]);
     expect(db.select().from(schema.cvEvidenceOverlays).all()).toEqual([]);
+    expect(workspace.listMcpClientGrants(db)).toEqual([]);
+    expect(workspace.listMcpAuditLogEntries(db)).toEqual([]);
+  });
+
+  it('toggles mcpEndpointEnabled like any other settings field (#421)', () => {
+    expect(workspace.getSettings(db).mcpEndpointEnabled).toBe(false);
+    expect(workspace.updateSettings(db, { mcpEndpointEnabled: true }).mcpEndpointEnabled).toBe(true);
   });
 });
 
@@ -488,6 +504,76 @@ describe('cv evidence overlays (#419)', () => {
       });
       expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, overlay.caseRevision)).toThrow(/no reviewed source/);
     });
+  });
+});
+
+describe('mcp client grants and audit trail (#421)', () => {
+  const CV = {
+    name: 'Resume',
+    kind: 'manual' as const,
+    profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+  };
+  const FUTURE = '2099-01-01T00:00:00.000Z';
+
+  it('mints a one-time credential that only this return value ever carries', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const { grant, credential } = workspace.createMcpClientGrant(db, {
+      name: 'My Claude Desktop',
+      scopeType: 'source_cv',
+      sourceCvId: cv.id,
+      expiresAt: FUTURE,
+    });
+    expect(credential).toHaveLength(64); // 32 random bytes, hex-encoded
+    expect(grant).not.toHaveProperty('credential');
+    expect(grant).not.toHaveProperty('credentialVerifierHash');
+    expect(grant).toMatchObject({ name: 'My Claude Desktop', scopeType: 'source_cv', sourceCvId: cv.id, caseIds: [], revokedAt: '' });
+    // The same credential authenticates the grant; `listMcpClientGrants` never carries it either.
+    expect(workspace.findMcpClientGrantByCredential(db, credential)?.id).toBe(grant.id);
+    expect(workspace.listMcpClientGrants(db)).toEqual([grant]);
+  });
+
+  it('rejects a source_cv grant for a CV that does not exist', () => {
+    expect(() =>
+      workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: 'missing-cv', expiresAt: FUTURE }),
+    ).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('a case_ids grant starts with exactly the ids the candidate named, never a source_cv', () => {
+    const { grant } = workspace.createMcpClientGrant(db, {
+      name: 'Narrow client',
+      scopeType: 'case_ids',
+      caseIds: ['overlay-1', 'overlay-2'],
+      expiresAt: FUTURE,
+    });
+    expect(grant).toMatchObject({ scopeType: 'case_ids', sourceCvId: '', caseIds: ['overlay-1', 'overlay-2'] });
+  });
+
+  it('never authenticates a wrong or unknown credential', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    expect(workspace.findMcpClientGrantByCredential(db, 'not-a-real-credential')).toBeNull();
+  });
+
+  it('revoking is idempotent and durable: the record stays, stamped with when it was actually revoked', () => {
+    const cv = workspace.createCvDocument(db, CV);
+    const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    const revoked = workspace.revokeMcpClientGrant(db, grant.id);
+    expect(revoked.revokedAt).not.toBe('');
+    const revokedAgain = workspace.revokeMcpClientGrant(db, grant.id);
+    expect(revokedAgain.revokedAt).toBe(revoked.revokedAt);
+  });
+
+  it('throws WorkspaceNotFoundError revoking a grant that does not exist', () => {
+    expect(() => workspace.revokeMcpClientGrant(db, 'missing-grant')).toThrow(workspace.WorkspaceNotFoundError);
+  });
+
+  it('records every audit entry, including one with no matching grant, newest first', () => {
+    workspace.appendMcpAuditLogEntry(db, { grantId: '', toolName: '', outcome: 'denied' });
+    workspace.appendMcpAuditLogEntry(db, { grantId: '', toolName: 'get_tailoring_case', caseId: 'case-1', outcome: 'success', revision: '3' });
+    const entries = workspace.listMcpAuditLogEntries(db);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ toolName: 'get_tailoring_case', caseId: 'case-1', outcome: 'success', revision: '3' });
+    expect(entries[1]).toMatchObject({ grantId: '', toolName: '', caseId: '', outcome: 'denied', revision: '' });
   });
 });
 
