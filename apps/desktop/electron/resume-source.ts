@@ -9,7 +9,10 @@ import {
   describeCvEvidenceOverlayGaps,
   findCvFactConflicts,
   isCvFactUsable,
+  type CvApprovedWording,
+  type CvEvidenceFact,
   type CvEvidenceOverlay,
+  type CvProjectSelection,
 } from './workspace/cv-evidence-schema.js';
 import type { ResumeExperienceEntry, ResumeProjectEntry, TailoredResume } from './resume-schema.js';
 
@@ -232,6 +235,12 @@ export interface ComposedTailoredResume {
  * risks silently dropping a bullet the candidate's own source already carried and never asked to
  * remove).
  *
+ * A variant is usable only when its own status and every fact it cites are active and approved, and
+ * it stays inside the scope those facts were confirmed for (`describeVariantScopeProblem`): a role
+ * bullet or project description only with facts from that same role or project, never a client named
+ * as a comparison, a summary or skill built from several roles never worded as one role's, and a new
+ * skill only when a cited fact names it. Roles are matched by stable id, never by employer and title.
+ *
  * Three things block approval, each named in `blockers` rather than silently excluded:
  *  - The overlay's own `describeCvEvidenceOverlayGaps` (unreviewed requirements, a required item
  *    still `needs_verification`, an overlay left in conflict, and so on).
@@ -249,9 +258,19 @@ export function composeApprovedTailoredResume(
   overlay: CvEvidenceOverlay,
   currentSourceCvContentHash: string,
   skills: readonly string[],
+  options: ComposeApprovedOptions = {},
 ): ComposedTailoredResume {
   const blockers = describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash);
+  const flag = (reason: string) => {
+    if (!blockers.includes(reason)) blockers.push(reason);
+  };
 
+  // Two roles can share an employer and a title, so the id is the only identity there is. An entry
+  // with no id, or an id another entry shares, would let one role's wording land on the other.
+  const experienceIds = source.experience.map((entry) => entry.id?.trim() ?? '');
+  if (experienceIds.some((id) => id.length === 0) || new Set(experienceIds).size !== experienceIds.length) {
+    flag('two roles in your reviewed source share one id or have none, so wording cannot be placed on the right role');
+  }
   const experienceById = new Map(source.experience.map((entry) => [entry.id, entry]));
   const projectById = new Map(source.projects.map((entry) => [entry.id, entry]));
 
@@ -260,21 +279,27 @@ export function composeApprovedTailoredResume(
   // it here, and a fact in an unresolved contradiction blocks the wording that stands on it.
   const factById = new Map(overlay.facts.map((fact) => [fact.factId, fact]));
   const conflicted = new Set(findCvFactConflicts(overlay.facts).flatMap((conflict) => conflict.factIds));
+  const profileSkillKeys = new Set(skills.map(matchKey));
   const usable = overlay.wordingVariants.filter((variant) => {
     if (variant.status !== 'candidate_approved') return false;
-    const backed =
-      variant.factIds.length > 0 &&
-      variant.factIds.every((factId) => {
-        const fact = factById.get(factId);
-        return fact !== undefined && isCvFactUsable(fact, conflicted);
-      });
-    if (!backed) return false;
+    const cited: CvEvidenceFact[] = [];
+    for (const factId of variant.factIds) {
+      const fact = factById.get(factId);
+      if (!fact || !isCvFactUsable(fact, conflicted)) return false;
+      cited.push(fact);
+    }
+    if (cited.length === 0) return false;
     if (variant.sourceRevision !== currentSourceCvContentHash) {
-      blockers.push(`an approved "${variant.targetField}" variant was approved against a source CV revision that no longer matches`);
+      flag(`an approved "${variant.targetField}" variant was approved against a source CV revision that no longer matches`);
       return false;
     }
     if (variant.parentId && !experienceById.has(variant.parentId) && !projectById.has(variant.parentId)) {
-      blockers.push(`an approved "${variant.targetField}" variant refers to a role or project that no longer exists in your reviewed source`);
+      flag(`an approved "${variant.targetField}" variant refers to a role or project that no longer exists in your reviewed source`);
+      return false;
+    }
+    const scopeProblem = describeVariantScopeProblem(variant, cited, experienceById, projectById, profileSkillKeys);
+    if (scopeProblem) {
+      flag(scopeProblem);
       return false;
     }
     return true;
@@ -293,12 +318,25 @@ export function composeApprovedTailoredResume(
     resumeExperienceById.set(entry.id, resumeEntry);
     return resumeEntry;
   });
+  const selectedProjects = selectSourceProjects(source);
   const resumeProjectById = new Map<string, ResumeProjectEntry>();
-  resume.projects = selectSourceProjects(source).map((project) => {
+  resume.projects = selectedProjects.map((project) => {
     const resumeEntry = sourceProjectToResumeEntry(project);
     resumeProjectById.set(project.id, resumeEntry);
     return resumeEntry;
   });
+
+  // The candidate approves which projects the CV shows (#419 step 8). Passing `projectSelection`
+  // (even `null`) asks for that check; omitting it leaves the selection to the source's own pins and
+  // limit, as before.
+  if (options.projectSelection !== undefined && selectedProjects.length > 0) {
+    const selection = options.projectSelection;
+    if (!selection) {
+      flag('the projects for this CV have not been approved yet');
+    } else if (selection.projectIds.join('\n') !== selectedProjects.map((project) => project.id).join('\n')) {
+      flag('the projects selected for this CV changed after you approved the selection: approve the selection again');
+    }
+  }
 
   for (const variant of usable) {
     if (variant.targetField === 'summary') {
@@ -306,7 +344,7 @@ export function composeApprovedTailoredResume(
       continue;
     }
     if (variant.targetField === 'skill') {
-      if (!resume.skills.includes(variant.text)) resume.skills.push(variant.text);
+      if (!resume.skills.some((skill) => matchKey(skill) === matchKey(variant.text))) resume.skills.push(variant.text);
       continue;
     }
     if (variant.targetField === 'experience_bullet') {
@@ -326,4 +364,81 @@ export function composeApprovedTailoredResume(
   }
 
   return { resume, blockers };
+}
+
+export interface ComposeApprovedOptions {
+  /** The candidate's approved project selection. `undefined` skips the check; `null` means none
+   * has been approved. */
+  projectSelection?: CvProjectSelection | null;
+}
+
+/** Whole-word, case-insensitive: "Acme" is mentioned by "at Acme Corp" but not by "Acmeology". */
+function mentions(text: string, name: string): boolean {
+  const needle = name.trim();
+  if (needle.length < 2) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'iu').test(text);
+}
+
+/** Phrases that pin a statement to one position ("in my current role"). A summary or skill line
+ * built from several roles has no single position to name. */
+const SINGLE_ROLE_PHRASE =
+  /\b(?:in|at|during|within|throughout)\s+(?:my|the|his|her|their)\s+(?:current|present|last|previous|latest|recent|first|former|prior|most recent)\s+(?:role|job|position|company|employer|team|engagement|project)\b/iu;
+
+/**
+ * Why one approved variant cannot be placed where it claims to go, or `null` when it can. It never
+ * decides what a variant says (the candidate approved the exact text); it checks that the text
+ * stays inside what its facts were confirmed for (#419 step 8):
+ *  - A role bullet or project description is scoped to one role or project, and every fact it cites
+ *    must belong to that same role or project. A fact confirmed at Role A is never a Role B bullet.
+ *  - A fact that names an end client cannot back a bullet on a role whose reviewed source lists no
+ *    such client: a client mentioned as an analogy is not an engagement.
+ *  - A summary or skill may draw on facts from several roles, but must not word them as one role's.
+ *  - A skill the reviewed profile does not already list must be named in a fact it cites.
+ */
+function describeVariantScopeProblem(
+  variant: CvApprovedWording,
+  cited: readonly CvEvidenceFact[],
+  experienceById: ReadonlyMap<string, CvSourceExperienceEntry>,
+  projectById: ReadonlyMap<string, CvSourceProjectEntry>,
+  profileSkillKeys: ReadonlySet<string>,
+): string | null {
+  if (variant.targetField === 'experience_bullet' || variant.targetField === 'project_description') {
+    const isBullet = variant.targetField === 'experience_bullet';
+    const label = isBullet ? 'role' : 'project';
+    const parent = isBullet ? experienceById.get(variant.parentId) : projectById.get(variant.parentId);
+    if (!variant.parentId || !parent) {
+      return `an approved "${variant.targetField}" wording is not scoped to a ${label} in your reviewed source`;
+    }
+    const factKind = isBullet ? 'experience' : 'project';
+    if (cited.some((fact) => fact.parentId !== variant.parentId || fact.parentType !== factKind)) {
+      return `an approved ${label} wording cites a fact confirmed for a different ${isBullet ? 'role or project' : 'project or role'}, so it cannot appear under this ${label}`;
+    }
+    const reviewedClient = isBullet
+      ? (parent as CvSourceExperienceEntry).client
+      : (parent as CvSourceProjectEntry).organization;
+    const strayClient = cited.find((fact) => fact.client.trim() && matchKey(fact.client) !== matchKey(reviewedClient));
+    if (strayClient) {
+      return `an approved ${label} wording cites a client ("${strayClient.client}") that your reviewed source does not list for it: a client named as a comparison is not an engagement`;
+    }
+    return null;
+  }
+  const parentIds = new Set(cited.map((fact) => fact.parentId));
+  if (parentIds.size > 1) {
+    const named = [...parentIds].filter((parentId) => {
+      const experience = experienceById.get(parentId);
+      const names = experience ? [experience.company, experience.client] : [projectById.get(parentId)?.name ?? ''];
+      return names.some((name) => name.trim() !== '' && mentions(variant.text, name));
+    });
+    if (named.length === 1 || SINGLE_ROLE_PHRASE.test(variant.text)) {
+      return `an approved "${variant.targetField}" wording draws on facts from several roles but words them as one role's: name each role or drop the role reference`;
+    }
+  }
+  if (variant.targetField === 'skill' && !profileSkillKeys.has(matchKey(variant.text))) {
+    const words = cited.flatMap((fact) => [fact.activity, fact.mechanism, fact.result]);
+    if (!words.some((entry) => mentions(entry, variant.text))) {
+      return `the new skill "${variant.text}" is not named in any approved fact it cites, so it cannot be added`;
+    }
+  }
+  return null;
 }
