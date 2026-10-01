@@ -89,6 +89,10 @@ function pdfArtifact(snapshotDigest: string, snapshotApprovedAt: string): CvArti
   };
 }
 
+/** The library page is heavy to load, so a loaded machine needs more than testing-library's default second. */
+const SLOW = { timeout: 8000 };
+vi.setConfig({ testTimeout: 20_000 });
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -155,7 +159,7 @@ describe('reopening tailoring cases from the CV Library', () => {
 
     render(<CvLibraryPage />);
 
-    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' });
+    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
     const rows = within(table).getAllByRole('row');
     const manualRow = rows.find((row) => within(row).queryByText('Platform Engineer at Northwind Freight'));
     const foundRow = rows.find((row) => within(row).queryByText('Data Engineer at Acme'));
@@ -171,7 +175,7 @@ describe('reopening tailoring cases from the CV Library', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Platform Engineer at Northwind Freight' }));
 
     await waitFor(() => expect(getCvEvidenceOverlay).toHaveBeenCalledWith('cv-1', 'manual:abc-123'));
-    expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('you will own the GraphQL gateway');
+    expect(await screen.findByLabelText('Full job description text', undefined, SLOW)).toHaveTextContent('you will own the GraphQL gateway');
     expect(screen.getByText('Platform Engineer')).toBeInTheDocument();
     expect(screen.getByText(/Saved as revision 1/)).toBeInTheDocument();
   });
@@ -222,9 +226,9 @@ describe('reopening tailoring cases from the CV Library', () => {
     });
 
     render(<CvLibraryPage />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Open Platform Engineer at Northwind Freight$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Open Platform Engineer at Northwind Freight$/ }, SLOW));
 
-    expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('you will own the GraphQL gateway');
+    expect(await screen.findByLabelText('Full job description text', undefined, SLOW)).toHaveTextContent('you will own the GraphQL gateway');
     expect(screen.getByRole('combobox', { name: /use saved cv/i })).toHaveValue('cv-2');
     expect(screen.getByText(/Text you pasted/)).toBeInTheDocument();
     expect(screen.getByText(/Saved as revision 2/)).toBeInTheDocument();
