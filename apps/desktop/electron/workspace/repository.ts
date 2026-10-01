@@ -12,8 +12,16 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
-import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
 import {
+  EMPTY_CV_SOURCE,
+  selectSourceProjects,
+  stableCvSourceJson,
+  withStableExperienceIds,
+  type CvSourceDocument,
+} from './cv-source-schema.js';
+import { planCvEvidenceRebase, type CvCurrentInputs, type CvRebasePlan } from './cv-case-rebase.js';
+import {
+  CV_RENDER_CONTRACT_VERSION,
   currentCvJdRevisionId,
   EMPTY_CV_REQUIREMENT_COVERAGE,
   findCvFactConflicts,
@@ -29,6 +37,8 @@ import {
   CV_JD_UNWAIVABLE_REASONS,
   type CvEvidenceOverlay,
   type CvJdIncompleteReason,
+  type CvProjectSelection,
+  type CvSourceBaseline,
 } from './cv-evidence-schema.js';
 import type { CvProposalPayload } from './cv-proposal-schema.js';
 import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
@@ -493,6 +503,10 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
 }
 
 export function updateCvDocument(db: WorkspaceDb, id: string, values: CvDocumentPatch): CvDocumentRecord {
+  return db.transaction((tx) => updateCvDocumentInTransaction(tx, id, values));
+}
+
+function updateCvDocumentInTransaction(db: WorkspaceDb, id: string, values: CvDocumentPatch): CvDocumentRecord {
   const existing = db.select().from(cvDocuments).where(eq(cvDocuments.id, id)).get();
   if (!existing) throw new WorkspaceNotFoundError('CV document', id);
 
@@ -513,7 +527,34 @@ export function updateCvDocument(db: WorkspaceDb, id: string, values: CvDocument
 
   const [row] = db.update(cvDocuments).set(set).where(eq(cvDocuments.id, id)).returning().all();
   if (!row) throw new WorkspaceNotFoundError('CV document', id);
-  return toCvDocument(row);
+  const updated = toCvDocument(row);
+  // A change to the source CV, the profile text or the skills a case was approved against means the
+  // approval no longer describes what the CV says (#419): drop approved cases back to a draft. The
+  // candidate then sees what changed and rebases explicitly; nothing is rebased on their behalf.
+  if (computeCaseInputsDigest(currentCaseInputs(toCvDocument(existing))) !== computeCaseInputsDigest(currentCaseInputs(updated))) {
+    invalidateApprovedCasesOfCv(db, id);
+  }
+  return updated;
+}
+
+/** Moves every approved case of one CV back to a draft and bumps its revision. The stored approved
+ * snapshot stays as the historical record of what was approved. */
+function invalidateApprovedCasesOfCv(db: WorkspaceDb, cvId: string): void {
+  const approved = db
+    .select()
+    .from(cvEvidenceOverlays)
+    .where(and(eq(cvEvidenceOverlays.cvId, cvId), inArray(cvEvidenceOverlays.state, ['candidate_approved', 'artifact_approved', 'qa_failed'])))
+    .all();
+  for (const row of approved) {
+    db.update(cvEvidenceOverlays)
+      .set({
+        state: invalidatedOverlayState(row.state as CvEvidenceOverlayRecord['state']),
+        caseRevision: bumpCaseRevision(row.caseRevision ?? '0'),
+        updatedAt: new Date(),
+      })
+      .where(eq(cvEvidenceOverlays.id, row.id))
+      .run();
+  }
 }
 
 /**
@@ -597,7 +638,12 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     jdRevisions,
     origin: (row.origin ?? 'vacancy') as CvEvidenceOverlayRecord['origin'],
     caseRevision: row.caseRevision ?? '0',
-    approvedResumeSnapshot: row.approvedResumeSnapshot ?? null,
+    // A snapshot approved before the render contract was versioned reads as version 0.
+    approvedResumeSnapshot: row.approvedResumeSnapshot
+      ? { ...row.approvedResumeSnapshot, renderContractVersion: row.approvedResumeSnapshot.renderContractVersion ?? 0 }
+      : null,
+    projectSelection: row.projectSelection ?? null,
+    sourceBaseline: row.sourceBaseline ?? null,
     capturedAt: iso(row.capturedAt),
     updatedAt: iso(row.updatedAt),
   };
@@ -668,6 +714,7 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
   return db.transaction((tx) => {
     const cv = tx.select({ id: cvDocuments.id }).from(cvDocuments).where(eq(cvDocuments.id, input.cvId)).get();
     if (!cv) throw new WorkspaceNotFoundError('CV document', input.cvId);
+    const baseline = captureSourceBaseline(getCvDocument(tx, input.cvId));
 
     const existing = tx
       .select()
@@ -713,6 +760,7 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
         listingStatus: input.listingStatus ?? 'unknown',
         origin,
         caseRevision: '1',
+        sourceBaseline: baseline,
       })
       .returning()
       .all();
@@ -881,6 +929,35 @@ function bumpCaseRevision(current: string): string {
   return String(Number(current) + 1);
 }
 
+function currentCaseInputs(doc: CvDocumentRecord): CvCurrentInputs {
+  return {
+    source: doc.source,
+    skills: doc.profile.skills,
+    profileSummary: doc.profile.summary,
+    textDigest: createHash('sha256').update(doc.text).digest('hex'),
+  };
+}
+
+/** One digest over everything a case depends on in the CV: the reviewed source, the profile's
+ * skills and summary, and the extracted text. Computed here in the main process (#419). */
+function computeCaseInputsDigest(inputs: CvCurrentInputs): string {
+  return createHash('sha256')
+    .update(JSON.stringify([inputs.source ? stableCvSourceJson(inputs.source) : null, [...inputs.skills], inputs.profileSummary, inputs.textDigest]))
+    .digest('hex');
+}
+
+function captureSourceBaseline(doc: CvDocumentRecord): CvSourceBaseline {
+  const inputs = currentCaseInputs(doc);
+  return {
+    source: inputs.source,
+    skills: [...inputs.skills],
+    profileSummary: inputs.profileSummary,
+    textDigest: inputs.textDigest,
+    inputsDigest: computeCaseInputsDigest(inputs),
+    capturedAt: new Date().toISOString(),
+  };
+}
+
 /**
  * The *only* path that may move `state` to `'candidate_approved'` (#421's case contract). Unlike
  * the generic patch above, this never approves any wording itself: it composes only the variants the
@@ -909,16 +986,26 @@ export function approveCvEvidenceOverlay(
       throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
     }
     const currentSourceCvContentHash = computeSourceCvContentHash(doc.source);
+    // A case started before the CV changed has to be rebased onto the new CV by the candidate; it
+    // cannot be approved against a CV it was not built from (#419).
+    if (existing.sourceBaseline && existing.sourceBaseline.inputsDigest !== computeCaseInputsDigest(currentCaseInputs(doc))) {
+      throw new Error(
+        'this CV cannot be approved yet: your CV, profile or skills changed since this case was started, so review the changes and rebase the case first',
+      );
+    }
 
     // Wording is never approved here (#419 step 7): only variants the candidate already approved,
     // one by one, are composed. A draft sentence, or a fact id nobody approved, adds nothing.
-    const { resume, blockers } = composeApprovedTailoredResume(doc.source, existing, currentSourceCvContentHash, doc.profile.skills);
+    const { resume, blockers } = composeApprovedTailoredResume(doc.source, existing, currentSourceCvContentHash, doc.profile.skills, {
+      projectSelection: existing.projectSelection,
+    });
     if (blockers.length > 0) {
       throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);
     }
 
     const newCaseRevision = bumpCaseRevision(existing.caseRevision);
     const approvedResumeSnapshot: CvApprovedResumeSnapshot = {
+      renderContractVersion: CV_RENDER_CONTRACT_VERSION,
       resume,
       digest: createHash('sha256').update(JSON.stringify(resume)).digest('hex'),
       approvedAt: new Date().toISOString(),
@@ -931,6 +1018,110 @@ export function approveCvEvidenceOverlay(
         state: 'candidate_approved',
         approvedResumeSnapshot,
         caseRevision: newCaseRevision,
+        updatedAt: new Date(),
+      })
+      .where(eq(cvEvidenceOverlays.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    return toCvEvidenceOverlay(row);
+  });
+}
+
+/**
+ * #419 step 8: records the candidate's approval of the projects the CV will show. The selection is
+ * computed here from the reviewed source (`selectSourceProjects`: pins first, then the unpinned
+ * ones the configured limit allows), never taken from the caller. Approving a selection that differs
+ * from one already approved moves an approved case back to a draft, since the document it approved
+ * is not the document that would now be built.
+ */
+export function approveCvProjectSelection(db: WorkspaceDb, id: string, expectedCaseRevision: string): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const existingRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+    if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    const existing = toCvEvidenceOverlay(existingRow);
+    if (existing.caseRevision !== expectedCaseRevision) throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
+    const doc = getCvDocument(tx, existing.cvId);
+    if (!doc.source) throw new Error('this CV has no reviewed source yet, so there are no projects to approve');
+    const selection: CvProjectSelection = {
+      projectIds: selectSourceProjects(doc.source).map((project) => project.id),
+      maxProjects: doc.source.maxProjects,
+      approvedAt: new Date().toISOString(),
+    };
+    const changed = existing.projectSelection !== null && existing.projectSelection.projectIds.join('\n') !== selection.projectIds.join('\n');
+    const [row] = tx
+      .update(cvEvidenceOverlays)
+      .set({
+        projectSelection: selection,
+        state: changed ? invalidatedOverlayState(existing.state) : existing.state,
+        caseRevision: bumpCaseRevision(existing.caseRevision),
+        updatedAt: new Date(),
+      })
+      .where(eq(cvEvidenceOverlays.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    return toCvEvidenceOverlay(row);
+  });
+}
+
+/** What changed in the CV since this case was started or last rebased, and what a rebase would keep
+ * and drop (#419). Read only. */
+export function previewCvEvidenceRebase(db: WorkspaceDb, id: string): CvRebasePlan {
+  const overlay = getCvEvidenceOverlayById(db, id);
+  const doc = getCvDocument(db, overlay.cvId);
+  const plan = planCvEvidenceRebase(overlay, currentCaseInputs(doc));
+  const inputsChanged = overlay.sourceBaseline
+    ? overlay.sourceBaseline.inputsDigest !== computeCaseInputsDigest(currentCaseInputs(doc))
+    : !!doc.source && overlay.sourceCvContentHash !== computeSourceCvContentHash(doc.source);
+  return { ...plan, inputsChanged };
+}
+
+/**
+ * The candidate's explicit rebase onto the current CV (#419). Facts are kept. Approved wording that
+ * still fits the new CV is kept and re-stamped to the new source revision; wording whose role or
+ * project is gone, or whose source text changed, is superseded (kept in the history, never used).
+ * Requirements that pointed at a vanished role or project lose that link and need review again. The
+ * project selection approval is cleared and an approved case goes back to a draft, so the whole CV
+ * is approved again against the new source.
+ */
+export function rebaseCvEvidenceOverlay(db: WorkspaceDb, id: string, expectedCaseRevision: string): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const existingRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+    if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    const existing = toCvEvidenceOverlay(existingRow);
+    if (existing.caseRevision !== expectedCaseRevision) throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
+    const doc = getCvDocument(tx, existing.cvId);
+    if (!doc.source) throw new Error('this CV has no reviewed source yet, so a case cannot be rebased onto it');
+    const plan = planCvEvidenceRebase(existing, currentCaseInputs(doc));
+    const newHash = computeSourceCvContentHash(doc.source);
+    const dropped = new Set(plan.droppedVariants.map((variant) => variant.variantId));
+    const wordingVariants = existing.wordingVariants.map((variant) => {
+      if (dropped.has(variant.variantId)) return { ...variant, status: 'superseded' as const };
+      return variant.status === 'candidate_approved' ? { ...variant, sourceRevision: newHash } : variant;
+    });
+    const live = new Set([...doc.source.experience.map((entry) => entry.id), ...doc.source.projects.map((entry) => entry.id)]);
+    const review = new Set(plan.requirementIdsToReview);
+    const requirements = existing.requirements.map((requirement) =>
+      review.has(requirement.requirementId)
+        ? {
+            ...requirement,
+            anchorParentId: live.has(requirement.anchorParentId) ? requirement.anchorParentId : '',
+            sourceIds: requirement.sourceIds.filter((sourceId) => live.has(sourceId)),
+            reviewed: false,
+          }
+        : requirement,
+    );
+    const [row] = tx
+      .update(cvEvidenceOverlays)
+      .set({
+        sourceCvContentHash: newHash,
+        wordingVariants,
+        requirements,
+        sourceBaseline: captureSourceBaseline(doc),
+        projectSelection: null,
+        state: invalidatedOverlayState(existing.state),
+        caseRevision: bumpCaseRevision(existing.caseRevision),
         updatedAt: new Date(),
       })
       .where(eq(cvEvidenceOverlays.id, id))

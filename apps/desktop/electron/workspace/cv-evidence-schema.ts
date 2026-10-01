@@ -32,6 +32,17 @@
  */
 
 import type { TailoredResume } from '../resume-schema.js';
+import type { CvSourceDocument } from './cv-source-schema.js';
+
+/**
+ * The version of the resume render contract: the shape `TailoredResume` is rendered from and the
+ * template/validation rules that turn it into a PDF or DOCX. It is stored with every approved
+ * snapshot so that a later renderer change can mark a saved artifact's verification as outdated
+ * without touching the candidate's factual approval (#419: "a renderer change invalidates artifact
+ * verification, not factual approval"). Raise it whenever a change alters what a render of the same
+ * snapshot would contain. A snapshot approved before this field existed reads as version `0`.
+ */
+export const CV_RENDER_CONTRACT_VERSION = 1;
 
 /** Whether a candidate's testimony has been independently corroborated. `self_reported` is the
  * default and the common case; upgrading it is a deliberate, separate action, never implicit in
@@ -365,6 +376,10 @@ export interface CvJdRevision {
  * as the historical record of what was approved.
  */
 export interface CvApprovedResumeSnapshot {
+  /** The `CV_RENDER_CONTRACT_VERSION` this snapshot was approved under. `0` for a snapshot approved
+   * before the field existed. Artifact verification (a later slice) compares it with the current
+   * constant; factual approval never depends on it. */
+  renderContractVersion: number;
   resume: TailoredResume;
   /** SHA-256 hex of the resume's own serialization, supplied by the caller. */
   digest: string;
@@ -372,6 +387,39 @@ export interface CvApprovedResumeSnapshot {
   approvedAt: string;
   /** The `caseRevision` this snapshot was approved against. */
   caseRevision: string;
+}
+
+/**
+ * The projects the candidate approved for this case's CV (#419 step 8), in the order they appear.
+ * It records the ids of `selectSourceProjects(source)` at the moment of approval, so changing a
+ * pin or the project limit, or removing a project, makes it differ from the current selection and
+ * blocks whole-CV approval until the candidate approves the new selection.
+ */
+export interface CvProjectSelection {
+  projectIds: string[];
+  /** The source's `maxProjects` at approval, shown back to the candidate. `0` means no limit. */
+  maxProjects: number;
+  /** ISO-8601, stamped by the write layer. */
+  approvedAt: string;
+}
+
+/**
+ * What the case was started from, kept so a later change to the CV can be shown as a diff (#419:
+ * "a source CV/profile/text change invalidates the case's approval until the candidate reviews a
+ * diff and explicitly rebases it"). `null` on a case created before this existed: such a case still
+ * blocks on its stored source hash, but has no earlier copy to list changes against.
+ */
+export interface CvSourceBaseline {
+  source: CvSourceDocument | null;
+  /** The reviewed `CvProfile.skills` at capture time. */
+  skills: string[];
+  profileSummary: string;
+  /** SHA-256 hex of the CV's extracted text; the text itself is not duplicated here. */
+  textDigest: string;
+  /** SHA-256 hex over all of the above, compared against the CV's current inputs on approval. */
+  inputsDigest: string;
+  /** ISO-8601 */
+  capturedAt: string;
 }
 
 /**
@@ -427,6 +475,10 @@ export interface CvEvidenceOverlay {
    * moved to `'candidate_approved'`. `null` until the first approval. See
    * `CvApprovedResumeSnapshot`. */
   approvedResumeSnapshot: CvApprovedResumeSnapshot | null;
+  /** The candidate's approved project selection, `null` until approved. Persisted with the case. */
+  projectSelection: CvProjectSelection | null;
+  /** The CV inputs this case was last started or rebased from. See `CvSourceBaseline`. */
+  sourceBaseline: CvSourceBaseline | null;
 }
 
 export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
@@ -447,6 +499,8 @@ export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
   origin: 'vacancy',
   caseRevision: '0',
   approvedResumeSnapshot: null,
+  projectSelection: null,
+  sourceBaseline: null,
 };
 
 /** Field size budgets, the same two-tier discipline (generous for real content, finite against a

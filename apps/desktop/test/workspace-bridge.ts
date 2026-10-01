@@ -113,6 +113,17 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     createCvEvidenceOverlay: vi.fn(),
     updateCvEvidenceOverlay: vi.fn(),
     approveCvEvidenceOverlay: vi.fn(),
+    approveCvProjectSelection: vi.fn(),
+    previewCvEvidenceRebase: vi.fn().mockResolvedValue({
+      baselineKnown: true,
+      inputsChanged: false,
+      changes: [],
+      keptVariantIds: [],
+      droppedVariants: [],
+      orphanedFactIds: [],
+      requirementIdsToReview: [],
+    }),
+    rebaseCvEvidenceOverlay: vi.fn(),
     deleteCvEvidenceOverlay: vi.fn().mockResolvedValue({ deleted: true }),
     exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
 

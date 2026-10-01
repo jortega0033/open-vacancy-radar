@@ -3078,6 +3078,27 @@ guardedIpc.handle('workspace:cv-evidence-overlays:approve', async (_event, input
   });
 });
 
+/** #419 step 8: the candidate approves the projects the CV will show, as its own step before the
+ * whole CV. The selection is computed from the reviewed source here, never taken from the renderer. */
+guardedIpc.handle('workspace:cv-evidence-overlays:approve-projects', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, expectedCaseRevision } = parseCvEvidenceOverlayApproveInput(input);
+    return workspace.approveCvProjectSelection(await ensureWorkspaceDb(), id, expectedCaseRevision);
+  });
+});
+
+guardedIpc.handle('workspace:cv-evidence-overlays:preview-rebase', async (_event, input: unknown) =>
+  workspace.previewCvEvidenceRebase(await ensureWorkspaceDb(), parseIdEnvelope(input)),
+);
+
+/** #419: the candidate's explicit decision to move a case onto the current CV after it changed. */
+guardedIpc.handle('workspace:cv-evidence-overlays:rebase', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { id, expectedCaseRevision } = parseCvEvidenceOverlayApproveInput(input);
+    return workspace.rebaseCvEvidenceOverlay(await ensureWorkspaceDb(), id, expectedCaseRevision);
+  });
+});
+
 guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input: unknown) =>
   applicationDataResetGate.runMutation(async () =>
     workspace.deleteCvEvidenceOverlay(await ensureWorkspaceDb(), parseIdEnvelope(input)),

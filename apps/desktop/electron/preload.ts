@@ -414,6 +414,15 @@ const workspaceApi: WorkspaceBridge = {
   approveCvEvidenceOverlay(id, expectedCaseRevision) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:approve', { id, expectedCaseRevision });
   },
+  approveCvProjectSelection(id, expectedCaseRevision) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:approve-projects', { id, expectedCaseRevision });
+  },
+  previewCvEvidenceRebase(id) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:preview-rebase', { id });
+  },
+  rebaseCvEvidenceOverlay(id, expectedCaseRevision) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:rebase', { id, expectedCaseRevision });
+  },
   deleteCvEvidenceOverlay(id) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
   },
