@@ -1,8 +1,10 @@
 import type { Logger } from '@agent-dock/agent-runtime';
 import { createConsoleLogger } from '@agent-dock/agent-runtime';
+import { DAEMON_EXIT_CODE_LOCK_CONFLICT } from '@agent-dock/shared';
 import { generateToken } from './auth-token.js';
 import {
   DEFAULT_APP_ID,
+  DaemonLockConflictError,
   assertNoLiveDaemon,
   discoveryFilePath,
   removeDiscoveryFile,
@@ -142,7 +144,11 @@ async function main() {
 
 main().catch((err) => {
   console.error('daemon failed to start:', err instanceof Error ? err.message : err);
-  process.exit(1);
+  // A lock conflict gets its own exit code so the parent process (apps/desktop/electron/main.ts)
+  // can tell "another instance already owns this app id, and is reachable" apart from a genuine
+  // startup failure, using only this process's exit code -- see
+  // `DAEMON_EXIT_CODE_LOCK_CONFLICT`'s own comment for why that's the only contract available.
+  process.exit(err instanceof DaemonLockConflictError ? DAEMON_EXIT_CODE_LOCK_CONFLICT : 1);
 });
 
 export { discoveryFilePath };
