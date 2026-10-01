@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CV_RENDER_CONTRACT_VERSION } from '../electron/workspace/cv-evidence-schema.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson } from '../electron/workspace/cv-source-schema.js';
 import { ComposedCvReview } from '../src/components/cv/ComposedCvReview.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
@@ -49,8 +50,31 @@ function installOverlayBridge(overlay: CvEvidenceOverlayRecord) {
       };
       return current;
     }),
-    exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
+    exportCvEvidenceOverlay: vi.fn().mockImplementation(async () => {
+      const snapshot = current.approvedResumeSnapshot;
+      const artifact = {
+        artifactId: 'artifact-1',
+        format: 'pdf' as const,
+        contentHash: 'f'.repeat(64),
+        exportedAt: '2026-10-01T11:00:00.000Z',
+        snapshotDigest: snapshot?.digest ?? '',
+        snapshotApprovedAt: snapshot?.approvedAt ?? '',
+        renderContractVersion: CV_RENDER_CONTRACT_VERSION,
+        validation: { ok: true, reasons: [], pageCount: 1 },
+        savedPath: 'C:\\fake\\approved-cv.pdf',
+        reviewOpenedAt: '',
+        confirmedAt: '',
+      };
+      current = { ...current, artifacts: [artifact] };
+      return { saved: true, path: artifact.savedPath, artifact, overlay: current };
+    }),
   });
+}
+
+const EMPTY_RESUME = { contact: { name: 'Sam Doe', title: '', location: '', email: '', phone: '', links: [] }, summary: '', experience: [], projects: [], skills: [], education: [] };
+
+function snapshotAt(renderContractVersion: number) {
+  return { renderContractVersion, resume: EMPTY_RESUME, digest: 'd'.repeat(64), approvedAt: '2026-10-01T10:00:00.000Z', caseRevision: '1' };
 }
 
 function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidenceOverlayRecord {
@@ -140,14 +164,30 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
 
   it('exports the approved composition via the overlay id, and shows the saved path', async () => {
     const hash = await hashOf(SOURCE);
-    const workspace = installOverlayBridge(baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved' }));
+    const workspace = installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved', approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION) }),
+    );
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
     const pdfButton = await screen.findByRole('button', { name: /export as pdf/i });
     fireEvent.click(pdfButton);
 
     await waitFor(() => expect(workspace.exportCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', 'pdf'));
-    expect(await screen.findByText(/saved to c:\\fake\\approved-cv\.pdf/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/saved to c:\\fake\\approved-cv\.pdf/i)).length).toBeGreaterThan(0);
+    // A saved file is waiting for the candidate's own review, not accepted.
+    expect(within(screen.getByLabelText('PDF file')).getByRole('status')).toHaveTextContent('Exported, waiting for your review');
+  });
+
+  it('a case approved under an older document format asks to be approved again before it can be exported', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved', approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION - 1) }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+    expect(await screen.findByText(/approved before the current document format/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /export as pdf/i })).not.toBeInTheDocument();
+    await clickPreview();
+    expect(await screen.findByRole('button', { name: /^approve again$/i })).toBeEnabled();
   });
 
   it('offers no export action before the CV has been approved', async () => {

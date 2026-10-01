@@ -37,7 +37,7 @@ describe('renderResumePlainText (#419 step 9)', () => {
     let rest = text;
     for (const claim of [...claims].sort((a, b) => b.length - a.length)) rest = rest.split(claim).join(' ');
     for (const word of filler) rest = rest.split(word).join(' ');
-    expect(rest.replace(/[\s,:;|()\-]+/g, '')).toBe('');
+    expect(rest.replace(/[\s,:;|()-]+/g, '')).toBe('');
   });
 
   it('omits an empty section entirely', () => {
