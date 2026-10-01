@@ -1,0 +1,227 @@
+import { useState } from 'react';
+import { renderResumePlainText } from '../../../electron/resume-text.js';
+import {
+  cvArtifactStatus,
+  latestArtifactOfFormat,
+} from '../../../electron/workspace/cv-artifact-status.js';
+import type { CvArtifactRecord, CvEvidenceOverlayRecord, CvExportFormat } from '../../window.js';
+import { describeError } from './useAgentRun.js';
+
+export interface CvArtifactPanelProps {
+  overlay: CvEvidenceOverlayRecord;
+  onOverlayChange: (overlay: CvEvidenceOverlayRecord) => void;
+}
+
+const FORMATS: { format: CvExportFormat; label: string; exportLabel: string }[] = [
+  { format: 'pdf', label: 'PDF', exportLabel: 'Export as PDF' },
+  { format: 'docx', label: 'Word', exportLabel: 'Export as Word' },
+];
+
+const STATUS_TEXT = {
+  not_exported: 'Not exported',
+  awaiting_review: 'Exported, waiting for your review',
+  qa_failed: 'Failed its checks',
+  accepted: 'Accepted',
+  stale: 'Out of date',
+  legacy_unverified: 'Exported by an earlier version, not verified',
+} as const;
+
+const STATUS_NOTE = {
+  not_exported: '',
+  awaiting_review: 'Open the file and look at it before you accept it.',
+  qa_failed: 'The file was not saved. Fix what is listed, then export it again. Your approved facts are unchanged.',
+  accepted: 'You confirmed this file. The record covers the bytes saved at export. If you edit or replace the file afterwards, it is not checked again.',
+  stale: 'Your CV, job description, facts, wording, projects or the document format changed after this file was made. It stays on disk with its recorded hash and no longer counts as the current CV.',
+  legacy_unverified: 'An earlier version of the app recorded this export without a hash or any checks. Export it again to get a verified file.',
+} as const;
+
+function shortHash(hash: string): string {
+  return hash.slice(0, 12);
+}
+
+/**
+ * Per-format export and acceptance for an approved tailoring case (#419 step 9). Shows what each
+ * format is worth right now, from the artifact records the main process wrote, and offers the
+ * candidate's own review steps: open the saved file, then confirm it. A PDF is opened to read every
+ * page; a Word file is looked at in the candidate's own editor, because pagination depends on the
+ * editor and no page fit is claimed. Nothing here says the vacancy is ready to apply.
+ */
+export function CvArtifactPanel({ overlay, onOverlayChange }: CvArtifactPanelProps) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+
+  async function run(key: string, action: () => Promise<void>, fallback: string) {
+    setBusy(key);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await action();
+    } catch (err) {
+      setError(describeError(err, fallback));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const exportFile = (format: CvExportFormat) =>
+    run(
+      `export-${format}`,
+      async () => {
+        const result = await window.workspace.exportCvEvidenceOverlay(overlay.id, format);
+        onOverlayChange(result.overlay);
+        if (result.saved && result.path) setNotice(`Saved to ${result.path}. It is waiting for your review.`);
+      },
+      'could not export this CV',
+    );
+
+  const openFile = (artifact: CvArtifactRecord) =>
+    run(
+      `open-${artifact.artifactId}`,
+      async () => onOverlayChange(await window.workspace.openCvArtifact(overlay.id, artifact.artifactId)),
+      'could not open this file',
+    );
+
+  const confirmFile = (artifact: CvArtifactRecord) =>
+    run(
+      `confirm-${artifact.artifactId}`,
+      async () => onOverlayChange(await window.workspace.confirmCvArtifact(overlay.id, artifact.artifactId)),
+      'could not record your confirmation',
+    );
+
+  const copyText = () =>
+    run(
+      'copy',
+      async () => {
+        const snapshot = overlay.approvedResumeSnapshot;
+        if (!snapshot) throw new Error('this CV has no approved version to copy');
+        await navigator.clipboard.writeText(renderResumePlainText(snapshot.resume));
+        setNotice('Copied the approved CV as plain text.');
+      },
+      'could not copy the text',
+    );
+
+  const shownIds = new Set(
+    FORMATS.flatMap(({ format }) => {
+      const status = cvArtifactStatus(overlay, format);
+      const latest = latestArtifactOfFormat(overlay, format);
+      return latest && (status === 'awaiting_review' || status === 'accepted' || status === 'qa_failed') ? [latest.artifactId] : [];
+    }),
+  );
+  const earlier = overlay.artifacts.filter((artifact) => !shownIds.has(artifact.artifactId));
+
+  return (
+    <section className="flex flex-col gap-3 rounded-box border border-base-300 p-4 text-sm" aria-label="Exported files">
+      <h3 className="font-medium">Files</h3>
+      <p className="text-base-content/70">
+        Each format is exported from your approved CV and checked on its own. A file counts only after you have
+        looked at it and confirmed it. Accepting a file says the document is right. Whether the vacancy is open, and
+        when to apply, is checked elsewhere in the app.
+      </p>
+
+      {FORMATS.map(({ format, label, exportLabel }) => {
+        const status = cvArtifactStatus(overlay, format);
+        const latest = latestArtifactOfFormat(overlay, format);
+        const current = latest && (status === 'awaiting_review' || status === 'accepted' || status === 'qa_failed') ? latest : null;
+        return (
+          <div key={format} className="flex flex-col gap-2 rounded-box border border-base-300 p-3" aria-label={`${label} file`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{label}</span>
+              <span
+                className={`badge ${status === 'accepted' ? 'badge-success' : status === 'qa_failed' ? 'badge-error' : status === 'not_exported' ? 'badge-ghost' : 'badge-warning'}`}
+                role="status"
+              >
+                {STATUS_TEXT[status]}
+              </span>
+            </div>
+            {STATUS_NOTE[status] && <p className="text-base-content/70">{STATUS_NOTE[status]}</p>}
+
+            {status === 'stale' && latest && (
+              <p className="text-xs text-base-content/60">
+                Last file: {latest.savedPath || 'not saved'}, hash {shortHash(latest.contentHash)}, exported {latest.exportedAt}.
+              </p>
+            )}
+
+            {current && (
+              <div className="text-xs text-base-content/60">
+                {current.savedPath ? `Saved to ${current.savedPath}. ` : ''}Hash {shortHash(current.contentHash)}, exported {current.exportedAt}
+                {current.validation.pageCount !== undefined ? `, ${current.validation.pageCount} page(s)` : ''}.
+              </div>
+            )}
+
+            {current && !current.validation.ok && (
+              <ul className="list-disc pl-5 text-error" aria-label={`${label} problems`}>
+                {current.validation.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="btn btn-outline" onClick={() => void exportFile(format)} disabled={busy !== null}>
+                {busy === `export-${format}` && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
+                {status === 'not_exported' || status === 'legacy_unverified' ? exportLabel : `Export ${label} again`}
+              </button>
+              {current && current.validation.ok && current.savedPath && status !== 'accepted' && (
+                <>
+                  <button type="button" className="btn btn-outline" onClick={() => void openFile(current)} disabled={busy !== null}>
+                    {format === 'pdf' ? 'Open the PDF to read every page' : 'Open in my editor'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void confirmFile(current)}
+                    disabled={busy !== null || (format === 'pdf' && !current.reviewOpenedAt)}
+                  >
+                    {format === 'pdf' ? 'I read every page and it looks right' : 'I reviewed this in my editor'}
+                  </button>
+                </>
+              )}
+            </div>
+            {format === 'pdf' && current && current.validation.ok && status === 'awaiting_review' && !current.reviewOpenedAt && (
+              <p className="text-xs text-base-content/60">Confirming unlocks after you open the PDF.</p>
+            )}
+            {format === 'docx' && status !== 'not_exported' && (
+              <p className="text-xs text-base-content/60">
+                The checks read the text, sections, links, contact details and projects back from the file. They say
+                nothing about page layout, which depends on your editor.
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-outline" onClick={() => void copyText()} disabled={busy !== null || !overlay.approvedResumeSnapshot}>
+          Copy as plain text
+        </button>
+      </div>
+
+      {earlier.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-base-content/70">Earlier files ({earlier.length})</summary>
+          <ul className="mt-2 list-disc pl-5 text-xs text-base-content/60">
+            {earlier.map((artifact) => (
+              <li key={artifact.artifactId}>
+                {artifact.format.toUpperCase()}, hash {shortHash(artifact.contentHash)}, exported {artifact.exportedAt}
+                {artifact.validation.ok ? '' : ', failed its checks'}
+                {artifact.savedPath ? `, ${artifact.savedPath}` : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      {error && (
+        <div className="alert alert-error text-sm" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="text-sm font-medium" role="status">
+          {notice}
+        </div>
+      )}
+    </section>
+  );
+}

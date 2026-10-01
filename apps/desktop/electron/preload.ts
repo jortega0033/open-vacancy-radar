@@ -429,6 +429,12 @@ const workspaceApi: WorkspaceBridge = {
   exportCvEvidenceOverlay(overlayId, format) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:export', { overlayId, format });
   },
+  openCvArtifact(overlayId, artifactId) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:open-artifact', { overlayId, artifactId });
+  },
+  confirmCvArtifact(overlayId, artifactId) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:confirm-artifact', { overlayId, artifactId });
+  },
 
   listMcpClientGrants() {
     return ipcRenderer.invoke('workspace:mcp-client-grants:list');

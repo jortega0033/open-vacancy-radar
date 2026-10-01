@@ -46,7 +46,7 @@ describe('validateRenderedResumePdf', () => {
   it('passes when the rendered text contains the candidate name and every employer/role', async () => {
     const pdf = realPdfContaining(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']);
     const result = await validateRenderedResumePdf(pdf, RESUME);
-    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/), pageCount: 1 });
   });
 
   it('fails on a PDF with no extractable text at all', async () => {
@@ -87,6 +87,6 @@ describe('validateRenderedResumePdf', () => {
     const buffer = Buffer.from(realPdfContaining(['Jamie Rivera', 'Senior Frontend Engineer, Redwood Software']));
     expect(buffer).toBeInstanceOf(Buffer);
     const result = await validateRenderedResumePdf(buffer, RESUME);
-    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/), pageCount: 1 });
   });
 });

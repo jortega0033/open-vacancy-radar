@@ -17,6 +17,7 @@ import type { CvSourceDocument } from './cv-source-schema.js';
 import type {
   CvApprovedResumeSnapshot,
   CvApprovedWording,
+  CvArtifactRecord,
   CvEvidenceFact,
   CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
@@ -312,6 +313,10 @@ export interface CvEvidenceOverlayRecord {
   projectSelection: CvProjectSelection | null;
   /** #419: the CV inputs this case was started or last rebased from, used to show what changed. */
   sourceBaseline: CvSourceBaseline | null;
+  /** #419 step 9: files rendered from the approved snapshot, oldest first. See `CvArtifactRecord`. */
+  artifacts: CvArtifactRecord[];
+  /** #419: an earlier version marked this case exported without recording a hash or checks. */
+  legacyUnverifiedExport: boolean;
   /** ISO-8601 */
   capturedAt: string;
   /** ISO-8601 */
@@ -363,7 +368,7 @@ export interface CvEvidenceOverlayPatch {
    * known-truncated JD, and reset to `false` by any text change that does not also set it. */
   jdConfirmedComplete?: boolean;
   listingStatus?: CvListingStatus;
-  state?: Exclude<CvEvidenceOverlayState, 'candidate_approved'>;
+  state?: Exclude<CvEvidenceOverlayState, 'candidate_approved' | 'qa_failed' | 'artifact_approved'>;
   requirements?: CvRequirementMapping[];
   /** #419: record that extraction is partial (more batches owed) or that the candidate confirms the
    * list is complete. The repository stamps it with the current JD revision. */
@@ -464,6 +469,16 @@ export type CvExportFormat = 'pdf' | 'docx';
 export interface CvExportResult {
   saved: boolean;
   path?: string;
+}
+
+/** The result of exporting a tailoring case's approved snapshot (#419 step 9). `artifact` is the record
+ * written by this call: a saved file, or a file that failed its checks (`saved: false` with
+ * `validation.ok` false). It is `null` when the save dialog was cancelled, which writes nothing. */
+export interface CvCaseExportResult {
+  saved: boolean;
+  path?: string;
+  artifact: CvArtifactRecord | null;
+  overlay: CvEvidenceOverlayRecord;
 }
 
 export interface LetterRecord {
@@ -1109,7 +1124,16 @@ export interface WorkspaceBridge {
    * `'artifact_approved'` -- the terminal state, distinct from `'candidate_approved'` (#419: "CV
    * approval and application/submission readiness are separate states").
    */
-  exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvExportResult>;
+  exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvCaseExportResult>;
+  /**
+   * #419 step 9: opens the saved file for the candidate to read, after checking that its bytes still
+   * match the hash recorded at export, and records that it was opened. A PDF cannot be accepted
+   * before this has happened.
+   */
+  openCvArtifact(overlayId: string, artifactId: string): Promise<CvEvidenceOverlayRecord>;
+  /** #419 step 9: the candidate's explicit visual confirmation of one saved file. Refused for a file
+   * that failed its checks or belongs to an earlier version of the CV. */
+  confirmCvArtifact(overlayId: string, artifactId: string): Promise<CvEvidenceOverlayRecord>;
 
   /**
    * #421: named local-client grants for the local MCP endpoint. Deliberately never returns a

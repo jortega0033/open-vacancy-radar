@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { composeApprovedTailoredResume } from '../../../electron/resume-source.js';
+import { snapshotNeedsReapproval } from '../../../electron/workspace/cv-artifact-status.js';
 import { selectSourceProjects } from '../../../electron/workspace/cv-source-schema.js';
 import type {
   CvEvidenceOverlayRecord,
-  CvExportFormat,
   CvProfile,
   CvRebasePlan,
   CvSourceDocument,
 } from '../../window.js';
 import { sha256HexOfSource } from './content-hash.js';
+import { CvArtifactPanel } from './CvArtifactPanel.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
@@ -50,8 +51,6 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
   const [approvingProjects, setApprovingProjects] = useState(false);
   const [rebasing, setRebasing] = useState(false);
   const [approved, setApproved] = useState(false);
-  const [exporting, setExporting] = useState<CvExportFormat | null>(null);
-  const [exportedPath, setExportedPath] = useState<string>();
 
   const vacancyKey = vacancy ? caseKeyFor(vacancy) : null;
 
@@ -200,25 +199,10 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     }
   }, [composed, runCaseAction]);
 
-  const handleExport = useCallback(
-    async (format: CvExportFormat) => {
-      if (!overlay) return;
-      setExporting(format);
-      setError(undefined);
-      setExportedPath(undefined);
-      try {
-        const result = await window.workspace.exportCvEvidenceOverlay(overlay.id, format);
-        if (result.saved && result.path) setExportedPath(result.path);
-      } catch (err) {
-        setError(describeError(err, 'could not export this CV'));
-      } finally {
-        setExporting(null);
-      }
-    },
-    [overlay],
-  );
-
-  const isApproved = approved || overlay?.state === 'candidate_approved' || overlay?.state === 'artifact_approved';
+  // A snapshot approved under an older document format keeps its facts and wording, but cannot be
+  // exported until the case is approved again, which builds it under the current format.
+  const needsReapproval = !!overlay && snapshotNeedsReapproval(overlay);
+  const isApproved = approved || overlay?.state === 'candidate_approved';
 
   if (!cvId || !vacancy) return null;
 
@@ -337,33 +321,11 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
               type="button"
               className="btn btn-primary"
               onClick={() => void handleApprove()}
-              disabled={composed.blockers.length > 0 || approving || isApproved || needsRebase}
+              disabled={composed.blockers.length > 0 || approving || (isApproved && !needsReapproval) || needsRebase}
             >
               {approving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-              {isApproved ? 'Approved' : 'Approve CV'}
+              {isApproved && !needsReapproval ? 'Approved' : needsReapproval ? 'Approve again' : 'Approve CV'}
             </button>
-          )}
-          {isApproved && (
-            <>
-              <button
-                type="button"
-                className="btn btn-outline"
-                onClick={() => void handleExport('pdf')}
-                disabled={exporting !== null}
-              >
-                {exporting === 'pdf' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-                Export as PDF
-              </button>
-              <button
-                type="button"
-                className="btn btn-outline"
-                onClick={() => void handleExport('docx')}
-                disabled={exporting !== null}
-              >
-                {exporting === 'docx' && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
-                Export as Word
-              </button>
-            </>
           )}
         </div>
 
@@ -372,16 +334,20 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
             {error}
           </div>
         )}
-        {exportedPath && (
-          <div className="text-sm font-medium" role="status">
-            Saved to {exportedPath}
-          </div>
-        )}
         {approved && (
           <div className="text-sm font-medium" role="status">
             Approved. This is the version ready for export.
           </div>
         )}
+
+        {overlay && isApproved && needsReapproval && (
+          <div className="alert alert-warning text-sm" role="status">
+            This CV was approved before the current document format. Your facts and wording are kept. Preview and approve
+            it again to export it.
+          </div>
+        )}
+
+        {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} />}
 
         {composed && composed.blockers.length > 0 && (
           <div className="alert alert-warning text-sm" role="alert">

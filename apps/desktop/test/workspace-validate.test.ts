@@ -786,8 +786,11 @@ describe('workspace cv evidence overlays (#419)', () => {
 
   it('never accepts "candidate_approved" through the generic patch (#421: only approveCvEvidenceOverlay may set it)', () => {
     expect(() => parseCvEvidenceOverlayPatch({ state: 'candidate_approved' })).toThrow(/"state" must be one of/);
+    // Artifact status is derived from artifact records (#419 step 9), so those two are not patchable either.
+    expect(() => parseCvEvidenceOverlayPatch({ state: 'artifact_approved' })).toThrow(/"state" must be one of/);
+    expect(() => parseCvEvidenceOverlayPatch({ state: 'qa_failed' })).toThrow(/"state" must be one of/);
     // Every other state is still a plain patch value.
-    expect(parseCvEvidenceOverlayPatch({ state: 'artifact_approved' }).state).toBe('artifact_approved');
+    expect(parseCvEvidenceOverlayPatch({ state: 'conflict' }).state).toBe('conflict');
   });
 
   it('never accepts caseRevision, jdRevisions or approvedResumeSnapshot through the generic patch (#421)', () => {

@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as workspace from './workspace/repository.js';
+import { cvArtifactStatus } from './workspace/cv-artifact-status.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import { describeMcpGrantBlockers, mcpGrantCoversCase } from './workspace/mcp-grant-schema.js';
 import { CV_EVIDENCE_LIMITS, describeCvEvidenceOverlayGaps, mintManualCaseKey, vacancyKeyFor } from './workspace/cv-evidence-schema.js';
@@ -310,7 +311,15 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
           state: overlay.state,
           gaps: describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash),
           pendingProposalCount,
-          artifactState: overlay.state === 'artifact_approved' ? 'exported' : overlay.state === 'candidate_approved' ? 'approved_not_exported' : 'not_approved',
+          // Per-format status of the files exported from the approved snapshot (#419 step 9). `exported`
+          // says a current file exists, not that it was accepted or that the vacancy is ready to apply.
+          artifactStatus: { pdf: cvArtifactStatus(overlay, 'pdf'), docx: cvArtifactStatus(overlay, 'docx') },
+          artifactState:
+            overlay.state !== 'candidate_approved'
+              ? 'not_approved'
+              : (['pdf', 'docx'] as const).some((format) => ['awaiting_review', 'accepted'].includes(cvArtifactStatus(overlay, format)))
+                ? 'exported'
+                : 'approved_not_exported',
         });
       } catch (err) {
         auditTool(db, grant, 'get_tailoring_status', caseId, 'denied');
@@ -331,7 +340,7 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
         requireCoverage(grant, caseId);
         const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
         if (!overlay.approvedResumeSnapshot) throw new Error('this case has not been approved yet');
-        if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+        if (overlay.state !== 'candidate_approved') {
           throw new Error('the case has changed since it was approved; the approved snapshot is no longer current');
         }
         auditTool(db, grant, 'read_approved_resume', caseId, 'success', overlay.caseRevision);

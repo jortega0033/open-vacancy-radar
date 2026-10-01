@@ -27,6 +27,8 @@ export interface ResumePdfValidationResult {
   /** sha256 of the exact bytes checked. Callers bind staging, readiness and attachment to this
    * rather than re-deriving a hash later from whatever is on disk (#276). */
   contentHash: string;
+  /** Pages in the rendered PDF, shown to the candidate when they review it (#419). */
+  pageCount: number;
 }
 
 export async function validateRenderedResumePdf(
@@ -45,5 +47,6 @@ export async function validateRenderedResumePdf(
     ok: acceptance.ok,
     reasons: acceptance.findings.map((finding) => (finding.page === undefined ? finding.detail : `page ${finding.page}: ${finding.detail}`)),
     contentHash: acceptance.contentHash,
+    pageCount: acceptance.pageCount,
   };
 }
