@@ -201,14 +201,6 @@ type DaemonStatus = { state: 'connecting' } | { state: 'ready' } | { state: 'una
 
 let daemonChild: ChildProcess | undefined;
 let client: AgentDockClient | undefined;
-/**
- * False only when `client` was adopted from a sibling instance's already-running daemon after a
- * discovery-file lock conflict (see `attachToDaemonAfterLockConflict`), rather than spawned by
- * this process. `killDaemon` reads this to decide whether a daemon-wide `/sessions/cancel-all`
- * is this process's call to make -- that route's own comment documents "exactly one legitimate
- * caller", an invariant this process must not break on behalf of a daemon it does not own.
- */
-let ownsDaemonProcess = true;
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 /**
@@ -607,23 +599,23 @@ function spawnDaemon(): void {
 
 /**
  * Settled once per `generation` by whichever of `waitForDaemonReady`'s own poll loop or
- * `attachToDaemonAfterLockConflict` reaches `finishDaemonAdoption` first for that generation.
- * Both run concurrently for the same generation (the lock-conflict exit fires without cancelling
- * the sibling poll loop already in flight from the same `spawnDaemon()` call), so without this
- * guard both can independently pass their own health check and apply `finishDaemonAdoption`'s
- * side effects twice -- and `waitForDaemonReady` specifically needs it to recognize that its
- * generation was already settled by the *other* path, rather than spending its full 15s timeout
- * polling for a file freshness condition that attach already satisfied by other means, then
- * throwing a bogus "timed out" failure that undoes a successful attach.
+ * `attachToDaemonAfterLockConflict` reaches a final outcome first for that generation (adoption via
+ * `finishDaemonAdoption`, or giving up on this generation via `quitAsDuplicateInstance`). Both run
+ * concurrently for the same generation (the lock-conflict exit fires without cancelling the
+ * sibling poll loop already in flight from the same `spawnDaemon()` call), so without this guard
+ * both could independently reach a conclusion for the same generation -- and `waitForDaemonReady`
+ * specifically needs it to recognize that its generation was already settled by the *other* path,
+ * rather than spending its full 15s timeout polling for a file freshness condition that can no
+ * longer be satisfied, then throwing a bogus "timed out" failure after the app already decided to
+ * quit.
  */
 let adoptedGeneration: number | undefined;
 
 /**
- * Everything a daemon handoff -- this process's own freshly-spawned child becoming ready, or
- * attaching to a sibling instance's daemon after losing the discovery-file lock race -- does once
- * it has a reachable `baseUrl`/`token`/`daemonInstanceId` in hand. Factored out so both paths stay
- * in lockstep instead of silently drifting apart. A no-op if `generation` was already adopted by
- * the other path (see `adoptedGeneration`).
+ * Everything this process's own freshly-spawned daemon child does once it becomes ready (reachable
+ * `baseUrl`/`token`/`daemonInstanceId` in hand). A no-op if `generation` was already adopted or
+ * abandoned by a concurrent lock-conflict outcome for the same generation (see `adoptedGeneration`
+ * and `quitAsDuplicateInstance`).
  */
 function finishDaemonAdoption(
   connectedClient: AgentDockClient,
@@ -631,11 +623,9 @@ function finishDaemonAdoption(
   token: string,
   daemonInstanceId: string | undefined,
   generation: number,
-  owns: boolean,
 ): void {
   if (adoptedGeneration === generation) return;
   adoptedGeneration = generation;
-  ownsDaemonProcess = owns;
   // Reuses the exact client instance the caller already called `.health()` on, rather than
   // building a fresh one: `AgentDockClient` memoizes its protocol-compatibility check per
   // instance, so a fresh client here would silently repeat that `/health` round trip on this
@@ -674,41 +664,65 @@ function readDiscoveryFileConnection(file: string): DiscoveredDaemon | undefined
 }
 
 /**
- * Called from the daemon-exit handler when this generation's child died with
- * `DAEMON_EXIT_CODE_LOCK_CONFLICT`: reads the discovery file the winning instance already wrote
- * and, if it's still reachable, attaches to it in place of the daemon this process failed to
- * start. Returns `false` when there is nothing valid to attach to, so the caller can fall back to
- * treating the exit as an ordinary failure.
+ * A `DAEMON_EXIT_CODE_LOCK_CONFLICT` child exit (see `assertNoLiveDaemon` in
+ * `apps/daemon/src/discovery-file.ts`) means another daemon with this same app id is alive right
+ * now -- and by construction that can only exist if a sibling Electron *main process* is also
+ * alive, since this process's own daemon-spawn is gated behind `app.requestSingleInstanceLock()`
+ * already having refused every other instance (see `gotSingleInstanceLock`'s call site). In other
+ * words, reaching this function at all means that guard was already defeated for this launch --
+ * Electron's own single-instance lock has a narrow, OS-level race on an ungraceful kill-and-
+ * relaunch (observed via vite-plugin-electron's dev-server hot restart, which force-kills the old
+ * main process rather than letting it quit cleanly) that can let two live instances both pass it.
+ * This process is the half of that pair that lost the daemon-spawn race too, so rather than try to
+ * recover and run on as a second full instance -- its own window, tray icon, background-scan/
+ * auto-apply/application-pipeline timers, and SQLite connections to workspace.db/vacancy-engine.db
+ * alongside the sibling's -- it quits (`quitAsDuplicateInstance`) once it confirms the sibling's
+ * daemon is actually reachable. Returns `false` when there is nothing valid to confirm (the
+ * sibling's discovery file is stale or its daemon isn't actually there), so the caller falls back
+ * to treating the exit as an ordinary failure instead of quitting over a false alarm.
  */
 async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
-  if (isQuitting) return false; // nothing worth attaching to if the app is already shutting down
-  // Stashed by `checkHealth` below so a successful adoption reuses the exact client instance that
-  // already passed the health check, instead of `finishDaemonAdoption` building another one.
-  let healthyClient: AgentDockClient | undefined;
+  if (isQuitting) return false; // already shutting down; nothing left to confirm or act on
   const attached = await tryAttachToWinningDaemon({
     readDiscoveryFile: () => readDiscoveryFileConnection(discoveryFilePath()),
     checkHealth: async (daemon) => {
       try {
         // health() also verifies protocol compatibility (see @agent-dock/client).
-        const candidate = new AgentDockClient(daemon);
-        const health = await candidate.health();
-        healthyClient = candidate;
-        return health;
+        return await new AgentDockClient(daemon).health();
       } catch {
         return undefined; // stale file from a daemon that already exited, or not listening yet
       }
     },
   });
-  if (!attached || !healthyClient) return false;
+  if (!attached) return false;
   if (isQuitting || !daemonRespawn.isCurrentGeneration(generation)) {
-    // Superseded, or the app started quitting while the attach was in flight: either way this
-    // generation has nothing left to retry, so report "handled" without applying any side effects.
-    console.warn('[daemon] ignoring stale lock-conflict attach from a superseded or quitting spawn attempt');
+    // Superseded, or the app started quitting while the check was in flight: either way this
+    // generation has nothing left to retry, so report "handled" without taking further action.
+    console.warn('[daemon] ignoring stale lock-conflict result from a superseded or quitting spawn attempt');
     return true;
   }
-  console.warn('[daemon] attached to a sibling instance\'s already-running daemon after a discovery-file lock conflict');
-  finishDaemonAdoption(healthyClient, attached.daemon.baseUrl, attached.daemon.token, attached.health.daemonInstanceId, generation, false);
+  quitAsDuplicateInstance(generation);
   return true;
+}
+
+/**
+ * Called once `attachToDaemonAfterLockConflict` confirms a sibling instance's daemon is alive and
+ * reachable: this process is a duplicate Electron instance that should never have started
+ * alongside it (see that function's own comment for how `app.requestSingleInstanceLock()` can
+ * still let this happen). `app.quit()` routes through the existing quit handlers further down this
+ * file: a `before-quit` listener sets `isQuitting` before any window's `close` handler can
+ * intercept it into hiding to the tray instead of actually closing, and another `before-quit`
+ * listener runs `killDaemon()` against this process's own (already-exited) `daemonChild` -- safe,
+ * since `client` was never assigned here and `killDaemon`'s session-cancel call is gated on it.
+ */
+function quitAsDuplicateInstance(generation: number): void {
+  if (adoptedGeneration === generation) return;
+  adoptedGeneration = generation;
+  console.warn(
+    '[daemon] lost a discovery-file lock conflict to a sibling instance\'s already-running daemon -- ' +
+      'quitting this duplicate instance rather than running alongside it',
+  );
+  app.quit();
 }
 
 async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
@@ -735,7 +749,7 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
           return;
         }
-        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation, true);
+        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
@@ -1054,7 +1068,7 @@ async function killDaemon(): Promise<void> {
   closeAllApplicationReviews();
   for (const controller of [...v1EventForwards.values()]) controller.abort();
   v1EventForwards.clear();
-  if (client && ownsDaemonProcess) {
+  if (client) {
     try {
       // Cancels every in-flight session over HTTP, not just `activeSessionId`: on Windows,
       // daemonChild.kill() below maps to TerminateProcess, which never gives the daemon's own
@@ -1062,13 +1076,6 @@ async function killDaemon(): Promise<void> {
       // reliable way to stop every session's CLI process on that platform. Tracking a single
       // `activeSessionId` was previously the only thing cancelled here, which orphaned every
       // other session's process for any fork that runs more than one at a time (AD-12).
-      //
-      // Gated on `ownsDaemonProcess`: a daemon-wide cancel is only this process's call to make
-      // when it actually spawned the daemon it's talking to. When `client` was instead adopted
-      // from a sibling instance's daemon after a lock conflict, that daemon's own route comment
-      // (apps/daemon/src/routes/sessions.ts) documents "exactly one legitimate caller" -- calling
-      // cancel-all here would cancel the sibling instance's own in-flight sessions out from under
-      // it just because this window closed.
       await client.sessions.cancelAll();
     } catch {
       // best effort; the daemon's own shutdown handler is the fallback (SIGTERM on POSIX)
