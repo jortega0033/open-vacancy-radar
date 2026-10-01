@@ -1,0 +1,1 @@
+ALTER TABLE `cv_evidence_overlays` ADD `artifacts` text DEFAULT '[]';

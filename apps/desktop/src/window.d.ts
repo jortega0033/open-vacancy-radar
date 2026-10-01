@@ -271,6 +271,8 @@ export type {
   AppSettingsPatch,
   AppSettingsRecord,
   CvApprovedWording,
+  CvArtifactRecord,
+  CvCaseExportResult,
   CvClaimField,
   CvDocumentInput,
   CvDocumentPatch,

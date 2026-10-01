@@ -389,6 +389,54 @@ export interface CvApprovedResumeSnapshot {
   caseRevision: string;
 }
 
+/** The two file formats a case can be exported to. Spelled out here (not imported from `types.ts`)
+ * so this module stays dependency-free. */
+export type CvArtifactFormat = 'pdf' | 'docx';
+
+export const CV_ARTIFACT_FORMATS: readonly CvArtifactFormat[] = ['pdf', 'docx'];
+
+/**
+ * One rendered file made from a case's approved snapshot (#419 step 9). The record attests to the
+ * bytes produced at export, nothing else: a file edited or replaced afterwards on disk is not
+ * re-verified, and a record never becomes "current" again once the snapshot it was made from is no
+ * longer the case's approved one. History is kept: an old record stays with its hash.
+ */
+export interface CvArtifactRecord {
+  artifactId: string;
+  format: CvArtifactFormat;
+  /** SHA-256 hex of the rendered bytes (of the bytes written to `savedPath` when `savedPath` is set). */
+  contentHash: string;
+  /** ISO-8601 */
+  exportedAt: string;
+  /** `CvApprovedResumeSnapshot.digest` this file was rendered from. */
+  snapshotDigest: string;
+  /** `CvApprovedResumeSnapshot.approvedAt` of that snapshot. A later approval of identical content
+   * still makes this file historical. */
+  snapshotApprovedAt: string;
+  renderContractVersion: number;
+  /** `pageCount` is set for a PDF only. */
+  validation: { ok: boolean; reasons: string[]; pageCount?: number };
+  /** Where the candidate saved it. `''` when the file failed its checks and was never offered for saving. */
+  savedPath: string;
+  /** ISO-8601 or `''`: the candidate opened the saved file to read it (PDF review needs this). */
+  reviewOpenedAt: string;
+  /** ISO-8601 or `''`: the candidate's explicit visual confirmation of this file. */
+  confirmedAt: string;
+}
+
+/** Per-format status shown in the CV workspace. `legacy_unverified` is a case marked exported by an
+ * earlier version that recorded no hash or checks. */
+export type CvArtifactStatus =
+  | 'not_exported'
+  | 'awaiting_review'
+  | 'qa_failed'
+  | 'accepted'
+  | 'stale'
+  | 'legacy_unverified';
+
+/** Most artifact records kept per case; the oldest are dropped past this. */
+export const CV_ARTIFACT_HISTORY_LIMIT = 40;
+
 /**
  * The projects the candidate approved for this case's CV (#419 step 8), in the order they appear.
  * It records the ids of `selectSourceProjects(source)` at the moment of approval, so changing a
@@ -479,6 +527,11 @@ export interface CvEvidenceOverlay {
   projectSelection: CvProjectSelection | null;
   /** The CV inputs this case was last started or rebased from. See `CvSourceBaseline`. */
   sourceBaseline: CvSourceBaseline | null;
+  /** Files rendered from the approved snapshot, oldest first. See `CvArtifactRecord`. */
+  artifacts: CvArtifactRecord[];
+  /** True for a case an earlier version marked `artifact_approved`: it was exported, but no hash or
+   * checks were recorded, so nothing about that file is verified. Cleared once a real artifact is recorded. */
+  legacyUnverifiedExport: boolean;
 }
 
 export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
@@ -501,6 +554,8 @@ export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
   approvedResumeSnapshot: null,
   projectSelection: null,
   sourceBaseline: null,
+  artifacts: [],
+  legacyUnverifiedExport: false,
 };
 
 /** Field size budgets, the same two-tier discipline (generous for real content, finite against a

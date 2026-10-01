@@ -697,8 +697,12 @@ export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayIn
 // #421's case contract: `'candidate_approved'` is never accepted through the generic patch --
 // only `approveCvEvidenceOverlay` may set it. `CvEvidenceOverlayPatch['state']` already excludes
 // it at the type level; this is the same rule enforced against the raw, unknown runtime payload.
-const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candidate_approved'>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
-  (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
+// `'qa_failed'` and `'artifact_approved'` are not patchable either (#419 step 9): artifact status is
+// derived from the artifact records the export action writes, never set by a caller.
+type UnpatchableOverlayState = 'candidate_approved' | 'qa_failed' | 'artifact_approved';
+const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, UnpatchableOverlayState>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
+  (candidate): candidate is Exclude<CvEvidenceOverlayState, UnpatchableOverlayState> =>
+    candidate !== 'candidate_approved' && candidate !== 'qa_failed' && candidate !== 'artifact_approved',
 );
 
 function integerField(value: unknown, field: string): number {
@@ -763,6 +767,12 @@ export function parseCvIdEnvelope(value: unknown): string {
 export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: string; format: CvExportFormat } {
   const input = asRecord(value, 'export request');
   return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+/** `{ overlayId, artifactId }` envelope for the artifact review channels (#419 step 9). */
+export function parseCvArtifactActionInput(value: unknown): { overlayId: string; artifactId: string } {
+  const input = asRecord(value, 'artifact request');
+  return { overlayId: parseId(input.overlayId), artifactId: parseId(input.artifactId) };
 }
 
 /**

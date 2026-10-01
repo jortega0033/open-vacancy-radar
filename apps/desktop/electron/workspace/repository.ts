@@ -20,7 +20,9 @@ import {
   type CvSourceDocument,
 } from './cv-source-schema.js';
 import { planCvEvidenceRebase, type CvCurrentInputs, type CvRebasePlan } from './cv-case-rebase.js';
+import { isCurrentArtifact, latestArtifactOfFormat } from './cv-artifact-status.js';
 import {
+  CV_ARTIFACT_HISTORY_LIMIT,
   CV_RENDER_CONTRACT_VERSION,
   currentCvJdRevisionId,
   EMPTY_CV_REQUIREMENT_COVERAGE,
@@ -35,6 +37,7 @@ import {
   verifyCvRequirementQuotes,
   withJdRevision,
   CV_JD_UNWAIVABLE_REASONS,
+  type CvArtifactRecord,
   type CvEvidenceOverlay,
   type CvJdIncompleteReason,
   type CvProjectSelection,
@@ -599,6 +602,23 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
 
 type CvEvidenceOverlayRow = typeof cvEvidenceOverlays.$inferSelect;
 
+/** A stored artifact record read defensively: a malformed entry is dropped rather than trusted. */
+function upgradeStoredArtifacts(stored: CvArtifactRecord[]): CvArtifactRecord[] {
+  return stored
+    .filter((artifact) => artifact && (artifact.format === 'pdf' || artifact.format === 'docx') && typeof artifact.contentHash === 'string')
+    .map((artifact) => ({
+      ...artifact,
+      validation: {
+        ok: artifact.validation?.ok === true,
+        reasons: artifact.validation?.reasons ?? [],
+        ...(artifact.validation?.pageCount === undefined ? {} : { pageCount: artifact.validation.pageCount }),
+      },
+      savedPath: artifact.savedPath ?? '',
+      reviewOpenedAt: artifact.reviewOpenedAt ?? '',
+      confirmedAt: artifact.confirmedAt ?? '',
+    }));
+}
+
 function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord {
   // A revision stored before #419's metadata existed has none of it. It is filled from what the
   // case itself says (a manual case's text was entered by hand, any other was read from a found
@@ -627,7 +647,10 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     jdWarning: row.jdWarning ?? '',
     jdConfirmedComplete: row.jdConfirmedComplete ?? false,
     listingStatus: row.listingStatus as CvEvidenceOverlayRecord['listingStatus'],
-    state: row.state as CvEvidenceOverlayRecord['state'],
+    // `artifact_approved` was the single global state an earlier version set the moment a file was
+    // saved, with no hash or checks. It reads as the factual approval it stood on, flagged below as an
+    // unverified export rather than trusted.
+    state: (row.state === 'artifact_approved' ? 'candidate_approved' : row.state) as CvEvidenceOverlayRecord['state'],
     // JSON columns: a row from before a later field was added to these shapes could be missing it,
     // so entries are defaulted rather than trusted, the same discipline `toCvDocument` already
     // applies to `profile`.
@@ -644,6 +667,8 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
       : null,
     projectSelection: row.projectSelection ?? null,
     sourceBaseline: row.sourceBaseline ?? null,
+    artifacts: upgradeStoredArtifacts(row.artifacts ?? []),
+    legacyUnverifiedExport: row.state === 'artifact_approved' && (row.artifacts ?? []).length === 0,
     capturedAt: iso(row.capturedAt),
     updatedAt: iso(row.updatedAt),
   };
@@ -1062,6 +1087,145 @@ export function approveCvProjectSelection(db: WorkspaceDb, id: string, expectedC
       .all();
     if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
     return toCvEvidenceOverlay(row);
+  });
+}
+
+/**
+ * What the main process checks immediately before it renders an approved case (#419 step 9). It reads
+ * the case's frozen `approvedResumeSnapshot`, never recomposes, and never takes content from a
+ * caller. Every blocker is a sentence the candidate can act on. `snapshot` is `null` when there is
+ * nothing exportable.
+ */
+export function checkCvCaseExportReadiness(
+  db: WorkspaceDb,
+  id: string,
+): { overlay: CvEvidenceOverlayRecord; snapshot: CvApprovedResumeSnapshot | null; blockers: string[] } {
+  const overlay = getCvEvidenceOverlayById(db, id);
+  const doc = getCvDocument(db, overlay.cvId);
+  const blockers: string[] = [];
+  const snapshot = overlay.approvedResumeSnapshot;
+
+  if (overlay.state !== 'candidate_approved' || !snapshot) {
+    blockers.push('this CV is not approved: it changed since it was approved, or it was never approved, so approve it again before exporting');
+    return { overlay, snapshot: null, blockers };
+  }
+  if (createHash('sha256').update(JSON.stringify(snapshot.resume)).digest('hex') !== snapshot.digest) {
+    blockers.push('the approved CV on record does not match its own digest, so it cannot be exported');
+  }
+  if (snapshot.renderContractVersion !== CV_RENDER_CONTRACT_VERSION) {
+    blockers.push('this CV was approved before the current document format, so approve it again to export it. Your facts and wording are kept');
+  }
+  const jdHash = createHash('sha256').update(overlay.jdSnapshot).digest('hex');
+  const lastRevision = overlay.jdRevisions.at(-1);
+  if (overlay.jdSnapshot.trim() === '' || overlay.jdSnapshotHash !== jdHash || (lastRevision && lastRevision.textHash !== jdHash)) {
+    blockers.push('the job description on record does not match its digest, so review it and approve this CV again');
+  }
+  if (!doc.source) {
+    blockers.push('this CV has no reviewed source, so there is nothing to export it against');
+  } else {
+    if (computeSourceCvContentHash(doc.source) !== overlay.sourceCvContentHash) {
+      blockers.push('your reviewed CV changed since this case was approved, so review the changes and approve this CV again');
+    }
+    const projects = selectSourceProjects(doc.source);
+    if (projects.length > 0) {
+      // A case approved before project selection existed stays exportable only when the CV has no
+      // projects to leave out or add; with projects it has to be approved again with a selection.
+      if (!overlay.projectSelection) {
+        blockers.push('the projects on this CV were never approved, so approve the project selection and this CV again');
+      } else if (overlay.projectSelection.projectIds.join('\n') !== projects.map((project) => project.id).join('\n')) {
+        blockers.push('the projects on this CV changed since you approved them, so approve the new selection and this CV again');
+      }
+    }
+  }
+  if (overlay.sourceBaseline && overlay.sourceBaseline.inputsDigest !== computeCaseInputsDigest(currentCaseInputs(doc))) {
+    blockers.push('your CV, profile or skills changed since this case was started, so review the changes and rebase the case first');
+  }
+  return { overlay, snapshot, blockers };
+}
+
+function writeCvArtifacts(db: WorkspaceDb, id: string, artifacts: CvArtifactRecord[]): CvEvidenceOverlayRecord {
+  const [row] = db
+    .update(cvEvidenceOverlays)
+    // Not a case content change: the revision token is left alone, so a panel holding the current
+    // revision can still approve without a conflict. A legacy `artifact_approved` row is normalized to
+    // the factual approval it stood on, now that a real record exists.
+    .set({
+      artifacts,
+      state: sql`CASE WHEN ${cvEvidenceOverlays.state} = 'artifact_approved' THEN 'candidate_approved' ELSE ${cvEvidenceOverlays.state} END`,
+      updatedAt: new Date(),
+    })
+    .where(eq(cvEvidenceOverlays.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
+/**
+ * Records one rendered file. The id and time are stamped here, never taken from the caller, and a new
+ * record starts unreviewed. A failed file is recorded too (it has no `savedPath`), so the candidate
+ * sees why it failed. Older records stay as history.
+ */
+export function recordCvArtifact(
+  db: WorkspaceDb,
+  id: string,
+  input: Pick<CvArtifactRecord, 'format' | 'contentHash' | 'snapshotDigest' | 'snapshotApprovedAt' | 'renderContractVersion' | 'validation' | 'savedPath'>,
+): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const existing = getCvEvidenceOverlayById(tx, id);
+    const record: CvArtifactRecord = {
+      artifactId: randomUUID(),
+      format: input.format,
+      contentHash: input.contentHash,
+      exportedAt: new Date().toISOString(),
+      snapshotDigest: input.snapshotDigest,
+      snapshotApprovedAt: input.snapshotApprovedAt,
+      renderContractVersion: input.renderContractVersion,
+      validation: input.validation,
+      savedPath: input.savedPath,
+      reviewOpenedAt: '',
+      confirmedAt: '',
+    };
+    return writeCvArtifacts(tx, id, [...existing.artifacts, record].slice(-CV_ARTIFACT_HISTORY_LIMIT));
+  });
+}
+
+function findArtifact(overlay: CvEvidenceOverlayRecord, artifactId: string): CvArtifactRecord {
+  const artifact = overlay.artifacts.find((candidate) => candidate.artifactId === artifactId);
+  if (!artifact) throw new WorkspaceNotFoundError('CV artifact', artifactId);
+  return artifact;
+}
+
+/** The candidate opened the saved file to read it. Only a record still current can be marked. */
+export function markCvArtifactReviewOpened(db: WorkspaceDb, id: string, artifactId: string): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const overlay = getCvEvidenceOverlayById(tx, id);
+    const artifact = findArtifact(overlay, artifactId);
+    if (!artifact.savedPath) throw new Error('this file was never saved, so there is nothing to open');
+    if (!isCurrentArtifact(overlay, artifact)) throw new Error('this file belongs to an earlier version of the CV, so export it again before reviewing it');
+    const now = new Date().toISOString();
+    return writeCvArtifacts(tx, id, overlay.artifacts.map((entry) => (entry.artifactId === artifactId ? { ...entry, reviewOpenedAt: now } : entry)));
+  });
+}
+
+/**
+ * The candidate's explicit visual confirmation of one saved file. Refused for a file that failed its
+ * checks, was never saved, is not the newest of its format, or belongs to an earlier approval or
+ * render contract. A PDF additionally needs to have been opened for review first. Confirmation
+ * attests to the bytes recorded at export; the file is not re-read here.
+ */
+export function confirmCvArtifact(db: WorkspaceDb, id: string, artifactId: string): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const overlay = getCvEvidenceOverlayById(tx, id);
+    const artifact = findArtifact(overlay, artifactId);
+    if (!artifact.validation.ok) throw new Error('this file failed its checks, so it cannot be accepted. Fix the problems and export it again');
+    if (!artifact.savedPath) throw new Error('this file was never saved, so there is nothing to accept');
+    if (!isCurrentArtifact(overlay, artifact)) throw new Error('this file belongs to an earlier version of the CV, so export it again before accepting it');
+    if (latestArtifactOfFormat(overlay, artifact.format)?.artifactId !== artifactId) throw new Error('a newer export of this format exists, so review that one');
+    if (artifact.format === 'pdf' && !artifact.reviewOpenedAt) throw new Error('open the PDF and read every page before accepting it');
+    if (artifact.confirmedAt) return overlay;
+    const now = new Date().toISOString();
+    return writeCvArtifacts(tx, id, overlay.artifacts.map((entry) => (entry.artifactId === artifactId ? { ...entry, confirmedAt: now } : entry)));
   });
 }
 

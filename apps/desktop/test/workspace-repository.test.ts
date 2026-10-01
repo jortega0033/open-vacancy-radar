@@ -320,11 +320,10 @@ describe('cv evidence overlays (#419)', () => {
       sourceCvContentHash: HASH_A,
       jdSnapshotHash: HASH_B,
     });
-    // 'candidate_approved' is seeded via 'artifact_approved' rather than the real approval flow --
-    // `updateCvEvidenceOverlay`'s patch no longer accepts 'candidate_approved' at all (#421: only
-    // `approveCvEvidenceOverlay` may set it), and `invalidatedOverlayState` treats both the same
-    // way, which is exactly the behavior this test is about.
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+    // 'candidate_approved' is seeded directly rather than through the real approval flow --
+    // `updateCvEvidenceOverlay`'s patch no longer accepts it at all (#421: only
+    // `approveCvEvidenceOverlay` may set it), which is exactly the behavior this test is not about.
+    db.update(schema.cvEvidenceOverlays).set({ state: 'candidate_approved' }).where(eq(schema.cvEvidenceOverlays.id, overlay.id)).run();
     // The source CV was re-reviewed (a new content hash) after approval, and this patch does not
     // itself assert a new state -- the approval must not silently survive that.
     const afterDrift = workspace.updateCvEvidenceOverlay(db, overlay.id, { sourceCvContentHash: HASH_B });
@@ -339,9 +338,9 @@ describe('cv evidence overlays (#419)', () => {
       sourceCvContentHash: HASH_A,
       jdSnapshotHash: HASH_B,
     });
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+    db.update(schema.cvEvidenceOverlays).set({ state: 'candidate_approved' }).where(eq(schema.cvEvidenceOverlays.id, overlay.id)).run();
     const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { listingStatus: 'closed' });
-    expect(after.state).toBe('artifact_approved');
+    expect(after.state).toBe('candidate_approved');
   });
 
   it('deletes an overlay, and deletes every overlay when its CV is deleted (cascade)', () => {
@@ -816,7 +815,7 @@ Node.js experience is a plus.`;
 
     it('invalidates a standing candidate_approved state back to draft, the same rule updateCvEvidenceOverlay applies', () => {
       const { overlay } = caseWithRequirementAndFact();
-      workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
+      db.update(schema.cvEvidenceOverlays).set({ state: 'candidate_approved' }).where(eq(schema.cvEvidenceOverlays.id, overlay.id)).run();
       const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'requirement', data: { text: 'x', jdAnchor: 'Node.js experience', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } } });
       const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
       expect(updated.state).toBe('draft');

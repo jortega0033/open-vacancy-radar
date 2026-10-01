@@ -77,6 +77,8 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     approvedResumeSnapshot: null,
     projectSelection: null,
     sourceBaseline: null,
+    artifacts: [],
+    legacyUnverifiedExport: false,
     capturedAt: '2026-09-30T00:00:00.000Z',
     updatedAt: '2026-09-30T00:00:00.000Z',
     ...partial,

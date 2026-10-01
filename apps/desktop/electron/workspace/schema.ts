@@ -8,6 +8,7 @@ import {
   EMPTY_CV_REQUIREMENT_COVERAGE,
   type CvApprovedResumeSnapshot,
   type CvApprovedWording,
+  type CvArtifactRecord,
   type CvEvidenceFact,
   type CvJdIncompleteReason,
   type CvJdRevision,
@@ -181,6 +182,8 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
   /** #419: the CV inputs this case was started or last rebased from, so a later change can be shown
    * as a diff. `null` for a case that predates the column. */
   sourceBaseline: text('source_baseline', { mode: 'json' }).$type<CvSourceBaseline | null>().default(null),
+  /** #419 step 9: one record per rendered file, oldest first -- see `CvArtifactRecord`. */
+  artifacts: text('artifacts', { mode: 'json' }).$type<CvArtifactRecord[]>().default([]),
   capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
