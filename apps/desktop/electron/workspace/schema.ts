@@ -1,6 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { CvSourceDocument } from './cv-source-schema.js';
+import {
+  CV_EVIDENCE_OVERLAY_ORIGINS,
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_LISTING_STATUSES,
+  type CvApprovedResumeSnapshot,
+  type CvApprovedWording,
+  type CvEvidenceFact,
+  type CvJdRevision,
+  type CvRequirementMapping,
+} from './cv-evidence-schema.js';
+import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
+import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -82,9 +94,134 @@ export const cvDocuments = sqliteTable('cv_documents', {
    * time, and nothing queries, orders or joins across it in SQL.
    */
   sourceCv: text('source_cv', { mode: 'json' }).$type<CvSourceDocument>(),
+  /**
+   * Provenance of `text` (issue #396): `'text_layer'` for pdf.js/mammoth local extraction (every
+   * row before this column existed, via the column default, and every ordinary upload since), or
+   * `'ai_transcription'` for a scanned/image-only PDF whose text came from an AI provider instead.
+   * A vision-capable model can misread dates, employers or technologies, so this is never inferred
+   * after the fact -- `createCvDocument`'s caller states it explicitly, and the renderer can only
+   * ever request `'ai_transcription'` after the user has reviewed and confirmed the transcribed
+   * text (see `useCvPicker.ts`'s transcription-review step): the row simply would not exist yet
+   * otherwise. `text_layer` needs no separate review gate the way transcription does -- pdf.js and
+   * mammoth extract the document's own text characters rather than inferring them, so there is
+   * nothing equivalent to a vision model's misread to confirm.
+   */
+  textSource: text('text_source', { enum: ['text_layer', 'ai_transcription'] }).notNull().default('text_layer'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/**
+ * #419: one row per (CV, vacancy) tailoring session -- the reviewable requirement/evidence/
+ * approved-wording overlay `cv-evidence-schema.ts` describes. A separate table from `cvDocuments`
+ * rather than another JSON column on it, unlike `sourceCv`: `sourceCv` is 1:1 with its CV, this is
+ * 1:many (the same CV tailored for several vacancies, each with its own JD and its own set of
+ * approved wording), so it needs its own lookup key (`cvId` + `vacancyKey`) a JSON column cannot
+ * offer. `facts`/`requirements`/`wordingVariants` are still JSON columns within this table, for
+ * the same reason `sourceCv` is one: each is only ever read and written whole, for one overlay at
+ * a time, and nothing queries, orders or joins across it in SQL.
+ */
+export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  cvId: text('cv_id').notNull().references(() => cvDocuments.id, { onDelete: 'cascade' }),
+  /** Matches `savedJobs.vacancyKey`/`applicationAttempts`' own vacancy reference: the discovery
+   * report's `key`, not a URL, so the same vacancy is always the same row regardless of how it was
+   * reached. */
+  vacancyKey: text('vacancy_key').notNull(),
+  /** SHA-256 hex of the `CvSourceDocument` this overlay was built from -- see this module's own
+   * doc comment on `CvEvidenceOverlay.sourceCvContentHash` in `cv-evidence-schema.ts`. */
+  sourceCvContentHash: text('source_cv_content_hash').notNull(),
+  jdSnapshot: text('jd_snapshot').notNull().default(''),
+  jdSnapshotHash: text('jd_snapshot_hash').notNull(),
+  jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  /** #421's case contract: every past `jdSnapshot`, oldest first -- see `CvJdRevision`. */
+  jdRevisions: text('jd_revisions', { mode: 'json' }).notNull().$type<CvJdRevision[]>().default([]),
+  listingStatus: text('listing_status', { enum: CV_LISTING_STATUSES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('unknown'),
+  state: text('state', { enum: CV_EVIDENCE_OVERLAY_STATES as unknown as [string, ...string[]] })
+    .notNull()
+    .default('needs_input'),
+  requirements: text('requirements', { mode: 'json' }).notNull().$type<CvRequirementMapping[]>().default([]),
+  facts: text('facts', { mode: 'json' }).notNull().$type<CvEvidenceFact[]>().default([]),
+  wordingVariants: text('wording_variants', { mode: 'json' }).notNull().$type<CvApprovedWording[]>().default([]),
+  /** #421's case contract: how this case began -- see `CvEvidenceOverlayOrigin`. */
+  origin: text('origin', { enum: CV_EVIDENCE_OVERLAY_ORIGINS as unknown as [string, ...string[]] })
+    .notNull()
+    .default('vacancy'),
+  /** #421's case contract: bumped by the repository layer on every write, never caller-supplied.
+   * A plain `text` column (not `integer`), since every reader treats it as an opaque token to
+   * compare for equality -- see `CvEvidenceOverlay.caseRevision`. */
+  caseRevision: text('case_revision').notNull().default('0'),
+  /** #421's case contract: `null` until the first approval -- see `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: text('approved_resume_snapshot', { mode: 'json' })
+    .$type<CvApprovedResumeSnapshot | null>()
+    .default(null),
+  capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421: a named local client's authorization to act on the local MCP endpoint. See
+ * `mcp-grant-schema.ts`'s own header for why this lives in its own module rather than beside
+ * `cvEvidenceOverlays` above. */
+export const mcpClientGrants = sqliteTable('mcp_client_grants', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  name: text('name').notNull(),
+  scopeType: text('scope_type', { enum: MCP_GRANT_SCOPE_TYPES as unknown as [string, ...string[]] }).notNull(),
+  /** Set only when `scopeType === 'source_cv'`; `''` otherwise. */
+  sourceCvId: text('source_cv_id').notNull().default(''),
+  /** Set only when `scopeType === 'case_ids'` at creation, or appended to over time for a
+   * `source_cv` grant -- a JSON column rather than a join table, since nothing ever queries across
+   * it in SQL, the same reasoning `cvEvidenceOverlays.requirements` above already documents. */
+  caseIds: text('case_ids', { mode: 'json' }).notNull().$type<string[]>().default([]),
+  canReadFinalSnapshot: integer('can_read_final_snapshot', { mode: 'boolean' }).notNull().default(false),
+  /** SHA-256 hex of the one-time credential value shown to the candidate at creation and never
+   * itself stored -- this column can verify a presented credential but can never reproduce it, the
+   * same discipline a password hash follows. */
+  credentialVerifierHash: text('credential_verifier_hash').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Null while active. Never deleted once revoked -- the same `automationGrants.revokedAt`
+   * reasoning: a revoked grant is itself part of the record #421's audit trail exists to keep. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
+/** #421's audit trail. Every call attempt through the local MCP endpoint writes exactly one row
+ * here, successful or not -- see `mcp-grant-schema.ts`'s own doc comment on why every column here
+ * is structurally incapable of carrying raw CV/JD text or a credential. Append-only: nothing in
+ * this module ever updates or deletes a row here once written. */
+export const mcpAuditLogEntries = sqliteTable('mcp_audit_log_entries', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  /** `null` when no grant could be matched at all. `onDelete: 'set null'`, not `'cascade'`: deleting
+   * a grant record is not a thing this app does (grants are revoked, never deleted -- see above),
+   * but if it ever happened, the audit history of what that client did must outlive the grant row
+   * it once pointed to, not vanish with it. */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  toolName: text('tool_name').notNull(),
+  caseId: text('case_id'),
+  outcome: text('outcome', { enum: MCP_AUDIT_OUTCOMES as unknown as [string, ...string[]] }).notNull(),
+  revision: text('revision'),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421's proposal staging layer. See `cv-proposal-schema.ts`'s own header for why nothing an MCP
+ * client sends reaches `cvEvidenceOverlays.requirements`/`facts`/`wordingVariants` directly. */
+export const cvTailoringProposals = sqliteTable('cv_tailoring_proposals', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  caseId: text('case_id').notNull().references(() => cvEvidenceOverlays.id, { onDelete: 'cascade' }),
+  /** `onDelete: 'set null'`, matching `mcpAuditLogEntries.grantId`'s own reasoning: a proposal
+   * already decided stays a record of what was decided even if its grant row somehow stopped
+   * existing (grants are revoked, never deleted, in the app's own flows). */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  kind: text('kind', { enum: CV_PROPOSAL_KINDS as unknown as [string, ...string[]] }).notNull(),
+  status: text('status', { enum: CV_PROPOSAL_STATUSES as unknown as [string, ...string[]] }).notNull().default('pending'),
+  /** The kind-specific payload (`CvProposalPayload`'s `data`, not the `{kind, data}` wrapper --
+   * `kind` above is this same value, already its own column so a query can filter by it in SQL). */
+  payload: text('payload', { mode: 'json' }).notNull(),
+  caseRevisionAtProposal: text('case_revision_at_proposal').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  decidedAt: integer('decided_at', { mode: 'timestamp_ms' }),
 });
 
 export const letters = sqliteTable('letters', {
@@ -507,6 +644,13 @@ export const appSettings = sqliteTable('app_settings', {
   confirmApplicationDelete: integer('confirm_application_delete', { mode: 'boolean' }).notNull().default(true),
   autoArchiveRejected: integer('auto_archive_rejected', { mode: 'boolean' }).notNull().default(false),
   defaultProvider: text('default_provider', { enum: ['claude', 'codex'] }).notNull().default('claude'),
+  /** #421: whether the local MCP endpoint listens at all. Off by default, the same reasoning
+   * `autoApplyEnabled` above already states for a feature that expands what an outside actor may
+   * do on the candidate's behalf -- this one is a literal new network listener in Electron main,
+   * so the default-off posture matters even more than usual. Closing the app removes the endpoint
+   * regardless of this setting; it only controls whether one is stood up on the next launch or
+   * settings change. */
+  mcpEndpointEnabled: integer('mcp_endpoint_enabled', { mode: 'boolean' }).notNull().default(false),
   /*
    * ADI-07: the AI Workspace's renderer-local view state.
    *

@@ -44,6 +44,7 @@ function makeCv(id: string, name: string): CvDocumentRecord {
     text: '',
     profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
     source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
@@ -101,7 +102,7 @@ describe('SettingsPage', () => {
     expect(headingsNow()).toEqual(['Documents', 'Applications', 'Saved application answers']);
 
     openTab('Advanced');
-    expect(headingsNow()).toEqual(['AI runtime', 'Data management', 'About']);
+    expect(headingsNow()).toEqual(['AI runtime', 'Local AI assistant access (MCP)', 'Data management', 'About']);
   });
 
   it('offers "All countries" plus the full country list (Netherlands included) as one unified selector', async () => {

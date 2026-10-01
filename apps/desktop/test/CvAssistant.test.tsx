@@ -22,6 +22,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
       auth: '',
     },
     source: null,
+    textSource: 'text_layer',
     isDefault: false,
     uploadedAt: '2026-08-01T09:00:00.000Z',
     updatedAt: '2026-08-01T09:00:00.000Z',
@@ -61,7 +62,7 @@ describe('CvAssistant', () => {
   it('switches library CVs and still allows a one-off upload fallback', async () => {
     installBridges({
       cv: {
-        selectAndRead: vi.fn().mockResolvedValue({ fileName: 'one-off.pdf', text: 'One off CV.' }),
+        selectAndRead: vi.fn().mockResolvedValue({ status: 'ok', fileName: 'one-off.pdf', text: 'One off CV.' }),
       },
     });
     installWorkspaceBridge({
@@ -102,7 +103,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 
@@ -134,7 +135,7 @@ describe('CvAssistant', () => {
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 
@@ -188,12 +189,63 @@ describe('CvAssistant', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/claude code is not installed/i);
   });
 
+  it('resolves to the one installed alternative when the persisted default is not installed (issue #400)', async () => {
+    // Persisted preference stays 'claude' (installWorkspaceBridge's default): only Codex is
+    // reported as installed, so the effective provider used to actually run a session must be
+    // Codex, without ever rewriting the persisted preference itself.
+    const bridges = installBridges({
+      cv: {
+        selectAndRead: vi
+          .fn()
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
+      },
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([
+          {
+            id: 'claude',
+            name: 'Claude Code',
+            installed: false,
+            authenticated: 'unknown',
+            capabilities: {},
+          },
+          {
+            id: 'codex',
+            name: 'Codex',
+            installed: true,
+            authenticated: 'authenticated',
+            capabilities: { resume: true, cancellation: true, tools: true, usage: true },
+          },
+        ]),
+      },
+    });
+
+    render(<CvAssistant vacancy={TEST_VACANCY} />);
+
+    // Not blocked as unavailable: the resolved effective provider (Codex) is installed, even
+    // though the raw persisted preference (Claude) is not.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(await screen.findByText(/runs on your own authenticated codex cli/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /choose cv file/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /check ats fit/i })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /check ats fit/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].provider).toBe('codex'),
+    );
+    // The persisted preference itself was never rewritten to match the resolved fallback: only an
+    // explicit "Use as default" action on the AI Runtime page may do that (issue #400).
+    expect(window.workspace.updateSettings).not.toHaveBeenCalled();
+  });
+
   it('offers the provider model picker and passes the chosen model into the session', async () => {
     const bridges = installBridges({
       cv: {
         selectAndRead: vi
           .fn()
-          .mockResolvedValue({ fileName: 'jake.pdf', text: 'Angular architect.' }),
+          .mockResolvedValue({ status: 'ok', fileName: 'jake.pdf', text: 'Angular architect.' }),
       },
     });
 

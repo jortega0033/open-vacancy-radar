@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
 import type {
   CvDocumentRecord,
   LetterInput,
@@ -12,6 +11,7 @@ import type {
 } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
@@ -124,7 +124,7 @@ export function LetterGenerator({
   const [length, setLength] = useState<LetterLength>(letter?.length ?? 'standard');
   const [status, setStatus] = useState<LetterStatus>(letter?.status ?? 'draft');
   const [instructions, setInstructions] = useState('');
-  const [provider, setProvider] = useState<ProviderId>('claude');
+  const { provider } = useEffectiveProvider();
 
   const [title, setTitle] = useState(letter?.title ?? '');
   // A title the user typed is theirs; only an untouched one keeps tracking the type and company.
@@ -220,23 +220,6 @@ export function LetterGenerator({
       cancelled = true;
     };
   }, [letter]);
-
-  // Which CLI a generation runs through is a runtime preference, not a per-document style choice
-  // like tone/type/length, so it is read for every letter (new or existing), not gated on `!letter`.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const settings = await window.workspace.getSettings();
-        if (!cancelled) setProvider(settings.defaultProvider);
-      } catch {
-        // the useState default ('claude') is already sensible
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Once the library lands, settle on a CV: whatever was already chosen if it still exists, else
   // the library's default, else the first one.

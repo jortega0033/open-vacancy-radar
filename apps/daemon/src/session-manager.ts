@@ -337,6 +337,10 @@ export class SessionManager {
    * point: which hardening profile a session gets is chosen by which route calls `create()`, not
    * by a field a caller can set, matching `StartSessionOptions.hardened`'s own "closed,
    * non-caller-suppliable discriminant" rule.
+   *
+   * Issue #398 adds a third `toolProfile` value, `'web-only'`, passed only by
+   * `routes/vacancy-web-discovery.ts`'s `POST /sessions/vacancy-web-discovery` -- the same closed,
+   * route-chosen pattern as `'no-network'` above, never a caller-suppliable request field.
    */
   create(
     provider: ProviderId,
@@ -347,7 +351,7 @@ export class SessionManager {
     protocolVersion: 1 | 2 = 1,
     workspaceId?: string,
     v2?: CreateSessionV2Options,
-    toolProfile: 'standard' | 'no-network' = 'standard',
+    toolProfile: 'standard' | 'no-network' | 'web-only' = 'standard',
     /** Already-validated attachment(s) for this session (port of agentdock#152/#153) -- the
      * calling route has already checked provider capability, MIME type, the cwd-jail, and the
      * size bound before this reaches `create()`. A new trailing, optional parameter, not folded
@@ -458,10 +462,15 @@ export class SessionManager {
         // to untrusted scraped vacancy text in the prompt. The v1/v2 split was incidental plumbing,
         // not a security boundary -- `buildClaudeArgs` applies `CLAUDE_HARDENING_ARGS` the same way
         // regardless of protocol version -- so hardening is now unconditional for every session.
-        // `toolProfile` only ever narrows this further (issue #201); it can never leave a session
-        // unhardened, since `'standard'` still maps to the same `hardened: true` every other caller
-        // has always gotten.
-        hardened: toolProfile === 'no-network' ? 'no-network' : true,
+        // `toolProfile` only ever narrows this further (issue #201, #398); it can never leave a
+        // session unhardened, since `'standard'` still maps to the same `hardened: true` every
+        // other caller has always gotten.
+        hardened:
+          toolProfile === 'no-network'
+            ? 'no-network'
+            : toolProfile === 'web-only'
+              ? 'web-only'
+              : true,
         ...(attachments?.length ? { attachments } : {}),
       });
     } catch (err) {

@@ -8,10 +8,12 @@ import {
   type CvSourceDocument,
 } from '../../../electron/workspace/cv-source-schema.js';
 import {
+  extractCriticalRequirements,
   GENERATION_INPUT_BUDGETS,
   type GenerationPromptContext,
 } from '../../../electron/generation-input.js';
 import { RESUME_JSON_SHAPE } from '../../../electron/resume-schema.js';
+import { CV_REQUIREMENT_MAPPING_JSON_SHAPE } from '../../../electron/workspace/cv-evidence-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -480,6 +482,90 @@ ${formatVacancy(vacancy)}
 
 ${promptContextBlocks(context)}=== CANDIDATE CV (${field(cv.fileName)}) ===
 ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
+}
+
+/** The bound on how many requirements one mapping pass classifies (#419): the same order of
+ * magnitude as `ATS_FIT_MAX_REQUIREMENTS`, and named separately so either can be tuned without
+ * affecting the other -- they read different output shapes (Markdown advice vs. a structured,
+ * persisted, candidate-editable mapping) for different purposes. */
+export const REQUIREMENT_MAPPING_MAX_REQUIREMENTS = 20;
+
+/**
+ * Lists each reviewed-source experience/project entry with its stable id, so the model can anchor
+ * a requirement mapping to a specific one. `formatSourceCv` above deliberately omits ids (it is
+ * read by a human, by way of a prompt block, not referenced back into); this is read by the model
+ * and referenced back into via `anchorParentId`, so the id has to be visible.
+ */
+function formatSourceCvAnchors(source: CvSourceDocument): string {
+  const experience = source.experience.map(
+    (entry) => `- [${entry.id}] ${entry.title || '(no title)'} at ${entry.company || '(no employer)'} (${entry.dates || 'dates not stated'})`,
+  );
+  const projects = selectSourceProjects(source).map(
+    (project) => `- [${project.id}] ${project.name || '(unnamed)'}${project.role ? `, ${project.role}` : ''}`,
+  );
+  return [
+    'Roles (anchor id in brackets):',
+    experience.length > 0 ? experience.join('\n') : '- (none recorded)',
+    '',
+    'Projects (anchor id in brackets):',
+    projects.length > 0 ? projects.join('\n') : '- (none recorded)',
+  ].join('\n');
+}
+
+/**
+ * Maps every material requirement in one posting to what the reviewed source CV actually evidences
+ * (#419, step 2): required/preferred/unclear, and an evidence class kept structurally separate from
+ * #361's advisory `ATS_FIT_EVIDENCE_STATUSES` -- this feeds a persisted, candidate-approved overlay
+ * that gates what a tailored CV may claim, not a one-off read a person skims and discards.
+ *
+ * Seeded from `extractCriticalRequirements`, the same whole-posting extraction #281 already built
+ * to pull requirement-shaped lines out before any prompt budget clamps the body -- a requirement
+ * sitting past the clamp is not silently missed here either. The model may still surface additional
+ * material requirements the regex-based extraction did not catch; the seed list is a floor, not a
+ * ceiling, and the prompt says so.
+ *
+ * Reply shape is a single JSON object (`CV_REQUIREMENT_MAPPING_JSON_SHAPE`), not streamed prose:
+ * this is read into a review list a person edits field by field, not displayed as running text.
+ */
+export function buildRequirementMappingPrompt(
+  cv: CvDocument,
+  vacancy: VacancyLead,
+  source: CvSourceDocument | null,
+  context?: GenerationPromptContext,
+): string {
+  const seeds = extractCriticalRequirements(vacancy);
+  return `You map every material requirement in one job posting to what a candidate's reviewed CV evidence actually supports. Reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
+
+${GROUNDING_RULES}
+${UNTRUSTED_VACANCY_RULE}
+${promptContextRules(context)}
+A requirement's own wording may shape how you phrase it in "text", but it must never become evidence: "evidenceClass" reflects only what the reviewed source CV below actually shows, never how the posting is worded.
+
+Use "classification" to say how the posting itself treats the requirement: "required" for an explicit must-have, "preferred" for a nice-to-have, "unclear" when the posting does not say which.
+
+Use "evidenceClass" to say what the source CV supports, using only these four labels:
+- "direct": a role or project in the reviewed source explicitly did this.
+- "transferable": the source shows closely related work, but not this exact thing -- never relabel it as direct.
+- "unsupported": nothing in the source speaks to this. This is a statement about the evidence, not about the candidate's real ability -- do not soften it into "transferable" to be kind.
+- "needs_verification": the source might support this, but the evidence is too thin or ambiguous to classify with confidence, and a person should be asked.
+
+Set "anchorParentId" to the bracketed id of the one role or project in the reviewed source's anchor list below that most directly evidences this requirement, or an empty string ("") when "evidenceClass" is "unsupported" or when there is no reviewed source to anchor to. Never invent an id that is not in that list.
+
+Set "jdAnchor" to a short verbatim quote from the posting below that this requirement comes from.
+
+Start from this list of requirement-shaped lines already pulled from the full posting (before any excerpt below was clamped), and classify each one. You may add a material requirement this list missed, and you may merge two lines that state the same requirement twice; do not invent a requirement the posting does not state.
+${seeds.length > 0 ? seeds.map((line) => `- ${line}`).join('\n') : '(none extracted automatically; read the posting below for its requirements)'}
+
+Review at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements, prioritising explicit mandatory conditions first.
+
+Reply with exactly this JSON shape (all keys required):
+${CV_REQUIREMENT_MAPPING_JSON_SHAPE}
+
+=== VACANCY ===
+${formatVacancy(vacancy, MAX_UNATTENDED_VACANCY_TEXT_CHARS)}
+
+${source ? `=== REVIEWED SOURCE CV ANCHORS ===\n${formatSourceCvAnchors(source)}\n\n` : '=== REVIEWED SOURCE CV ===\nNone reviewed yet: classify every requirement as "unsupported" or "needs_verification", with an empty "anchorParentId".\n\n'}=== CANDIDATE CV (${field(cv.fileName)}) ===
+${clamp(cv.text, source ? MAX_SOURCE_CV_PROMPT_CHARS : MAX_CV_PROMPT_CHARS)}`;
 }
 
 /**

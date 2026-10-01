@@ -19,6 +19,12 @@ export interface CreateSessionInput {
   provider: ProviderId;
   prompt: string;
   model?: string;
+  /**
+   * Issue #396: an opaque, single-use handle from a `cv:select-and-read` `'scanned-pdf'` result --
+   * never a path. The main process resolves it to an already-staged PDF before the daemon ever
+   * sees it.
+   */
+  attachmentCandidateId?: string;
 }
 
 export interface AgentDockBridge {
@@ -33,7 +39,18 @@ export interface AgentDockBridge {
 
 export type VacancyEngineStatus = { ready: boolean; error?: string };
 export type VacancyReportSummary = { runId: string; generatedAt: string; vacancyCount: number };
-export type VacancyScanRequest = string | { mode: 'query'; query: string; country?: string; employment?: string; salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean } } | { mode: 'browse_all' };
+export type VacancyScanRequest =
+  | string
+  | {
+      mode: 'query';
+      query: string;
+      country?: string;
+      employment?: string;
+      salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
+      /** Issue #398 Phase 1: opt in to an on-demand AI-web-search discovery pass for this run only. */
+      aiWebDiscovery?: boolean;
+    }
+  | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
 export interface VacancyRadarBridge {
   getStatus(): Promise<VacancyEngineStatus>;
@@ -69,9 +86,20 @@ export interface CvFile {
   text: string;
 }
 
+/** Mirror of `CvSelectResult` in electron/preload.ts. See the rationale for the shape there. */
+export type CvSelectResult =
+  | { status: 'ok'; fileName: string; text: string }
+  | { status: 'scanned-pdf'; fileName: string; pageCount: number; candidateId: string }
+  | {
+      status: 'scanned-pdf-unavailable';
+      fileName: string;
+      pageCount: number;
+      reason: 'too-many-pages' | 'no-provider' | 'declined';
+    };
+
 /** Mirror of `CvBridge` in electron/preload.ts. See the rationale for the narrow shape there. */
 export interface CvBridge {
-  selectAndRead(): Promise<CvFile | null>;
+  selectAndRead(): Promise<CvSelectResult | null>;
   getWorkspaceDir(): Promise<string>;
 }
 
@@ -242,19 +270,45 @@ export type {
   ApplicationStatus,
   AppSettingsPatch,
   AppSettingsRecord,
+  CvApprovedWording,
+  CvClaimField,
   CvDocumentInput,
   CvDocumentPatch,
   CvDocumentRecord,
+  CvEvidenceClass,
+  CvEvidenceFact,
+  CvEvidenceOverlayInput,
+  CvEvidenceOverlayPatch,
+  CvEvidenceOverlayRecord,
+  CvEvidenceOverlayState,
   CvExportFormat,
   CvExportResult,
+  CvFactOwnership,
+  CvFactSourceKind,
+  CvFactVerification,
   CvKind,
+  CvListingStatus,
   CvProfile,
   CvEngagementType,
+  CvRequirementClassification,
+  CvRequirementMapping,
   CvSourceContact,
   CvSourceDocument,
   CvSourceEducationEntry,
   CvSourceExperienceEntry,
   CvSourceProjectEntry,
+  CvTailoringProposalRecord,
+  CvTextSource,
+  CvClarificationQuestionProposalPayload,
+  CvEvidenceLinkProposalPayload,
+  CvFactProposalPayload,
+  CvProposalKind,
+  CvProposalPayload,
+  CvProposalStatus,
+  CvRequirementProposalPayload,
+  CvSelectionProposalPayload,
+  CvWordingProposalPayload,
+  CvWordingApprovalStatus,
   DeleteResult,
   DensityPreference,
   LetterInput,
@@ -264,6 +318,11 @@ export type {
   LetterStatus,
   LetterTone,
   LetterType,
+  McpAuditLogEntry,
+  McpAuditOutcome,
+  McpClientGrantInput,
+  McpClientGrantRecord,
+  McpGrantScopeType,
   PreparedApplicationField,
   PreparedApplicationFields,
   PreparedFieldProvenance,

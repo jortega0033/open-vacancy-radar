@@ -1,7 +1,14 @@
-import type { CvFile } from '../../window.js';
+import type { CvFile, CvTextSource } from '../../window.js';
 
-/** The loaded CV, as returned by `window.cv.selectAndRead()`. */
-export type CvDocument = CvFile;
+/**
+ * The loaded CV, as resolved by `useCvPicker` (issue #396): either straight from
+ * `window.cv.selectAndRead()`, or -- for a scanned/image-only PDF -- from the reviewed AI-
+ * transcription fallback. `textSource` is optional because most `CvDocument` consumers (gap
+ * analysis, letters, tailoring) never persist it and don't care; `SaveCvToLibrary` reads it when
+ * present and otherwise defaults to `'text_layer'`, the correct provenance for every call site that
+ * predates this field.
+ */
+export type CvDocument = CvFile & { textSource?: CvTextSource };
 
 /**
  * The vacancy shape these features need in order to write a prompt.

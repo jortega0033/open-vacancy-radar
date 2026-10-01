@@ -19,6 +19,7 @@ const CV: CvDocumentRecord = {
     auth: 'EU citizen, no sponsorship needed',
   },
   source: null,
+  textSource: 'text_layer',
   isDefault: true,
   uploadedAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',

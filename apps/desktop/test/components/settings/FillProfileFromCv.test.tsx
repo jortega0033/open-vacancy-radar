@@ -26,6 +26,7 @@ const CV: CvDocumentRecord = {
   text: 'Senior Frontend Engineer at Redwood. Angular, TypeScript, RxJS. Eight years.',
   profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
   source: null,
+  textSource: 'text_layer',
   isDefault: true,
   uploadedAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -33,6 +34,7 @@ const CV: CvDocumentRecord = {
 
 const PARSED_CV: CvDocumentRecord = {
   ...CV,
+  textSource: 'text_layer',
   profile: {
     title: 'Senior Frontend Engineer',
     years: '8',
@@ -187,8 +189,17 @@ describe('FillProfileFromCvDrawer', () => {
     // Real regression: this drawer used to call useAgentRun.start() with no provider option at
     // all, which silently falls back to Claude Code regardless of what the user set as their
     // default runtime -- failing outright for anyone who set Codex because Claude Code isn't
-    // authenticated on their machine.
-    const bridges = installBridges();
+    // authenticated on their machine. `listProviders` reports Codex installed, matching that
+    // machine, so the effective provider resolves to the user's actual preference rather than a
+    // fallback alternative.
+    const bridges = installBridges({
+      agentDock: {
+        listProviders: vi.fn().mockResolvedValue([
+          { id: 'claude', name: 'Claude Code', installed: false, authenticated: 'unknown', capabilities: {} },
+          { id: 'codex', name: 'Codex', installed: true, authenticated: 'authenticated', capabilities: {} },
+        ]),
+      },
+    });
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([CV]),
       getSettings: vi.fn().mockResolvedValue({ defaultProvider: 'codex' }),

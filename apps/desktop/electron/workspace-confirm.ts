@@ -98,3 +98,51 @@ export async function confirmWorkspaceGrant(
 ): Promise<boolean> {
   return showConfirmDialog(parent, buildConfirmOptions(input));
 }
+
+export interface CvTranscriptionConsentInput {
+  /** Bounded basename of the picked file. Never a path. */
+  fileName: string;
+  /** Display name of the provider this file would be sent to. */
+  providerName: string;
+}
+
+/**
+ * The native confirmation a scanned/image-only CV's original PDF cannot be sent for AI
+ * transcription without (issue #396).
+ *
+ * This is the one and only place that consent is granted: `cv:select-and-read` shows it, and only
+ * an exact click on the allow button leads to the file ever being staged at all (see
+ * `cv-transcription-staging.ts`). A renderer-drawn confirmation was deliberately rejected for this
+ * decision, for the same reason `confirmWorkspaceGrant` above uses a native one: a renderer-drawn
+ * modal is just more DOM the renderer itself controls, so it proves nothing about what the user
+ * actually saw or clicked, and it cannot stand between a compromised renderer and an IPC call it
+ * is otherwise free to make. See `showConfirmDialog`'s own doc comment for the shared consent
+ * rule (only the allow index counts; everything else, including closing the window, is a refusal).
+ */
+export function buildCvTranscriptionConsentOptions(input: CvTranscriptionConsentInput): MessageBoxOptions {
+  return {
+    type: 'warning',
+    title: 'Transcribe with AI?',
+    message: `Send "${input.fileName}" to ${input.providerName} for transcription?`,
+    detail: [
+      `"${input.fileName}" has no selectable text. It looks like a scanned image.`,
+      '',
+      `${input.providerName} can transcribe it for you, but that means sending the original file ` +
+        'to your configured AI CLI for this one operation. The transcribed text will be shown to ' +
+        'you for review before anything is saved.',
+    ].join('\n'),
+    buttons: ['Cancel', 'Send for transcription'],
+    defaultId: CANCEL_BUTTON_INDEX,
+    cancelId: CANCEL_BUTTON_INDEX,
+    noLink: true,
+  };
+}
+
+/** Shows the CV-transcription consent dialog specifically. See `showConfirmDialog` for the shared
+ * consent rule. */
+export async function confirmCvTranscription(
+  parent: BrowserWindow | undefined,
+  input: CvTranscriptionConsentInput,
+): Promise<boolean> {
+  return showConfirmDialog(parent, buildCvTranscriptionConsentOptions(input));
+}

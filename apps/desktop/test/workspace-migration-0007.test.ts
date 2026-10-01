@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
 
@@ -16,6 +16,12 @@ import * as workspace from '../electron/workspace/repository.js';
  * table rebuild -- this suite mostly proves an existing row picks up the new column's default
  * without disturbing any of its other, already-stored values.
  */
+
+// Each test here opens real SQLite databases (WAL mode) and runs the real drizzle migration chain
+// through them, some of them twice -- genuine disk I/O with no logic-level slowness, but on a
+// loaded CI runner it has been observed to occasionally run past vitest's default 5000ms per-test
+// timeout on its own. Widened here rather than globally, matching this repo's `App.test.tsx`.
+vi.setConfig({ testTimeout: 20_000 });
 
 const REAL_MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '..', 'electron', 'workspace', 'drizzle');
 

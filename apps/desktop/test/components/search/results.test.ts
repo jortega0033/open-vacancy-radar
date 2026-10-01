@@ -254,13 +254,15 @@ describe('large report filtering index', () => {
       provider: index % 3 === 0 ? 'jobicy' : 'remotive',
       employmentType: index % 5 === 0 ? 'contract' : 'full_time',
       postedAt: index % 7 === 0 ? '2026-08-31T00:00:00.000Z' : null,
-      profileScore: index % 100,
+      // A third of rows scoreless so the query-match tier comparator (issue #395) actually runs
+      // across a meaningful share of this budget test, not just the pre-existing score/postedAt path.
+      profileScore: index % 3 === 0 ? null : index % 100,
     })) satisfies SearchResult[];
     const filters = { ...DEFAULT_FILTERS, query: 'frontend', country: 'Netherlands' };
     const start = performance.now();
     const index = buildSearchResultIndex(results);
     const filtered = filterSearchResultIndex(index, filters, now);
-    const sorted = sortSearchResultIndex(filtered);
+    const sorted = sortSearchResultIndex(filtered, filters.query);
     const elapsedMs = performance.now() - start;
 
     expect(sorted).toHaveLength(5_000);
@@ -303,27 +305,32 @@ describe('sortResults', () => {
     profileScore?: number | null;
     postedAt?: string | null;
     title?: string;
+    company?: string;
+    description?: string | null;
+    provisional?: boolean;
   }): SearchResult {
+    const title = overrides.title ?? overrides.key;
+    const company = overrides.company ?? 'Acme';
     return {
       raw: discoveryVacancy({ key: overrides.key }),
       official: null,
-      provisional: false,
+      provisional: overrides.provisional ?? false,
       key: overrides.key,
-      title: overrides.title ?? overrides.key,
-      company: 'Acme',
+      title,
+      company,
       location: null,
       url: 'https://example.com/job',
       provider: 'jobicy',
       employmentType: null,
       salary: null,
       postedAt: overrides.postedAt ?? null,
-      description: null,
+      description: overrides.description ?? null,
       verification: { level: 'not_available', label: 'Not available for this vacancy', tone: null, note: '' },
       profileScore: overrides.profileScore ?? null,
       strongPoints: [],
       gaps: [],
       reasons: [],
-      lead: { title: overrides.title ?? overrides.key, company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
+      lead: { title, company, location: 'Not stated', url: 'https://example.com/job' },
     };
   }
 
@@ -371,6 +378,173 @@ describe('sortResults', () => {
     ];
 
     expect(sortResults(results).map((r) => r.key)).toEqual(['newer', 'older']);
+  });
+});
+
+describe('sortResults/sortSearchResultIndex: query-match tier for scoreless rows (issue #395)', () => {
+  function sortableResult(overrides: {
+    key: string;
+    profileScore?: number | null;
+    postedAt?: string | null;
+    title?: string;
+    company?: string;
+    description?: string | null;
+    provisional?: boolean;
+  }): SearchResult {
+    const title = overrides.title ?? overrides.key;
+    const company = overrides.company ?? 'Acme';
+    return {
+      raw: discoveryVacancy({ key: overrides.key }),
+      official: null,
+      provisional: overrides.provisional ?? false,
+      key: overrides.key,
+      title,
+      company,
+      location: null,
+      url: 'https://example.com/job',
+      provider: 'jobicy',
+      employmentType: null,
+      salary: null,
+      postedAt: overrides.postedAt ?? null,
+      description: overrides.description ?? null,
+      verification: { level: 'not_available', label: 'Not available for this vacancy', tone: null, note: '' },
+      profileScore: overrides.profileScore ?? null,
+      strongPoints: [],
+      gaps: [],
+      reasons: [],
+      lead: { title, company, location: 'Not stated', url: 'https://example.com/job' },
+    };
+  }
+
+  it('ranks an exact title match above a partial title match', () => {
+    const results = [
+      sortableResult({ key: 'partial', title: 'Senior Frontend Engineer' }),
+      sortableResult({ key: 'exact', title: 'Frontend Engineer' }),
+    ];
+
+    expect(sortResults(results, 'Frontend Engineer').map((r) => r.key)).toEqual(['exact', 'partial']);
+  });
+
+  it('ranks an exact company match at the same top tier as an exact title match', () => {
+    const results = [
+      sortableResult({ key: 'exact-title', title: 'Acme Corp', company: 'Someone Else' }),
+      sortableResult({ key: 'exact-company', title: 'Unrelated Role', company: 'Acme Corp' }),
+      sortableResult({ key: 'partial-title', title: 'Acme Corp Senior Role', company: 'Someone Else' }),
+    ];
+
+    const ordered = sortResults(results, 'Acme Corp').map((r) => r.key);
+    // Both exact matches (tier 4) rank ahead of the partial title match (tier 3); which of the two
+    // tier-4 rows comes first is not asserted since the ticket only guarantees the tier is the same.
+    expect(ordered.slice(0, 2).sort()).toEqual(['exact-company', 'exact-title']);
+    expect(ordered[2]).toBe('partial-title');
+  });
+
+  it('matches case-insensitively', () => {
+    const results = [
+      sortableResult({ key: 'lower', title: 'frontend engineer' }),
+      sortableResult({ key: 'no-match', title: 'Backend Engineer' }),
+    ];
+
+    expect(sortResults(results, 'FRONTEND ENGINEER').map((r) => r.key)).toEqual(['lower', 'no-match']);
+  });
+
+  it('matches a multi-word query via substring against the title', () => {
+    const results = [
+      sortableResult({ key: 'no-match', title: 'Backend Developer' }),
+      sortableResult({ key: 'match', title: 'Senior Frontend Developer, Remote' }),
+    ];
+
+    expect(sortResults(results, 'frontend developer').map((r) => r.key)).toEqual(['match', 'no-match']);
+  });
+
+  it('breaks a tie within the same tier by recency', () => {
+    const results = [
+      sortableResult({ key: 'older', title: 'Frontend Developer', postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'newer', title: 'Frontend Developer', postedAt: '2026-08-20T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['newer', 'older']);
+  });
+
+  it('does not let a scored row automatically outrank an unscored one -- the postedAt fallback is unchanged', () => {
+    const results = [
+      sortableResult({ key: 'scored', profileScore: 40, postedAt: '2026-08-01T00:00:00.000Z', title: 'No match here' }),
+      sortableResult({ key: 'scoreless', profileScore: null, postedAt: '2026-08-20T00:00:00.000Z', title: 'Frontend Engineer' }),
+    ];
+
+    // Mixed pair: the tier check never fires (it requires both rows scoreless), so this falls
+    // straight through to today's postedAt fallback, exactly as before this change.
+    expect(sortResults(results, 'frontend engineer').map((r) => r.key)).toEqual(['scoreless', 'scored']);
+  });
+
+  it('keeps profileScore authoritative for a both-scored pair, even when the lower score would win the query tier', () => {
+    const results = [
+      sortableResult({ key: 'high-score-no-match', profileScore: 90, title: 'Backend Developer' }),
+      sortableResult({ key: 'low-score-exact-match', profileScore: 40, title: 'Frontend Engineer' }),
+    ];
+
+    expect(sortResults(results, 'Frontend Engineer').map((r) => r.key)).toEqual([
+      'high-score-no-match',
+      'low-score-exact-match',
+    ]);
+  });
+
+  it('is byte-for-behavior identical to omitting the query, when the query is empty', () => {
+    const results = [
+      sortableResult({ key: 'a', title: 'Frontend Engineer', postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'b', title: 'Backend Engineer', postedAt: '2026-08-20T00:00:00.000Z' }),
+      sortableResult({ key: 'c', title: 'Frontend Engineer', postedAt: '2026-08-10T00:00:00.000Z' }),
+    ];
+
+    const withNoArgument = sortResults(results).map((r) => r.key);
+    const withEmptyQuery = sortResults(results, '').map((r) => r.key);
+
+    expect(withEmptyQuery).toEqual(withNoArgument);
+    // Sanity check: a real query would have reordered this set (title-tier would put both
+    // "Frontend Engineer" rows ahead of postedAt-only ordering), so this is a meaningful assertion.
+    expect(sortResults(results, 'frontend engineer').map((r) => r.key)).not.toEqual(withNoArgument);
+  });
+
+  it('ranks a description-only match below a title/company match but above a no-match row', () => {
+    const results = [
+      sortableResult({ key: 'no-match', title: 'Unrelated', company: 'Nowhere', description: 'Nothing relevant.' }),
+      sortableResult({ key: 'description-match', title: 'Unrelated Role', company: 'Nowhere', description: 'Requires TypeScript experience.' }),
+      sortableResult({ key: 'title-match', title: 'TypeScript Engineer', company: 'Nowhere' }),
+    ];
+
+    expect(sortResults(results, 'typescript').map((r) => r.key)).toEqual([
+      'title-match',
+      'description-match',
+      'no-match',
+    ]);
+  });
+
+  it('ranks a live/provisional scoreless row by query-match tier the same as a non-provisional one', () => {
+    const results = [
+      sortableResult({ key: 'provisional-match', title: 'Frontend Engineer', provisional: true }),
+      sortableResult({ key: 'provisional-no-match', title: 'Backend Engineer', provisional: true }),
+    ];
+
+    expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['provisional-match', 'provisional-no-match']);
+  });
+
+  it('treats a whitespace-only query the same as an empty one', () => {
+    const results = [
+      sortableResult({ key: 'a', title: 'Frontend Engineer', postedAt: '2026-08-01T00:00:00.000Z' }),
+      sortableResult({ key: 'b', title: 'Backend Engineer', postedAt: '2026-08-20T00:00:00.000Z' }),
+    ];
+
+    expect(sortResults(results, '   ').map((r) => r.key)).toEqual(sortResults(results, '').map((r) => r.key));
+  });
+
+  it('gives a row with no description text tier 0 against a query, rather than matching or throwing', () => {
+    const results = [
+      sortableResult({ key: 'no-description', title: 'Unrelated Role', company: 'Nowhere', description: null }),
+      sortableResult({ key: 'title-match', title: 'Frontend Engineer', company: 'Nowhere' }),
+    ];
+
+    expect(() => sortResults(results, 'frontend')).not.toThrow();
+    expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['title-match', 'no-description']);
   });
 });
 

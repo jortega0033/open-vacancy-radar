@@ -37,7 +37,9 @@ export function buildClaudeArgs(opts: StartSessionOptions): string[] {
   if (opts.model) {
     args.push('--model', opts.model);
   }
-  if (opts.hardened === 'no-network') {
+  if (opts.hardened === 'web-only') {
+    args.push(...CLAUDE_HARDENING_ARGS_WEB_ONLY);
+  } else if (opts.hardened === 'no-network') {
     args.push(...CLAUDE_HARDENING_ARGS_NO_NETWORK);
   } else if (opts.hardened) {
     args.push(...CLAUDE_HARDENING_ARGS);
@@ -214,6 +216,41 @@ export const CLAUDE_HARDENING_ARGS_NO_NETWORK: readonly string[] = Object.freeze
   '--disable-slash-commands',
   '--tools',
   CLAUDE_HARDENED_TOOLS_NO_NETWORK.join(','),
+  '--disallowed-tools',
+  CLAUDE_HARDENED_DISALLOWED_TOOLS.join(','),
+]);
+
+/**
+ * `CLAUDE_HARDENED_TOOLS` restricted the other direction from `CLAUDE_HARDENED_TOOLS_NO_NETWORK`:
+ * only `WebSearch`/`WebFetch`, and none of `Read`/`Write`/`Edit`/`Glob`/`Grep`/`NotebookEdit`
+ * (issue #398).
+ *
+ * AI-web vacancy discovery is, in this repo's own words above, "the single worst place to reuse"
+ * `CLAUDE_HARDENED_TOOLS`: it deliberately, repeatedly fetches untrusted, attacker-influenceable web
+ * content (job postings) unattended, and `CLAUDE_HARDENED_TOOLS`'s own doc comment already names the
+ * exact residual risk this profile exists to close -- "nothing in this allowlist stops an injected
+ * instruction from telling the session to `Read` a workspace file and `WebFetch` a URL with that
+ * content encoded in the query string". Dropping the filesystem tools removes the "read a workspace
+ * file" half of that chain; pairing this profile with an empty, app-owned scratch `cwd` (the daemon
+ * route's job, not this file's) removes the "anything worth exfiltrating" half too.
+ */
+export const CLAUDE_HARDENED_TOOLS_WEB_ONLY = ['WebSearch', 'WebFetch'] as const;
+
+/**
+ * `CLAUDE_HARDENING_ARGS`, but with `--tools` restricted to `CLAUDE_HARDENED_TOOLS_WEB_ONLY`
+ * (`WebSearch`/`WebFetch` only). Selected via `opts.hardened === 'web-only'`, a value only the
+ * daemon's own `POST /sessions/vacancy-web-discovery` route ever passes -- see that constant's doc
+ * comment and `StartSessionOptions.hardened` for why this is a closed, non-caller-suppliable
+ * discriminant rather than a request-schema field.
+ */
+export const CLAUDE_HARDENING_ARGS_WEB_ONLY: readonly string[] = Object.freeze([
+  '--safe-mode',
+  '--strict-mcp-config',
+  '--setting-sources',
+  '',
+  '--disable-slash-commands',
+  '--tools',
+  CLAUDE_HARDENED_TOOLS_WEB_ONLY.join(','),
   '--disallowed-tools',
   CLAUDE_HARDENED_DISALLOWED_TOOLS.join(','),
 ]);

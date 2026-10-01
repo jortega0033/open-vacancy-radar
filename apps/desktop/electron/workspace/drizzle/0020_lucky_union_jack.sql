@@ -1,0 +1,1 @@
+ALTER TABLE `cv_documents` ADD `text_source` text DEFAULT 'text_layer' NOT NULL;

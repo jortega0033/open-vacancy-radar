@@ -254,6 +254,23 @@ describe('AgentDockClient: sessions', () => {
     );
   });
 
+  it('creates a vacancy-web-discovery session against its own dedicated route (#398)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/health')) return healthOk();
+      if (url.endsWith('/sessions/vacancy-web-discovery')) return jsonResponse(201, session);
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const client = makeClient(fetchImpl);
+    await expect(
+      client.sessions.createVacancyWebDiscovery({ provider: 'claude', cwd: '/tmp', prompt: 'search for frontend vacancies' }),
+    ).resolves.toEqual(session);
+    // Never the plain /sessions route -- that would get the "hardened: true" profile, not
+    // "web-only" (see apps/daemon/src/routes/vacancy-web-discovery.ts).
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/sessions') && !String(url).includes('vacancy-web-discovery'))).toBe(
+      false,
+    );
+  });
+
   it('throws SessionNotFoundError for a 404 on sessions.get', async () => {
     const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith('/health')) return healthOk();

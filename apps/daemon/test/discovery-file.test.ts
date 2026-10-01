@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { assertNoLiveDaemon, discoveryFilePath, removeDiscoveryFile, writeDiscoveryFile } from '../src/discovery-file.js';
+import {
+  DaemonLockConflictError,
+  assertNoLiveDaemon,
+  discoveryFilePath,
+  removeDiscoveryFile,
+  writeDiscoveryFile,
+} from '../src/discovery-file.js';
 
 const discoveryDir = join(tmpdir(), 'agent-dock');
 
@@ -30,6 +36,25 @@ describe('assertNoLiveDaemon', () => {
   it('throws when the discovery file references the current (definitely alive) process', () => {
     writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
     expect(() => assertNoLiveDaemon()).toThrow(/already running/);
+  });
+
+  // index.ts's top-level catch tells this apart from every other startup failure by type, mapping
+  // it onto its own dedicated exit code (DAEMON_EXIT_CODE_LOCK_CONFLICT) so the parent process can
+  // attach to the daemon that won the race instead of burning its respawn budget. A plain `Error`
+  // here would silently fall back to the generic exit code and break that handoff.
+  it('throws specifically a DaemonLockConflictError, not a plain Error', () => {
+    writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
+    expect(() => assertNoLiveDaemon()).toThrow(DaemonLockConflictError);
+  });
+
+  it('names the error DaemonLockConflictError, not the inherited "Error"', () => {
+    writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
+    try {
+      assertNoLiveDaemon();
+      expect.unreachable('assertNoLiveDaemon should have thrown');
+    } catch (err) {
+      expect((err as Error).name).toBe('DaemonLockConflictError');
+    }
   });
 
   it('does not throw when the discovery file is corrupt/partially written', () => {

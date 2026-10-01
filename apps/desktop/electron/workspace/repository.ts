@@ -10,8 +10,18 @@
  * `ipcMain.handle` is, and because `ensureWorkspaceDb()` is.
  */
 
-import { asc, desc, eq, inArray, ne } from 'drizzle-orm';
-import { EMPTY_CV_SOURCE, type CvSourceDocument } from './cv-source-schema.js';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
+import {
+  invalidatedOverlayState,
+  proposeWordingFromFacts,
+  withJdRevision,
+  type CvEvidenceOverlay,
+} from './cv-evidence-schema.js';
+import type { CvProposalPayload } from './cv-proposal-schema.js';
+import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
+import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
 import { deriveApplicationIdentity, type ApplicationIdentity } from './application-identity.js';
@@ -24,7 +34,11 @@ import {
   applications,
   automationGrants,
   cvDocuments,
+  cvEvidenceOverlays,
+  cvTailoringProposals,
   letters,
+  mcpAuditLogEntries,
+  mcpClientGrants,
   savedJobs,
 } from './schema.js';
 import {
@@ -51,14 +65,23 @@ import {
   type AutomationGrantInput,
   type AutomationGrantRecord,
   type CompletedApplicationMatch,
+  type CvApprovedResumeSnapshot,
   type CvDocumentInput,
   type CvDocumentPatch,
   type CvDocumentRecord,
+  type CvEvidenceOverlayInput,
+  type CvEvidenceOverlayPatch,
+  type CvEvidenceOverlayRecord,
   type CvProfile,
+  type CvTailoringProposalRecord,
   type DeleteResult,
   type LetterInput,
   type LetterPatch,
   type LetterRecord,
+  type McpAuditLogEntry,
+  type McpAuditLogEntryInput,
+  type McpClientGrantInput,
+  type McpClientGrantRecord,
   type PreparedApplicationField,
   type PreparedApplicationFields,
   type PreparedFieldProvenance,
@@ -76,6 +99,18 @@ export class WorkspaceNotFoundError extends Error {
   constructor(entity: string, id: string) {
     super(`no ${entity} with id "${id}"`);
     this.name = 'WorkspaceNotFoundError';
+  }
+}
+
+/** Thrown by `approveCvEvidenceOverlay` when `expectedCaseRevision` does not match the overlay's
+ * current `caseRevision` -- #421's own acceptance criterion ("a stale revision returns a conflict
+ * with the current revision, without partially applying a proposal"). Carries the actual current
+ * revision so a caller (the UI today, an MCP tool later) can decide whether to re-fetch and retry
+ * rather than just failing. */
+export class CvEvidenceOverlayRevisionConflictError extends Error {
+  constructor(public readonly currentRevision: string) {
+    super(`case has changed since it was last read (current revision: ${currentRevision})`);
+    this.name = 'CvEvidenceOverlayRevisionConflictError';
   }
 }
 
@@ -372,6 +407,8 @@ function toCvSource(value: CvSourceDocument | null): CvSourceDocument | null {
     ...EMPTY_CV_SOURCE,
     ...value,
     contact: { ...EMPTY_CV_SOURCE.contact, ...(value.contact ?? {}) },
+    // #419: a row written before experience entries carried an id has none in its stored JSON.
+    experience: withStableExperienceIds(value.experience ?? []),
   };
 }
 
@@ -386,6 +423,10 @@ function toCvDocument(row: CvDocumentRow): CvDocumentRecord {
     // fields the renderer treats as required, so it is filled in rather than trusted.
     profile: { ...EMPTY_PROFILE, ...(row.profile ?? {}) },
     source: toCvSource(row.sourceCv ?? null),
+    // `?? 'text_layer'`: a row written before this column existed has no value for it, and
+    // `'text_layer'` (the same default the column itself declares) is the correct provenance for
+    // every one of them -- they all came from local pdf.js/mammoth extraction.
+    textSource: row.textSource ?? 'text_layer',
     isDefault: row.isDefault,
     uploadedAt: iso(row.uploadedAt),
     updatedAt: iso(row.updatedAt),
@@ -429,6 +470,7 @@ export function createCvDocument(db: WorkspaceDb, input: CvDocumentInput): CvDoc
         text: input.text ?? '',
         profile: { ...EMPTY_PROFILE, ...(input.profile ?? {}) },
         sourceCv: stampReviewed(input.source ?? null),
+        textSource: input.textSource ?? 'text_layer',
         isDefault: shouldBeDefault,
       })
       .returning()
@@ -498,6 +540,724 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
     }
     return { deleted: true };
   });
+}
+
+// -------------------------------------------------------------------- cv evidence overlays (#419)
+
+type CvEvidenceOverlayRow = typeof cvEvidenceOverlays.$inferSelect;
+
+function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord {
+  return {
+    id: row.id,
+    cvId: row.cvId,
+    vacancyKey: row.vacancyKey,
+    sourceCvContentHash: row.sourceCvContentHash,
+    jdSnapshot: row.jdSnapshot,
+    jdSnapshotHash: row.jdSnapshotHash,
+    jdComplete: row.jdComplete,
+    listingStatus: row.listingStatus as CvEvidenceOverlayRecord['listingStatus'],
+    state: row.state as CvEvidenceOverlayRecord['state'],
+    // JSON columns: a row from before a later field was added to these shapes could be missing it,
+    // so entries are defaulted rather than trusted, the same discipline `toCvDocument` already
+    // applies to `profile`.
+    requirements: row.requirements ?? [],
+    facts: row.facts ?? [],
+    wordingVariants: row.wordingVariants ?? [],
+    jdRevisions: row.jdRevisions ?? [],
+    origin: (row.origin ?? 'vacancy') as CvEvidenceOverlayRecord['origin'],
+    caseRevision: row.caseRevision ?? '0',
+    approvedResumeSnapshot: row.approvedResumeSnapshot ?? null,
+    capturedAt: iso(row.capturedAt),
+    updatedAt: iso(row.updatedAt),
+  };
+}
+
+/** Single-row lookup by id (#419's export action, mirroring `getCvDocument`'s own reasoning): every
+ * other overlay verb so far only needed a list or a (cvId, vacancyKey) pair. Throws
+ * `WorkspaceNotFoundError` for a missing id rather than returning `undefined`. */
+export function getCvEvidenceOverlayById(db: WorkspaceDb, id: string): CvEvidenceOverlayRecord {
+  const row = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
+export function listCvEvidenceOverlays(db: WorkspaceDb, cvId: string): CvEvidenceOverlayRecord[] {
+  return db
+    .select()
+    .from(cvEvidenceOverlays)
+    .where(eq(cvEvidenceOverlays.cvId, cvId))
+    .orderBy(desc(cvEvidenceOverlays.updatedAt))
+    .all()
+    .map(toCvEvidenceOverlay);
+}
+
+/** `null`, not a throw, when no overlay exists yet for this (cvId, vacancyKey) pair -- see the
+ * `WorkspaceBridge` doc comment on this method in `types.ts` for why that is the normal state
+ * rather than an error. */
+export function getCvEvidenceOverlay(db: WorkspaceDb, cvId: string, vacancyKey: string): CvEvidenceOverlayRecord | null {
+  const row = db
+    .select()
+    .from(cvEvidenceOverlays)
+    .where(and(eq(cvEvidenceOverlays.cvId, cvId), eq(cvEvidenceOverlays.vacancyKey, vacancyKey)))
+    .get();
+  return row ? toCvEvidenceOverlay(row) : null;
+}
+
+/**
+ * One overlay per (cvId, vacancyKey): a second `create` call for the same pair returns the
+ * existing row unchanged rather than erroring or duplicating it, so a caller does not have to
+ * `get` before every `create` just to find out whether today is this vacancy's first visit. This
+ * mirrors how `createCvDocument` handles "no explicit isDefault" -- deriving the right behavior
+ * from existing state rather than making the caller ask first.
+ */
+export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverlayInput): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const cv = tx.select({ id: cvDocuments.id }).from(cvDocuments).where(eq(cvDocuments.id, input.cvId)).get();
+    if (!cv) throw new WorkspaceNotFoundError('CV document', input.cvId);
+
+    const existing = tx
+      .select()
+      .from(cvEvidenceOverlays)
+      .where(and(eq(cvEvidenceOverlays.cvId, input.cvId), eq(cvEvidenceOverlays.vacancyKey, input.vacancyKey)))
+      .get();
+    if (existing) return toCvEvidenceOverlay(existing);
+
+    const jdSnapshot = input.jdSnapshot ?? '';
+    const now = new Date().toISOString();
+    const [row] = tx
+      .insert(cvEvidenceOverlays)
+      .values({
+        cvId: input.cvId,
+        vacancyKey: input.vacancyKey,
+        sourceCvContentHash: input.sourceCvContentHash,
+        jdSnapshot,
+        jdSnapshotHash: input.jdSnapshotHash,
+        jdComplete: input.jdComplete ?? true,
+        // The overlay's first JD capture is already a revision, not a blank starting point -- an
+        // empty `jdSnapshot` (no JD read yet) stays out of the history until real text arrives.
+        jdRevisions: jdSnapshot
+          ? [{ revisionId: randomUUID(), text: jdSnapshot, textHash: input.jdSnapshotHash, complete: input.jdComplete ?? true, capturedAt: now }]
+          : [],
+        listingStatus: input.listingStatus ?? 'unknown',
+        origin: input.origin ?? 'vacancy',
+        caseRevision: '1',
+      })
+      .returning()
+      .all();
+    if (!row) throw new Error('failed to insert CV evidence overlay');
+    return toCvEvidenceOverlay(row);
+  });
+}
+
+export function updateCvEvidenceOverlay(
+  db: WorkspaceDb,
+  id: string,
+  values: CvEvidenceOverlayPatch,
+): CvEvidenceOverlayRecord {
+  const existingRow = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+  if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  const existing = toCvEvidenceOverlay(existingRow);
+
+  const set: Partial<CvEvidenceOverlayRow> = {
+    updatedAt: new Date(),
+    // #421's case contract: every write bumps this, regardless of which fields changed -- an MCP
+    // tool's revision check is against this, never against a specific field.
+    caseRevision: bumpCaseRevision(existing.caseRevision),
+  };
+  if (values.sourceCvContentHash !== undefined) set.sourceCvContentHash = values.sourceCvContentHash;
+  if (values.jdSnapshot !== undefined || values.jdSnapshotHash !== undefined || values.jdComplete !== undefined) {
+    const jdSnapshot = values.jdSnapshot ?? existing.jdSnapshot;
+    const jdSnapshotHash = values.jdSnapshotHash ?? existing.jdSnapshotHash;
+    const jdComplete = values.jdComplete ?? existing.jdComplete;
+    set.jdSnapshot = jdSnapshot;
+    set.jdSnapshotHash = jdSnapshotHash;
+    set.jdComplete = jdComplete;
+    set.jdRevisions = withJdRevision(existing, jdSnapshot, jdSnapshotHash, jdComplete, new Date().toISOString());
+  }
+  if (values.listingStatus !== undefined) set.listingStatus = values.listingStatus;
+  if (values.requirements !== undefined) set.requirements = values.requirements;
+  if (values.facts !== undefined) set.facts = values.facts;
+  if (values.wordingVariants !== undefined) set.wordingVariants = values.wordingVariants;
+  // An explicit `state` in the patch wins outright -- a caller setting it (the composition/QA gate
+  // slices) knows exactly what state it is asserting. Absent an explicit one, a patch that touches
+  // any input the approval depended on invalidates a prior approval rather than leaving it standing
+  // against inputs that just changed underneath it (#419: "do not silently carry forward an
+  // approval"). `CvEvidenceOverlayPatch['state']` excludes `'candidate_approved'` at the type level
+  // (#421: that transition only happens through `approveCvEvidenceOverlay` below), so this can only
+  // ever move state to something else.
+  const touchesInputs =
+    values.sourceCvContentHash !== undefined ||
+    values.jdSnapshot !== undefined ||
+    values.jdSnapshotHash !== undefined ||
+    values.requirements !== undefined ||
+    values.facts !== undefined ||
+    values.wordingVariants !== undefined;
+  if (values.state !== undefined) {
+    set.state = values.state;
+  } else if (touchesInputs) {
+    set.state = invalidatedOverlayState(existing.state);
+  }
+
+  const [row] = db.update(cvEvidenceOverlays).set(set).where(eq(cvEvidenceOverlays.id, id)).returning().all();
+  if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+  return toCvEvidenceOverlay(row);
+}
+
+/**
+ * The one place this file hashes a reviewed source CV. `main.ts`'s export handler and every
+ * MCP tool that needs a fresh hash (`start_tailoring_case`, `get_tailoring_status`) call this
+ * rather than each re-typing `createHash('sha256').update(stableCvSourceJson(...))...` -- a
+ * self-caught duplication from this PR's own review: four independent copies of the same three
+ * calls meant a future change to hash computation had four places to find and patch by hand.
+ */
+export function computeSourceCvContentHash(source: CvSourceDocument): string {
+  return createHash('sha256').update(stableCvSourceJson(source)).digest('hex');
+}
+
+/** `caseRevision` is an opaque token to every reader, but something has to own the one place that
+ * actually increments it. Three call sites (`updateCvEvidenceOverlay`, `approveCvEvidenceOverlay`,
+ * `acceptCvTailoringProposal`) independently re-typed `String(Number(x) + 1)` before this existed --
+ * another self-caught duplication, since a future change to the revision scheme (an overflow
+ * guard, a different encoding) would otherwise need finding and patching in three places. */
+function bumpCaseRevision(current: string): string {
+  return String(Number(current) + 1);
+}
+
+/**
+ * The *only* path that may move `state` to `'candidate_approved'` (#421's case contract). Unlike
+ * the generic patch above, this never trusts a caller-supplied `wordingVariants` for the wording it
+ * is about to approve: it re-derives proposed wording from the overlay's own facts
+ * (`proposeWordingFromFacts`), the exact computation `ComposedCvReview.tsx`'s preview already runs
+ * client-side, then re-verifies every gap (`describeCvEvidenceOverlayGaps`, via
+ * `composeApprovedTailoredResume`'s own blockers) against the CV's *current* reviewed source before
+ * writing anything. `expectedCaseRevision` must match the overlay's current `caseRevision`, checked
+ * and applied inside one transaction so a second writer's change in between cannot be silently lost
+ * or silently overwritten -- a mismatch throws `CvEvidenceOverlayRevisionConflictError` naming the
+ * actual current revision, with nothing partially applied.
+ */
+export function approveCvEvidenceOverlay(
+  db: WorkspaceDb,
+  id: string,
+  expectedCaseRevision: string,
+): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const existingRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).get();
+    if (!existingRow) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    const existing = toCvEvidenceOverlay(existingRow);
+    if (existing.caseRevision !== expectedCaseRevision) {
+      throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
+    }
+
+    const doc = getCvDocument(tx, existing.cvId);
+    if (!doc.source) {
+      throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
+    }
+    const currentSourceCvContentHash = computeSourceCvContentHash(doc.source);
+
+    const proposed = proposeWordingFromFacts(existing, currentSourceCvContentHash);
+    const wordingVariants = [...existing.wordingVariants, ...proposed];
+    const candidate: CvEvidenceOverlay = { ...existing, wordingVariants };
+
+    const { resume, blockers } = composeApprovedTailoredResume(doc.source, candidate, currentSourceCvContentHash, doc.profile.skills);
+    if (blockers.length > 0) {
+      throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);
+    }
+
+    const newCaseRevision = bumpCaseRevision(existing.caseRevision);
+    const approvedResumeSnapshot: CvApprovedResumeSnapshot = {
+      resume,
+      digest: createHash('sha256').update(JSON.stringify(resume)).digest('hex'),
+      approvedAt: new Date().toISOString(),
+      caseRevision: newCaseRevision,
+    };
+
+    const [row] = tx
+      .update(cvEvidenceOverlays)
+      .set({
+        wordingVariants,
+        state: 'candidate_approved',
+        approvedResumeSnapshot,
+        caseRevision: newCaseRevision,
+        updatedAt: new Date(),
+      })
+      .where(eq(cvEvidenceOverlays.id, id))
+      .returning()
+      .all();
+    if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
+    return toCvEvidenceOverlay(row);
+  });
+}
+
+export function deleteCvEvidenceOverlay(db: WorkspaceDb, id: string): DeleteResult {
+  const removed = db.delete(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, id)).returning({ id: cvEvidenceOverlays.id }).all();
+  return { deleted: removed.length > 0 };
+}
+
+// --------------------------------------------------------------------- mcp client grants (#421)
+
+type McpClientGrantRow = typeof mcpClientGrants.$inferSelect;
+
+function toMcpClientGrant(row: McpClientGrantRow): McpClientGrantRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    scopeType: row.scopeType as McpClientGrantRecord['scopeType'],
+    sourceCvId: row.sourceCvId,
+    caseIds: row.caseIds ?? [],
+    canReadFinalSnapshot: row.canReadFinalSnapshot,
+    createdAt: iso(row.createdAt),
+    expiresAt: iso(row.expiresAt),
+    revokedAt: row.revokedAt ? iso(row.revokedAt) : '',
+  };
+}
+
+export function listMcpClientGrants(db: WorkspaceDb): McpClientGrantRecord[] {
+  return db.select().from(mcpClientGrants).orderBy(desc(mcpClientGrants.createdAt)).all().map(toMcpClientGrant);
+}
+
+/**
+ * Mints a fresh one-time credential, stores only its SHA-256 verifier, and returns the plaintext
+ * exactly once. The caller (main.ts's IPC handler) is responsible for delivering it to the
+ * candidate through a native dialog or the clipboard and must never let it reach the resolved IPC
+ * value the renderer receives -- #421: "a one-time client credential is delivered ... without
+ * sending the secret to the renderer." This function has no opinion on delivery; it only
+ * guarantees the plaintext is never written to the database and never returned a second time (no
+ * other function in this module can read it back).
+ */
+export function createMcpClientGrant(db: WorkspaceDb, input: McpClientGrantInput): { grant: McpClientGrantRecord; credential: string } {
+  if (input.scopeType === 'source_cv') {
+    const cv = db.select({ id: cvDocuments.id }).from(cvDocuments).where(eq(cvDocuments.id, input.sourceCvId ?? '')).get();
+    if (!cv) throw new WorkspaceNotFoundError('CV document', input.sourceCvId ?? '');
+  }
+  const credential = randomBytes(32).toString('hex');
+  const credentialVerifierHash = createHash('sha256').update(credential).digest('hex');
+  const [row] = db
+    .insert(mcpClientGrants)
+    .values({
+      name: input.name,
+      scopeType: input.scopeType,
+      sourceCvId: input.scopeType === 'source_cv' ? input.sourceCvId ?? '' : '',
+      // A `source_cv` grant starts with no cases at all -- it earns them one at a time as its own
+      // `start_tailoring_case` calls succeed (#421: "covers only the cases that this client
+      // creates from that CV, not other cases linked to the same CV"), never every case that CV
+      // already has.
+      caseIds: input.scopeType === 'case_ids' ? input.caseIds ?? [] : [],
+      canReadFinalSnapshot: input.canReadFinalSnapshot ?? false,
+      credentialVerifierHash,
+      expiresAt: new Date(input.expiresAt),
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to insert MCP client grant');
+  return { grant: toMcpClientGrant(row), credential };
+}
+
+/** Idempotent: revoking an already-revoked grant returns it unchanged rather than stamping a new
+ * `revokedAt` over the original one, so the record keeps saying *when* it was actually revoked. */
+export function revokeMcpClientGrant(db: WorkspaceDb, id: string): McpClientGrantRecord {
+  const existing = db.select().from(mcpClientGrants).where(eq(mcpClientGrants.id, id)).get();
+  if (!existing) throw new WorkspaceNotFoundError('MCP client grant', id);
+  if (existing.revokedAt) return toMcpClientGrant(existing);
+  const [row] = db.update(mcpClientGrants).set({ revokedAt: new Date() }).where(eq(mcpClientGrants.id, id)).returning().all();
+  if (!row) throw new WorkspaceNotFoundError('MCP client grant', id);
+  return toMcpClientGrant(row);
+}
+
+/**
+ * Finds the grant, if any, whose stored verifier matches `credential`. Authentication only -- a
+ * match here says nothing about whether the grant is still active; a caller needing that checks
+ * `describeMcpGrantBlockers` (`mcp-grant-schema.ts`) against the returned record itself. Every
+ * stored hash is compared with `timingSafeEqual`, and the loop never stops early on a match --
+ * self-caught in review: returning as soon as a match is found makes *overall* lookup time depend
+ * on the matching row's position even though each individual comparison is constant-time, which
+ * is exactly the timing channel the daemon's own single-token `tokensMatch` never had to avoid.
+ */
+export function findMcpClientGrantByCredential(db: WorkspaceDb, credential: string): McpClientGrantRecord | null {
+  const providedHash = Buffer.from(createHash('sha256').update(credential).digest('hex'), 'utf8');
+  let matched: McpClientGrantRow | null = null;
+  for (const row of db.select().from(mcpClientGrants).all()) {
+    const storedHash = Buffer.from(row.credentialVerifierHash, 'utf8');
+    if (storedHash.length === providedHash.length && timingSafeEqual(storedHash, providedHash)) {
+      matched = row;
+    }
+  }
+  return matched ? toMcpClientGrant(matched) : null;
+}
+
+/**
+ * Appends `caseId` to a `source_cv` grant's `caseIds`, if not already present -- the mechanism
+ * behind `mcp-grant-schema.ts`'s own documented behavior: a `source_cv` grant earns coverage of a
+ * case one at a time, only as its own `start_tailoring_case` calls succeed, never by reading every
+ * case that CV happens to have. Idempotent: calling it twice with the same `caseId` is a no-op the
+ * second time, not a duplicate entry. Bounded by the same `MCP_GRANT_LIMITS.caseIdsPerGrant` a
+ * `case_ids` grant's initial list is bounded to at creation (`validate.ts`) -- a long-lived
+ * `source_cv` grant that keeps starting new cases must not grow this array without limit either.
+ */
+export function appendMcpClientGrantCaseId(db: WorkspaceDb, grantId: string, caseId: string): McpClientGrantRecord {
+  const existing = db.select().from(mcpClientGrants).where(eq(mcpClientGrants.id, grantId)).get();
+  if (!existing) throw new WorkspaceNotFoundError('MCP client grant', grantId);
+  const caseIds = existing.caseIds ?? [];
+  if (caseIds.includes(caseId)) return toMcpClientGrant(existing);
+  if (caseIds.length >= MCP_GRANT_LIMITS.caseIdsPerGrant) {
+    throw new Error(`this grant has already started the maximum of ${MCP_GRANT_LIMITS.caseIdsPerGrant} cases`);
+  }
+  const [row] = db
+    .update(mcpClientGrants)
+    .set({ caseIds: [...caseIds, caseId] })
+    .where(eq(mcpClientGrants.id, grantId))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('MCP client grant', grantId);
+  return toMcpClientGrant(row);
+}
+
+// ----------------------------------------------------------------------- mcp audit trail (#421)
+
+type McpAuditLogEntryRow = typeof mcpAuditLogEntries.$inferSelect;
+
+function toMcpAuditLogEntry(row: McpAuditLogEntryRow): McpAuditLogEntry {
+  return {
+    id: row.id,
+    grantId: row.grantId ?? '',
+    toolName: row.toolName,
+    caseId: row.caseId ?? '',
+    outcome: row.outcome as McpAuditLogEntry['outcome'],
+    revision: row.revision ?? '',
+    createdAt: iso(row.createdAt),
+  };
+}
+
+/**
+ * Appends one row. Takes a plain `WorkspaceDb`, which a `db.transaction` callback's `tx` also
+ * satisfies -- a future tool handler that must record its own audit entry atomically with its
+ * mutation (#421: "a failed audit write blocks a mutating call") calls this with `tx`, the same way
+ * `approveCvEvidenceOverlay` above calls `getCvDocument(tx, ...)` from inside its own transaction.
+ */
+export function appendMcpAuditLogEntry(db: WorkspaceDb, entry: McpAuditLogEntryInput): McpAuditLogEntry {
+  const [row] = db
+    .insert(mcpAuditLogEntries)
+    .values({
+      grantId: entry.grantId || null,
+      toolName: entry.toolName,
+      caseId: entry.caseId || null,
+      outcome: entry.outcome,
+      revision: entry.revision || null,
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to append MCP audit log entry');
+  return toMcpAuditLogEntry(row);
+}
+
+/**
+ * `rowid` breaks a tie `createdAt` alone cannot: two calls in the same millisecond (entirely
+ * realistic for back-to-back tool calls, and exactly what made this nondeterministic in testing)
+ * would otherwise leave SQLite free to return either order for rows whose timestamp is identical.
+ * `rowid` is monotonically increasing with insertion order on this ordinary (non-`WITHOUT ROWID`)
+ * table, so it is both a correct and a free tiebreaker -- no separate sequence column needed.
+ */
+export function listMcpAuditLogEntries(db: WorkspaceDb, limit = 500): McpAuditLogEntry[] {
+  return db
+    .select()
+    .from(mcpAuditLogEntries)
+    .orderBy(desc(mcpAuditLogEntries.createdAt), desc(sql`rowid`))
+    .limit(limit)
+    .all()
+    .map(toMcpAuditLogEntry);
+}
+
+// ----------------------------------------------------------------- mcp tailoring proposals (#421)
+
+type CvTailoringProposalRow = typeof cvTailoringProposals.$inferSelect;
+
+function toCvTailoringProposal(row: CvTailoringProposalRow): CvTailoringProposalRecord {
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    grantId: row.grantId ?? '',
+    status: row.status as CvTailoringProposalRecord['status'],
+    // `kind`/`payload` are stored as separate columns (so `kind` can be filtered in SQL) and
+    // reassembled into the `{kind, data}` shape every reader of `CvProposalPayload` expects.
+    payload: { kind: row.kind, data: row.payload } as CvProposalPayload,
+    caseRevisionAtProposal: row.caseRevisionAtProposal,
+    createdAt: iso(row.createdAt),
+    decidedAt: row.decidedAt ? iso(row.decidedAt) : '',
+  };
+}
+
+/** True when `id` names a real experience or project entry in `source` -- `''` (no anchor at all)
+ * always passes, the same "empty means unsupported/unanchored, not invalid" reading
+ * `cv-evidence-schema.ts` already gives an empty `anchorParentId`/`parentId` elsewhere. */
+function resolvesInSource(source: CvSourceDocument | null, id: string): boolean {
+  if (!id) return true;
+  if (!source) return false;
+  return source.experience.some((entry) => entry.id === id) || source.projects.some((entry) => entry.id === id);
+}
+
+/**
+ * Creates one staged proposal. Called only from the MCP tool handlers (`mcp-server.ts`), never
+ * from a renderer-facing IPC channel -- see `CvTailoringProposalRecord`'s own doc comment in
+ * `types.ts` for why there is no `CvTailoringProposalInput`/renderer verb for this.
+ *
+ * Validates every id the payload cites against the case's *current* state before staging it at
+ * all (#421: "invented fact IDs... fail", generalized to every id this module accepts) -- an
+ * `anchorParentId`/`parentId` must resolve in the reviewed source, a `requirementId` must already
+ * exist on the case, and every `wording` proposal's `factIds` must already exist on the case.
+ * Re-checked again at acceptance time in `acceptCvTailoringProposal`, since the case can change in
+ * between.
+ */
+export function createCvTailoringProposal(
+  db: WorkspaceDb,
+  input: { caseId: string; grantId: string; payload: CvProposalPayload },
+): CvTailoringProposalRecord {
+  const overlayRow = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, input.caseId)).get();
+  if (!overlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', input.caseId);
+  const overlay = toCvEvidenceOverlay(overlayRow);
+  const doc = getCvDocument(db, overlay.cvId);
+
+  const payload = input.payload;
+  switch (payload.kind) {
+    case 'requirement':
+      if (!resolvesInSource(doc.source, payload.data.anchorParentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'evidence_link':
+      if (!overlay.requirements.some((r) => r.requirementId === payload.data.requirementId)) {
+        throw new Error('this proposal references a requirement that does not exist in this case');
+      }
+      if (!resolvesInSource(doc.source, payload.data.anchorParentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'clarification_question':
+      if (!overlay.requirements.some((r) => r.requirementId === payload.data.requirementId)) {
+        throw new Error('this proposal references a requirement that does not exist in this case');
+      }
+      break;
+    case 'fact':
+      if (!resolvesInSource(doc.source, payload.data.parentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'wording': {
+      const knownFactIds = new Set(overlay.facts.map((f) => f.factId));
+      if (!payload.data.factIds.every((id) => knownFactIds.has(id))) {
+        throw new Error('this proposal cites a fact id that does not exist in this case');
+      }
+      if (!resolvesInSource(doc.source, payload.data.parentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    }
+    case 'selection':
+      if (!payload.data.includedEntryIds.every((id) => resolvesInSource(doc.source, id))) {
+        throw new Error('this proposal references a role or project that does not exist in the reviewed source');
+      }
+      break;
+  }
+
+  const [row] = db
+    .insert(cvTailoringProposals)
+    .values({
+      caseId: input.caseId,
+      grantId: input.grantId || null,
+      kind: payload.kind,
+      payload: payload.data,
+      caseRevisionAtProposal: overlay.caseRevision,
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to insert CV tailoring proposal');
+  return toCvTailoringProposal(row);
+}
+
+export function listCvTailoringProposals(db: WorkspaceDb, caseId: string): CvTailoringProposalRecord[] {
+  return db
+    .select()
+    .from(cvTailoringProposals)
+    .where(eq(cvTailoringProposals.caseId, caseId))
+    // createdAt alone ties for two proposals landing in the same millisecond -- the same ordering
+    // bug self-caught in listMcpAuditLogEntries, fixed the same way with rowid as a free, correct
+    // secondary sort key.
+    .orderBy(desc(cvTailoringProposals.createdAt), desc(sql`rowid`))
+    .all()
+    .map(toCvTailoringProposal);
+}
+
+/**
+ * Promotes a pending proposal's payload into the case's real overlay, kind by kind -- the only
+ * place any of #421's staged content becomes real `CvRequirementMapping`/`CvEvidenceFact`/
+ * `CvApprovedWording` data (see `cv-proposal-schema.ts`'s own header). Refuses a proposal that is
+ * not `'pending'` (never re-promotes an already-decided one) and re-validates every id the payload
+ * cites against the case's *current* state, not the state at proposal-creation time -- the case
+ * can have changed in between. Bumps `caseRevision` and runs the same approval-invalidation rule
+ * `updateCvEvidenceOverlay` already applies (a requirements/facts/wordingVariants change drops a
+ * standing `'candidate_approved'`/`'artifact_approved'` state back to `'draft'`), since this writes
+ * those same columns directly rather than through that function.
+ */
+export function acceptCvTailoringProposal(
+  db: WorkspaceDb,
+  id: string,
+): { proposal: CvTailoringProposalRecord; overlay: CvEvidenceOverlayRecord } {
+  return db.transaction((tx) => {
+    const proposalRow = tx.select().from(cvTailoringProposals).where(eq(cvTailoringProposals.id, id)).get();
+    if (!proposalRow) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+    if (proposalRow.status !== 'pending') throw new Error(`this proposal was already ${proposalRow.status}`);
+    const proposal = toCvTailoringProposal(proposalRow);
+
+    const overlayRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, proposal.caseId)).get();
+    if (!overlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', proposal.caseId);
+    const overlay = toCvEvidenceOverlay(overlayRow);
+    // Self-caught in review: this function's own doc comment above claims every id is re-checked
+    // against the case's *current* state, but only `requirementId`/`factIds` actually were --
+    // `anchorParentId`/`parentId` were written straight through unchecked. Loading the CV document
+    // here, the same way `createCvTailoringProposal` does at proposal time, closes that gap: a
+    // source entry the candidate deleted between proposal and acceptance is caught here too, not
+    // only silently dropped later by `composeApprovedTailoredResume`'s own defensive filtering.
+    const doc = getCvDocument(tx, overlay.cvId);
+
+    const patch: Partial<CvEvidenceOverlayRow> = {};
+    const payload = proposal.payload;
+    switch (payload.kind) {
+      case 'requirement': {
+        const data = payload.data;
+        if (!resolvesInSource(doc.source, data.anchorParentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
+        patch.requirements = [
+          ...overlay.requirements,
+          {
+            requirementId: randomUUID(),
+            text: data.text,
+            jdAnchor: data.jdAnchor,
+            classification: data.classification,
+            evidenceClass: data.evidenceClass,
+            anchorParentId: data.anchorParentId,
+            candidateAdded: true,
+            reviewed: false,
+          },
+        ];
+        break;
+      }
+      case 'evidence_link': {
+        const data = payload.data;
+        if (!overlay.requirements.some((r) => r.requirementId === data.requirementId)) {
+          throw new Error('the requirement this proposal links to no longer exists in this case');
+        }
+        if (!resolvesInSource(doc.source, data.anchorParentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
+        patch.requirements = overlay.requirements.map((r) =>
+          r.requirementId === data.requirementId ? { ...r, anchorParentId: data.anchorParentId, evidenceClass: data.evidenceClass } : r,
+        );
+        break;
+      }
+      case 'clarification_question': {
+        const data = payload.data;
+        if (!overlay.requirements.some((r) => r.requirementId === data.requirementId)) {
+          throw new Error('the requirement this proposal asks about no longer exists in this case');
+        }
+        patch.requirements = overlay.requirements.map((r) =>
+          r.requirementId === data.requirementId ? { ...r, evidenceClass: 'needs_verification' as const, reviewed: false } : r,
+        );
+        break;
+      }
+      case 'fact': {
+        const data = payload.data;
+        if (!resolvesInSource(doc.source, data.parentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
+        patch.facts = [
+          ...overlay.facts,
+          {
+            factId: randomUUID(),
+            parentId: data.parentId,
+            parentType: data.parentType,
+            client: data.client,
+            activity: data.activity,
+            mechanism: data.mechanism,
+            result: data.result,
+            ownership: data.ownership,
+            sourceKind: 'candidate_testimony',
+            sourceReference: data.sourceReference,
+            verification: 'self_reported',
+            metricValue: data.metricValue,
+            metricUnit: data.metricUnit,
+            metricBasis: data.metricBasis,
+            supersedes: '',
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        break;
+      }
+      case 'wording': {
+        const data = payload.data;
+        if (!data.factIds.every((factId) => overlay.facts.some((f) => f.factId === factId))) {
+          throw new Error('this proposal cites a fact id that no longer exists in this case');
+        }
+        if (!resolvesInSource(doc.source, data.parentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
+        patch.wordingVariants = [
+          ...overlay.wordingVariants,
+          {
+            variantId: randomUUID(),
+            targetField: data.targetField,
+            parentId: data.parentId,
+            text: data.text,
+            factIds: data.factIds,
+            status: 'candidate_approved',
+            approvedAt: new Date().toISOString(),
+            sourceRevision: overlay.sourceCvContentHash,
+          },
+        ];
+        break;
+      }
+      case 'selection':
+        if (!payload.data.includedEntryIds.every((entryId) => resolvesInSource(doc.source, entryId))) {
+          throw new Error('this proposal references a role or project that no longer exists in this case');
+        }
+        // Not yet wired into composition -- see `CvSelectionProposalPayload`'s own doc comment.
+        // Nothing to patch onto the overlay; the decision is still recorded below.
+        break;
+    }
+
+    const touchesInputs = patch.requirements !== undefined || patch.facts !== undefined || patch.wordingVariants !== undefined;
+    if (touchesInputs) patch.state = invalidatedOverlayState(overlay.state);
+
+    const [updatedOverlayRow] = tx
+      .update(cvEvidenceOverlays)
+      .set({ ...patch, caseRevision: bumpCaseRevision(overlay.caseRevision), updatedAt: new Date() })
+      .where(eq(cvEvidenceOverlays.id, overlay.id))
+      .returning()
+      .all();
+    if (!updatedOverlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', overlay.id);
+
+    const [updatedProposalRow] = tx
+      .update(cvTailoringProposals)
+      .set({ status: 'accepted', decidedAt: new Date() })
+      .where(eq(cvTailoringProposals.id, id))
+      .returning()
+      .all();
+    if (!updatedProposalRow) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+
+    return { proposal: toCvTailoringProposal(updatedProposalRow), overlay: toCvEvidenceOverlay(updatedOverlayRow) };
+  });
+}
+
+export function rejectCvTailoringProposal(db: WorkspaceDb, id: string): CvTailoringProposalRecord {
+  const existing = db.select().from(cvTailoringProposals).where(eq(cvTailoringProposals.id, id)).get();
+  if (!existing) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+  if (existing.status !== 'pending') throw new Error(`this proposal was already ${existing.status}`);
+  const [row] = db
+    .update(cvTailoringProposals)
+    .set({ status: 'rejected', decidedAt: new Date() })
+    .where(eq(cvTailoringProposals.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+  return toCvTailoringProposal(row);
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -1540,6 +2300,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
     confirmApplicationDelete: row.confirmApplicationDelete,
     autoArchiveRejected: row.autoArchiveRejected,
     defaultProvider: row.defaultProvider,
+    mcpEndpointEnabled: row.mcpEndpointEnabled,
     // ADI-07. Defended against a null/legacy JSON value rather than trusted: a row written before
     // migration 0003 has no column at all, and better-sqlite3 hands back whatever is there.
     agentSelectedSessionId: row.agentSelectedSessionId,
@@ -1591,6 +2352,10 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
         .all().length,
       automationGrants: tx.select({ id: automationGrants.id }).from(automationGrants).all().length,
       applicationAnswers: tx.select({ id: applicationAnswers.id }).from(applicationAnswers).all().length,
+      cvEvidenceOverlays: tx.select({ id: cvEvidenceOverlays.id }).from(cvEvidenceOverlays).all().length,
+      mcpClientGrants: tx.select({ id: mcpClientGrants.id }).from(mcpClientGrants).all().length,
+      mcpAuditLogEntries: tx.select({ id: mcpAuditLogEntries.id }).from(mcpAuditLogEntries).all().length,
+      cvTailoringProposals: tx.select({ id: cvTailoringProposals.id }).from(cvTailoringProposals).all().length,
     };
 
     tx.delete(applicationAttempts).run();
@@ -1598,9 +2363,22 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
     tx.delete(letters).run();
     tx.delete(savedJobs).run();
     tx.delete(appSettings).run();
+    // Explicit, not left to the `cvId` foreign key's `on delete cascade`: this loop already counts
+    // every table it empties, and a cascade delete would remove these rows without ever appearing
+    // in `deleted` above.
+    tx.delete(cvEvidenceOverlays).run();
     tx.delete(cvDocuments).run();
     tx.delete(automationGrants).run();
     tx.delete(applicationAnswers).run();
+    // #421: a full reset must not leave a client grant pointing at a (cvId, caseId) pair that no
+    // longer exists. Audit entries deleted explicitly too, ahead of the grant rows they reference
+    // via `onDelete: 'set null'` -- deleting grants first would only null out `grantId` here, not
+    // remove the rows, so this reset would otherwise leave every past audit entry behind.
+    // Ahead of `cvEvidenceOverlays` below, same reasoning: its `caseId` FK would cascade-delete
+    // these silently otherwise, without ever appearing in `deleted` above.
+    tx.delete(cvTailoringProposals).run();
+    tx.delete(mcpAuditLogEntries).run();
+    tx.delete(mcpClientGrants).run();
 
     const [settings] = tx.insert(appSettings).values({ id: SETTINGS_ROW_ID }).returning().all();
     if (!settings) throw new Error('failed to restore default app settings');

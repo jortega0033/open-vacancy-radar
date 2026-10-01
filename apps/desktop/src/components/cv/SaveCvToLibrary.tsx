@@ -31,6 +31,9 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
         name: cv.fileName,
         kind: 'uploaded',
         text: cv.text,
+        // Issue #396: `undefined` here (every call site that predates the AI-transcription
+        // fallback) falls through to the column default, `'text_layer'`.
+        textSource: cv.textSource,
       });
       setState('saved');
       onSaved?.(created.id);
@@ -38,7 +41,7 @@ export function SaveCvToLibrary({ cv, onSaved }: SaveCvToLibraryProps) {
       setState('idle');
       setError(describeError(err, 'could not save this CV to your library'));
     }
-  }, [cv.fileName, cv.text, onSaved]);
+  }, [cv.fileName, cv.text, cv.textSource, onSaved]);
 
   return (
     <div className="flex flex-wrap items-center gap-3">

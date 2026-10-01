@@ -23,6 +23,19 @@ export interface SearchFilterBarProps {
   /** One honest line about the money the report actually carries. */
   salaryNote: string;
   hasReport: boolean;
+  /**
+   * Issue #398 Phase 1: whether the next scan should also run an on-demand AI-web-search discovery
+   * pass. Deliberately not part of `SearchFilters`/`browseAllViewFilters` -- this is a scan-time
+   * request option (like `country`/`employment`), not a client-side result refinement, so it never
+   * interacts with the results-list filtering machinery.
+   */
+  aiWebDiscovery: boolean;
+  onAiWebDiscoveryChange: (value: boolean) => void;
+  /** Whether the candidate search profile is configured enough for AI web discovery to run at all
+   * (see `runAiWebDiscovery`'s own "never runs without a usable profile projection" contract). The
+   * checkbox stays visible either way -- so it is discoverable even before a profile exists -- but
+   * is disabled with an explanatory note until one is. */
+  aiWebDiscoveryAvailable: boolean;
 }
 
 /**
@@ -45,6 +58,9 @@ export function SearchFilterBar({
   busy,
   salaryNote,
   hasReport,
+  aiWebDiscovery,
+  onAiWebDiscoveryChange,
+  aiWebDiscoveryAvailable,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
 
@@ -165,6 +181,21 @@ export function SearchFilterBar({
             </p>
           </div>
         </details>
+
+        <label
+          className="ml-1 flex cursor-pointer items-center gap-2 text-sm text-base-content/70"
+          title={aiWebDiscoveryAvailable ? undefined : 'Fill in a search profile (target roles or strongest skills) to use this.'}
+        >
+          <input
+            className="checkbox checkbox-sm"
+            type="checkbox"
+            aria-label="Include AI web search"
+            checked={aiWebDiscovery}
+            onChange={(event) => onAiWebDiscoveryChange(event.target.checked)}
+            disabled={busy || !aiWebDiscoveryAvailable}
+          />
+          Include AI web search
+        </label>
 
         <button className="btn btn-primary btn-sm" type="button" onClick={onSearch} disabled={busy || !hasQuery}>
           {busy && <span className="loading loading-spinner loading-xs text-primary-content" aria-hidden="true" />}

@@ -26,6 +26,26 @@ import type {
   CvSourceExperienceEntry,
   CvSourceProjectEntry,
 } from './cv-source-schema.js';
+import {
+  CV_CLAIM_FIELDS,
+  CV_EVIDENCE_CLASSES,
+  CV_EVIDENCE_LIMITS,
+  CV_EVIDENCE_OVERLAY_ORIGINS,
+  CV_EVIDENCE_OVERLAY_STATES,
+  CV_FACT_OWNERSHIPS,
+  CV_FACT_SOURCE_KINDS,
+  CV_FACT_VERIFICATIONS,
+  CV_LISTING_STATUSES,
+  CV_REQUIREMENT_CLASSIFICATIONS,
+  CV_WORDING_APPROVAL_STATUSES,
+} from './cv-evidence-schema.js';
+import type {
+  CvApprovedWording,
+  CvEvidenceFact,
+  CvEvidenceOverlayState,
+  CvRequirementMapping,
+} from './cv-evidence-schema.js';
+import { MCP_GRANT_LIMITS, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import type {
   ApplicationAnswerInput,
   ApplicationAnswerPatch,
@@ -43,9 +63,12 @@ import type {
   AppSettingsPatch,
   CvDocumentInput,
   CvDocumentPatch,
+  CvEvidenceOverlayInput,
+  CvEvidenceOverlayPatch,
   CvExportFormat,
   CvKind,
   CvProfile,
+  CvTextSource,
   DefaultAiProvider,
   DensityPreference,
   LetterInput,
@@ -54,6 +77,7 @@ import type {
   LetterStatus,
   LetterTone,
   LetterType,
+  McpClientGrantInput,
   SavedJobInput,
   SavedJobPatch,
   SavedJobStatus,
@@ -163,6 +187,13 @@ function nullableIsoDate(value: unknown, field: string): string | null {
   return parsed.toISOString();
 }
 
+/** Same as `nullableIsoDate`, but the field is required. */
+function requiredIsoDate(value: unknown, field: string): string {
+  const parsed = nullableIsoDate(value, field);
+  if (parsed === null) fail(`"${field}" is required`);
+  return parsed;
+}
+
 /**
  * Copies `key` from `source` onto `target` only when the caller actually supplied it.
  * `undefined` means "leave this column alone" for every patch verb in this file; a caller that
@@ -190,6 +221,7 @@ export const APPLICATION_STATUSES: readonly ApplicationStatus[] = [
 ];
 export const APPLICATION_FILTERS: readonly ApplicationFilter[] = ['all', 'active', 'archived'];
 export const CV_KINDS: readonly CvKind[] = ['uploaded', 'manual'];
+export const CV_TEXT_SOURCES: readonly CvTextSource[] = ['text_layer', 'ai_transcription'];
 export const CV_EXPORT_FORMATS: readonly CvExportFormat[] = ['pdf', 'docx'];
 export const LETTER_TYPES: readonly LetterType[] = [
   'motivation_letter',
@@ -374,7 +406,12 @@ function parseSourceExperience(value: unknown, index: number): CvSourceExperienc
     entry.engagement === undefined
       ? 'employment'
       : oneOf(entry.engagement, `source.experience[${index}].engagement`, CV_ENGAGEMENT_TYPES);
+  // Same fallback `parseSourceProject` already uses for its own `id`: an empty/missing id gets a
+  // stable, position-keyed one rather than being rejected, so a legacy record without ids is
+  // never blocked from being saved back.
+  const id = str(entry.id ?? '', `source.experience[${index}].id`, LIMITS.short).trim();
   return {
+    id: id.length > 0 ? id : `experience-${index + 1}`,
     company: str(entry.company ?? '', `source.experience[${index}].company`, CV_SOURCE_LIMITS.shortField),
     title: str(entry.title ?? '', `source.experience[${index}].title`, CV_SOURCE_LIMITS.shortField),
     dates: str(entry.dates ?? '', `source.experience[${index}].dates`, CV_SOURCE_LIMITS.shortField),
@@ -495,6 +532,7 @@ export function parseCvDocumentInput(value: unknown): CvDocumentInput {
     text: input.text === undefined ? '' : str(input.text, 'text', LIMITS.cvText),
     profile: input.profile === undefined ? {} : parseProfile(input.profile),
     source: input.source === undefined ? null : parseCvSource(input.source),
+    textSource: input.textSource === undefined ? undefined : oneOf(input.textSource, 'textSource', CV_TEXT_SOURCES),
     isDefault: input.isDefault === undefined ? false : bool(input.isDefault, 'isDefault'),
   };
 }
@@ -510,6 +548,11 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
   // source back, and merging arrays entry by entry would make "I deleted a project during review"
   // impossible to express. An explicit `null` clears it.
   patch(input, out, 'source', (v) => parseCvSource(v));
+  // `textSource` is deliberately NOT patchable, the same way `isDefault` below is not: it can only
+  // be set at creation (`parseCvDocumentInput` above), which is also the only place the AI-
+  // transcription review step ever runs. Allowing it here would let a later, unrelated patch claim
+  // `'ai_transcription'` provenance -- or silently launder it back to `'text_layer'` -- with no
+  // review having happened for that patch at all.
   // `isDefault` is deliberately NOT patchable: promoting a CV has to go through
   // `workspace:cv-documents:set-default`, which demotes the previous default in the same
   // transaction. Allowing it here would let the library end up with two defaults, or none.
@@ -520,6 +563,190 @@ export function parseCvDocumentPatch(value: unknown): CvDocumentPatch {
 export function parseCvExportInput(value: unknown): { id: string; format: CvExportFormat } {
   const input = asRecord(value, 'export request');
   return { id: parseId(input.id), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+// -------------------------------------------------------------------------- cv evidence overlays
+
+function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
+  const entry = asRecord(value, `"facts[${index}]"`);
+  const parentType = oneOf(entry.parentType, `facts[${index}].parentType`, ['experience', 'project'] as const);
+  const verification =
+    entry.verification === undefined
+      ? 'self_reported'
+      : oneOf(entry.verification, `facts[${index}].verification`, CV_FACT_VERIFICATIONS);
+  const metricValueStr = entry.metricValue === undefined ? '' : str(entry.metricValue, `facts[${index}].metricValue`, CV_EVIDENCE_LIMITS.shortField);
+  const hasMetric = metricValueStr.trim().length > 0;
+  return {
+    factId: requiredNonEmpty(entry.factId, `facts[${index}].factId`, CV_EVIDENCE_LIMITS.shortField),
+    // Empty for a "not my work" answer with no anchor to name (#419's clarification flow: a
+    // `needs_verification` requirement commonly has no `anchorParentId` at all) -- not every fact
+    // is scoped to one role or project, unlike `CvSourceProjectEntry.id` elsewhere in this app.
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `facts[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    parentType,
+    client: entry.client === undefined ? '' : str(entry.client, `facts[${index}].client`, CV_EVIDENCE_LIMITS.shortField),
+    activity: str(entry.activity ?? '', `facts[${index}].activity`, CV_EVIDENCE_LIMITS.activity),
+    mechanism: str(entry.mechanism ?? '', `facts[${index}].mechanism`, CV_EVIDENCE_LIMITS.mechanism),
+    result: str(entry.result ?? '', `facts[${index}].result`, CV_EVIDENCE_LIMITS.result),
+    ownership: entry.ownership === undefined ? 'unknown' : oneOf(entry.ownership, `facts[${index}].ownership`, CV_FACT_OWNERSHIPS),
+    sourceKind:
+      entry.sourceKind === undefined
+        ? 'candidate_testimony'
+        : oneOf(entry.sourceKind, `facts[${index}].sourceKind`, CV_FACT_SOURCE_KINDS),
+    sourceReference: str(entry.sourceReference ?? '', `facts[${index}].sourceReference`, CV_EVIDENCE_LIMITS.shortField),
+    verification,
+    // A metric with a value but no stated basis is refused outright, rather than silently accepted
+    // with an empty basis: `describeCvEvidenceOverlayGaps` cannot tell "no metric" from "a metric
+    // nobody grounded" once both are blank, and the second is exactly what #419 forbids.
+    metricValue: hasMetric ? metricValueStr : '',
+    metricUnit: hasMetric ? str(entry.metricUnit ?? '', `facts[${index}].metricUnit`, CV_EVIDENCE_LIMITS.shortField) : '',
+    metricBasis: (() => {
+      const basis = str(entry.metricBasis ?? '', `facts[${index}].metricBasis`, CV_EVIDENCE_LIMITS.shortField);
+      if (hasMetric && basis.trim().length === 0) {
+        fail(`"facts[${index}].metricBasis" is required when metricValue is set`);
+      }
+      return hasMetric ? basis : '';
+    })(),
+    supersedes: entry.supersedes === undefined ? '' : str(entry.supersedes, `facts[${index}].supersedes`, CV_EVIDENCE_LIMITS.shortField),
+    // Preserved from the caller rather than stamped here: this app's own `state`/`approvedAt`
+    // fields on this same overlay are already renderer-supplied (see `CvApprovedWording
+    // .approvedAt`'s doc comment), so re-blanking just this one timestamp would not raise the
+    // trust bar, only make it inconsistent with its neighbours.
+    createdAt: entry.createdAt === undefined ? '' : str(entry.createdAt, `facts[${index}].createdAt`, CV_EVIDENCE_LIMITS.shortField),
+  };
+}
+
+function parseApprovedWording(value: unknown, index: number): CvApprovedWording {
+  const entry = asRecord(value, `"wordingVariants[${index}]"`);
+  return {
+    variantId: requiredNonEmpty(entry.variantId, `wordingVariants[${index}].variantId`, CV_EVIDENCE_LIMITS.shortField),
+    targetField: oneOf(entry.targetField, `wordingVariants[${index}].targetField`, CV_CLAIM_FIELDS),
+    parentId: entry.parentId === undefined ? '' : str(entry.parentId, `wordingVariants[${index}].parentId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `wordingVariants[${index}].text`, CV_EVIDENCE_LIMITS.wordingText),
+    factIds: stringList(
+      entry.factIds ?? [],
+      `wordingVariants[${index}].factIds`,
+      CV_EVIDENCE_LIMITS.factIdsPerVariant,
+      CV_EVIDENCE_LIMITS.shortField,
+    ),
+    status: entry.status === undefined ? 'draft' : oneOf(entry.status, `wordingVariants[${index}].status`, CV_WORDING_APPROVAL_STATUSES),
+    // Preserved from the caller, not stamped here -- see `CvApprovedWording.approvedAt`'s own doc
+    // comment. Blanking it here would silently discard the timestamp `proposeWordingFromFacts`
+    // sets at the moment of approval.
+    approvedAt: entry.approvedAt === undefined ? '' : str(entry.approvedAt, `wordingVariants[${index}].approvedAt`, CV_EVIDENCE_LIMITS.shortField),
+    sourceRevision:
+      entry.sourceRevision === undefined ? '' : str(entry.sourceRevision, `wordingVariants[${index}].sourceRevision`, CV_EVIDENCE_LIMITS.shortField),
+  };
+}
+
+function parseRequirementMapping(value: unknown, index: number): CvRequirementMapping {
+  const entry = asRecord(value, `"requirements[${index}]"`);
+  return {
+    requirementId: requiredNonEmpty(entry.requirementId, `requirements[${index}].requirementId`, CV_EVIDENCE_LIMITS.shortField),
+    text: requiredNonEmpty(entry.text, `requirements[${index}].text`, CV_EVIDENCE_LIMITS.requirementText),
+    jdAnchor: entry.jdAnchor === undefined ? '' : str(entry.jdAnchor, `requirements[${index}].jdAnchor`, CV_EVIDENCE_LIMITS.shortField),
+    classification: oneOf(entry.classification, `requirements[${index}].classification`, CV_REQUIREMENT_CLASSIFICATIONS),
+    evidenceClass: oneOf(entry.evidenceClass, `requirements[${index}].evidenceClass`, CV_EVIDENCE_CLASSES),
+    anchorParentId:
+      entry.anchorParentId === undefined ? '' : str(entry.anchorParentId, `requirements[${index}].anchorParentId`, CV_EVIDENCE_LIMITS.shortField),
+    candidateAdded: entry.candidateAdded === undefined ? false : bool(entry.candidateAdded, `requirements[${index}].candidateAdded`),
+    reviewed: entry.reviewed === undefined ? false : bool(entry.reviewed, `requirements[${index}].reviewed`),
+  };
+}
+
+export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayInput {
+  const input = asRecord(value, 'CV evidence overlay');
+  return {
+    cvId: parseId(input.cvId),
+    vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short),
+    sourceCvContentHash: sha256Hex(input.sourceCvContentHash, 'sourceCvContentHash'),
+    jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
+    jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
+    jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
+    origin: input.origin === undefined ? 'vacancy' : oneOf(input.origin, 'origin', CV_EVIDENCE_OVERLAY_ORIGINS),
+  };
+}
+
+// #421's case contract: `'candidate_approved'` is never accepted through the generic patch --
+// only `approveCvEvidenceOverlay` may set it. `CvEvidenceOverlayPatch['state']` already excludes
+// it at the type level; this is the same rule enforced against the raw, unknown runtime payload.
+const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candidate_approved'>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
+  (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
+);
+
+export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
+  const input = asRecord(value, '"patch"');
+  const out: CvEvidenceOverlayPatch = {};
+  patch(input, out, 'sourceCvContentHash', (v) => sha256Hex(v, 'sourceCvContentHash'));
+  patch(input, out, 'jdSnapshot', (v) => str(v, 'jdSnapshot', LIMITS.jdSnapshot));
+  patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
+  patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
+  patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
+  patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
+  patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
+  patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));
+  return out;
+}
+
+/** `{ id, expectedCaseRevision }` envelope for `workspace:cv-evidence-overlays:approve` (#421). */
+export function parseCvEvidenceOverlayApproveInput(value: unknown): { id: string; expectedCaseRevision: string } {
+  const input = asRecord(value, 'approve request');
+  return {
+    id: parseId(input.id),
+    expectedCaseRevision: requiredNonEmpty(input.expectedCaseRevision, 'expectedCaseRevision', LIMITS.short),
+  };
+}
+
+/** `{ caseId }` envelope for `workspace:cv-tailoring-proposals:list` (#421). */
+export function parseCaseIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').caseId);
+}
+
+/** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */
+export function parseCvEvidenceOverlayLookup(value: unknown): { cvId: string; vacancyKey: string } {
+  const input = asRecord(value, 'lookup');
+  return { cvId: parseId(input.cvId), vacancyKey: requiredNonEmpty(input.vacancyKey, 'vacancyKey', LIMITS.short) };
+}
+
+/** `{ cvId }` envelope for `workspace:cv-evidence-overlays:list`. */
+export function parseCvIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').cvId);
+}
+
+/** `{ overlayId, format }` envelope for `workspace:cv-evidence-overlays:export` (#419, slice 4). */
+export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: string; format: CvExportFormat } {
+  const input = asRecord(value, 'export request');
+  return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+/**
+ * #421's local-client grant. `sourceCvId`/`caseIds` are required or forbidden depending on
+ * `scopeType` rather than both simply optional: a `source_cv` grant given a `caseIds` list (or
+ * vice versa) is a caller confusing the two scope types, which fails loudly here rather than
+ * silently keeping only the field that matched.
+ */
+export function parseMcpClientGrantInput(value: unknown): McpClientGrantInput {
+  const input = asRecord(value, 'MCP client grant');
+  const scopeType = oneOf(input.scopeType, 'scopeType', MCP_GRANT_SCOPE_TYPES);
+  if (scopeType === 'source_cv') {
+    if (input.caseIds !== undefined) fail('"caseIds" must not be set for a "source_cv" grant');
+    return {
+      name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+      scopeType,
+      sourceCvId: parseId(input.sourceCvId),
+      canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+      expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+    };
+  }
+  if (input.sourceCvId !== undefined) fail('"sourceCvId" must not be set for a "case_ids" grant');
+  return {
+    name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+    scopeType,
+    caseIds: stringList(input.caseIds ?? [], 'caseIds', MCP_GRANT_LIMITS.caseIdsPerGrant, LIMITS.short),
+    canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+    expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+  };
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -732,6 +959,9 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
   patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
+  // #421: the candidate's own on/off switch for the local MCP endpoint -- unlike `autoApplyEnabled`
+  // above, this one is meant to be renderer-writable.
+  patch(input, out, 'mcpEndpointEnabled', (v) => bool(v, 'mcpEndpointEnabled'));
   // ADI-07's three AI Workspace preferences. See `AGENT_WORKSPACE_PREF_LIMITS` for why these live
   // in SQLite alongside every other setting rather than in localStorage.
   patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));

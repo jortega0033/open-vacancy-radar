@@ -99,6 +99,14 @@ describe('buildCodexArgs: prompt transport (ADI-14)', () => {
       ...FRESH_ARGV,
     ]);
   });
+
+  it('ignores `hardened: "web-only"` too (issue #398), the same as every other hardened value', () => {
+    // Issue #398's AI-web-discovery session is explicitly Claude-only in V1; Codex gains no
+    // reviewed 'web-only' restriction profile and must not silently start honoring one.
+    expect(
+      buildCodexArgs({ sessionId: 'sess-1', cwd: '/tmp', prompt: 'hi', hardened: 'web-only' }),
+    ).toEqual([...FRESH_ARGV]);
+  });
 });
 
 describe('buildCodexArgs: does not silently inherit the host config.toml (issue #174)', () => {

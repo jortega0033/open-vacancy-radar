@@ -106,6 +106,7 @@ export const SOURCE_FILTER_CAPABILITIES: Readonly<
   jooble: role('keywords', 'not_applicable', 'Jooble issues one bounded request; the keywords are sent once.'),
   reed: role('keywords', 'not_applicable', 'Reed issues one bounded request; the keywords are sent once.'),
   jobspipe: role('job_title_or', 'not_applicable', 'JobsPipe issues one bounded request; the title is sent once.'),
+  ai_web_search: NO_UPSTREAM_FILTERS,
   ats_roster_greenhouse: NO_UPSTREAM_FILTERS,
   ats_roster_lever: NO_UPSTREAM_FILTERS,
   ats_roster_ashby: NO_UPSTREAM_FILTERS,

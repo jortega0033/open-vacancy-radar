@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ProviderId } from '@agent-dock/shared';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { buildSearchProfileFromCvPrompt } from '../cv/profile-bridge-prompts.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
@@ -142,25 +142,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
   // as CvDrawer's parse run.
   const run = useAgentRun({ chunkSeparator: '' });
   const appliedRef = useRef(false);
-  const [provider, setProvider] = useState<ProviderId>('claude');
-
-  // The default provider is a settings preference (set from the AI Runtime page); a failure here
-  // just leaves the Claude Code default in place rather than blocking the feature. Without this,
-  // `run.start` would fall back to its own hardcoded 'claude' default regardless of what the user
-  // configured, which fails outright for anyone who set Codex as default because Claude Code
-  // isn't authenticated on their machine.
-  useEffect(() => {
-    let cancelled = false;
-    void window.workspace
-      .getSettings()
-      .then((settings) => {
-        if (!cancelled) setProvider(settings.defaultProvider);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { provider } = useEffectiveProvider();
 
   // Only CVs with extracted text can be read: a scanned PDF that produced nothing is listed nowhere
   // here rather than being offered and then failing with an empty answer.

@@ -66,8 +66,15 @@ export interface StartSessionOptions {
    * job description). See `CLAUDE_HARDENING_ARGS_NO_NETWORK` in `providers/claude/build-args.ts`.
    * Only the daemon's dedicated field-map-generation route passes it; every other caller passes
    * `true` or omits the field, exactly as before this value existed.
+   *
+   * `'web-only'` (issue #398) is the opposite narrowing: it drops `Read`/`Write`/`Edit`/`Glob`/
+   * `Grep`/`NotebookEdit` and keeps only `WebSearch`/`WebFetch`, for the one session type -- AI-web
+   * vacancy discovery -- that deliberately fetches untrusted, attacker-influenceable web content
+   * unattended and must never also be able to read a workspace file and exfiltrate it via a crafted
+   * `WebFetch` URL. See `CLAUDE_HARDENING_ARGS_WEB_ONLY` in `providers/claude/build-args.ts`. Only
+   * the daemon's dedicated `POST /sessions/vacancy-web-discovery` route passes it.
    */
-  hardened?: boolean | 'no-network';
+  hardened?: boolean | 'no-network' | 'web-only';
   /**
    * One-shot outbound attachment(s) delivered with the initial prompt (port of
    * agentdock#152/#153). Only honored when the selected provider's

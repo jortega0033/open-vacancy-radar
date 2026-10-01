@@ -190,6 +190,16 @@ desktop app's local data.
   this project's. This app has no visibility into what that provider does with the prompt after the
   CLI sends it, and no control over it. See [What this is not](../README.md#what-this-is-not) for
   why this project itself never makes a direct API call or holds an API key.
+- **AI transcription fallback for scanned/image-only PDF CVs**: uploading a CV normally never sends
+  the original file anywhere, only text extracted locally on your machine. If a PDF has no
+  selectable text (a scan or a print-to-image export), the app can instead offer to send that
+  **original PDF file** to your configured AI CLI so it can transcribe it. This only ever happens
+  after you explicitly confirm a per-upload prompt naming the CLI it will go to; declining leaves
+  the file exactly where it always was, unsent, with the usual guidance to re-export a text-based
+  PDF or paste the CV as text instead. The transcribed text is shown to you for review before it is
+  saved anywhere, and the saved CV record keeps a note of whether its text came from local
+  extraction or this fallback. The same third-party terms named above apply to this file the same
+  way they apply to any other prompt content sent through that CLI.
 - **MCP job-source providers**: the daemon ships one reviewed MCP provider today, InfoSec Job
   Board — a public, no-auth vacancy-search server. It is not part of the automatic Search scan and
   has no screen in the app today. Of the daemon's two routes for it, only search is wired to

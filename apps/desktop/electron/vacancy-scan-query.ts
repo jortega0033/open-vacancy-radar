@@ -11,12 +11,23 @@ export type VacancyScanRequest =
       country?: string;
       employment?: string;
       salary?: { minimumAnnual: string; currency: string; includeUnknown?: boolean };
+      /** Issue #398 Phase 1: opt in to an additional, on-demand AI-web-search discovery pass for
+       * this run only. Omitted/false is a true no-op -- see `runVacancyScan` in `main.ts`, which
+       * never even looks at this field's absence differently from `false`. */
+      aiWebDiscovery?: boolean;
     }
-  | { mode: 'browse_all' };
+  | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
 export type ParsedVacancyScanRequest =
-  | { mode: 'query'; query: string; country?: string; employment?: string; salary?: SalaryFilterCriteria }
-  | { mode: 'browse_all' };
+  | {
+      mode: 'query';
+      query: string;
+      country?: string;
+      employment?: string;
+      salary?: SalaryFilterCriteria;
+      aiWebDiscovery?: boolean;
+    }
+  | { mode: 'browse_all'; aiWebDiscovery?: boolean };
 
 export function requiredScanQuery(query: unknown): string {
   const trimmed = typeof query === 'string' ? query.trim() : '';
@@ -24,6 +35,12 @@ export function requiredScanQuery(query: unknown): string {
     throw new Error('Add a role or keyword before starting a new worldwide scan.');
   }
   return trimmed;
+}
+
+function optionalBoolean(value: unknown, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean.`);
+  return value;
 }
 
 function optionalFocusedCriterion(value: unknown, name: string): string | undefined {
@@ -60,20 +77,32 @@ function parseSalaryFilter(value: unknown): SalaryFilterCriteria | undefined {
 export function parseVacancyScanRequest(value: unknown): ParsedVacancyScanRequest {
   if (typeof value === 'string') return { mode: 'query', query: requiredScanQuery(value) };
   if (value && typeof value === 'object') {
-    const request = value as { mode?: unknown; query?: unknown; country?: unknown; employment?: unknown; salary?: unknown };
+    const request = value as {
+      mode?: unknown;
+      query?: unknown;
+      country?: unknown;
+      employment?: unknown;
+      salary?: unknown;
+      aiWebDiscovery?: unknown;
+    };
     if (request.mode === 'query') {
       const country = optionalFocusedCriterion(request.country, 'Country');
       const employment = optionalFocusedCriterion(request.employment, 'Employment type');
       const salary = parseSalaryFilter(request.salary);
+      const aiWebDiscovery = optionalBoolean(request.aiWebDiscovery, 'AI web discovery');
       return {
         mode: 'query',
         query: requiredScanQuery(request.query),
         ...(country ? { country } : {}),
         ...(employment ? { employment } : {}),
         ...(salary ? { salary } : {}),
+        ...(aiWebDiscovery !== undefined ? { aiWebDiscovery } : {}),
       };
     }
-    if (request.mode === 'browse_all') return { mode: 'browse_all' };
+    if (request.mode === 'browse_all') {
+      const aiWebDiscovery = optionalBoolean(request.aiWebDiscovery, 'AI web discovery');
+      return { mode: 'browse_all', ...(aiWebDiscovery !== undefined ? { aiWebDiscovery } : {}) };
+    }
   }
   throw new Error('Unsupported vacancy scan request.');
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RESUME_JSON_SHAPE } from '../electron/resume-schema.js';
+import { CV_REQUIREMENT_MAPPING_JSON_SHAPE } from '../electron/workspace/cv-evidence-schema.js';
+import { EMPTY_CV_SOURCE, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import {
   ATS_FIT_EVIDENCE_STATUSES,
   ATS_FIT_MAX_REQUIREMENTS,
@@ -10,6 +12,7 @@ import {
   buildCvParsePrompt,
   buildCvTailorPrompt,
   buildGapAnalysisPrompt,
+  buildRequirementMappingPrompt,
   buildResumeAuditPrompt,
   buildStructuredResumePrompt,
   formatVacancy,
@@ -18,6 +21,7 @@ import {
   MAX_CV_PROMPT_CHARS,
   MAX_UNATTENDED_VACANCY_TEXT_CHARS,
   MAX_VACANCY_FIELD_CHARS,
+  REQUIREMENT_MAPPING_MAX_REQUIREMENTS,
   validateAuditFocus,
   wasVacancyTextTruncated,
 } from '../src/components/cv/prompts.js';
@@ -182,6 +186,51 @@ describe('prompt builders', () => {
     expect(prompt).toContain('JD anchor');
     expect(prompt).toContain('source: <CV section, role or project name>');
     expect(prompt).toContain('Never invent a line number, a document link, an employer policy');
+  });
+
+  describe('buildRequirementMappingPrompt (#419)', () => {
+    const SOURCE: CvSourceDocument = {
+      ...EMPTY_CV_SOURCE,
+      experience: [
+        { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment', client: '', bullets: [] },
+      ],
+      projects: [
+        { id: 'project-1', name: 'Design System', role: 'Lead', dates: '2023', organization: '', description: '', technologies: [], links: [], pinned: true },
+      ],
+    };
+
+    it('requests a single JSON object with the four-label evidence class, kept separate from ATS fit', () => {
+      const prompt = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
+      expect(prompt).toContain(CV_REQUIREMENT_MAPPING_JSON_SHAPE);
+      expect(prompt).toContain('"direct"');
+      expect(prompt).toContain('"transferable"');
+      expect(prompt).toContain('"unsupported"');
+      expect(prompt).toContain('"needs_verification"');
+      expect(prompt).toContain('never how the posting is worded');
+    });
+
+    it('lists reviewed-source anchors by their stable id, so the model can only anchor to a real entry', () => {
+      const prompt = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
+      expect(prompt).toContain('[experience-1] Frontend Engineer at Redwood Software');
+      expect(prompt).toContain('[project-1] Design System, Lead');
+      expect(prompt).toContain('Never invent an id that is not in that list');
+    });
+
+    it('tells the model to classify everything as unsupported/needs_verification when there is no reviewed source', () => {
+      const prompt = buildRequirementMappingPrompt(CV, VACANCY, null);
+      expect(prompt).toContain('None reviewed yet: classify every requirement');
+      expect(prompt).not.toContain('REVIEWED SOURCE CV ANCHORS');
+    });
+
+    it('seeds from the whole-posting critical-requirement extraction, not just the clamped excerpt', () => {
+      const prompt = buildRequirementMappingPrompt(CV, { ...VACANCY, requirements: ['Must have 5+ years of React experience'] }, SOURCE);
+      expect(prompt).toContain('Must have 5+ years of React experience');
+    });
+
+    it('bounds the review to a fixed requirement count', () => {
+      const prompt = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
+      expect(prompt).toContain(`Review at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements`);
+    });
   });
 
   it('keeps the resume audit grounded and organized around actionable review', () => {

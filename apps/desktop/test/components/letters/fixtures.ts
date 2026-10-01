@@ -42,6 +42,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
       summary: 'Frontend engineer working on design systems.',
       experience: [
         {
+          id: 'experience-1',
           company: 'Northwind Digital',
           title: 'Senior Frontend Engineer',
           dates: '2021 - present',
@@ -71,6 +72,7 @@ export function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRec
       sourceChars: 4_000,
       reviewedAt: '2026-08-01T09:00:00.000Z',
     },
+    textSource: 'text_layer',
     isDefault: true,
     uploadedAt: '2026-08-01T09:00:00.000Z',
     updatedAt: '2026-08-01T09:00:00.000Z',

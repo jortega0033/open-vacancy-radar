@@ -26,6 +26,9 @@ export interface AgentRunOptions {
   /** Which installed CLI to run through. Defaults to Claude Code, matching every existing call
    * site that didn't previously have a choice. */
   provider?: ProviderId;
+  /** Issue #396: an opaque handle from a `cv:select-and-read` `'scanned-pdf'` result, forwarded
+   * unchanged to `window.agentDock.createSession`. Never a path -- see that call's own doc comment. */
+  attachmentCandidateId?: string;
 }
 
 export interface UseAgentRunOptions {
@@ -194,6 +197,7 @@ export function useAgentRun(options: UseAgentRunOptions = {}): AgentRun {
           provider: options.provider ?? 'claude',
           prompt,
           ...(options.model ? { model: options.model } : {}),
+          ...(options.attachmentCandidateId ? { attachmentCandidateId: options.attachmentCandidateId } : {}),
         });
         if (generationRef.current !== generation) {
           // Superseded while this request was in flight -- by a newer `start`, a `cancel` (even one

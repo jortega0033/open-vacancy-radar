@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { ProviderId } from '@agent-dock/shared';
 import { parseMinimumAnnualSalary } from '@open-vacancy-radar/vacancy-engine/salary';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import emptySearchIllustration from '../../../assets/illustrations/empty-search.svg?no-inline';
 import type { SavedJobInput } from '../../window.js';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
@@ -17,6 +17,7 @@ import { createSearchSessionState, type SearchSessionState } from './search-sess
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
   DEFAULT_FILTERS,
+  browseAllViewFilters,
   buildSearchResultIndex,
   employmentOptions,
   filterSearchResultIndex,
@@ -247,6 +248,11 @@ export function SearchPage({
   const [viewingSaved, setViewingSaved] = useState(false);
   const [searchProfile, setSearchProfile] = useState<CandidateProfile | null>(null);
   const [searchProfileError, setSearchProfileError] = useState<string>();
+  // Issue #398 Phase 1: a plain, un-persisted scan-time toggle -- deliberately not part of
+  // `SearchFilters`/the session-restore machinery those other fields use (see `SearchFilterBar`'s
+  // own doc comment on this prop): it is a one-off request option for the next scan, not a
+  // client-side result refinement or something worth restoring across a remount.
+  const [aiWebDiscovery, setAiWebDiscovery] = useState(false);
 
   // Rows pushed by `vacancy:scan-progress` (issue #252) for the scan currently running, if any --
   // used only while no final report is loaded yet (see `results` below). Reset whenever this page
@@ -271,9 +277,10 @@ export function SearchPage({
   const [prepareStates, setPrepareStates] = useState<Record<string, PrepareState>>({});
   const [prepareErrors, setPrepareErrors] = useState<Record<string, string>>({});
   const [defaultCvName, setDefaultCvName] = useState<string | null>(null);
-  // Which CLI the gap-analysis offer below actually runs through, so its copy names the real
-  // provider instead of assuming Claude Code. A failure here just leaves that default in place.
-  const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
+  // Which CLI the gap-analysis offer below actually runs through (issue #400): the effective
+  // provider, matching what CvAssistant itself resolves, so this copy never names a CLI the
+  // analysis won't actually use.
+  const { provider: effectiveProvider } = useEffectiveProvider();
 
   const [engineCheckTick, setEngineCheckTick] = useState(0);
   const [checkingEngine, setCheckingEngine] = useState(false);
@@ -536,21 +543,6 @@ export function SearchPage({
 
   useEffect(() => {
     let cancelled = false;
-    void window.workspace
-      .getSettings()
-      .then((settings) => {
-        if (!cancelled) setDefaultProvider(settings.defaultProvider);
-      })
-      .catch(() => {
-        // the card falls back to the Claude Code default
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
     void window.vacancyRadar
       .getSearchProfile()
       .then((loaded) => {
@@ -610,7 +602,7 @@ export function SearchPage({
   // directly, so they never disagree about which filters are in effect.
   const effectiveFilters = showLiveResults && pendingScanFilters ? pendingScanFilters : appliedFilters;
   const visible = useMemo(
-    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters)),
+    () => sortSearchResultIndex(filterSearchResultIndex(resultIndex, effectiveFilters), effectiveFilters.query),
     [resultIndex, effectiveFilters],
   );
 
@@ -725,6 +717,9 @@ export function SearchPage({
               },
             }
           : {}),
+        // Omitted entirely when off, exactly like `country`/`employment`/`salary` above, so a scan
+        // that never opts in produces byte-identical requests to before this feature existed.
+        ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
       });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
@@ -767,7 +762,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const runBrowseAllScan = useCallback(async () => {
     const requestGeneration = ++reportRequestGenerationRef.current;
@@ -776,11 +771,14 @@ export function SearchPage({
     setScanError(undefined);
     setScanGuard(undefined);
     setLoadError(undefined);
-    setPendingScanFilters(filters);
+    setPendingScanFilters(browseAllViewFilters(filters));
     setPartialVacancies([]);
     setViewingSaved(false);
     try {
-      const report = await window.vacancyRadar.runScan({ mode: 'browse_all' });
+      const report = await window.vacancyRadar.runScan({
+        mode: 'browse_all',
+        ...(aiWebDiscovery ? { aiWebDiscovery: true } : {}),
+      });
       if (unmountedRef.current || requestGeneration !== reportRequestGenerationRef.current) return;
       setSession((current) => ({
         ...current,
@@ -816,7 +814,7 @@ export function SearchPage({
         setScanError(message);
       }
     }
-  }, [filters, setPendingScanFilters, setSession, waitForScanToFinish]);
+  }, [aiWebDiscovery, filters, setPendingScanFilters, setSession, waitForScanToFinish]);
 
   const handleRescore = useCallback(() => {
     const query = currentProfileScanQuery;
@@ -975,6 +973,9 @@ export function SearchPage({
           busy={busy}
           salaryNote={salaryNote}
           hasReport={hasReport}
+          aiWebDiscovery={aiWebDiscovery}
+          onAiWebDiscoveryChange={setAiWebDiscovery}
+          aiWebDiscoveryAvailable={currentProfileConfigured}
         />
       </div>
 
@@ -1118,9 +1119,12 @@ export function SearchPage({
           {profileNotConfigured && (
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
-                {results.length.toLocaleString()} vacancies were found, but none were scored because
-                the search profile has no target roles or strongest skills. You can still browse,
-                save and filter these vacancies; fill the profile under Settings to rank future scans.
+                {results.length.toLocaleString()} vacancies were found, but were not scored against
+                your Search Profile because no target roles or strongest skills are configured.
+                {effectiveFilters.query.trim()
+                  ? ' Results are ordered by the submitted query match and posting date.'
+                  : ' Results are ordered by posting date.'}{' '}
+                Fill your Search Profile to enable profile-based ranking on future scans.
               </span>
               {onOpenSearchProfile && (
                 <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
@@ -1173,7 +1177,7 @@ export function SearchPage({
               <VacancyDetail
                 result={selected}
                 defaultCvName={defaultCvName}
-                providerLabel={PROVIDER_LABEL[defaultProvider]}
+                providerLabel={PROVIDER_LABEL[effectiveProvider]}
                 saveState={saveState}
                 prepareState={prepareState}
                 prepareAvailable={!selected.provisional}
@@ -1227,6 +1231,10 @@ export function SearchPage({
             <p className="mt-2 text-sm text-base-content/70">
               This starts a broad live scan without a role or keyword. It can take longer and hit
               more external sources. The saved report is capped at {BROWSE_ALL_RESULT_CAP.toLocaleString()} rows and will say when it is incomplete.
+            </p>
+            <p className="mt-2 text-sm text-base-content/70">
+              Browse All runs without role, country, employment, or salary scan criteria. Local
+              display refinements such as source or posting date can still narrow what is shown.
             </p>
             <div className="modal-action">
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmBrowseAll(false)}>
