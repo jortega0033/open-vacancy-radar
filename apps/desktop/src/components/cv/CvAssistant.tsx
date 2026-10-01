@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { describeCvSourceGaps } from '../../../electron/workspace/cv-source-schema.js';
+import { jobDescriptionBody } from '../../../electron/generation-input.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { ComposedCvReview } from './ComposedCvReview.js';
 import { EvidenceReview } from './EvidenceReview.js';
@@ -33,13 +34,16 @@ export interface CvAssistantProps {
   model?: string;
   /** Optional return action when the assistant was opened from a vacancy detail. */
   onBackToVacancy?: () => void;
+  /** The library CV an existing tailoring case belongs to, so reopening a case lands on the CV it
+   * was built from rather than on the default one. */
+  initialCvId?: string;
 }
 
 function cvDocumentFromLibrary(doc: CvDocumentRecord): CvDocument {
   return { fileName: doc.name, text: doc.text };
 }
 
-export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy }: CvAssistantProps) {
+export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy, initialCvId }: CvAssistantProps) {
   const [cv, setCv] = useState<CvDocument | null>(null);
   const [libraryCvs, setLibraryCvs] = useState<CvDocumentRecord[]>([]);
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
@@ -77,6 +81,32 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
   );
   const handleJdSaved = useCallback(() => setJdVersion((version) => version + 1), []);
 
+  // #419: the latest stored JD revision is the source of truth. A pasted replacement lives in this
+  // component's state only until it is saved, so after a remount (reopening the case, or leaving
+  // and returning) the stored text is read back here and every panel below works from it. The
+  // vacancy's own original text is never written over it.
+  const selectedVacancyRef = useRef(selectedVacancy);
+  selectedVacancyRef.current = selectedVacancy;
+  const storedCaseKey = selectedVacancy ? caseKeyFor(selectedVacancy) : null;
+  useEffect(() => {
+    if (!storedCaseKey || !selectedLibraryCvId) return;
+    let cancelled = false;
+    void window.workspace
+      .getCvEvidenceOverlay(selectedLibraryCvId, storedCaseKey)
+      .then((record) => {
+        const original = selectedVacancyRef.current;
+        if (cancelled || !record || !original || record.jdSnapshot.trim().length === 0) return;
+        if (record.jdSnapshot === jobDescriptionBody(original)) return;
+        setPasted({ key: storedCaseKey, text: record.jdSnapshot, requisition: record.jdRevisions.at(-1)?.requisition ?? '' });
+      })
+      .catch(() => {
+        // Nothing stored to read back; the panels below report their own load errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLibraryCvId, storedCaseKey]);
+
   useEffect(() => {
     let cancelled = false;
     void window.workspace
@@ -85,7 +115,10 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
         if (cancelled) return;
         setLibraryCvs(documents);
         const usable = documents.filter((doc) => doc.text.trim().length > 0);
-        const selected = usable.find((doc) => doc.isDefault) ?? usable[0];
+        const selected =
+          (initialCvId ? usable.find((doc) => doc.id === initialCvId) : undefined) ??
+          usable.find((doc) => doc.isDefault) ??
+          usable[0];
         if (selected) {
           setSelectedLibraryCvId(selected.id);
           setCv(cvDocumentFromLibrary(selected));
