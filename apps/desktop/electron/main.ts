@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -131,7 +131,7 @@ import {
 } from './workspace-grant.js';
 import { createWorkspaceDb, type WorkspaceDb } from './workspace/client.js';
 import * as workspace from './workspace/repository.js';
-import type { CvExportFormat, CvExportResult } from './workspace/types.js';
+import type { CvCaseExportResult, CvExportFormat, CvExportResult } from './workspace/types.js';
 import {
   parseApplicationAnswerInput,
   parseApplicationAnswerPatch,
@@ -142,6 +142,7 @@ import {
   parseCaseIdEnvelope,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvArtifactActionInput,
   parseCvEvidenceOverlayApproveInput,
   parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
@@ -164,7 +165,7 @@ import { cvDocumentToTailoredResume, describeCvExportBlockers, sanitizeCvExportF
 import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
-import { composeApprovedTailoredResume } from './resume-source.js';
+import { renderApprovedSnapshot } from './cv-case-export.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import type { TailoredResume } from './resume-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -3106,50 +3107,97 @@ guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input:
 );
 
 /**
- * #419, slice 4: exports the *candidate-approved* composition, not a persisted CV Library record.
- * Reuses exactly the rendering/validation/save machinery `workspace:cv-documents:export` (#156)
- * already established -- the difference is entirely in what builds the `TailoredResume`:
- * `composeApprovedTailoredResume` (#419) instead of `cvDocumentToTailoredResume` (#274/#156), built
- * fresh against the CV's *current* reviewed source rather than trusting the overlay's own stored
- * hash, so a source re-reviewed after the overlay's last save cannot export stale. A blocked
- * composition refuses the same way `describeCvExportBlockers` already does for the other path --
- * before anything is rendered, with the reasons, never a silent partial export.
+ * #419 step 9: exports a tailoring case's frozen approved snapshot, by case id. The renderer sends
+ * only the id and the format. Nothing is recomposed from the current source and no document content
+ * is accepted from the caller: the stored `approvedResumeSnapshot` is what gets rendered, after
+ * `checkCvCaseExportReadiness` rechecks approval, the snapshot digest, the JD, source and project
+ * selection digests and the render contract version immediately before. A blocker refuses the call
+ * with its reasons.
+ *
+ * A file that fails its checks is recorded as a failed artifact and never offered for saving, so the
+ * candidate reads the reasons and exports again after fixing the cause (their approved facts are
+ * untouched). A cancelled save dialog records nothing. A saved file is recorded with its format,
+ * hash, time, snapshot digest and contract version, and starts unreviewed: it is accepted only by
+ * the candidate's own confirmation (`workspace:cv-evidence-overlays:confirm-artifact`).
  */
-guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvExportResult> => {
+guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvCaseExportResult> => {
   const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
   const db = await ensureWorkspaceDb();
-  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
-  const doc = workspace.getCvDocument(db, overlay.cvId);
 
-  // The renderer only ever offers this action once `overlay.state` reaches `'candidate_approved'`
-  // (`ComposedCvReview.tsx`), but that is a UI gate, not a security boundary -- this channel is the
-  // actual enforcement point, the same reasoning `describeCvExportBlockers` already applies to the
-  // #156 export path.
-  if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
-    throw new Error('this CV has not been approved yet: open the Approved CV panel and approve it before exporting');
+  const before = workspace.checkCvCaseExportReadiness(db, overlayId);
+  if (before.blockers.length > 0 || !before.snapshot) {
+    throw new Error(`this CV cannot be exported yet: ${before.blockers.join('; ')}`);
   }
-  if (!doc.source) {
-    throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
-  }
-  const currentSourceCvContentHash = workspace.computeSourceCvContentHash(doc.source);
-  const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
-  if (blockers.length > 0) {
-    throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);
+  const snapshot = before.snapshot;
+  if (!mainWindow) return { saved: false, artifact: null, overlay: before.overlay };
+
+  const rendered = await renderApprovedSnapshot(snapshot.resume, format, printHtmlToPdf);
+  const recordBase = {
+    format,
+    contentHash: rendered.contentHash,
+    snapshotDigest: snapshot.digest,
+    snapshotApprovedAt: snapshot.approvedAt,
+    renderContractVersion: snapshot.renderContractVersion,
+    validation: rendered.validation,
+  };
+
+  if (!rendered.validation.ok) {
+    const overlay = await applicationDataResetGate.runMutation(async () =>
+      workspace.recordCvArtifact(db, overlayId, { ...recordBase, savedPath: '' }),
+    );
+    return { saved: false, artifact: overlay.artifacts.at(-1) ?? null, overlay };
   }
 
-  const outcome = await renderTailoredResumeToFile(resume, format, {
+  const doc = workspace.getCvDocument(db, before.overlay.cvId);
+  const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export approved CV',
-    defaultFileName: sanitizeCvExportFileName(doc.name),
+    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
+    filters: [format === 'pdf' ? { name: 'PDF document', extensions: ['pdf'] } : { name: 'Word document', extensions: ['docx'] }],
   });
-  if (!outcome.saved) return outcome;
+  if (result.canceled || !result.filePath) return { saved: false, artifact: null, overlay: before.overlay };
 
-  // The terminal state (#419): "CV approval and application/submission readiness are separate
-  // states" -- candidate_approved says the content is right, artifact_approved says a real,
-  // validated file now exists from it.
-  await applicationDataResetGate.runMutation(async () =>
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' }),
+  await writeFile(result.filePath, rendered.buffer);
+  // The dialog can stay open for a long time. If the case changed meanwhile, the file still exists
+  // and is recorded as what it is: the status of a record is derived from the snapshot it was made
+  // from, so it reads as historical rather than current.
+  const overlay = await applicationDataResetGate.runMutation(async () =>
+    workspace.recordCvArtifact(db, overlayId, { ...recordBase, savedPath: result.filePath }),
   );
-  return outcome;
+  return { saved: true, path: result.filePath, artifact: overlay.artifacts.at(-1) ?? null, overlay };
+});
+
+/**
+ * Opens a saved artifact in the system viewer so the candidate can read every page (PDF) or look at
+ * it in their editor (DOCX), and records that it was opened. Only a file whose bytes still match the
+ * hash recorded at export is opened: an externally changed or replaced file is never presented as the
+ * verified one.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:open-artifact', async (_event, input: unknown) => {
+  const { overlayId, artifactId } = parseCvArtifactActionInput(input);
+  const db = await ensureWorkspaceDb();
+  const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
+  const artifact = overlay.artifacts.find((candidate) => candidate.artifactId === artifactId);
+  if (!artifact || !artifact.savedPath) throw new Error('this file was never saved, so there is nothing to open');
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(artifact.savedPath);
+  } catch {
+    throw new Error('the saved file could not be read. It may have been moved or deleted, so export it again');
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== artifact.contentHash) {
+    throw new Error('the file at that location is not the one saved at export, so it was not opened. Export it again to review it');
+  }
+  const failure = await shell.openPath(artifact.savedPath);
+  if (failure) throw new Error(`the file could not be opened: ${failure}`);
+  return applicationDataResetGate.runMutation(async () => workspace.markCvArtifactReviewOpened(db, overlayId, artifactId));
+});
+
+/** The candidate's explicit visual confirmation of one saved file (#419 step 9). */
+guardedIpc.handle('workspace:cv-evidence-overlays:confirm-artifact', async (_event, input: unknown) => {
+  return applicationDataResetGate.runMutation(async () => {
+    const { overlayId, artifactId } = parseCvArtifactActionInput(input);
+    return workspace.confirmCvArtifact(await ensureWorkspaceDb(), overlayId, artifactId);
+  });
 });
 
 // #421: named local-client grants for the local MCP endpoint.
