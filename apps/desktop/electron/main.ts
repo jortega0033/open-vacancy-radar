@@ -119,6 +119,7 @@ import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
 import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
+import { waitWithOneRetry } from './daemon-ready-retry.js';
 import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
 import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
@@ -624,7 +625,13 @@ function spawnDaemon(): void {
     scheduleDaemonRespawn(`daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
   });
 
-  Promise.race([waitForDaemonReady(spawnedAt, generation), earlyExit]).catch((err: Error) => {
+  // A timeout here means "still starting" (a crash is `earlyExit`'s job), so grant one more window
+  // before treating it as a failure -- see `daemon-ready-retry.ts`.
+  const readyWithRetry = waitWithOneRetry(
+    () => waitForDaemonReady(spawnedAt, generation),
+    () => daemonRespawn.isCurrentGeneration(generation),
+  );
+  Promise.race([readyWithRetry, earlyExit]).catch((err: Error) => {
     scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
   });
 }
