@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  DAEMON_EXIT_CODE_LOCK_CONFLICT,
   createSessionRequestSchema,
   mcpCredentialInputSchema,
   mcpProviderIdSchema,
@@ -117,6 +118,7 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
+import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
 import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
 import { resolveEffectiveProvider } from '../src/resolve-effective-provider.js';
 import {
@@ -563,10 +565,27 @@ function spawnDaemon(): void {
     rejectOnEarlyExit = reject;
   });
 
+  const earlyExitMessage = (code: number | null, signal: NodeJS.Signals | null): string => {
+    const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
+    return `process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`;
+  };
+
   daemonChild.on('exit', (code, signal) => {
     if (!client) {
-      const detail = stderrSnippet.trim() ? `: ${stderrSnippet.trim()}` : '';
-      rejectOnEarlyExit(new Error(`process exited before starting (code ${code ?? 'null'}, signal ${signal ?? 'null'})${detail}`));
+      // A lock conflict means another instance of this same app already won the discovery-file
+      // race and is alive and reachable right now (see `discoveryFilePath`'s own comment): attach
+      // to it instead of spending this generation's whole respawn budget losing the same race
+      // again on every retry.
+      if (code === DAEMON_EXIT_CODE_LOCK_CONFLICT) {
+        void attachToDaemonAfterLockConflict(generation).then((attached) => {
+          if (attached) return;
+          // The winning daemon exited, or its discovery file was stale/corrupt, in the time it
+          // took to read it: nothing left to attach to, so this is a genuine failure after all.
+          rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
+        });
+        return;
+      }
+      rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
       return;
     }
     client = undefined;
@@ -578,6 +597,73 @@ function spawnDaemon(): void {
   });
 }
 
+/**
+ * Everything a daemon handoff -- this process's own freshly-spawned child becoming ready, or
+ * attaching to a sibling instance's daemon after losing the discovery-file lock race -- does once
+ * it has a reachable `baseUrl`/`token`/`daemonInstanceId` in hand. Factored out so both paths stay
+ * in lockstep instead of silently drifting apart.
+ */
+function finishDaemonAdoption(baseUrl: string, token: string, daemonInstanceId: string | undefined): void {
+  client = new AgentDockClient({ baseUrl, token });
+  daemonConnection = { baseUrl, token };
+  // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
+  // different process, so every outstanding approval is void. Done before the status goes
+  // `ready`, so no renderer can consume a stale grant against the new daemon.
+  adoptDaemonInstance(daemonInstanceId);
+  daemonRespawn.resetAttempts();
+  sendStatus({ state: 'ready' });
+  // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
+  // request), there is exactly one application queue and no per-session redaction concern,
+  // so this attaches proactively -- "reopening the window reflects current queue state"
+  // needs the stream live before any renderer even asks.
+  applicationQueueRelay.attach();
+  // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
+  // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
+  // must not wait on workspace recovery.
+  void recoverApplicationPipelineOnStartup();
+}
+
+/**
+ * Called from the daemon-exit handler when this generation's child died with
+ * `DAEMON_EXIT_CODE_LOCK_CONFLICT`: reads the discovery file the winning instance already wrote
+ * and, if it's still reachable, attaches to it in place of the daemon this process failed to
+ * start. Returns `false` when there is nothing valid to attach to, so the caller can fall back to
+ * treating the exit as an ordinary failure.
+ */
+async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
+  const attached = await tryAttachToWinningDaemon({
+    readDiscoveryFile: (): DiscoveredDaemon | undefined => {
+      const file = discoveryFilePath();
+      if (!existsSync(file)) return undefined;
+      try {
+        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
+        return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
+      } catch {
+        return undefined; // discovery file mid-write, or left behind corrupt
+      }
+    },
+    checkHealth: async (daemon) => {
+      try {
+        // health() also verifies protocol compatibility (see @agent-dock/client).
+        const health = await new AgentDockClient(daemon).health();
+        return { daemonInstanceId: health.daemonInstanceId };
+      } catch {
+        return undefined; // stale file from a daemon that already exited, or not listening yet
+      }
+    },
+  });
+  if (!attached) return false;
+  if (!daemonRespawn.isCurrentGeneration(generation)) {
+    // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
+    // attach resolved. Stand down instead of clobbering its state, but report "handled" -- this
+    // generation has nothing left to retry either way.
+    console.warn('[daemon] ignoring stale lock-conflict attach from a superseded spawn attempt');
+    return true;
+  }
+  finishDaemonAdoption(attached.daemon.baseUrl, attached.daemon.token, attached.health.daemonInstanceId);
+  return true;
+}
+
 async function waitForDaemonReady(spawnedAt: number, generation: number, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const file = discoveryFilePath();
@@ -587,33 +673,16 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
       try {
         const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
         const baseUrl = `http://127.0.0.1:${parsed.port}`;
-        const candidate = new AgentDockClient({ baseUrl, token: parsed.token });
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
-        const health = await candidate.health();
+        const health = await new AgentDockClient({ baseUrl, token: parsed.token }).health();
         if (!daemonRespawn.isCurrentGeneration(generation)) {
           // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
           // stale loop's poll finally landed. Stand down instead of clobbering its state.
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
           return;
         }
-        client = candidate;
-        daemonConnection = { baseUrl, token: parsed.token };
-        // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
-        // different process, so every outstanding approval is void. Done before the status goes
-        // `ready`, so no renderer can consume a stale grant against the new daemon.
-        adoptDaemonInstance(health.daemonInstanceId);
-        daemonRespawn.resetAttempts();
-        sendStatus({ state: 'ready' });
-        // #200: unlike the AI-workspace relay (per-session, only attached on a renderer's own
-        // request), there is exactly one application queue and no per-session redaction concern,
-        // so this attaches proactively -- "reopening the window reflects current queue state"
-        // needs the stream live before any renderer even asks.
-        applicationQueueRelay.attach();
-        // #272: the daemon is now reachable, so an attempt this app left mid-preparation before it
-        // last closed can be put back on the queue. Deliberately not awaited -- daemon readiness
-        // must not wait on workspace recovery.
-        void recoverApplicationPipelineOnStartup();
+        finishDaemonAdoption(baseUrl, parsed.token, health.daemonInstanceId);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol

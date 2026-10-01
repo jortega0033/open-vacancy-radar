@@ -39,3 +39,4 @@ export * from './session-v2.js';
 export * from './workspace-v2.js';
 export * from './capabilities-v2.js';
 export * from './negotiation-v2.js';
+export * from './daemon-process.js';
