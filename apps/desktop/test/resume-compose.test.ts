@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { composeApprovedTailoredResume } from '../electron/resume-source.js';
-import { EMPTY_CV_EVIDENCE_OVERLAY, type CvApprovedWording, type CvEvidenceOverlay } from '../electron/workspace/cv-evidence-schema.js';
+import type { CvApprovedWording, CvEvidenceOverlay } from '../electron/workspace/cv-evidence-schema.js';
 import { EMPTY_CV_SOURCE, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
+import { FIXTURE_HASH as HASH, makeFact, makeOverlay, makeRequirement, makeVariant } from './fixtures/cv-evidence.js';
 
-const HASH = 'a'.repeat(64);
 const STALE_HASH = 'b'.repeat(64);
 
 const SOURCE: CvSourceDocument = {
@@ -18,22 +18,13 @@ const SOURCE: CvSourceDocument = {
   ],
 };
 
+/** Includes one approved fact, since every variant here cites `fact-1`. */
 function overlay(partial: Partial<CvEvidenceOverlay> = {}): CvEvidenceOverlay {
-  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, jdSnapshot: 'A full job description.', ...partial };
+  return makeOverlay({ facts: [makeFact()], ...partial });
 }
 
 function wording(partial: Partial<CvApprovedWording> = {}): CvApprovedWording {
-  return {
-    variantId: 'v-1',
-    targetField: 'summary',
-    parentId: '',
-    text: 'Approved wording.',
-    factIds: ['fact-1'],
-    status: 'candidate_approved',
-    approvedAt: '2026-09-30T00:00:00.000Z',
-    sourceRevision: HASH,
-    ...partial,
-  };
+  return makeVariant(partial);
 }
 
 describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
@@ -128,9 +119,7 @@ describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
     const { blockers } = composeApprovedTailoredResume(
       SOURCE,
       overlay({
-        requirements: [
-          { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
-        ],
+        requirements: [makeRequirement({ evidenceClass: 'needs_verification', anchorParentId: '' })],
       }),
       HASH,
       [],
@@ -158,5 +147,62 @@ describe('composeApprovedTailoredResume (#419, step 5-6)', () => {
     expect(resume.projects[0]?.name).toBe('Kept');
     // Not a blocker: the variant's anchor is real, it is just not in this document's selection.
     expect(blockers).toEqual([]);
+  });
+});
+
+describe('composeApprovedTailoredResume: facts and variants must both be approved (#419, step 7)', () => {
+  const draft = (text: string) => wording({ status: 'draft', approvedAt: '', text });
+
+  it('never composes a draft sentence, a rejected variant or a superseded variant', () => {
+    const { resume } = composeApprovedTailoredResume(
+      SOURCE,
+      overlay({
+        wordingVariants: [
+          draft('An unapproved sentence a model emitted.'),
+          wording({ variantId: 'v-2', status: 'rejected', text: 'Rejected sentence.' }),
+          wording({ variantId: 'v-3', status: 'superseded', text: 'Replaced sentence.' }),
+        ],
+      }),
+      HASH,
+      [],
+    );
+    expect(resume.summary).toBe('Original summary.');
+  });
+
+  it('never composes a variant that cites a plausible fact id the case does not have', () => {
+    const { resume } = composeApprovedTailoredResume(
+      SOURCE,
+      overlay({ wordingVariants: [wording({ factIds: ['fact-made-up'], text: 'Fake-backed sentence.' })] }),
+      HASH,
+      [],
+    );
+    expect(resume.summary).toBe('Original summary.');
+  });
+
+  it('never composes a variant whose fact is proposed, rejected or superseded', () => {
+    for (const approval of ['proposed', 'rejected', 'superseded'] as const) {
+      const { resume } = composeApprovedTailoredResume(
+        SOURCE,
+        overlay({ facts: [makeFact({ approval })], wordingVariants: [wording({ text: 'Backed by a dead fact.' })] }),
+        HASH,
+        [],
+      );
+      expect(resume.summary, approval).toBe('Original summary.');
+    }
+  });
+
+  it('blocks use of wording whose facts contradict each other, and reports the contradiction', () => {
+    const facts = [
+      makeFact({ factId: 'fact-1', activity: 'Built the booking screens', ownership: 'sole' }),
+      makeFact({ factId: 'fact-2', activity: 'Built the booking screens', ownership: 'shared' }),
+    ];
+    const { resume, blockers } = composeApprovedTailoredResume(
+      SOURCE,
+      overlay({ facts, wordingVariants: [wording({ text: 'Contradicted sentence.' })] }),
+      HASH,
+      [],
+    );
+    expect(resume.summary).toBe('Original summary.');
+    expect(blockers).toEqual(expect.arrayContaining([expect.stringContaining('contradict each other')]));
   });
 });

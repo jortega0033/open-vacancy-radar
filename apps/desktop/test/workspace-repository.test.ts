@@ -12,6 +12,7 @@ import * as schema from '../electron/workspace/schema.js';
 import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import { MCP_GRANT_LIMITS } from '../electron/workspace/mcp-grant-schema.js';
+import { makeFact, makeRequirement, makeVariant } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
 
 /**
@@ -302,24 +303,7 @@ describe('cv evidence overlays (#419)', () => {
       sourceCvContentHash: HASH_A,
       jdSnapshotHash: HASH_B,
     });
-    const fact = {
-      factId: 'fact-1',
-      parentId: 'experience-1',
-      parentType: 'experience' as const,
-      client: '',
-      activity: 'Rebuilt the checkout flow',
-      mechanism: 'React, Stripe Elements',
-      result: 'reduced drop-off',
-      ownership: 'sole' as const,
-      sourceKind: 'candidate_testimony' as const,
-      sourceReference: '',
-      verification: 'self_reported' as const,
-      metricValue: '',
-      metricUnit: '',
-      metricBasis: '',
-      supersedes: '',
-      createdAt: '2026-09-30T00:00:00.000Z',
-    };
+    const fact = makeFact({ activity: 'Rebuilt the checkout flow', mechanism: 'React, Stripe Elements', result: 'reduced drop-off' });
     const updated = workspace.updateCvEvidenceOverlay(db, overlay.id, {
       facts: [fact],
       state: 'draft',
@@ -427,24 +411,14 @@ describe('cv evidence overlays (#419)', () => {
       ],
     };
 
-    const FACT = {
-      factId: 'fact-1',
-      parentId: 'experience-1',
-      parentType: 'experience' as const,
-      client: '',
+    const FACT = makeFact({
       activity: 'Designed the GraphQL schema',
       mechanism: 'Apollo Server, schema-first',
       result: 'cut client-side overfetching',
-      ownership: 'unknown' as const,
-      sourceKind: 'candidate_testimony' as const,
-      sourceReference: '',
-      verification: 'self_reported' as const,
-      metricValue: '',
-      metricUnit: '',
-      metricBasis: '',
-      supersedes: '',
-      createdAt: '2026-09-30T00:00:00.000Z',
-    };
+      ownership: 'unknown',
+    });
+    const FACT_WORDING = 'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching';
+    const COVERED = { requirementCoverage: { status: 'complete' as const, batches: 1 } };
 
     // `createCvDocument` stamps `reviewedAt` onto the source it stores (`stampReviewed`), so the
     // hash an overlay must match is the *stored* source's hash, not a hash of `SOURCE` computed
@@ -455,7 +429,7 @@ describe('cv evidence overlays (#419)', () => {
       return { cv, sourceHash };
     }
 
-    it('re-derives wording from facts server-side, freezes an approved-resume snapshot, and bumps caseRevision', () => {
+    function caseWithApprovedFact() {
       const { cv, sourceHash } = cvWithSource();
       const overlay = workspace.createCvEvidenceOverlay(db, {
         cvId: cv.id,
@@ -464,19 +438,48 @@ describe('cv evidence overlays (#419)', () => {
         jdSnapshot: FULL_JD,
         jdSnapshotHash: HASH_B,
       });
-      workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [FACT] });
+      const withFact = workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [FACT], ...COVERED });
+      return { cv, sourceHash, overlay: withFact };
+    }
 
-      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, '2');
+    it('composes only wording the candidate approved, freezes an approved-resume snapshot, and bumps caseRevision', () => {
+      const { overlay } = caseWithApprovedFact();
+      const draft = makeVariant({
+        targetField: 'experience_bullet',
+        parentId: 'experience-1',
+        text: FACT_WORDING,
+        status: 'candidate_approved',
+        approvedAt: '',
+        sourceRevision: '',
+      });
+      const withVariant = workspace.updateCvEvidenceOverlay(db, overlay.id, { wordingVariants: [draft] });
+      // The repository stamps the approval itself; whatever the caller sent is not trusted.
+      expect(withVariant.wordingVariants[0]?.approvedAt).not.toBe('');
+      expect(withVariant.wordingVariants[0]?.sourceRevision).toBe(withVariant.sourceCvContentHash);
+
+      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, withVariant.caseRevision);
 
       expect(approved.state).toBe('candidate_approved');
       expect(approved.wordingVariants).toHaveLength(1);
-      expect(approved.wordingVariants[0]).toMatchObject({ status: 'candidate_approved', factIds: ['fact-1'] });
       expect(approved.approvedResumeSnapshot).not.toBeNull();
       expect(approved.approvedResumeSnapshot?.caseRevision).toBe(approved.caseRevision);
-      expect(approved.approvedResumeSnapshot?.resume.experience[0]?.bullets).toContain(
-        'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching',
-      );
-      expect(approved.caseRevision).toBe('3');
+      expect(approved.approvedResumeSnapshot?.resume.experience[0]?.bullets).toContain(FACT_WORDING);
+      expect(approved.caseRevision).toBe(String(Number(withVariant.caseRevision) + 1));
+    });
+
+    it('never approves wording on its own: a fact with no approved variant adds nothing to the approved CV', () => {
+      const { overlay } = caseWithApprovedFact();
+      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, overlay.caseRevision);
+      expect(approved.wordingVariants).toEqual([]);
+      expect(approved.approvedResumeSnapshot?.resume.experience[0]?.bullets).not.toContain(FACT_WORDING);
+    });
+
+    it('does not compose a draft variant even when approval itself succeeds', () => {
+      const { overlay } = caseWithApprovedFact();
+      const draft = makeVariant({ status: 'draft', approvedAt: '', sourceRevision: '', targetField: 'summary', text: 'A sentence nobody approved.' });
+      const withDraft = workspace.updateCvEvidenceOverlay(db, overlay.id, { wordingVariants: [draft] });
+      const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, withDraft.caseRevision);
+      expect(approved.approvedResumeSnapshot?.resume.summary).toBe('Original summary.');
     });
 
     it('rejects a stale expectedCaseRevision without applying anything, naming the real current revision', () => {
@@ -503,12 +506,14 @@ describe('cv evidence overlays (#419)', () => {
         cvId: cv.id,
         vacancyKey: 'vacancy-1',
         sourceCvContentHash: sourceHash,
+        jdSnapshot: FULL_JD,
         jdSnapshotHash: HASH_B,
       });
       const withGap = workspace.updateCvEvidenceOverlay(db, overlay.id, {
         requirements: [
-          { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
+          makeRequirement({ jdAnchor: 'Fluent English is essential', quoteStart: -1, quoteEnd: -1, evidenceClass: 'needs_verification', anchorParentId: '' }),
         ],
+        ...COVERED,
       });
       expect(() => workspace.approveCvEvidenceOverlay(db, overlay.id, withGap.caseRevision)).toThrow(/cannot be approved/);
       expect(workspace.getCvEvidenceOverlayById(db, overlay.id).state).not.toBe('candidate_approved');
@@ -623,6 +628,9 @@ describe('mcp client grants and audit trail (#421)', () => {
 });
 
 describe('cv tailoring proposals (#421)', () => {
+  /** FULL_JD plus a line the accepted-requirement tests quote. */
+  const CASE_JD = `${FULL_JD}
+Node.js experience is a plus.`;
   const SOURCE: CvSourceDocument = {
     ...EMPTY_CV_SOURCE,
     experience: [
@@ -632,17 +640,12 @@ describe('cv tailoring proposals (#421)', () => {
 
   function caseWithRequirementAndFact() {
     const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, source: SOURCE, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
-    const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'v-1', sourceCvContentHash: 'a'.repeat(64), jdSnapshotHash: 'b'.repeat(64) });
+    const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'v-1', sourceCvContentHash: 'a'.repeat(64), jdSnapshot: CASE_JD, jdSnapshotHash: 'b'.repeat(64) });
     const withReqAndFact = workspace.updateCvEvidenceOverlay(db, overlay.id, {
       requirements: [
-        { requirementId: 'req-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
+        makeRequirement({ requirementId: 'req-1', text: 'React', jdAnchor: 'Fluent English is essential', evidenceClass: 'needs_verification', anchorParentId: '' }),
       ],
-      facts: [
-        {
-          factId: 'fact-1', parentId: 'experience-1', parentType: 'experience', client: '', activity: 'Built things', mechanism: '', result: '',
-          ownership: 'sole', sourceKind: 'candidate_testimony', sourceReference: '', verification: 'self_reported', metricValue: '', metricUnit: '', metricBasis: '', supersedes: '', createdAt: '2026-09-30T00:00:00.000Z',
-        },
-      ],
+      facts: [makeFact({ activity: 'Built things', mechanism: '' })],
     });
     return { cv, overlay: withReqAndFact };
   }
@@ -774,7 +777,7 @@ describe('cv tailoring proposals (#421)', () => {
       expect(updated.requirements[0]).toMatchObject({ evidenceClass: 'needs_verification', reviewed: false });
     });
 
-    it('promotes a fact proposal into a real self_reported, candidate_testimony fact', () => {
+    it('promotes a fact proposal into a self_reported, candidate_testimony fact that still needs approval', () => {
       const { overlay } = caseWithRequirementAndFact();
       const proposal = workspace.createCvTailoringProposal(db, {
         caseId: overlay.id,
@@ -783,10 +786,15 @@ describe('cv tailoring proposals (#421)', () => {
       });
       const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
       expect(updated.facts).toHaveLength(2);
-      expect(updated.facts[1]).toMatchObject({ activity: 'Shipped the thing', verification: 'self_reported', sourceKind: 'candidate_testimony' });
+      expect(updated.facts[1]).toMatchObject({
+        activity: 'Shipped the thing',
+        verification: 'self_reported',
+        sourceKind: 'candidate_testimony',
+        approval: 'proposed',
+      });
     });
 
-    it('promotes a wording proposal into a candidate_approved variant', () => {
+    it('promotes a wording proposal into a draft variant, never an approved one', () => {
       const { overlay } = caseWithRequirementAndFact();
       const proposal = workspace.createCvTailoringProposal(db, {
         caseId: overlay.id,
@@ -795,7 +803,7 @@ describe('cv tailoring proposals (#421)', () => {
       });
       const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
       expect(updated.wordingVariants).toHaveLength(1);
-      expect(updated.wordingVariants[0]).toMatchObject({ status: 'candidate_approved', factIds: ['fact-1'] });
+      expect(updated.wordingVariants[0]).toMatchObject({ status: 'draft', factIds: ['fact-1'], approvedAt: '' });
     });
 
     it('accepting a selection proposal still bumps caseRevision even though nothing on the overlay changes yet', () => {
@@ -809,7 +817,7 @@ describe('cv tailoring proposals (#421)', () => {
     it('invalidates a standing candidate_approved state back to draft, the same rule updateCvEvidenceOverlay applies', () => {
       const { overlay } = caseWithRequirementAndFact();
       workspace.updateCvEvidenceOverlay(db, overlay.id, { state: 'artifact_approved' });
-      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } } });
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'requirement', data: { text: 'x', jdAnchor: 'Node.js experience', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' } } });
       const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
       expect(updated.state).toBe('draft');
     });
@@ -830,7 +838,7 @@ describe('cv tailoring proposals (#421)', () => {
       const requirement = workspace.createCvTailoringProposal(db, {
         caseId: overlay.id,
         grantId: '',
-        payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'direct', anchorParentId: 'experience-1' } },
+        payload: { kind: 'requirement', data: { text: 'x', jdAnchor: 'Node.js experience', classification: 'required', evidenceClass: 'direct', anchorParentId: 'experience-1' } },
       });
       const fact = workspace.createCvTailoringProposal(db, {
         caseId: overlay.id,

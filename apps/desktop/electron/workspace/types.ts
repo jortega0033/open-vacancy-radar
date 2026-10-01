@@ -24,6 +24,7 @@ import type {
   CvJdOrigin,
   CvJdRevision,
   CvListingStatus,
+  CvRequirementCoverage,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
@@ -93,6 +94,8 @@ export type {
   CvEvidenceFact,
   CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
+  CvFactApproval,
+  CvFactConflict,
   CvFactOwnership,
   CvFactSourceKind,
   CvFactVerification,
@@ -101,6 +104,7 @@ export type {
   CvJdRevision,
   CvListingStatus,
   CvRequirementClassification,
+  CvRequirementCoverage,
   CvRequirementMapping,
   CvWordingApprovalStatus,
 } from './cv-evidence-schema.js';
@@ -284,6 +288,8 @@ export interface CvEvidenceOverlayRecord {
   listingStatus: CvListingStatus;
   state: CvEvidenceOverlayState;
   requirements: CvRequirementMapping[];
+  /** #419: extraction progress for the current JD revision. See `CvRequirementCoverage`. */
+  requirementCoverage: CvRequirementCoverage;
   facts: CvEvidenceFact[];
   wordingVariants: CvApprovedWording[];
   /** #421's case contract: see `CvEvidenceOverlayOrigin`. */
@@ -349,6 +355,9 @@ export interface CvEvidenceOverlayPatch {
   listingStatus?: CvListingStatus;
   state?: Exclude<CvEvidenceOverlayState, 'candidate_approved'>;
   requirements?: CvRequirementMapping[];
+  /** #419: record that extraction is partial (more batches owed) or that the candidate confirms the
+   * list is complete. The repository stamps it with the current JD revision. */
+  requirementCoverage?: { status: 'partial' | 'complete'; batches: number };
   facts?: CvEvidenceFact[];
   wordingVariants?: CvApprovedWording[];
 }

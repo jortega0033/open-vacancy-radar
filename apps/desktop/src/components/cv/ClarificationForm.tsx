@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ClarificationAnswer } from './clarification-answer.js';
+import { metricBasisProblem, type ClarificationAnswer } from './clarification-answer.js';
 import { sourceAnchors } from './source-anchors.js';
 import type { CvSourceDocument } from '../../window.js';
 
@@ -9,16 +9,25 @@ export interface ClarificationFormProps {
   onCancel(): void;
 }
 
+type Step = 1 | 2 | 3;
+
+const STEP_COUNT = 3;
+
 /**
- * The clarification ask for one `needs_verification` requirement (#419, step 3): three separate
- * questions -- what, how, and the result if known -- with no target keyword ever suggested as an
- * answer, plus the three honest non-answers ("I don't know", "not my work", "skip") that #419
- * requires stay gaps rather than being nudged toward a supported-evidence answer.
+ * The clarification ask for one `needs_verification` requirement (#419, step 6): three separate
+ * steps -- what the candidate personally did and where, how with the actual tools and scope, and the
+ * result or purpose if known -- with no target keyword ever suggested as an answer. Every step offers
+ * the same explicit non-answers: "I don't know" (considered, no answer), "Not my work" (recorded as a
+ * gap the candidate confirmed) and "Skip" (nothing recorded). Steps two and three may also be left
+ * unstated with "Don't know this part", so an unknown mechanism or result stays unstated rather than
+ * being guessed.
  */
 export function ClarificationForm({ sourceCv, onAnswer, onCancel }: ClarificationFormProps) {
   const options = sourceAnchors(sourceCv);
+  const [step, setStep] = useState<Step>(1);
   const [anchor, setAnchor] = useState('');
   const [activity, setActivity] = useState('');
+  const [timePhase, setTimePhase] = useState('');
   const [mechanism, setMechanism] = useState('');
   const [result, setResult] = useState('');
   const [metricValue, setMetricValue] = useState('');
@@ -26,113 +35,187 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
   const [metricBasis, setMetricBasis] = useState('');
 
   const selected = options.find((option) => `${option.type}:${option.id}` === anchor);
-  const canSave = !!selected && activity.trim().length > 0 && mechanism.trim().length > 0;
-  const metricIncomplete = metricValue.trim().length > 0 && metricBasis.trim().length === 0;
+  const hasMetric = metricValue.trim().length > 0;
+  const basisProblem = hasMetric ? metricBasisProblem(metricBasis) : null;
+
+  const stepComplete =
+    step === 1 ? !!selected && activity.trim().length > 0 : step === 2 ? mechanism.trim().length > 0 : true;
 
   function handleSave() {
-    if (!selected || !canSave || metricIncomplete) return;
-    const answer: ClarificationAnswer = {
+    if (!selected || activity.trim().length === 0 || basisProblem) return;
+    onAnswer({
       kind: 'answered',
       parentId: selected.id,
       parentType: selected.type,
       activity,
       mechanism,
       result,
-      ...(metricValue.trim() ? { metricValue, metricUnit, metricBasis } : {}),
-    };
-    onAnswer(answer);
+      ...(timePhase.trim() ? { timePhase } : {}),
+      ...(hasMetric ? { metricValue, metricUnit, metricBasis } : {}),
+    });
+  }
+
+  function next() {
+    if (step < STEP_COUNT) setStep((step + 1) as Step);
+  }
+
+  function back() {
+    if (step > 1) setStep((step - 1) as Step);
   }
 
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium">Which role or project is this about?</span>
-        <select
-          className="select select-sm"
-          value={anchor}
-          onChange={(event) => setAnchor(event.currentTarget.value)}
-          aria-label="Role or project"
-        >
-          <option value="">Choose one…</option>
-          {options.map((option) => (
-            <option key={`${option.type}:${option.id}`} value={`${option.type}:${option.id}`}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="text-xs text-base-content/60" aria-live="polite">
+        Question {step} of {STEP_COUNT}
+      </div>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium">What did you personally do?</span>
-        <textarea
-          className="textarea textarea-sm"
-          rows={2}
-          value={activity}
-          onChange={(event) => setActivity(event.currentTarget.value)}
-        />
-      </label>
-
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium">How, including the actual tools and scope?</span>
-        <textarea
-          className="textarea textarea-sm"
-          rows={2}
-          value={mechanism}
-          onChange={(event) => setMechanism(event.currentTarget.value)}
-        />
-      </label>
-
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium">What was the result, or why it mattered, if known?</span>
-        <textarea
-          className="textarea textarea-sm"
-          rows={2}
-          value={result}
-          onChange={(event) => setResult(event.currentTarget.value)}
-        />
-      </label>
-
-      {result.trim().length > 0 && (
-        <div className="flex flex-wrap items-end gap-2">
+      {step === 1 && (
+        <>
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium">Number, if there is one</span>
-            <input
-              type="text"
-              className="input input-sm w-28"
-              value={metricValue}
-              onChange={(event) => setMetricValue(event.currentTarget.value)}
-              placeholder="e.g. 30%"
+            <span className="text-xs font-medium">Which role or project is this about?</span>
+            <select
+              className="select select-sm"
+              value={anchor}
+              onChange={(event) => setAnchor(event.currentTarget.value)}
+              aria-label="Role or project"
+            >
+              <option value="">Choose one…</option>
+              {options.map((option) => (
+                <option key={`${option.type}:${option.id}`} value={`${option.type}:${option.id}`}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium">What did you personally do, and where?</span>
+            <textarea
+              className="textarea textarea-sm"
+              rows={2}
+              value={activity}
+              onChange={(event) => setActivity(event.currentTarget.value)}
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium">Unit</span>
-            <input
-              type="text"
-              className="input input-sm w-24"
-              value={metricUnit}
-              onChange={(event) => setMetricUnit(event.currentTarget.value)}
-            />
-          </label>
-          <label className="flex min-w-40 flex-1 flex-col gap-1">
-            <span className="text-xs font-medium">Where does that number come from?</span>
+            <span className="text-xs font-medium">When did this happen, if you want to say</span>
             <input
               type="text"
               className="input input-sm"
-              value={metricBasis}
-              onChange={(event) => setMetricBasis(event.currentTarget.value)}
-              placeholder="e.g. a figure you remember, not a guess"
+              value={timePhase}
+              onChange={(event) => setTimePhase(event.currentTarget.value)}
+              placeholder="e.g. the first year, or 2021 to 2022"
             />
           </label>
-        </div>
+        </>
       )}
-      {metricIncomplete && (
-        <p className="text-xs text-warning">A number needs a stated source before it can be saved.</p>
+
+      {step === 2 && (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium">How did you do it, including the actual tools and scope?</span>
+          <textarea
+            className="textarea textarea-sm"
+            rows={3}
+            value={mechanism}
+            onChange={(event) => setMechanism(event.currentTarget.value)}
+          />
+        </label>
+      )}
+
+      {step === 3 && (
+        <>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium">What was the result, or what was it for, if you know?</span>
+            <textarea
+              className="textarea textarea-sm"
+              rows={2}
+              value={result}
+              onChange={(event) => setResult(event.currentTarget.value)}
+            />
+          </label>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">Number, if there is one</span>
+              <input
+                type="text"
+                className="input input-sm w-28"
+                value={metricValue}
+                onChange={(event) => setMetricValue(event.currentTarget.value)}
+                placeholder="e.g. 30%"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">Unit</span>
+              <input
+                type="text"
+                className="input input-sm w-24"
+                value={metricUnit}
+                onChange={(event) => setMetricUnit(event.currentTarget.value)}
+              />
+            </label>
+            <label className="flex min-w-40 flex-1 flex-col gap-1">
+              <span className="text-xs font-medium">Where does that number come from?</span>
+              <input
+                type="text"
+                className="input input-sm"
+                value={metricBasis}
+                onChange={(event) => setMetricBasis(event.currentTarget.value)}
+                placeholder="e.g. a report you were sent"
+              />
+            </label>
+          </div>
+          {basisProblem && <p className="text-xs text-warning">{basisProblem}</p>}
+        </>
       )}
 
       <div className="flex flex-wrap items-center gap-2 pt-1">
-        <button type="button" className="btn btn-primary btn-sm" onClick={handleSave} disabled={!canSave || metricIncomplete}>
-          Save answer
-        </button>
+        {step > 1 && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={back}>
+            Back
+          </button>
+        )}
+        {step < STEP_COUNT && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={next} disabled={!stepComplete}>
+            Next
+          </button>
+        )}
+        {step === 2 && (
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => {
+              setMechanism('');
+              next();
+            }}
+          >
+            Don&rsquo;t know this part
+          </button>
+        )}
+        {step === STEP_COUNT && (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleSave}
+              disabled={!selected || activity.trim().length === 0 || !!basisProblem}
+            >
+              Save answer
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                setResult('');
+                setMetricValue('');
+                setMetricUnit('');
+                setMetricBasis('');
+              }}
+            >
+              Don&rsquo;t know this part
+            </button>
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-base-300 pt-2">
         <button type="button" className="btn btn-outline btn-sm" onClick={() => onAnswer({ kind: 'unknown' })}>
           I don&rsquo;t know
         </button>

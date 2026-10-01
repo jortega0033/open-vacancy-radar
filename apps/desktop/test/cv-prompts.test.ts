@@ -229,7 +229,22 @@ describe('prompt builders', () => {
 
     it('bounds the review to a fixed requirement count', () => {
       const prompt = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
-      expect(prompt).toContain(`Review at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements`);
+      expect(prompt).toContain(`Return at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements`);
+    });
+
+    it('asks for exact quotes, which the app checks against the posting', () => {
+      const prompt = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
+      expect(prompt).toContain('copied character for character');
+      expect(prompt).toContain('"hasMore"');
+    });
+
+    it('lists the requirements already extracted when asking for a follow-up batch', () => {
+      const first = buildRequirementMappingPrompt(CV, VACANCY, SOURCE);
+      expect(first).not.toContain('already listed in earlier replies');
+      const next = buildRequirementMappingPrompt(CV, VACANCY, SOURCE, undefined, ['Angular experience', 'Design systems']);
+      expect(next).toContain('already listed in earlier replies');
+      expect(next).toContain('- Angular experience');
+      expect(next).toContain('- Design systems');
     });
   });
 

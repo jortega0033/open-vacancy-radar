@@ -29,6 +29,7 @@ function overlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidenceOver
     listingStatus: 'unknown',
     state: 'draft',
     requirements: [],
+    requirementCoverage: { status: 'not_run', revisionId: '', batches: 0 },
     facts: [],
     wordingVariants: [],
     origin: 'vacancy',

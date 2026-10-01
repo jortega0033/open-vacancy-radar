@@ -8,6 +8,9 @@ export interface TailoringProposalsPanelProps {
   cvId: string | null;
   vacancy: VacancyLead | null;
   sourceCv?: CvSourceDocument | null;
+  /** Called after a proposal is accepted, so panels that show the case's facts and wording can
+   * reload what the acceptance just added. */
+  onAccepted?: () => void;
 }
 
 function entryLabel(source: CvSourceDocument | null | undefined, id: string): string {
@@ -54,7 +57,7 @@ function describeProposal(payload: CvProposalPayload, source: CvSourceDocument |
  * MCP client, and an empty "Proposals" card on every CV assistant screen would be noise for all of
  * them.
  */
-export function TailoringProposalsPanel({ cvId, vacancy, sourceCv }: TailoringProposalsPanelProps) {
+export function TailoringProposalsPanel({ cvId, vacancy, sourceCv, onAccepted }: TailoringProposalsPanelProps) {
   const [overlayId, setOverlayId] = useState<string | null>(null);
   const [proposals, setProposals] = useState<CvTailoringProposalRecord[]>([]);
   const [error, setError] = useState<string>();
@@ -94,6 +97,7 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv }: TailoringPr
         () => {
           setProposals((prev) => prev.filter((proposal) => proposal.id !== id));
           setBusyId(null);
+          if (action === 'accept') onAccepted?.();
         },
         (err) => {
           setError(describeError(err, `could not ${action} this proposal`));
@@ -101,7 +105,7 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv }: TailoringPr
         },
       );
     },
-    [],
+    [onAccepted],
   );
 
   if (!overlayId || proposals.length === 0) return null;
@@ -112,7 +116,8 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv }: TailoringPr
         <div className="card-title text-base font-bold">Proposals from connected clients</div>
         <p className="text-sm text-base-content/60">
           An authorized local AI client suggested these. Nothing here affects your CV until you
-          accept it below.
+          accept it below. An accepted fact or wording still needs your approval in the facts and
+          wording review.
         </p>
 
         {error && (

@@ -224,7 +224,9 @@ describe('local MCP endpoint tool surface (#421)', () => {
     // Vacuously gap-free: there are no requirements at all yet to be unreviewed. Gaps appear once
     // something is proposed and accepted -- see the pagination test below.
     // A job description this short is flagged, so the case reports that gap from the start.
-    expect(started.gaps).toEqual([expect.stringMatching(/job description/)]);
+    expect(started.gaps).toEqual(
+      expect.arrayContaining([expect.stringMatching(/looks incomplete/), expect.stringMatching(/not been extracted and confirmed/)]),
+    );
 
     // Coverage was earned by this call, not pre-granted: a second tool call against the same
     // caseId from the same grant succeeds.
@@ -346,6 +348,8 @@ describe('local MCP endpoint tool surface (#421)', () => {
     const notApprovedYet = await client.callTool({ name: 'read_approved_resume', arguments: { caseId } });
     expect(notApprovedYet.isError).toBe(true);
 
+    // The candidate confirms the (empty) requirement list for this JD, which approval requires.
+    workspace.updateCvEvidenceOverlay(db, caseId, { requirementCoverage: { status: 'complete', batches: 1 } });
     const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
     workspace.approveCvEvidenceOverlay(db, caseId, overlay.caseRevision);
 

@@ -8,6 +8,7 @@ import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/clien
 import * as workspace from '../electron/workspace/repository.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import { describeCvEvidenceOverlayGaps, describeCvJdGaps } from '../electron/workspace/cv-evidence-schema.js';
+import { makeFact, makeOverlay, makeRequirement } from './fixtures/cv-evidence.js';
 import { parseCvEvidenceOverlayPatch } from '../electron/workspace/validate.js';
 import { FULL_JD } from './fixtures/job-description.js';
 
@@ -187,17 +188,12 @@ describe('candidate confirmation of a short JD', () => {
 describe('a JD change invalidates earlier review', () => {
   it('clears requirement reviews and drops an approved state back to draft', () => {
     const { overlay } = newCase(FULL_JD);
-    const requirement = {
-      requirementId: 'r-1',
-      text: 'TypeScript',
-      jdAnchor: 'TypeScript',
-      classification: 'required' as const,
-      evidenceClass: 'direct' as const,
-      anchorParentId: 'experience-1',
-      candidateAdded: false,
-      reviewed: true,
-    };
-    workspace.updateCvEvidenceOverlay(db, overlay.id, { requirements: [requirement], state: 'draft' });
+    const requirement = makeRequirement({ text: 'TypeScript', jdAnchor: 'TypeScript' });
+    workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      requirements: [requirement],
+      requirementCoverage: { status: 'complete', batches: 1 },
+      state: 'draft',
+    });
     const approved = workspace.approveCvEvidenceOverlay(
       db,
       overlay.id,
@@ -213,10 +209,85 @@ describe('a JD change invalidates earlier review', () => {
     expect(changed.requirements[0]?.reviewed).toBe(false);
     expect(changed.jdRevisions).toHaveLength(2);
   });
+
+  it('marks the requirement mapping stale: coverage and every requirement belong to the older revision', () => {
+    const { overlay, sourceHash } = newCase(FULL_JD);
+    const approved = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      requirements: [makeRequirement({ text: 'TypeScript', jdAnchor: 'TypeScript' })],
+      requirementCoverage: { status: 'complete', batches: 1 },
+    });
+    const firstRevisionId = approved.jdRevisions[0]?.revisionId;
+    expect(approved.requirements[0]?.jdRevisionId).toBe(firstRevisionId);
+    expect(describeCvEvidenceOverlayGaps(approved, sourceHash)).not.toEqual(expect.arrayContaining([expect.stringContaining('older job description')]));
+
+    const changed = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      jdSnapshot: `${FULL_JD}
+Also: GraphQL is required.`,
+      jdSnapshotHash: HASH,
+    });
+    const gaps = describeCvEvidenceOverlayGaps(changed, sourceHash);
+    expect(changed.requirements[0]?.jdRevisionId).toBe(firstRevisionId);
+    expect(gaps).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('have not been extracted and confirmed'),
+        expect.stringContaining('older job description'),
+        expect.stringContaining('have not been reviewed'),
+      ]),
+    );
+  });
+
+  it('keeps reviewed facts reusable across a JD edit', () => {
+    const { overlay } = newCase(FULL_JD);
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [makeFact()] });
+    const changed = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      jdSnapshot: `${FULL_JD}
+Also: GraphQL is required.`,
+      jdSnapshotHash: HASH,
+    });
+    expect(changed.facts[0]).toMatchObject({ factId: 'fact-1', approval: 'approved' });
+  });
+
+  it('re-verifies a requirement quote against the new text when the candidate reviews it again', () => {
+    const { overlay, sourceHash } = newCase(FULL_JD);
+    workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      requirements: [makeRequirement({ text: 'TypeScript', jdAnchor: 'TypeScript' })],
+      requirementCoverage: { status: 'complete', batches: 1 },
+    });
+    const changed = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      jdSnapshot: `${FULL_JD}
+Also: GraphQL is required.`,
+      jdSnapshotHash: HASH,
+    });
+    const rereviewed = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      requirements: changed.requirements.map((requirement) => ({ ...requirement, reviewed: true })),
+      requirementCoverage: { status: 'complete', batches: 1 },
+    });
+    expect(rereviewed.requirements[0]?.jdRevisionId).toBe(changed.jdRevisions.at(-1)?.revisionId);
+    expect(describeCvEvidenceOverlayGaps(rereviewed, sourceHash)).toEqual([]);
+
+    // A quote that the new text no longer contains cannot be reviewed again.
+    const replaced = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+      jdSnapshot: 'A different short posting that must be read again.',
+      jdSnapshotHash: HASH,
+    });
+    expect(() =>
+      workspace.updateCvEvidenceOverlay(db, overlay.id, {
+        requirements: replaced.requirements.map((requirement) => ({ ...requirement, reviewed: true })),
+      }),
+    ).toThrow(/no longer in the job description/u);
+  });
 });
 
 describe('approval gate for the JD', () => {
+  /** The candidate has confirmed the requirement list for whatever JD text there is. */
+  function covered(overlayId: string) {
+    if (workspace.getCvEvidenceOverlayById(db, overlayId).jdSnapshot.trim()) {
+      workspace.updateCvEvidenceOverlay(db, overlayId, { requirementCoverage: { status: 'complete', batches: 1 } });
+    }
+  }
+
   function approve(overlayId: string) {
+    covered(overlayId);
     return workspace.approveCvEvidenceOverlay(db, overlayId, workspace.getCvEvidenceOverlayById(db, overlayId).caseRevision);
   }
 
@@ -268,7 +339,7 @@ describe('describeCvJdGaps', () => {
 
   it('is part of the overlay gap list', () => {
     const gaps = describeCvEvidenceOverlayGaps(
-      { ...base, jdSnapshot: '', sourceCvContentHash: HASH, requirements: [], wordingVariants: [], state: 'draft' } as never,
+      makeOverlay({ ...base, jdSnapshot: '', sourceCvContentHash: HASH, jdRevisions: [], requirementCoverage: { status: 'not_run', revisionId: '', batches: 0 } }),
       HASH,
     );
     expect(gaps.some((gap) => /no job description text/u.test(gap))).toBe(true);

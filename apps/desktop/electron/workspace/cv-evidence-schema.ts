@@ -64,6 +64,14 @@ export const CV_FACT_SOURCE_KINDS: readonly CvFactSourceKind[] = [
   'repository_inspection',
 ];
 
+/** Where a fact stands in the candidate's own review (#419 step 7). Only `approved` facts may back
+ * wording that reaches a CV. `proposed` is the starting state of anything the candidate has not yet
+ * looked at (an accepted MCP proposal included); `superseded` means a later correction replaced
+ * it, and the record is kept rather than deleted. */
+export type CvFactApproval = 'proposed' | 'approved' | 'rejected' | 'superseded';
+
+export const CV_FACT_APPROVALS: readonly CvFactApproval[] = ['proposed', 'approved', 'rejected', 'superseded'];
+
 export interface CvEvidenceFact {
   /** Stable across edits, the same guarantee every other id in this module makes. Assigned by the
    * app, never by the model. */
@@ -100,6 +108,13 @@ export interface CvEvidenceFact {
    * deleted -- this field is what turns "replace" into an auditable action instead of data loss. */
   supersedes: string;
   createdAt: string;
+  /** The candidate's review state. A fact is usable only while `approved` and not part of an
+   * unresolved contradiction (see `isCvFactUsable`). */
+  approval: CvFactApproval;
+  /** When in the role or project this happened, in the candidate's own words ("2021 to 2022", "first
+   * year", "current"). Empty means the candidate has not said. Two facts about one role only
+   * contradict each other when they describe the same phase, so contradiction detection reads this. */
+  timePhase: string;
 }
 
 export type CvClaimField = 'summary' | 'skill' | 'experience_bullet' | 'project_description';
@@ -111,12 +126,13 @@ export const CV_CLAIM_FIELDS: readonly CvClaimField[] = [
   'project_description',
 ];
 
-export type CvWordingApprovalStatus = 'draft' | 'candidate_approved' | 'rejected';
+export type CvWordingApprovalStatus = 'draft' | 'candidate_approved' | 'rejected' | 'superseded';
 
 export const CV_WORDING_APPROVAL_STATUSES: readonly CvWordingApprovalStatus[] = [
   'draft',
   'candidate_approved',
   'rejected',
+  'superseded',
 ];
 
 export interface CvApprovedWording {
@@ -146,6 +162,12 @@ export interface CvApprovedWording {
    * source (a new `reviewedAt`) means this variant's grounding has not been re-confirmed against
    * the current source, and `describeCvEvidenceOverlayGaps` treats it as stale. */
   sourceRevision: string;
+  /** The `variantId` this wording replaced when the candidate edited it. Empty for a first
+   * proposal. The replaced variant stays in the list as `superseded` (#419: editing creates a new
+   * variant; rejection and supersession remain recorded). */
+  supersedes: string;
+  /** ISO-8601, stamped when the candidate rejected this exact wording. Empty otherwise. */
+  rejectedAt: string;
 }
 
 export type CvRequirementClassification = 'required' | 'preferred' | 'unclear';
@@ -161,9 +183,24 @@ export const CV_REQUIREMENT_CLASSIFICATIONS: readonly CvRequirementClassificatio
  * claimed* before anything is written. `unsupported` means no CV claim is permitted on current
  * evidence -- it says nothing about whether the candidate actually has the ability, which is why
  * it is a distinct state from `needs_verification` (not yet asked) rather than one bucket. */
-export type CvEvidenceClass = 'direct' | 'transferable' | 'unsupported' | 'needs_verification';
+export type CvEvidenceClass =
+  | 'direct'
+  | 'transferable'
+  | 'unsupported'
+  | 'needs_verification'
+  | 'candidate_confirmed_gap';
 
 export const CV_EVIDENCE_CLASSES: readonly CvEvidenceClass[] = [
+  'direct',
+  'transferable',
+  'unsupported',
+  'needs_verification',
+  'candidate_confirmed_gap',
+];
+
+/** What a model may propose. `candidate_confirmed_gap` is only ever the candidate's own statement,
+ * so no extraction or proposal path accepts it. */
+export const CV_MODEL_EVIDENCE_CLASSES: readonly CvEvidenceClass[] = [
   'direct',
   'transferable',
   'unsupported',
@@ -190,7 +227,41 @@ export interface CvRequirementMapping {
    * or candidate-added) and still be unreviewed; #419's "no complete-coverage language while any
    * material requirement remains unreviewed" reads this flag, not just array membership. */
   reviewed: boolean;
+  /** Where `jdAnchor` sits in the text of the JD revision `jdRevisionId` names, as a half-open span
+   * `[quoteStart, quoteEnd)`. Computed by the main process, never accepted from a caller. `-1` for
+   * both means the quote was not found in that text, which blocks approval. */
+  quoteStart: number;
+  quoteEnd: number;
+  /** The `CvJdRevision.revisionId` this requirement's quote was verified against. A requirement
+   * whose revision is not the current one is stale: it was reviewed against older text. */
+  jdRevisionId: string;
+  /** The candidate marked this "not a requirement". It stays in the list with its reason and is
+   * left out of review, coverage and evidence gating. */
+  excluded: boolean;
+  exclusionReason: string;
+  /** Further `CvSourceExperienceEntry.id`/`CvSourceProjectEntry.id` values that evidence this
+   * requirement, beyond the single `anchorParentId`. */
+  sourceIds: string[];
+  /** `CvEvidenceFact.factId` values that evidence this requirement. Each must exist on the case. */
+  factIds: string[];
 }
+
+/** How far requirement extraction has got for one JD revision (#419 step 5). A model output cap
+ * means one pass can return only part of a long posting, so `partial` records that more batches
+ * are still owed, and nothing may claim complete coverage until the status is `complete` for the
+ * current revision. */
+export type CvRequirementCoverageStatus = 'not_run' | 'partial' | 'complete';
+
+export const CV_REQUIREMENT_COVERAGE_STATUSES: readonly CvRequirementCoverageStatus[] = ['not_run', 'partial', 'complete'];
+
+export interface CvRequirementCoverage {
+  status: CvRequirementCoverageStatus;
+  /** The JD revision this status describes. Any other current revision reads as `not_run`. */
+  revisionId: string;
+  batches: number;
+}
+
+export const EMPTY_CV_REQUIREMENT_COVERAGE: CvRequirementCoverage = { status: 'not_run', revisionId: '', batches: 0 };
 
 export type CvEvidenceOverlayState =
   | 'needs_input'
@@ -338,6 +409,9 @@ export interface CvEvidenceOverlay {
   listingStatus: CvListingStatus;
   state: CvEvidenceOverlayState;
   requirements: CvRequirementMapping[];
+  /** How much of the JD's requirement list has been extracted and confirmed. See
+   * `CvRequirementCoverage`. */
+  requirementCoverage: CvRequirementCoverage;
   facts: CvEvidenceFact[];
   wordingVariants: CvApprovedWording[];
   /** #421's case contract: how this case began. See `CvEvidenceOverlayOrigin`. */
@@ -367,6 +441,7 @@ export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
   listingStatus: 'unknown',
   state: 'needs_input',
   requirements: [],
+  requirementCoverage: EMPTY_CV_REQUIREMENT_COVERAGE,
   facts: [],
   wordingVariants: [],
   origin: 'vacancy',
@@ -389,6 +464,7 @@ export const CV_EVIDENCE_LIMITS = {
   wordingVariants: 300,
   requirements: 200,
   factIdsPerVariant: 20,
+  linksPerRequirement: 20,
 } as const;
 
 /**
@@ -408,19 +484,7 @@ export function describeCvEvidenceOverlayGaps(
     reasons.push('the reviewed source CV has changed since this draft was built');
   }
   reasons.push(...describeCvJdGaps(overlay));
-  const unreviewed = overlay.requirements.filter((requirement) => !requirement.reviewed);
-  if (unreviewed.length > 0) {
-    reasons.push(`${unreviewed.length} requirement(s) have not been reviewed`);
-  }
-  const unresolvedRequired = overlay.requirements.filter(
-    (requirement) =>
-      requirement.classification === 'required' &&
-      requirement.reviewed &&
-      requirement.evidenceClass === 'needs_verification',
-  );
-  if (unresolvedRequired.length > 0) {
-    reasons.push(`${unresolvedRequired.length} required item(s) still need verification`);
-  }
+  reasons.push(...describeCvRequirementGaps(overlay));
   const approvedVariants = overlay.wordingVariants.filter((variant) => variant.status === 'candidate_approved');
   const staleVariants = approvedVariants.filter((variant) => variant.sourceRevision !== overlay.sourceCvContentHash);
   if (staleVariants.length > 0) {
@@ -430,10 +494,477 @@ export function describeCvEvidenceOverlayGaps(
   if (ungroundedVariants.length > 0) {
     reasons.push(`${ungroundedVariants.length} approved wording variant(s) cite no supporting fact`);
   }
-  if (overlay.state === 'conflict') {
+  const conflictedFactIds = conflictedFactIdSet(overlay.facts);
+  const unusableBacking = approvedVariants.filter(
+    (variant) =>
+      variant.factIds.length > 0 &&
+      !variant.factIds.every((factId) => {
+        const fact = overlay.facts.find((candidate) => candidate.factId === factId);
+        return fact !== undefined && isCvFactUsable(fact, conflictedFactIds);
+      }),
+  );
+  if (unusableBacking.length > 0) {
+    reasons.push(`${unusableBacking.length} approved wording variant(s) rest on a fact that is not approved or is in conflict`);
+  }
+  if (conflictedFactIds.size > 0) {
+    reasons.push('your facts contradict each other: resolve or omit one of each conflicting pair');
+  } else if (overlay.state === 'conflict') {
     reasons.push('unresolved conflicting corrections remain');
   }
   return reasons;
+}
+
+/**
+ * Why the requirement list cannot back an approved CV (#419 step 5): extraction not finished or
+ * not confirmed for the current JD revision, requirements reviewed against older text, a quote that
+ * is not in the JD, an item still unreviewed, a required item still needing verification, a
+ * confirmed gap that also links a fact, and a fact link that does not resolve to an approved fact.
+ * Excluded requirements ("not a requirement", with a reason) take no part in any of it.
+ */
+export function describeCvRequirementGaps(
+  overlay: Pick<CvEvidenceOverlay, 'requirements' | 'requirementCoverage' | 'jdRevisions' | 'facts'>,
+): string[] {
+  const reasons: string[] = [];
+  const currentRevisionId = currentCvJdRevisionId(overlay);
+  const coverage = overlay.requirementCoverage;
+  if (coverage.revisionId !== currentRevisionId || coverage.status === 'not_run') {
+    reasons.push('the requirements of the current job description have not been extracted and confirmed as a full list');
+  } else if (coverage.status === 'partial') {
+    reasons.push('the requirement list is partial: more of the job description has not been read yet');
+  }
+  const active = overlay.requirements.filter((requirement) => !requirement.excluded);
+  const stale = active.filter((requirement) => requirement.jdRevisionId !== currentRevisionId);
+  if (stale.length > 0) {
+    reasons.push(`${stale.length} requirement(s) were reviewed against an older job description and need review again`);
+  }
+  const unquoted = active.filter((requirement) => requirement.quoteStart < 0);
+  if (unquoted.length > 0) {
+    reasons.push(`${unquoted.length} requirement(s) have no exact quote from the job description`);
+  }
+  const unreviewed = active.filter((requirement) => !requirement.reviewed);
+  if (unreviewed.length > 0) {
+    reasons.push(`${unreviewed.length} requirement(s) have not been reviewed`);
+  }
+  const unresolvedRequired = active.filter(
+    (requirement) =>
+      requirement.classification === 'required' && requirement.reviewed && requirement.evidenceClass === 'needs_verification',
+  );
+  if (unresolvedRequired.length > 0) {
+    reasons.push(`${unresolvedRequired.length} required item(s) still need verification`);
+  }
+  const approvedFactIds = new Set(overlay.facts.filter((fact) => fact.approval === 'approved').map((fact) => fact.factId));
+  const badLinks = active.filter((requirement) => requirement.factIds.some((factId) => !approvedFactIds.has(factId)));
+  if (badLinks.length > 0) {
+    reasons.push(`${badLinks.length} requirement(s) link to a fact that is not approved`);
+  }
+  const contradictory = active.filter((requirement) => requirement.evidenceClass === 'candidate_confirmed_gap' && requirement.factIds.length > 0);
+  if (contradictory.length > 0) {
+    reasons.push(`${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`);
+  }
+  return reasons;
+}
+
+/**
+ * Checks a requirement list a caller wants to save against the stored JD text, in the main process
+ * (#419 step 5). A requirement whose quote is new or changed must be an exact substring of the
+ * current JD, and a requirement the candidate marks reviewed again after a JD edit is re-verified
+ * against the new text; both throw rather than saving a quote that is not there. A requirement left
+ * as it was keeps the span and revision already stored, whatever the caller sent back: a caller
+ * cannot vouch for its own quote. Excluded requirements are never refused for a missing quote.
+ */
+export function verifyCvRequirementQuotes(
+  next: readonly CvRequirementMapping[],
+  previous: readonly CvRequirementMapping[],
+  jdText: string,
+  currentRevisionId: string,
+): CvRequirementMapping[] {
+  const previousById = new Map(previous.map((requirement) => [requirement.requirementId, requirement]));
+  const taken = new Set<number>();
+  return next.map((requirement) => {
+    const before = previousById.get(requirement.requirementId);
+    const quoteChanged = !before || before.jdAnchor !== requirement.jdAnchor;
+    const reReviewed = requirement.reviewed && (!before || !before.reviewed || before.jdRevisionId !== currentRevisionId);
+    if (before && !quoteChanged && !reReviewed) {
+      if (before.quoteStart >= 0) taken.add(before.quoteStart);
+      return { ...requirement, quoteStart: before.quoteStart, quoteEnd: before.quoteEnd, jdRevisionId: before.jdRevisionId };
+    }
+    const span = locateJdQuote(jdText, requirement.jdAnchor, taken);
+    if (!span) {
+      if (requirement.excluded) {
+        return {
+          ...requirement,
+          quoteStart: before?.quoteStart ?? -1,
+          quoteEnd: before?.quoteEnd ?? -1,
+          jdRevisionId: before?.jdRevisionId ?? currentRevisionId,
+        };
+      }
+      throw new Error(
+        quoteChanged
+          ? `"${requirement.jdAnchor.slice(0, 80)}" is not an exact quote from the job description, so this requirement cannot be saved`
+          : `the quote for "${requirement.text.slice(0, 80)}" is no longer in the job description: correct the quote or mark it as not a requirement`,
+      );
+    }
+    taken.add(span.start);
+    return { ...requirement, jdAnchor: requirement.jdAnchor.trim(), quoteStart: span.start, quoteEnd: span.end, jdRevisionId: currentRevisionId };
+  });
+}
+
+/** The id of the newest JD revision, or `''` before any JD text exists. */
+export function currentCvJdRevisionId(overlay: Pick<CvEvidenceOverlay, 'jdRevisions'>): string {
+  return overlay.jdRevisions.at(-1)?.revisionId ?? '';
+}
+
+/**
+ * Finds `quote` in `text` as an exact substring (#419 step 5: a model-supplied quote is never
+ * trusted until it is found). Returns the half-open span of an occurrence, preferring one whose
+ * start is not in `takenStarts` so two requirements that quote the same words land on different
+ * occurrences when the text has more than one. A quote is trimmed at its edges only; nothing inside
+ * it is normalised, so a paraphrase or a re-spaced quote does not match.
+ */
+export function locateJdQuote(
+  text: string,
+  quote: string,
+  takenStarts: ReadonlySet<number> = new Set(),
+): { start: number; end: number } | null {
+  const needle = quote.trim();
+  if (needle.length === 0) return null;
+  let first: { start: number; end: number } | null = null;
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(needle, from);
+    if (at < 0) break;
+    const span = { start: at, end: at + needle.length };
+    if (!takenStarts.has(at)) return span;
+    first ??= span;
+    from = at + 1;
+  }
+  return first;
+}
+
+function normalizeWords(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/gu, ' ');
+}
+
+/** A key two proposals for the same requirement share: the same quote, or the same wording. Used
+ * to dedupe a model's list against itself and against what is already saved. */
+export function requirementDedupeKeys(requirement: Pick<CvRequirementMapping, 'text' | 'jdAnchor'>): string[] {
+  const keys = [`text:${normalizeWords(requirement.text)}`];
+  if (requirement.jdAnchor.trim()) keys.push(`quote:${normalizeWords(requirement.jdAnchor)}`);
+  return keys;
+}
+
+// ------------------------------------------------------------------------ facts (#419 step 7)
+
+const SOLE_VS_SHARED: readonly CvFactOwnership[] = ['sole', 'shared'];
+
+function wordSet(value: string): Set<string> {
+  return new Set(
+    normalizeWords(value)
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((word) => word.length > 2),
+  );
+}
+
+/** True when two activity descriptions plainly talk about the same piece of work: identical once
+ * normalised, or sharing most of their words. Deliberately conservative, so two different things
+ * done in one role are never reported as contradicting each other. */
+function sameSubject(a: string, b: string): boolean {
+  if (normalizeWords(a) === normalizeWords(b)) return true;
+  const left = wordSet(a);
+  const right = wordSet(b);
+  if (left.size === 0 || right.size === 0) return false;
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  return shared / Math.min(left.size, right.size) >= 0.7;
+}
+
+export interface CvFactConflict {
+  factIds: [string, string];
+  reason: string;
+}
+
+/**
+ * Contradictions among facts that are still in play (proposed or approved). Two facts about the
+ * same role or project and the same time phase, describing the same work, conflict when one says
+ * `sole` and the other `shared`, or when they give different numbers. Detection never picks a
+ * winner: the candidate resolves it by rejecting or superseding one fact, and every fact in an
+ * unresolved pair is unusable until then.
+ */
+export function findCvFactConflicts(facts: readonly CvEvidenceFact[]): CvFactConflict[] {
+  const live = facts.filter((fact) => fact.approval === 'proposed' || fact.approval === 'approved');
+  const conflicts: CvFactConflict[] = [];
+  for (let i = 0; i < live.length; i += 1) {
+    for (let j = i + 1; j < live.length; j += 1) {
+      const a = live[i]!;
+      const b = live[j]!;
+      if (a.parentId !== b.parentId) continue;
+      if (a.verification === 'candidate_confirmed_gap' || b.verification === 'candidate_confirmed_gap') continue;
+      if (normalizeWords(a.timePhase) !== normalizeWords(b.timePhase)) continue;
+      if (!sameSubject(a.activity, b.activity)) continue;
+      if (SOLE_VS_SHARED.includes(a.ownership) && SOLE_VS_SHARED.includes(b.ownership) && a.ownership !== b.ownership) {
+        conflicts.push({ factIds: [a.factId, b.factId], reason: 'one says you did this alone and the other says it was shared work' });
+        continue;
+      }
+      if (a.metricValue.trim() && b.metricValue.trim() && normalizeWords(a.metricValue) !== normalizeWords(b.metricValue)) {
+        conflicts.push({ factIds: [a.factId, b.factId], reason: 'the two facts give different numbers for the same work' });
+      }
+    }
+  }
+  return conflicts;
+}
+
+function conflictedFactIdSet(facts: readonly CvEvidenceFact[]): Set<string> {
+  return new Set(findCvFactConflicts(facts).flatMap((conflict) => conflict.factIds));
+}
+
+/** A fact may back wording only while the candidate has approved it and no unresolved
+ * contradiction involves it. */
+export function isCvFactUsable(fact: CvEvidenceFact, conflictedFactIds: ReadonlySet<string>): boolean {
+  return fact.approval === 'approved' && !conflictedFactIds.has(fact.factId);
+}
+
+/** The parts of a fact a candidate's approval was about. Changing any of them makes the old
+ * approval, and every wording built on it, no longer apply. */
+function factSignature(fact: CvEvidenceFact): string {
+  return JSON.stringify([
+    fact.parentId,
+    fact.parentType,
+    fact.client,
+    fact.activity,
+    fact.mechanism,
+    fact.result,
+    fact.ownership,
+    fact.timePhase,
+    fact.metricValue,
+    fact.metricUnit,
+    fact.metricBasis,
+    fact.verification,
+  ]);
+}
+
+/**
+ * Applies the supersession flow for one fact: the old fact becomes `superseded` (kept, never
+ * deleted), a corrected copy is added with `supersedes` pointing back at it and starts `proposed`
+ * so the candidate reviews the correction itself, and every wording variant that cited the old
+ * fact is revoked. Returns the new lists; the caller persists them.
+ */
+export function supersedeCvFact(
+  overlay: Pick<CvEvidenceOverlay, 'facts' | 'wordingVariants'>,
+  factId: string,
+  corrections: Partial<
+    Pick<CvEvidenceFact, 'activity' | 'mechanism' | 'result' | 'ownership' | 'timePhase' | 'client' | 'metricValue' | 'metricUnit' | 'metricBasis'>
+  >,
+  now: string,
+): { facts: CvEvidenceFact[]; wordingVariants: CvApprovedWording[]; replacement: CvEvidenceFact } {
+  const old = overlay.facts.find((fact) => fact.factId === factId);
+  if (!old) throw new Error('that fact does not exist on this case');
+  if (old.approval === 'superseded' || old.approval === 'rejected') {
+    throw new Error('that fact was already replaced or rejected');
+  }
+  const replacement: CvEvidenceFact = {
+    ...old,
+    ...corrections,
+    factId: crypto.randomUUID(),
+    supersedes: old.factId,
+    createdAt: now,
+    approval: 'proposed',
+  };
+  const facts = overlay.facts.map((fact) => (fact.factId === factId ? { ...fact, approval: 'superseded' as const } : fact));
+  return {
+    facts: [...facts, replacement],
+    wordingVariants: revokeVariantsCiting(overlay.wordingVariants, new Set([factId])),
+    replacement,
+  };
+}
+
+/** Marks every approved variant that cites one of `factIds` as superseded. Drafts are left alone:
+ * they were never approved, and `reconcileCvEvidence` stops a draft built on a dead fact from ever
+ * being approved. */
+export function revokeVariantsCiting(variants: readonly CvApprovedWording[], factIds: ReadonlySet<string>): CvApprovedWording[] {
+  return variants.map((variant) =>
+    variant.status === 'candidate_approved' && variant.factIds.some((factId) => factIds.has(factId))
+      ? { ...variant, status: 'superseded' as const }
+      : variant,
+  );
+}
+
+/**
+ * Edits one wording variant the way #419 step 7 requires: the edit never changes an approved text
+ * in place. The old variant becomes `superseded` and stays in the list, and the new text is a new
+ * variant, still a `draft` until the candidate approves exactly what is now displayed.
+ */
+export function editCvWordingVariant(
+  variants: readonly CvApprovedWording[],
+  variantId: string,
+  text: string,
+): { wordingVariants: CvApprovedWording[]; replacement: CvApprovedWording } {
+  const old = variants.find((variant) => variant.variantId === variantId);
+  if (!old) throw new Error('that wording does not exist on this case');
+  if (old.status === 'rejected' || old.status === 'superseded') throw new Error('that wording was already rejected or replaced');
+  const replacement: CvApprovedWording = {
+    ...old,
+    variantId: crypto.randomUUID(),
+    text: text.trim(),
+    status: 'draft',
+    approvedAt: '',
+    rejectedAt: '',
+    supersedes: old.variantId,
+  };
+  return {
+    wordingVariants: [...variants.map((variant) => (variant.variantId === variantId ? { ...variant, status: 'superseded' as const } : variant)), replacement],
+    replacement,
+  };
+}
+
+/**
+ * Fills the fields a row stored before #419 step 2 does not have, without inventing review state.
+ * A legacy requirement keeps its text and review flag, gets its quote located in the current JD
+ * (or `-1` when it is not there), and is treated as read against the current revision, as it was
+ * the only one then. A legacy fact becomes `approved` only when the candidate already approved
+ * wording built on it, or when it records the candidate's own "not my work"; every other legacy
+ * fact is `proposed`, so nothing the candidate never reviewed gains approval from the upgrade.
+ */
+export function upgradeStoredRequirements(
+  rows: readonly Partial<CvRequirementMapping>[],
+  jdText: string,
+  currentRevisionId: string,
+): CvRequirementMapping[] {
+  return rows.map((row) => {
+    const jdAnchor = row.jdAnchor ?? '';
+    const span = row.quoteStart === undefined ? locateJdQuote(jdText, jdAnchor) : null;
+    return {
+      requirementId: row.requirementId ?? '',
+      text: row.text ?? '',
+      jdAnchor,
+      classification: row.classification ?? 'unclear',
+      evidenceClass: row.evidenceClass ?? 'needs_verification',
+      anchorParentId: row.anchorParentId ?? '',
+      candidateAdded: row.candidateAdded ?? false,
+      reviewed: row.reviewed ?? false,
+      quoteStart: row.quoteStart ?? span?.start ?? -1,
+      quoteEnd: row.quoteEnd ?? span?.end ?? -1,
+      jdRevisionId: row.jdRevisionId ?? currentRevisionId,
+      excluded: row.excluded ?? false,
+      exclusionReason: row.exclusionReason ?? '',
+      sourceIds: row.sourceIds ?? [],
+      factIds: row.factIds ?? [],
+    };
+  });
+}
+
+export function upgradeStoredFacts(
+  rows: readonly (Omit<CvEvidenceFact, 'approval' | 'timePhase'> & Partial<Pick<CvEvidenceFact, 'approval' | 'timePhase'>>)[],
+  variants: readonly Pick<CvApprovedWording, 'status' | 'factIds'>[],
+): CvEvidenceFact[] {
+  const backing = new Set(variants.filter((variant) => variant.status === 'candidate_approved').flatMap((variant) => variant.factIds));
+  return rows.map((row) => ({
+    ...row,
+    timePhase: row.timePhase ?? '',
+    approval: row.approval ?? (row.verification === 'candidate_confirmed_gap' || backing.has(row.factId) ? 'approved' : 'proposed'),
+  }));
+}
+
+export function upgradeStoredVariants(
+  rows: readonly (Omit<CvApprovedWording, 'supersedes' | 'rejectedAt'> & Partial<Pick<CvApprovedWording, 'supersedes' | 'rejectedAt'>>)[],
+): CvApprovedWording[] {
+  return rows.map((row) => ({ ...row, supersedes: row.supersedes ?? '', rejectedAt: row.rejectedAt ?? '' }));
+}
+
+const NUMBER_PATTERN = /\d[\d.,]*/gu;
+
+/** Numbers in `text` that none of the cited facts' own words contain. A figure in a wording must
+ * come from a fact whose `metricBasis` the candidate gave, never be introduced by the wording. */
+export function unbackedNumbers(text: string, facts: readonly CvEvidenceFact[]): string[] {
+  const haystack = facts
+    .flatMap((fact) => [fact.activity, fact.mechanism, fact.result, fact.metricValue, fact.metricUnit])
+    .join(' ');
+  const backed = new Set((haystack.match(NUMBER_PATTERN) ?? []).map((value) => value.replace(/[.,]+$/u, '')));
+  return (text.match(NUMBER_PATTERN) ?? []).map((value) => value.replace(/[.,]+$/u, '')).filter((value) => !backed.has(value));
+}
+
+/**
+ * The invariants the evidence lists must keep across any write, enforced in the main process so a
+ * renderer bug (or a model-influenced renderer) cannot bypass them:
+ *  - a rejected or superseded fact or wording never comes back to life;
+ *  - changing an approved fact's content drops it to `proposed`, and wording built on it is revoked;
+ *  - a variant can only be newly approved when every fact it cites exists, is approved and is not
+ *    in a contradiction, and its numbers come from those facts;
+ *  - an approved variant's text is immutable (an edit is a new variant);
+ *  - approval timestamps and the source revision are stamped here, never taken from the caller.
+ * Throws on a forbidden transition. Wording approved earlier whose facts were since revoked is
+ * revoked silently, since that is a consequence rather than a mistake.
+ */
+export function reconcileCvEvidence(
+  previous: Pick<CvEvidenceOverlay, 'facts' | 'wordingVariants'>,
+  next: Pick<CvEvidenceOverlay, 'facts' | 'wordingVariants'>,
+  context: { sourceCvContentHash: string; now: string },
+): { facts: CvEvidenceFact[]; wordingVariants: CvApprovedWording[] } {
+  const previousFacts = new Map(previous.facts.map((fact) => [fact.factId, fact]));
+  const previousVariants = new Map(previous.wordingVariants.map((variant) => [variant.variantId, variant]));
+
+  const facts = next.facts.map((fact) => {
+    const before = previousFacts.get(fact.factId);
+    if (!before) return fact;
+    if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval) {
+      throw new Error('a rejected or replaced fact cannot be reused: add a corrected fact instead');
+    }
+    if (before.approval === 'approved' && fact.approval === 'approved' && factSignature(before) !== factSignature(fact)) {
+      return { ...fact, approval: 'proposed' as const };
+    }
+    return fact;
+  });
+  // Facts that left the approved state this write, by any route (edit, rejection, supersession).
+  const droppedFactIds = new Set(
+    facts.filter((fact) => previousFacts.get(fact.factId)?.approval === 'approved' && fact.approval !== 'approved').map((fact) => fact.factId),
+  );
+  const conflicted = conflictedFactIdSet(facts);
+  const factById = new Map(facts.map((fact) => [fact.factId, fact]));
+
+  const wordingVariants = next.wordingVariants.map((variant) => {
+    const before = previousVariants.get(variant.variantId);
+    if (before && (before.status === 'rejected' || before.status === 'superseded') && variant.status !== before.status) {
+      throw new Error('a rejected or replaced wording cannot be reused: edit it into a new variant instead');
+    }
+    let status = variant.status;
+    let approvedAt = variant.approvedAt;
+    let rejectedAt = variant.rejectedAt;
+    let sourceRevision = variant.sourceRevision;
+    if (status === 'candidate_approved') {
+      if (before?.status === 'candidate_approved') {
+        if (before.text !== variant.text || JSON.stringify(before.factIds) !== JSON.stringify(variant.factIds)) {
+          throw new Error('an approved wording cannot be edited in place: editing creates a new variant');
+        }
+        // Keep the original stamps; revoke if a fact it stands on was dropped or contradicts.
+        approvedAt = before.approvedAt;
+        sourceRevision = before.sourceRevision;
+        const backingBroken = variant.factIds.some((factId) => {
+          const fact = factById.get(factId);
+          return !fact || droppedFactIds.has(factId) || !isCvFactUsable(fact, conflicted);
+        });
+        if (backingBroken) status = 'superseded';
+      } else {
+        const cited = variant.factIds.map((factId) => factById.get(factId));
+        if (variant.factIds.length === 0 || cited.some((fact) => !fact)) {
+          throw new Error('this wording cites a fact that does not exist on this case, so it cannot be approved');
+        }
+        const usableFacts = cited as CvEvidenceFact[];
+        if (usableFacts.some((fact) => !isCvFactUsable(fact, conflicted))) {
+          throw new Error('this wording cites a fact that is not approved or is in a contradiction, so it cannot be approved');
+        }
+        const numbers = unbackedNumbers(variant.text, usableFacts);
+        if (numbers.length > 0) {
+          throw new Error(`this wording contains a number (${numbers.join(', ')}) that none of its facts state`);
+        }
+        approvedAt = context.now;
+        sourceRevision = context.sourceCvContentHash;
+      }
+    }
+    if (status === 'rejected' && !rejectedAt) rejectedAt = context.now;
+    if (status !== 'candidate_approved') approvedAt = status === 'superseded' ? approvedAt : '';
+    return { ...variant, status, approvedAt, rejectedAt, sourceRevision };
+  });
+
+  return { facts, wordingVariants };
 }
 
 /**
@@ -481,40 +1012,35 @@ export function deriveWordingFromFact(fact: CvEvidenceFact): string {
 }
 
 /**
- * Proposes one approved-wording variant per self-reported fact that has none yet (#419, step 4).
- * Only `self_reported` facts propose wording: `candidate_confirmed_gap` is the candidate saying
- * they did *not* do the thing, and `corroborated` facts (independently verified, not from a
- * clarification answer) are not yet wired to this path. A fact that already backs an existing
- * `wordingVariant` (by `factIds`) is never proposed a second time, so re-running this after an
- * earlier approval does not offer to re-approve the same ground twice.
+ * Proposes one wording variant per approved, self-reported fact that has none yet (#419, steps 4
+ * and 7). Only `self_reported` facts propose wording: `candidate_confirmed_gap` is the candidate
+ * saying they did *not* do the thing, and `corroborated` facts are not yet wired to this path. A
+ * fact the candidate has not approved, or that sits in a contradiction, proposes nothing. A fact
+ * that already backs any existing variant, including a rejected or superseded one, is never
+ * proposed a second time, so a rejection is not undone by re-running this.
  *
- * Each proposal is emitted already `status: 'candidate_approved'`, scoped to
- * `currentSourceCvContentHash`: the caller (the composition/approval review screen) shows the
- * candidate exactly this text, composed into the full CV preview, and only persists it at the
- * moment the candidate approves *that* preview -- so "propose" and "approve" are the same action
- * here by construction, not two separate steps that could drift apart. See
- * `ComposedCvReview.tsx`'s own doc comment for how the preview and the persisted approval stay the
- * same text.
+ * Every proposal is a `draft`. It reaches a CV only after the candidate approves that exact text,
+ * one variant at a time; nothing here, and nothing in the approve-whole-CV path, approves wording.
  */
-export function proposeWordingFromFacts(
-  overlay: CvEvidenceOverlay,
-  currentSourceCvContentHash: string,
-): CvApprovedWording[] {
+export function proposeWordingFromFacts(overlay: Pick<CvEvidenceOverlay, 'facts' | 'wordingVariants'>): CvApprovedWording[] {
   const alreadyGrounded = new Set(overlay.wordingVariants.flatMap((variant) => variant.factIds));
-  const now = new Date().toISOString();
+  const conflicted = conflictedFactIdSet(overlay.facts);
   return overlay.facts
-    .filter((fact) => fact.verification === 'self_reported' && !alreadyGrounded.has(fact.factId))
+    .filter((fact) => fact.verification === 'self_reported' && isCvFactUsable(fact, conflicted) && !alreadyGrounded.has(fact.factId))
     .map((fact) => ({
       variantId: crypto.randomUUID(),
-      targetField: fact.parentType === 'project' ? 'project_description' : 'experience_bullet',
+      targetField: fact.parentType === 'project' ? ('project_description' as const) : ('experience_bullet' as const),
       parentId: fact.parentId,
       text: deriveWordingFromFact(fact),
       factIds: [fact.factId],
-      status: 'candidate_approved',
-      approvedAt: now,
-      sourceRevision: currentSourceCvContentHash,
+      status: 'draft' as const,
+      approvedAt: '',
+      sourceRevision: '',
+      supersedes: '',
+      rejectedAt: '',
     }));
 }
+
 
 /**
  * A stable identity string for one vacancy lead, so per-vacancy state (#419's evidence overlay)
@@ -606,7 +1132,14 @@ export const CV_REQUIREMENT_MAPPING_JSON_SHAPE =
   '{"requirements": [{"text": string, "jdAnchor": string, ' +
   '"classification": "required" | "preferred" | "unclear", ' +
   '"evidenceClass": "direct" | "transferable" | "unsupported" | "needs_verification", ' +
-  '"anchorParentId": string}]}';
+  '"anchorParentId": string}], "hasMore": boolean}';
+
+/** How many requirements one extraction batch may return. A response that fills the batch is read
+ * as possibly cut off, however `hasMore` is set, and another batch is requested. */
+export const CV_REQUIREMENT_BATCH_SIZE = 25;
+/** Upper bound on follow-up batches for one posting, so a model that always says `hasMore` cannot
+ * loop forever. Reaching it leaves coverage `partial`. */
+export const CV_REQUIREMENT_MAX_BATCHES = 8;
 
 /**
  * The state a fresh read/refresh should carry, given whatever change was detected. #419: "a

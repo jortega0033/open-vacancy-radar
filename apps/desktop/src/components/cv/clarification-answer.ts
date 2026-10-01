@@ -22,6 +22,8 @@ export type ClarificationAnswer =
       activity: string;
       mechanism: string;
       result: string;
+      /** When in the role or project this happened, in the candidate's words. Optional. */
+      timePhase?: string;
       metricValue?: string;
       metricUnit?: string;
       metricBasis?: string;
@@ -41,6 +43,22 @@ export interface ClarificationResult {
  * stays the honest default until a later pass asks it explicitly, the same "never invent" rule
  * every other unset field in this app follows. */
 const UNASKED_OWNERSHIP: CvFactOwnership = 'unknown';
+
+/**
+ * Why a stated basis cannot ground a number, or `null` when it can (#419 step 6: "require an
+ * explicit basis for any number; do not infer business impact from code/test counts or a deployed
+ * URL"). A number is only ever what the candidate says it is and where it came from. A basis that
+ * says the number was worked out from test counts, commit or line counts, or a deployed address is
+ * the inference this rule forbids, so it is refused rather than stored.
+ */
+export function metricBasisProblem(basis: string): string | null {
+  const text = basis.trim();
+  if (text.length === 0) return 'A number needs a stated source before it can be saved.';
+  if (/\b(inferred|assumed|derived from|counted from|test count|number of tests|tests? passing|commit count|commits?|lines of code|loc|deployed|live site|url|website is live)\b/iu.test(text)) {
+    return 'A business result cannot be worked out from code, test counts or a deployed address. Give where you got the figure, or leave the number out.';
+  }
+  return null;
+}
 
 export function applyClarificationAnswer(
   requirement: CvRequirementMapping,
@@ -95,15 +113,30 @@ export function applyClarificationAnswer(
       metricBasis: '',
       supersedes: '',
       createdAt: now,
+      // The candidate's own statement that they did not do this. It claims nothing, so there is
+      // nothing for them to review field by field.
+      approval: 'approved',
+      timePhase: '',
     };
     return {
-      requirement: { ...requirement, evidenceClass: 'unsupported', anchorParentId: '', reviewed: true },
+      requirement: {
+        ...requirement,
+        evidenceClass: 'candidate_confirmed_gap',
+        anchorParentId: '',
+        sourceIds: [],
+        factIds: [],
+        reviewed: true,
+      },
       fact,
     };
   }
 
   // answer.kind === 'answered'
   const hasMetric = (answer.metricValue ?? '').trim().length > 0;
+  if (hasMetric) {
+    const problem = metricBasisProblem(answer.metricBasis ?? '');
+    if (problem) throw new Error(problem);
+  }
   const fact: CvEvidenceFact = {
     factId: crypto.randomUUID(),
     parentId: answer.parentId,
@@ -123,11 +156,16 @@ export function applyClarificationAnswer(
     metricBasis: hasMetric ? (answer.metricBasis ?? '').trim() : '',
     supersedes: '',
     createdAt: now,
+    // The candidate answered the question, which is not yet approving the distilled fact. That
+    // happens in the fact review, where every field is shown.
+    approval: 'proposed',
+    timePhase: (answer.timePhase ?? '').trim(),
   };
   return {
     requirement: {
       ...requirement,
       anchorParentId: answer.parentId,
+      factIds: [...requirement.factIds, fact.factId],
       // A direct, self-reported answer to "what did you do" is direct evidence by definition --
       // the candidate is not describing adjacent work, they are answering the requirement itself.
       evidenceClass: 'direct',
