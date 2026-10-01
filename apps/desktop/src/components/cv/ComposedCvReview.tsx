@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import { composeApprovedTailoredResume, type ComposedTailoredResume } from '../../../electron/resume-source.js';
-import { proposeWordingFromFacts } from '../../../electron/workspace/cv-evidence-schema.js';
 import type { CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
 import { sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
@@ -20,17 +19,12 @@ export interface ComposedCvReviewProps {
  * candidate-approved wording only -- never from `TailorCv`'s free-form advisory draft, which this
  * component neither reads nor affects.
  *
- * "Propose" and "approve" are the same action here, by design (#419: "require explicit approval of
- * the *exact text*"). `handlePreview` computes `proposeWordingFromFacts` -- the sentence each
- * self-reported clarification fact composes into, in the candidate's own words, never AI-generated
- * -- and folds those proposals into the very resume shown in the preview below, purely so the
- * candidate sees it before deciding to approve. `handleApprove` itself sends none of that computed
- * text: `workspace.approveCvEvidenceOverlay` (#421's case contract) re-derives the same proposals
- * from the overlay's own facts on the main-process side and re-verifies every gap before writing
- * anything, so a compromised or buggy renderer cannot approve wording it never actually derived
- * from evidence. The candidate never approves text they have not seen rendered in the actual CV --
- * that guarantee now holds because the server computes the same text the preview showed, not
- * because the renderer's computation is trusted.
+ * This component never approves wording (#419 step 7: the candidate approves the exact displayed
+ * text of each variant, one at a time, in the facts and wording review). The preview composes only
+ * variants that are already approved and whose facts are still approved; a draft or rejected
+ * variant adds nothing to it. `handleApprove` sends only the case id and revision:
+ * `workspace.approveCvEvidenceOverlay` (#421's case contract) composes the same approved variants on
+ * the main-process side and re-verifies every gap before writing anything.
  */
 export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedCvReviewProps) {
   const [overlay, setOverlay] = useState<CvEvidenceOverlayRecord | null>(null);
@@ -79,15 +73,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
       }
       setOverlay(fresh);
       const currentHash = await sha256HexOfSource(sourceCv);
-      const proposed = proposeWordingFromFacts(fresh, currentHash);
-      setComposed(
-        composeApprovedTailoredResume(
-          sourceCv,
-          { ...fresh, wordingVariants: [...fresh.wordingVariants, ...proposed] },
-          currentHash,
-          profile?.skills ?? [],
-        ),
-      );
+      setComposed(composeApprovedTailoredResume(sourceCv, fresh, currentHash, profile?.skills ?? []));
     } catch (err) {
       setError(describeError(err, 'could not build the composed CV'));
     }
@@ -143,8 +129,8 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Approved CV</div>
         <p className="text-sm text-base-content/60">
-          Built only from your unchanged reviewed CV and wording you explicitly approved above --
-          never from the tailored draft, which stays a separate, advisory read.
+          Built only from your unchanged reviewed CV and wording you approved one by one in the facts
+          and wording review. The tailored draft stays a separate, advisory read.
         </p>
 
         {!overlay && (

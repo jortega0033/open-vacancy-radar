@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_CV_SOURCE, stableCvSourceJson } from '../electron/workspace/cv-source-schema.js';
-import { proposeWordingFromFacts } from '../electron/workspace/cv-evidence-schema.js';
 import { ComposedCvReview } from '../src/components/cv/ComposedCvReview.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
 import type { CvEvidenceFact, CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvSourceDocument } from '../src/window.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
+import { FIXTURE_REVISION_ID, makeFact, makeRequirement, makeRevision, makeVariant } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
 
 const VACANCY: VacancyLead = {
@@ -32,20 +32,18 @@ function installOverlayBridge(overlay: CvEvidenceOverlayRecord) {
   return installWorkspaceBridge({
     getCvEvidenceOverlay: vi.fn().mockImplementation(async () => current),
     updateCvEvidenceOverlay: vi.fn().mockImplementation(async (_id: string, patch: CvEvidenceOverlayPatch) => {
-      current = { ...current, ...patch };
+      current = { ...current, ...patch } as CvEvidenceOverlayRecord;
       return current;
     }),
     // Mirrors `approveCvEvidenceOverlay`'s real server-side behavior (#421) closely enough for a
-    // component test: re-derives wording from facts itself rather than trusting anything the
-    // renderer sent, and rejects a stale `expectedCaseRevision` the same way the real service does.
+    // component test: approves no wording itself and rejects a stale `expectedCaseRevision` the
+    // same way the real service does.
     approveCvEvidenceOverlay: vi.fn().mockImplementation(async (_id: string, expectedCaseRevision: string) => {
       if (expectedCaseRevision !== current.caseRevision) {
         throw new Error(`case has changed since it was last read (current revision: ${current.caseRevision})`);
       }
-      const proposed = proposeWordingFromFacts(current, current.sourceCvContentHash);
       current = {
         ...current,
-        wordingVariants: [...current.wordingVariants, ...proposed],
         state: 'candidate_approved',
         caseRevision: String(Number(current.caseRevision) + 1),
       };
@@ -67,10 +65,11 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     jdIncompleteReasons: [],
     jdWarning: '',
     jdConfirmedComplete: false,
-    jdRevisions: [],
+    jdRevisions: [makeRevision({ text: FULL_JD })],
     listingStatus: 'unknown',
     state: 'draft',
     requirements: [],
+    requirementCoverage: { status: 'complete', revisionId: FIXTURE_REVISION_ID, batches: 1 },
     facts: [],
     wordingVariants: [],
     origin: 'vacancy',
@@ -91,26 +90,16 @@ async function hashOf(source: CvSourceDocument): Promise<string> {
 }
 
 function fact(partial: Partial<CvEvidenceFact> = {}): CvEvidenceFact {
-  return {
-    factId: 'fact-1',
-    parentId: 'experience-1',
-    parentType: 'experience',
-    client: '',
+  return makeFact({
     activity: 'Designed the GraphQL schema',
     mechanism: 'Apollo Server, schema-first',
     result: 'cut client-side overfetching',
     ownership: 'unknown',
-    sourceKind: 'candidate_testimony',
-    sourceReference: '',
-    verification: 'self_reported',
-    metricValue: '',
-    metricUnit: '',
-    metricBasis: '',
-    supersedes: '',
-    createdAt: '2026-09-30T00:00:00.000Z',
     ...partial,
-  };
+  });
 }
+
+const FACT_WORDING = 'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching';
 
 describe('ComposedCvReview (#419, step 5-6)', () => {
   it('renders nothing without a saved CV or a selected vacancy', () => {
@@ -163,9 +152,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     installOverlayBridge(
       baseOverlay({
         sourceCvContentHash: hash,
-        requirements: [
-          { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: true },
-        ],
+        requirements: [makeRequirement({ evidenceClass: 'needs_verification', anchorParentId: '' })],
       }),
     );
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
@@ -183,41 +170,57 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     expect(screen.getByRole('button', { name: /preview approved cv/i })).toBeDisabled();
   });
 
-  it('folds a self-reported fact\'s derived wording into the preview, and approving persists exactly that (#419, step 4)', async () => {
+  it('shows only wording the candidate approved: a fact alone, or a draft of it, adds nothing (#419, step 7)', async () => {
     const hash = await hashOf(SOURCE);
-    const workspace = installOverlayBridge(baseOverlay({ sourceCvContentHash: hash, facts: [fact()] }));
+    const draft = makeVariant({
+      targetField: 'experience_bullet',
+      parentId: 'experience-1',
+      text: FACT_WORDING,
+      status: 'draft',
+      approvedAt: '',
+      sourceRevision: '',
+    });
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash, facts: [fact()], wordingVariants: [draft] }));
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
 
     const preview = await screen.findByLabelText('Composed CV preview');
-    // The fact's own words, composed -- never an invented sentence.
     expect(preview).toHaveTextContent('Built things.');
-    expect(preview).toHaveTextContent(/Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching/);
+    expect(preview).not.toHaveTextContent(/Designed the GraphQL schema/);
+  });
+
+  it('shows approved wording in the preview, and approving sends only the id and revision (#419, step 7)', async () => {
+    const hash = await hashOf(SOURCE);
+    const approvedVariant = makeVariant({
+      targetField: 'experience_bullet',
+      parentId: 'experience-1',
+      text: FACT_WORDING,
+      sourceRevision: hash,
+    });
+    const workspace = installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, facts: [fact()], wordingVariants: [approvedVariant] }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
+
+    const preview = await screen.findByLabelText('Composed CV preview');
+    expect(preview).toHaveTextContent('Built things.');
+    expect(preview).toHaveTextContent(FACT_WORDING);
 
     fireEvent.click(screen.getByRole('button', { name: /^approve cv$/i }));
     await screen.findByText(/^approved\. this is the version ready for export\.$/i);
 
-    // The approve call sends only the overlay id and the revision last read -- never the wording
-    // or resume text the preview computed (#421: the server re-derives it itself).
+    // The approve call sends only the overlay id and the revision last read (#421).
     expect(workspace.approveCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', '1');
-    const approved = await vi.mocked(workspace.approveCvEvidenceOverlay).mock.results[0]?.value;
-    expect(approved.wordingVariants).toHaveLength(1);
-    expect(approved.wordingVariants[0]).toMatchObject({
-      status: 'candidate_approved',
-      factIds: ['fact-1'],
-      targetField: 'experience_bullet',
-    });
-    expect(approved.state).toBe('candidate_approved');
   });
 
-  it('re-fetches the overlay fresh on every preview, so a sibling panel\'s edits are never shown stale', async () => {
+  it('re-fetches the overlay fresh on every preview, so a sibling panel edits are never shown stale', async () => {
     const hash = await hashOf(SOURCE);
     let current = baseOverlay({
       sourceCvContentHash: hash,
-      requirements: [
-        { requirementId: 'r-1', text: 'React', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '', candidateAdded: false, reviewed: false },
-      ],
+      requirements: [makeRequirement({ evidenceClass: 'needs_verification', anchorParentId: '', reviewed: false })],
     });
     const getCvEvidenceOverlay = vi.fn().mockImplementation(async () => current);
     installWorkspaceBridge({

@@ -4,6 +4,7 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { describeCvSourceGaps } from '../../../electron/workspace/cv-source-schema.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { ComposedCvReview } from './ComposedCvReview.js';
+import { EvidenceReview } from './EvidenceReview.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
@@ -52,6 +53,9 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
   // Bumped when the saved JD changes, so panels that cached the case reload it (their requirement
   // reviews are cleared server-side when the text changes).
   const [jdVersion, setJdVersion] = useState(0);
+  /** Bumped when requirement or proposal edits may have changed the case's facts, so the facts
+   * panel reloads them. */
+  const [evidenceVersion, setEvidenceVersion] = useState(0);
   const vacancy = useMemo<VacancyLead | null>(() => {
     if (!selectedVacancy) return null;
     if (pasted && pasted.key === caseKeyFor(selectedVacancy)) {
@@ -278,10 +282,18 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
           vacancy={vacancy}
           sourceCv={selectedSourceCv}
           provider={provider}
+          onOverlayChanged={() => setEvidenceVersion((value) => value + 1)}
           {...(effectiveModel ? { model: effectiveModel } : {})}
         />
         <TailoringProposalsPanel
           key={`proposals-${jdVersion}`}
+          cvId={selectedLibraryCv?.id ?? null}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          onAccepted={() => setEvidenceVersion((value) => value + 1)}
+        />
+        <EvidenceReview
+          key={`evidence-${jdVersion}-${evidenceVersion}`}
           cvId={selectedLibraryCv?.id ?? null}
           vacancy={vacancy}
           sourceCv={selectedSourceCv}
