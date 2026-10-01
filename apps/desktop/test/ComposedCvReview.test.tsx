@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_CV_SOURCE, stableCvSourceJson } from '../electron/workspace/cv-source-schema.js';
+import { proposeWordingFromFacts } from '../electron/workspace/cv-evidence-schema.js';
 import { ComposedCvReview } from '../src/components/cv/ComposedCvReview.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
 import type { CvEvidenceFact, CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvSourceDocument } from '../src/window.js';
@@ -33,6 +34,22 @@ function installOverlayBridge(overlay: CvEvidenceOverlayRecord) {
       current = { ...current, ...patch };
       return current;
     }),
+    // Mirrors `approveCvEvidenceOverlay`'s real server-side behavior (#421) closely enough for a
+    // component test: re-derives wording from facts itself rather than trusting anything the
+    // renderer sent, and rejects a stale `expectedCaseRevision` the same way the real service does.
+    approveCvEvidenceOverlay: vi.fn().mockImplementation(async (_id: string, expectedCaseRevision: string) => {
+      if (expectedCaseRevision !== current.caseRevision) {
+        throw new Error(`case has changed since it was last read (current revision: ${current.caseRevision})`);
+      }
+      const proposed = proposeWordingFromFacts(current, current.sourceCvContentHash);
+      current = {
+        ...current,
+        wordingVariants: [...current.wordingVariants, ...proposed],
+        state: 'candidate_approved',
+        caseRevision: String(Number(current.caseRevision) + 1),
+      };
+      return current;
+    }),
     exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: true, path: 'C:\\fake\\approved-cv.pdf' }),
   });
 }
@@ -46,11 +63,15 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     jdSnapshot: '',
     jdSnapshotHash: 'b'.repeat(64),
     jdComplete: true,
+    jdRevisions: [],
     listingStatus: 'unknown',
     state: 'draft',
     requirements: [],
     facts: [],
     wordingVariants: [],
+    origin: 'vacancy',
+    caseRevision: '1',
+    approvedResumeSnapshot: null,
     capturedAt: '2026-09-30T00:00:00.000Z',
     updatedAt: '2026-09-30T00:00:00.000Z',
     ...partial,
@@ -173,14 +194,17 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^approve cv$/i }));
     await screen.findByText(/^approved\. this is the version ready for export\.$/i);
 
-    const lastPatch = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1];
-    expect(lastPatch?.wordingVariants).toHaveLength(1);
-    expect(lastPatch?.wordingVariants?.[0]).toMatchObject({
+    // The approve call sends only the overlay id and the revision last read -- never the wording
+    // or resume text the preview computed (#421: the server re-derives it itself).
+    expect(workspace.approveCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', '1');
+    const approved = await vi.mocked(workspace.approveCvEvidenceOverlay).mock.results[0]?.value;
+    expect(approved.wordingVariants).toHaveLength(1);
+    expect(approved.wordingVariants[0]).toMatchObject({
       status: 'candidate_approved',
       factIds: ['fact-1'],
       targetField: 'experience_bullet',
     });
-    expect(lastPatch?.state).toBe('candidate_approved');
+    expect(approved.state).toBe('candidate_approved');
   });
 
   it('re-fetches the overlay fresh on every preview, so a sibling panel\'s edits are never shown stale', async () => {

@@ -411,11 +411,36 @@ const workspaceApi: WorkspaceBridge = {
   updateCvEvidenceOverlay(id, patch) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:update', { id, patch });
   },
+  approveCvEvidenceOverlay(id, expectedCaseRevision) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:approve', { id, expectedCaseRevision });
+  },
   deleteCvEvidenceOverlay(id) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:delete', { id });
   },
   exportCvEvidenceOverlay(overlayId, format) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:export', { overlayId, format });
+  },
+
+  listMcpClientGrants() {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:list');
+  },
+  createMcpClientGrant(input) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:create', input);
+  },
+  revokeMcpClientGrant(id) {
+    return ipcRenderer.invoke('workspace:mcp-client-grants:revoke', { id });
+  },
+  getMcpServerStatus() {
+    return ipcRenderer.invoke('workspace:mcp-server:status');
+  },
+  listCvTailoringProposals(caseId) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:list', { caseId });
+  },
+  acceptCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:accept', { id });
+  },
+  rejectCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:reject', { id });
   },
 
   listLetters() {

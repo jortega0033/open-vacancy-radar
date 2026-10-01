@@ -540,6 +540,73 @@ makes no network calls of its own, and `img-src` allows same-origin images plus 
 specifically (not a broader `img-src *`) so that in-app images such as the application-review
 screenshot can render.
 
+## Local MCP endpoint (#421)
+
+Electron main hosts a second local HTTP listener, independent of the daemon above: an opt-in MCP
+(Model Context Protocol) endpoint a local AI client (Claude Desktop, a VS Code extension, an MCP
+Inspector) can connect to and help tailor a CV against a vacancy, under a scope the candidate
+explicitly grants. This is the first inbound listener main has ever hosted directly, and the first
+local credential this codebase issues to an outside *client* rather than to itself.
+
+**Off by default**, gated by `appSettings.mcpEndpointEnabled` (`electron/mcp-server.ts`,
+`main.ts`'s `syncMcpServer`). With it off, nothing listens at all -- there is no code path that
+starts the server without the candidate having turned the setting on first. Closing the app removes
+the endpoint regardless of the setting, and there is no persistence across restarts: a client always
+reconnects using whatever port main currently reports (`workspace:mcp-server:status`), never a
+cached one.
+
+**Transport.** `127.0.0.1` only, a dynamic port, plain `node:http` (no Express/Fastify dependency
+added for a two-check gate). Every request is rejected before anything MCP-specific runs if it
+carries an `Origin` header at all (the same "no legitimate browser caller, so disqualify the whole
+class" policy the daemon's own `server.ts` already documents above) or an unexpected `Host`
+(DNS-rebinding protection, checked against `127.0.0.1`/`localhost`/`[::1]` port-agnostically). A
+request body over ~1MB or that fails to parse as JSON is rejected before it ever reaches the MCP
+SDK's own request handling.
+
+**Per-client credentials, not the daemon's token.** Each named client grant
+(`electron/workspace/mcp-grant-schema.ts`, `mcp_client_grants` table) gets its own 32-byte random
+credential, minted once at grant creation and never stored -- the database holds only its SHA-256
+verifier (`credentialVerifierHash`), the same "a password hash, not the password" discipline. The
+plaintext credential is delivered to the candidate through a native `dialog.showMessageBox` and
+`clipboard.writeText`, both called directly inside the `workspace:mcp-client-grants:create` IPC
+handler in `main.ts` -- it is never placed on that handler's return value, so it never crosses into
+the renderer at all, the same rule this document already states for the daemon's own bearer token.
+Authenticating a request compares the presented credential's hash against every stored verifier
+with `timingSafeEqual` (`findMcpClientGrantByCredential`), never a database lookup keyed on the hash
+itself.
+
+**Scope.** A grant authorizes acting on a specific, bounded set of case ids
+(`CvEvidenceOverlay.id`s) -- either named explicitly at creation (`case_ids` scope) or earned one at
+a time as that grant's own `start_tailoring_case` calls succeed (`source_cv` scope, not yet wired;
+see "What slice 2 does not yet cover" below). A grant also carries its own expiry and can be revoked;
+both are re-checked on every request (`describeMcpGrantBlockers`), not only at authentication time.
+
+**Audit trail.** Every request past the Origin/Host check writes exactly one row to
+`mcp_audit_log_entries` -- denied, errored, or successful -- before responding, via the same
+`WorkspaceDb` the request's own work runs against (so a future tool handler can append its entry in
+the same transaction as its mutation, making a failed audit write block the mutation too, per the
+ticket's own requirement). Every column in that table is structurally incapable of carrying raw
+CV/JD text or a credential: there is no free-text field wide enough, and the credential itself is
+read only once (at creation, to compute its hash) and never again.
+
+**Case service access, not direct database access.** The MCP-facing code path calls the same
+`electron/workspace/repository.ts` functions the renderer's own IPC handlers call (`getCvDocument`,
+`approveCvEvidenceOverlay`, etc.) -- there is no second write path into `workspace.db` for this
+feature, and in particular `approveCvEvidenceOverlay` is the *only* function that may move a case's
+`state` to `'candidate_approved'`; see that function's own doc comment in `repository.ts` for why an
+MCP tool (or a compromised renderer) cannot approve wording it never actually derived from evidence.
+
+**What slice 2 does not yet cover** (tracked by #421's own delivery order, not a gap to silently
+patch): no MCP tool is registered yet (`createMcpServerInstance` in `mcp-server.ts` is intentionally
+empty -- slice 3 adds `start_tailoring_case`, `get_tailoring_case`, the `propose_*` tools, and
+`read_approved_resume`), so there is nothing yet for a `source_cv` grant's `caseIds` to actually grow
+into, and `mcpGrantCoversCase`/`canReadFinalSnapshot` have no caller yet either. The Settings UI
+(`McpEndpointSection.tsx`) only offers the `source_cv` grant scope; `case_ids` exists in the data
+layer for a future UI, not exposed yet. No formal adversarial audit of this endpoint has been
+performed (c.f. the "it has been through an adversarial audit" note at the top of this document,
+which describes the daemon above, not this endpoint) -- #421's own acceptance criteria call for one
+before release, and it should happen once slice 3's tool surface actually exists to audit.
+
 ## Reporting a vulnerability
 
 This repository does not have a dedicated security contact address. Report vulnerabilities through

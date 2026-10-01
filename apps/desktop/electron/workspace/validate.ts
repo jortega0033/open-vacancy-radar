@@ -30,6 +30,7 @@ import {
   CV_CLAIM_FIELDS,
   CV_EVIDENCE_CLASSES,
   CV_EVIDENCE_LIMITS,
+  CV_EVIDENCE_OVERLAY_ORIGINS,
   CV_EVIDENCE_OVERLAY_STATES,
   CV_FACT_OWNERSHIPS,
   CV_FACT_SOURCE_KINDS,
@@ -41,8 +42,10 @@ import {
 import type {
   CvApprovedWording,
   CvEvidenceFact,
+  CvEvidenceOverlayState,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
+import { MCP_GRANT_LIMITS, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import type {
   ApplicationAnswerInput,
   ApplicationAnswerPatch,
@@ -74,6 +77,7 @@ import type {
   LetterStatus,
   LetterTone,
   LetterType,
+  McpClientGrantInput,
   SavedJobInput,
   SavedJobPatch,
   SavedJobStatus,
@@ -181,6 +185,13 @@ function nullableIsoDate(value: unknown, field: string): string | null {
   const parsed = new Date(text);
   if (Number.isNaN(parsed.valueOf())) fail(`"${field}" must be an ISO-8601 date-time`);
   return parsed.toISOString();
+}
+
+/** Same as `nullableIsoDate`, but the field is required. */
+function requiredIsoDate(value: unknown, field: string): string {
+  const parsed = nullableIsoDate(value, field);
+  if (parsed === null) fail(`"${field}" is required`);
+  return parsed;
 }
 
 /**
@@ -652,8 +663,16 @@ export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayIn
     jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
     jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
     listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
+    origin: input.origin === undefined ? 'vacancy' : oneOf(input.origin, 'origin', CV_EVIDENCE_OVERLAY_ORIGINS),
   };
 }
+
+// #421's case contract: `'candidate_approved'` is never accepted through the generic patch --
+// only `approveCvEvidenceOverlay` may set it. `CvEvidenceOverlayPatch['state']` already excludes
+// it at the type level; this is the same rule enforced against the raw, unknown runtime payload.
+const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candidate_approved'>[] = CV_EVIDENCE_OVERLAY_STATES.filter(
+  (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
+);
 
 export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
   const input = asRecord(value, '"patch"');
@@ -663,11 +682,25 @@ export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPa
   patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
   patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
   patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
-  patch(input, out, 'state', (v) => oneOf(v, 'state', CV_EVIDENCE_OVERLAY_STATES));
+  patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
   patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
   patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
   patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));
   return out;
+}
+
+/** `{ id, expectedCaseRevision }` envelope for `workspace:cv-evidence-overlays:approve` (#421). */
+export function parseCvEvidenceOverlayApproveInput(value: unknown): { id: string; expectedCaseRevision: string } {
+  const input = asRecord(value, 'approve request');
+  return {
+    id: parseId(input.id),
+    expectedCaseRevision: requiredNonEmpty(input.expectedCaseRevision, 'expectedCaseRevision', LIMITS.short),
+  };
+}
+
+/** `{ caseId }` envelope for `workspace:cv-tailoring-proposals:list` (#421). */
+export function parseCaseIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').caseId);
 }
 
 /** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */
@@ -685,6 +718,35 @@ export function parseCvIdEnvelope(value: unknown): string {
 export function parseCvEvidenceOverlayExportInput(value: unknown): { overlayId: string; format: CvExportFormat } {
   const input = asRecord(value, 'export request');
   return { overlayId: parseId(input.overlayId), format: oneOf(input.format, 'format', CV_EXPORT_FORMATS) };
+}
+
+/**
+ * #421's local-client grant. `sourceCvId`/`caseIds` are required or forbidden depending on
+ * `scopeType` rather than both simply optional: a `source_cv` grant given a `caseIds` list (or
+ * vice versa) is a caller confusing the two scope types, which fails loudly here rather than
+ * silently keeping only the field that matched.
+ */
+export function parseMcpClientGrantInput(value: unknown): McpClientGrantInput {
+  const input = asRecord(value, 'MCP client grant');
+  const scopeType = oneOf(input.scopeType, 'scopeType', MCP_GRANT_SCOPE_TYPES);
+  if (scopeType === 'source_cv') {
+    if (input.caseIds !== undefined) fail('"caseIds" must not be set for a "source_cv" grant');
+    return {
+      name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+      scopeType,
+      sourceCvId: parseId(input.sourceCvId),
+      canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+      expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+    };
+  }
+  if (input.sourceCvId !== undefined) fail('"sourceCvId" must not be set for a "case_ids" grant');
+  return {
+    name: requiredNonEmpty(input.name, 'name', MCP_GRANT_LIMITS.name),
+    scopeType,
+    caseIds: stringList(input.caseIds ?? [], 'caseIds', MCP_GRANT_LIMITS.caseIdsPerGrant, LIMITS.short),
+    canReadFinalSnapshot: input.canReadFinalSnapshot === undefined ? false : bool(input.canReadFinalSnapshot, 'canReadFinalSnapshot'),
+    expiresAt: requiredIsoDate(input.expiresAt, 'expiresAt'),
+  };
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -897,6 +959,9 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'confirmApplicationDelete', (v) => bool(v, 'confirmApplicationDelete'));
   patch(input, out, 'autoArchiveRejected', (v) => bool(v, 'autoArchiveRejected'));
   patch(input, out, 'defaultProvider', (v) => oneOf(v, 'defaultProvider', DEFAULT_PROVIDERS));
+  // #421: the candidate's own on/off switch for the local MCP endpoint -- unlike `autoApplyEnabled`
+  // above, this one is meant to be renderer-writable.
+  patch(input, out, 'mcpEndpointEnabled', (v) => bool(v, 'mcpEndpointEnabled'));
   // ADI-07's three AI Workspace preferences. See `AGENT_WORKSPACE_PREF_LIMITS` for why these live
   // in SQLite alongside every other setting rather than in localStorage.
   patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));

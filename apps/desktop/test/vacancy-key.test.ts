@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { vacancyKeyFor } from '../src/components/cv/vacancy-key.js';
+import { mintManualCaseKey, vacancyKeyFor } from '../src/components/cv/vacancy-key.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
 
 const VACANCY: VacancyLead = {
@@ -27,5 +27,23 @@ describe('vacancyKeyFor (#419)', () => {
     const a = { ...VACANCY, url: '', title: 'Senior Frontend Engineer' };
     const b = { ...VACANCY, url: '', title: '  senior   frontend   engineer  ' };
     expect(vacancyKeyFor(a)).toBe(vacancyKeyFor(b));
+  });
+});
+
+describe('mintManualCaseKey (#421)', () => {
+  it('always starts with the manual: prefix', () => {
+    expect(mintManualCaseKey()).toMatch(/^manual:/);
+  });
+
+  it('mints a distinct key every call, even with nothing else to distinguish the calls', () => {
+    expect(mintManualCaseKey()).not.toBe(mintManualCaseKey());
+  });
+
+  it('can never collide with a vacancyKeyFor key, whatever the vacancy looks like', () => {
+    const noUrl: VacancyLead = { ...VACANCY, url: '' };
+    expect(mintManualCaseKey().startsWith('url:')).toBe(false);
+    expect(mintManualCaseKey().startsWith('fields:')).toBe(false);
+    expect(vacancyKeyFor(VACANCY).startsWith('manual:')).toBe(false);
+    expect(vacancyKeyFor(noUrl).startsWith('manual:')).toBe(false);
   });
 });

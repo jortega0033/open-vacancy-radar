@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { composeApprovedTailoredResume, type ComposedTailoredResume } from '../../../electron/resume-source.js';
 import { proposeWordingFromFacts } from '../../../electron/workspace/cv-evidence-schema.js';
-import type { CvApprovedWording, CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
+import type { CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocument } from '../../window.js';
 import { sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
@@ -23,14 +23,18 @@ export interface ComposedCvReviewProps {
  * "Propose" and "approve" are the same action here, by design (#419: "require explicit approval of
  * the *exact text*"). `handlePreview` computes `proposeWordingFromFacts` -- the sentence each
  * self-reported clarification fact composes into, in the candidate's own words, never AI-generated
- * -- and folds those proposals into the very resume shown in the preview below. `handleApprove`
- * persists exactly that same proposal set. The candidate never approves text they have not seen
- * rendered in the actual CV.
+ * -- and folds those proposals into the very resume shown in the preview below, purely so the
+ * candidate sees it before deciding to approve. `handleApprove` itself sends none of that computed
+ * text: `workspace.approveCvEvidenceOverlay` (#421's case contract) re-derives the same proposals
+ * from the overlay's own facts on the main-process side and re-verifies every gap before writing
+ * anything, so a compromised or buggy renderer cannot approve wording it never actually derived
+ * from evidence. The candidate never approves text they have not seen rendered in the actual CV --
+ * that guarantee now holds because the server computes the same text the preview showed, not
+ * because the renderer's computation is trusted.
  */
 export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedCvReviewProps) {
   const [overlay, setOverlay] = useState<CvEvidenceOverlayRecord | null>(null);
   const [composed, setComposed] = useState<ComposedTailoredResume | null>(null);
-  const [proposedWording, setProposedWording] = useState<CvApprovedWording[]>([]);
   const [error, setError] = useState<string>();
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
@@ -41,7 +45,6 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
 
   useEffect(() => {
     setComposed(null);
-    setProposedWording([]);
     setApproved(false);
     setError(undefined);
     if (!cvId || !vacancyKey) {
@@ -77,7 +80,6 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
       setOverlay(fresh);
       const currentHash = await sha256HexOfSource(sourceCv);
       const proposed = proposeWordingFromFacts(fresh, currentHash);
-      setProposedWording(proposed);
       setComposed(
         composeApprovedTailoredResume(
           sourceCv,
@@ -96,20 +98,23 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     setApproving(true);
     setError(undefined);
     try {
-      // Persists exactly the wording the preview above showed and nothing more: the same
-      // `proposedWording` list `handlePreview` folded into `composed.resume`.
-      const updated = await window.workspace.updateCvEvidenceOverlay(overlay.id, {
-        wordingVariants: [...overlay.wordingVariants, ...proposedWording],
-        state: 'candidate_approved',
-      });
+      // #421: the main process re-derives wording from facts and re-verifies every gap itself
+      // before writing anything -- this call sends only the overlay's id and the revision this
+      // component last saw, never the wording or resume it computed for the preview above. A
+      // conflicting write elsewhere fails the call rather than silently overwriting it; refetch so
+      // the panel shows the real current state rather than the stale one this request was built
+      // against.
+      const updated = await window.workspace.approveCvEvidenceOverlay(overlay.id, overlay.caseRevision);
       setOverlay(updated);
       setApproved(true);
     } catch (err) {
       setError(describeError(err, 'could not approve this CV'));
+      const refreshed = cvId && vacancyKey ? await window.workspace.getCvEvidenceOverlay(cvId, vacancyKey) : null;
+      if (refreshed) setOverlay(refreshed);
     } finally {
       setApproving(false);
     }
-  }, [overlay, composed, proposedWording]);
+  }, [overlay, composed, cvId, vacancyKey]);
 
   const handleExport = useCallback(
     async (format: CvExportFormat) => {

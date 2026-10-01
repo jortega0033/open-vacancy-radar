@@ -52,14 +52,31 @@ function preloadInvokeChannels(): string[] {
 }
 
 /**
- * The complete, reviewed set of MCP-shaped channels this repo exposes: the vacancy-source MCP
- * bridge (ADI's own policy-gated model, see docs/mcp-source-policy.md), not AgentDock's generic
- * provider-MCP. Each takes only an allowlisted providerId and an opaque credential string or search
- * query -- never a server URL, command, header, or tool name (enforced separately by
- * apps/daemon/test/mcp-routes.test.ts's "rejects arbitrary servers, tools, headers, and provider
- * arguments" case). Adding a channel here is exactly the review trigger this test exists to force.
+ * The complete, reviewed set of MCP-shaped channels this repo exposes. Two unrelated surfaces,
+ * both deliberately kept apart from AgentDock's generic, renderer-configurable provider-MCP (the
+ * thing this test guards against):
+ *  - The vacancy-source MCP bridge (ADI's own policy-gated model, see docs/mcp-source-policy.md).
+ *    Each of these four takes only an allowlisted providerId and an opaque credential string or
+ *    search query -- never a server URL, command, header, or tool name (enforced separately by
+ *    apps/daemon/test/mcp-routes.test.ts's "rejects arbitrary servers, tools, headers, and
+ *    provider arguments" case).
+ *  - #421's local MCP *server* endpoint -- the opposite direction entirely: this app answers MCP
+ *    calls from an external client, rather than making them to one. These four channels manage
+ *    named client grants and read the endpoint's own on/off status; none of them take a server
+ *    URL, command, or tool name either -- there is no renderer-configurable "connect to this MCP
+ *    server" surface here, only a toggle and a scoped grant the candidate creates by hand.
+ * Adding a channel here is exactly the review trigger this test exists to force.
  */
-const APPROVED_MCP_CHANNELS = new Set(['daemon:mcp-statuses', 'daemon:mcp-search', 'daemon:mcp-set-credential', 'daemon:mcp-remove']);
+const APPROVED_MCP_CHANNELS = new Set([
+  'daemon:mcp-statuses',
+  'daemon:mcp-search',
+  'daemon:mcp-set-credential',
+  'daemon:mcp-remove',
+  'workspace:mcp-client-grants:list',
+  'workspace:mcp-client-grants:create',
+  'workspace:mcp-client-grants:revoke',
+  'workspace:mcp-server:status',
+]);
 
 describe('generic AgentDock MCP and component control stay off the bridge (ADI-10)', () => {
   it('exposes no MCP-shaped channel beyond the reviewed vacancy-source set', () => {
