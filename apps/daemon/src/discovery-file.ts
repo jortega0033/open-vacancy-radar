@@ -102,6 +102,23 @@ export function removeDiscoveryFile(appId: string = DEFAULT_APP_ID): void {
   }
 }
 
+/**
+ * Thrown by `assertNoLiveDaemon` for the lock-conflict case specifically, distinct from every
+ * other `Error` a daemon startup can throw, so `index.ts`'s top-level catch can map it onto its
+ * own dedicated exit code (`DAEMON_EXIT_CODE_LOCK_CONFLICT` in `@agent-dock/shared`) instead of
+ * the generic startup-failure one. See that constant's own comment for why the exit code -- not
+ * this error type -- is the part that actually crosses into the parent process.
+ */
+export class DaemonLockConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    // Without this, `name` stays the inherited "Error", so any future logging/telemetry path that
+    // reports `err.name` (rather than `instanceof`-checking, as every current caller does) can't
+    // tell a lock conflict apart from an ordinary startup error.
+    this.name = 'DaemonLockConflictError';
+  }
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     // Signal 0 sends nothing; it only tests whether the process exists and is signalable.
@@ -136,7 +153,7 @@ export function assertNoLiveDaemon(appId: string = DEFAULT_APP_ID): void {
   }
 
   if (typeof existing.pid === 'number' && isProcessAlive(existing.pid)) {
-    throw new Error(
+    throw new DaemonLockConflictError(
       `another agent-dock daemon (app id "${appId}") is already running (pid ${existing.pid}, ` +
         `discovery file ${filePath}). Only one daemon per app id is supported at a time. Stop it first.`,
     );
