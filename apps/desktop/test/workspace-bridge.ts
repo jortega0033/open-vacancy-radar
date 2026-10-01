@@ -120,6 +120,9 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     createMcpClientGrant: vi.fn(),
     revokeMcpClientGrant: vi.fn(),
     getMcpServerStatus: vi.fn().mockResolvedValue({ running: false, port: null }),
+    listCvTailoringProposals: vi.fn().mockResolvedValue([]),
+    acceptCvTailoringProposal: vi.fn(),
+    rejectCvTailoringProposal: vi.fn(),
 
     listLetters: vi.fn().mockResolvedValue([]),
     createLetter: vi.fn(),

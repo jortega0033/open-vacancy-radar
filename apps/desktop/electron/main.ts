@@ -136,6 +136,7 @@ import {
   parseApplicationFilter,
   parseApplicationInput,
   parseApplicationPatch,
+  parseCaseIdEnvelope,
   parseCvDocumentInput,
   parseCvDocumentPatch,
   parseCvEvidenceOverlayApproveInput,
@@ -3022,6 +3023,20 @@ guardedIpc.handle('workspace:mcp-server:status', async () => ({
   running: mcpServerHandle !== null,
   port: mcpServerHandle?.port ?? null,
 }));
+
+// #421's proposal review surface. `createCvTailoringProposal` has no IPC channel at all -- only
+// the (not yet wired, slice 3) MCP tool handlers create one, directly in-process.
+guardedIpc.handle('workspace:cv-tailoring-proposals:list', async (_event, input: unknown) =>
+  workspace.listCvTailoringProposals(await ensureWorkspaceDb(), parseCaseIdEnvelope(input)),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:accept', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.acceptCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
+
+guardedIpc.handle('workspace:cv-tailoring-proposals:reject', async (_event, input: unknown) =>
+  applicationDataResetGate.runMutation(async () => workspace.rejectCvTailoringProposal(await ensureWorkspaceDb(), parseIdEnvelope(input))),
+);
 
 guardedIpc.handle('workspace:letters:list', async () => workspace.listLetters(await ensureWorkspaceDb()));
 

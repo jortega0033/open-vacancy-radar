@@ -25,6 +25,7 @@ import type {
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
+import type { CvProposalPayload, CvProposalStatus } from './cv-proposal-schema.js';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -103,6 +104,19 @@ export type {
 /** #421's MCP client grants and audit trail, re-exported for the same reason the CV-tailoring
  * types above are. */
 export type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
+
+/** #421's proposal staging layer, re-exported for the same reason. */
+export type {
+  CvClarificationQuestionProposalPayload,
+  CvEvidenceLinkProposalPayload,
+  CvFactProposalPayload,
+  CvProposalKind,
+  CvProposalPayload,
+  CvProposalStatus,
+  CvRequirementProposalPayload,
+  CvSelectionProposalPayload,
+  CvWordingProposalPayload,
+} from './cv-proposal-schema.js';
 
 export interface SavedJobRecord {
   id: string;
@@ -371,6 +385,27 @@ export interface McpAuditLogEntryInput {
   caseId?: string;
   outcome: McpAuditOutcome;
   revision?: string;
+}
+
+/** #421's staging layer: what an MCP client proposed, before any of it reaches a real
+ * `CvRequirementMapping`/`CvEvidenceFact`/`CvApprovedWording`. See `cv-proposal-schema.ts`'s own
+ * header for why a proposal is never the same type as what it promotes into. There is no
+ * `CvTailoringProposalInput` here: a proposal is created only by an MCP tool handler calling
+ * `createCvTailoringProposal` directly (same process, no IPC channel), never by the renderer --
+ * the renderer only ever lists, accepts, or rejects one that already exists.
+ */
+export interface CvTailoringProposalRecord {
+  id: string;
+  caseId: string;
+  /** `''` if the grant that proposed this no longer exists. */
+  grantId: string;
+  status: CvProposalStatus;
+  payload: CvProposalPayload;
+  caseRevisionAtProposal: string;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601, or `''` while `status === 'pending'`. */
+  decidedAt: string;
 }
 
 
@@ -903,6 +938,7 @@ export interface ApplicationDataResetResult {
     cvEvidenceOverlays: number;
     mcpClientGrants: number;
     mcpAuditLogEntries: number;
+    cvTailoringProposals: number;
   };
 }
 
@@ -1031,6 +1067,18 @@ export interface WorkspaceBridge {
   /** `port` is `null` whenever `running` is `false`. Not itself a secret -- see `main.ts`'s own
    * comment on this channel for why this is a plain read, unlike the daemon's base URL/token. */
   getMcpServerStatus(): Promise<{ running: boolean; port: number | null }>;
+
+  /**
+   * #421's proposal review surface. `acceptCvTailoringProposal` promotes the proposal's payload
+   * into the case's real `CvEvidenceOverlay` (the exact promotion depends on `payload.kind`, see
+   * `acceptCvTailoringProposal`'s own doc comment in `repository.ts`) and returns both the decided
+   * proposal and the overlay it just updated, since the caller's screen is watching the overlay,
+   * not the proposal list. `rejectCvTailoringProposal` has no promotion step: the overlay is
+   * unchanged, only the proposal's own `status` moves to `'rejected'`.
+   */
+  listCvTailoringProposals(caseId: string): Promise<CvTailoringProposalRecord[]>;
+  acceptCvTailoringProposal(id: string): Promise<{ proposal: CvTailoringProposalRecord; overlay: CvEvidenceOverlayRecord }>;
+  rejectCvTailoringProposal(id: string): Promise<CvTailoringProposalRecord>;
 
   /**
    * The reusable application-answer library (#372). See `schema.ts`'s comment on

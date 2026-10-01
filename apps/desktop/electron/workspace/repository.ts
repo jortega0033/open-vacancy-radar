@@ -19,6 +19,7 @@ import {
   withJdRevision,
   type CvEvidenceOverlay,
 } from './cv-evidence-schema.js';
+import type { CvProposalPayload } from './cv-proposal-schema.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
@@ -33,6 +34,7 @@ import {
   automationGrants,
   cvDocuments,
   cvEvidenceOverlays,
+  cvTailoringProposals,
   letters,
   mcpAuditLogEntries,
   mcpClientGrants,
@@ -70,6 +72,7 @@ import {
   type CvEvidenceOverlayPatch,
   type CvEvidenceOverlayRecord,
   type CvProfile,
+  type CvTailoringProposalRecord,
   type DeleteResult,
   type LetterInput,
   type LetterPatch,
@@ -897,6 +900,275 @@ export function appendMcpAuditLogEntry(db: WorkspaceDb, entry: McpAuditLogEntryI
 
 export function listMcpAuditLogEntries(db: WorkspaceDb, limit = 500): McpAuditLogEntry[] {
   return db.select().from(mcpAuditLogEntries).orderBy(desc(mcpAuditLogEntries.createdAt)).limit(limit).all().map(toMcpAuditLogEntry);
+}
+
+// ----------------------------------------------------------------- mcp tailoring proposals (#421)
+
+type CvTailoringProposalRow = typeof cvTailoringProposals.$inferSelect;
+
+function toCvTailoringProposal(row: CvTailoringProposalRow): CvTailoringProposalRecord {
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    grantId: row.grantId ?? '',
+    status: row.status as CvTailoringProposalRecord['status'],
+    // `kind`/`payload` are stored as separate columns (so `kind` can be filtered in SQL) and
+    // reassembled into the `{kind, data}` shape every reader of `CvProposalPayload` expects.
+    payload: { kind: row.kind, data: row.payload } as CvProposalPayload,
+    caseRevisionAtProposal: row.caseRevisionAtProposal,
+    createdAt: iso(row.createdAt),
+    decidedAt: row.decidedAt ? iso(row.decidedAt) : '',
+  };
+}
+
+/** True when `id` names a real experience or project entry in `source` -- `''` (no anchor at all)
+ * always passes, the same "empty means unsupported/unanchored, not invalid" reading
+ * `cv-evidence-schema.ts` already gives an empty `anchorParentId`/`parentId` elsewhere. */
+function resolvesInSource(source: CvSourceDocument | null, id: string): boolean {
+  if (!id) return true;
+  if (!source) return false;
+  return source.experience.some((entry) => entry.id === id) || source.projects.some((entry) => entry.id === id);
+}
+
+/**
+ * Creates one staged proposal. Called only from the MCP tool handlers (`mcp-server.ts`), never
+ * from a renderer-facing IPC channel -- see `CvTailoringProposalRecord`'s own doc comment in
+ * `types.ts` for why there is no `CvTailoringProposalInput`/renderer verb for this.
+ *
+ * Validates every id the payload cites against the case's *current* state before staging it at
+ * all (#421: "invented fact IDs... fail", generalized to every id this module accepts) -- an
+ * `anchorParentId`/`parentId` must resolve in the reviewed source, a `requirementId` must already
+ * exist on the case, and every `wording` proposal's `factIds` must already exist on the case.
+ * Re-checked again at acceptance time in `acceptCvTailoringProposal`, since the case can change in
+ * between.
+ */
+export function createCvTailoringProposal(
+  db: WorkspaceDb,
+  input: { caseId: string; grantId: string; payload: CvProposalPayload },
+): CvTailoringProposalRecord {
+  const overlayRow = db.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, input.caseId)).get();
+  if (!overlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', input.caseId);
+  const overlay = toCvEvidenceOverlay(overlayRow);
+  const doc = getCvDocument(db, overlay.cvId);
+
+  const payload = input.payload;
+  switch (payload.kind) {
+    case 'requirement':
+      if (!resolvesInSource(doc.source, payload.data.anchorParentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'evidence_link':
+      if (!overlay.requirements.some((r) => r.requirementId === payload.data.requirementId)) {
+        throw new Error('this proposal references a requirement that does not exist in this case');
+      }
+      if (!resolvesInSource(doc.source, payload.data.anchorParentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'clarification_question':
+      if (!overlay.requirements.some((r) => r.requirementId === payload.data.requirementId)) {
+        throw new Error('this proposal references a requirement that does not exist in this case');
+      }
+      break;
+    case 'fact':
+      if (!resolvesInSource(doc.source, payload.data.parentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    case 'wording': {
+      const knownFactIds = new Set(overlay.facts.map((f) => f.factId));
+      if (!payload.data.factIds.every((id) => knownFactIds.has(id))) {
+        throw new Error('this proposal cites a fact id that does not exist in this case');
+      }
+      if (!resolvesInSource(doc.source, payload.data.parentId)) {
+        throw new Error('this proposal anchors to a role or project that does not exist in the reviewed source');
+      }
+      break;
+    }
+    case 'selection':
+      if (!payload.data.includedEntryIds.every((id) => resolvesInSource(doc.source, id))) {
+        throw new Error('this proposal references a role or project that does not exist in the reviewed source');
+      }
+      break;
+  }
+
+  const [row] = db
+    .insert(cvTailoringProposals)
+    .values({
+      caseId: input.caseId,
+      grantId: input.grantId || null,
+      kind: payload.kind,
+      payload: payload.data,
+      caseRevisionAtProposal: overlay.caseRevision,
+    })
+    .returning()
+    .all();
+  if (!row) throw new Error('failed to insert CV tailoring proposal');
+  return toCvTailoringProposal(row);
+}
+
+export function listCvTailoringProposals(db: WorkspaceDb, caseId: string): CvTailoringProposalRecord[] {
+  return db
+    .select()
+    .from(cvTailoringProposals)
+    .where(eq(cvTailoringProposals.caseId, caseId))
+    .orderBy(desc(cvTailoringProposals.createdAt))
+    .all()
+    .map(toCvTailoringProposal);
+}
+
+/**
+ * Promotes a pending proposal's payload into the case's real overlay, kind by kind -- the only
+ * place any of #421's staged content becomes real `CvRequirementMapping`/`CvEvidenceFact`/
+ * `CvApprovedWording` data (see `cv-proposal-schema.ts`'s own header). Refuses a proposal that is
+ * not `'pending'` (never re-promotes an already-decided one) and re-validates every id the payload
+ * cites against the case's *current* state, not the state at proposal-creation time -- the case
+ * can have changed in between. Bumps `caseRevision` and runs the same approval-invalidation rule
+ * `updateCvEvidenceOverlay` already applies (a requirements/facts/wordingVariants change drops a
+ * standing `'candidate_approved'`/`'artifact_approved'` state back to `'draft'`), since this writes
+ * those same columns directly rather than through that function.
+ */
+export function acceptCvTailoringProposal(
+  db: WorkspaceDb,
+  id: string,
+): { proposal: CvTailoringProposalRecord; overlay: CvEvidenceOverlayRecord } {
+  return db.transaction((tx) => {
+    const proposalRow = tx.select().from(cvTailoringProposals).where(eq(cvTailoringProposals.id, id)).get();
+    if (!proposalRow) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+    if (proposalRow.status !== 'pending') throw new Error(`this proposal was already ${proposalRow.status}`);
+    const proposal = toCvTailoringProposal(proposalRow);
+
+    const overlayRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, proposal.caseId)).get();
+    if (!overlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', proposal.caseId);
+    const overlay = toCvEvidenceOverlay(overlayRow);
+
+    const patch: Partial<CvEvidenceOverlayRow> = {};
+    const payload = proposal.payload;
+    switch (payload.kind) {
+      case 'requirement': {
+        const data = payload.data;
+        patch.requirements = [
+          ...overlay.requirements,
+          {
+            requirementId: randomUUID(),
+            text: data.text,
+            jdAnchor: data.jdAnchor,
+            classification: data.classification,
+            evidenceClass: data.evidenceClass,
+            anchorParentId: data.anchorParentId,
+            candidateAdded: true,
+            reviewed: false,
+          },
+        ];
+        break;
+      }
+      case 'evidence_link': {
+        const data = payload.data;
+        if (!overlay.requirements.some((r) => r.requirementId === data.requirementId)) {
+          throw new Error('the requirement this proposal links to no longer exists in this case');
+        }
+        patch.requirements = overlay.requirements.map((r) =>
+          r.requirementId === data.requirementId ? { ...r, anchorParentId: data.anchorParentId, evidenceClass: data.evidenceClass } : r,
+        );
+        break;
+      }
+      case 'clarification_question': {
+        const data = payload.data;
+        if (!overlay.requirements.some((r) => r.requirementId === data.requirementId)) {
+          throw new Error('the requirement this proposal asks about no longer exists in this case');
+        }
+        patch.requirements = overlay.requirements.map((r) =>
+          r.requirementId === data.requirementId ? { ...r, evidenceClass: 'needs_verification' as const, reviewed: false } : r,
+        );
+        break;
+      }
+      case 'fact': {
+        const data = payload.data;
+        patch.facts = [
+          ...overlay.facts,
+          {
+            factId: randomUUID(),
+            parentId: data.parentId,
+            parentType: data.parentType,
+            client: data.client,
+            activity: data.activity,
+            mechanism: data.mechanism,
+            result: data.result,
+            ownership: data.ownership,
+            sourceKind: 'candidate_testimony',
+            sourceReference: data.sourceReference,
+            verification: 'self_reported',
+            metricValue: data.metricValue,
+            metricUnit: data.metricUnit,
+            metricBasis: data.metricBasis,
+            supersedes: '',
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        break;
+      }
+      case 'wording': {
+        const data = payload.data;
+        if (!data.factIds.every((factId) => overlay.facts.some((f) => f.factId === factId))) {
+          throw new Error('this proposal cites a fact id that no longer exists in this case');
+        }
+        patch.wordingVariants = [
+          ...overlay.wordingVariants,
+          {
+            variantId: randomUUID(),
+            targetField: data.targetField,
+            parentId: data.parentId,
+            text: data.text,
+            factIds: data.factIds,
+            status: 'candidate_approved',
+            approvedAt: new Date().toISOString(),
+            sourceRevision: overlay.sourceCvContentHash,
+          },
+        ];
+        break;
+      }
+      case 'selection':
+        // Not yet wired into composition -- see `CvSelectionProposalPayload`'s own doc comment.
+        // Nothing to patch onto the overlay; the decision is still recorded below.
+        break;
+    }
+
+    const touchesInputs = patch.requirements !== undefined || patch.facts !== undefined || patch.wordingVariants !== undefined;
+    if (touchesInputs) patch.state = invalidatedOverlayState(overlay.state);
+
+    const [updatedOverlayRow] = tx
+      .update(cvEvidenceOverlays)
+      .set({ ...patch, caseRevision: String(Number(overlay.caseRevision) + 1), updatedAt: new Date() })
+      .where(eq(cvEvidenceOverlays.id, overlay.id))
+      .returning()
+      .all();
+    if (!updatedOverlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', overlay.id);
+
+    const [updatedProposalRow] = tx
+      .update(cvTailoringProposals)
+      .set({ status: 'accepted', decidedAt: new Date() })
+      .where(eq(cvTailoringProposals.id, id))
+      .returning()
+      .all();
+    if (!updatedProposalRow) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+
+    return { proposal: toCvTailoringProposal(updatedProposalRow), overlay: toCvEvidenceOverlay(updatedOverlayRow) };
+  });
+}
+
+export function rejectCvTailoringProposal(db: WorkspaceDb, id: string): CvTailoringProposalRecord {
+  const existing = db.select().from(cvTailoringProposals).where(eq(cvTailoringProposals.id, id)).get();
+  if (!existing) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+  if (existing.status !== 'pending') throw new Error(`this proposal was already ${existing.status}`);
+  const [row] = db
+    .update(cvTailoringProposals)
+    .set({ status: 'rejected', decidedAt: new Date() })
+    .where(eq(cvTailoringProposals.id, id))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
+  return toCvTailoringProposal(row);
 }
 
 // ------------------------------------------------------------------------------- letters
@@ -1994,6 +2266,7 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
       cvEvidenceOverlays: tx.select({ id: cvEvidenceOverlays.id }).from(cvEvidenceOverlays).all().length,
       mcpClientGrants: tx.select({ id: mcpClientGrants.id }).from(mcpClientGrants).all().length,
       mcpAuditLogEntries: tx.select({ id: mcpAuditLogEntries.id }).from(mcpAuditLogEntries).all().length,
+      cvTailoringProposals: tx.select({ id: cvTailoringProposals.id }).from(cvTailoringProposals).all().length,
     };
 
     tx.delete(applicationAttempts).run();
@@ -2012,6 +2285,9 @@ export function resetApplicationData(db: WorkspaceDb): ApplicationDataResetResul
     // longer exists. Audit entries deleted explicitly too, ahead of the grant rows they reference
     // via `onDelete: 'set null'` -- deleting grants first would only null out `grantId` here, not
     // remove the rows, so this reset would otherwise leave every past audit entry behind.
+    // Ahead of `cvEvidenceOverlays` below, same reasoning: its `caseId` FK would cascade-delete
+    // these silently otherwise, without ever appearing in `deleted` above.
+    tx.delete(cvTailoringProposals).run();
     tx.delete(mcpAuditLogEntries).run();
     tx.delete(mcpClientGrants).run();
 

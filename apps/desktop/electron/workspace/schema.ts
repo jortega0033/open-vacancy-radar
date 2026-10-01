@@ -12,6 +12,7 @@ import {
   type CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
+import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -202,6 +203,25 @@ export const mcpAuditLogEntries = sqliteTable('mcp_audit_log_entries', {
   outcome: text('outcome', { enum: MCP_AUDIT_OUTCOMES as unknown as [string, ...string[]] }).notNull(),
   revision: text('revision'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+});
+
+/** #421's proposal staging layer. See `cv-proposal-schema.ts`'s own header for why nothing an MCP
+ * client sends reaches `cvEvidenceOverlays.requirements`/`facts`/`wordingVariants` directly. */
+export const cvTailoringProposals = sqliteTable('cv_tailoring_proposals', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  caseId: text('case_id').notNull().references(() => cvEvidenceOverlays.id, { onDelete: 'cascade' }),
+  /** `onDelete: 'set null'`, matching `mcpAuditLogEntries.grantId`'s own reasoning: a proposal
+   * already decided stays a record of what was decided even if its grant row somehow stopped
+   * existing (grants are revoked, never deleted, in the app's own flows). */
+  grantId: text('grant_id').references(() => mcpClientGrants.id, { onDelete: 'set null' }),
+  kind: text('kind', { enum: CV_PROPOSAL_KINDS as unknown as [string, ...string[]] }).notNull(),
+  status: text('status', { enum: CV_PROPOSAL_STATUSES as unknown as [string, ...string[]] }).notNull().default('pending'),
+  /** The kind-specific payload (`CvProposalPayload`'s `data`, not the `{kind, data}` wrapper --
+   * `kind` above is this same value, already its own column so a query can filter by it in SQL). */
+  payload: text('payload', { mode: 'json' }).notNull(),
+  caseRevisionAtProposal: text('case_revision_at_proposal').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  decidedAt: integer('decided_at', { mode: 'timestamp_ms' }),
 });
 
 export const letters = sqliteTable('letters', {

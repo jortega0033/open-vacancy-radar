@@ -698,6 +698,11 @@ export function parseCvEvidenceOverlayApproveInput(value: unknown): { id: string
   };
 }
 
+/** `{ caseId }` envelope for `workspace:cv-tailoring-proposals:list` (#421). */
+export function parseCaseIdEnvelope(value: unknown): string {
+  return parseId(asRecord(value, 'payload').caseId);
+}
+
 /** `{ cvId, vacancyKey }` lookup envelope for `workspace:cv-evidence-overlays:get`. */
 export function parseCvEvidenceOverlayLookup(value: unknown): { cvId: string; vacancyKey: string } {
   const input = asRecord(value, 'lookup');

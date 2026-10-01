@@ -433,6 +433,15 @@ const workspaceApi: WorkspaceBridge = {
   getMcpServerStatus() {
     return ipcRenderer.invoke('workspace:mcp-server:status');
   },
+  listCvTailoringProposals(caseId) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:list', { caseId });
+  },
+  acceptCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:accept', { id });
+  },
+  rejectCvTailoringProposal(id) {
+    return ipcRenderer.invoke('workspace:cv-tailoring-proposals:reject', { id });
+  },
 
   listLetters() {
     return ipcRenderer.invoke('workspace:letters:list');
