@@ -1,10 +1,10 @@
 /**
- * #421's local MCP endpoint (slice 2): the local HTTP transport, authentication, and audit layer.
- * No MCP tool is registered here yet -- #421's own delivery order puts tool wiring in slice 3,
- * after this transport/auth/audit layer has its own negative-security-test coverage. This module
- * proves the endpoint can be stood up, authenticated against, rejected for every disallowed shape
- * of request, and torn down cleanly; slice 3 only ever needs to add `registerTool` calls inside
- * `createMcpServerInstance` below.
+ * #421's local MCP endpoint: the local HTTP transport, authentication, audit layer (slice 2), and
+ * the tool surface itself (slice 3) -- `start_tailoring_case`, `get_tailoring_case`, the six
+ * `propose_*` tools, `get_tailoring_status`, and `read_approved_resume`, each a thin wrapper around
+ * the main-process case service `electron/workspace/repository.ts` already exposes to the renderer.
+ * No tool here writes approval state directly or bypasses `approveCvEvidenceOverlay` -- see that
+ * function's own doc comment, and `createCvTailoringProposal`'s, for why.
  *
  * Bound to `127.0.0.1` on a dynamic port, only while explicitly enabled (`appSettings
  * .mcpEndpointEnabled`) and only for the app's own lifetime -- there is no persistence across
@@ -20,12 +20,23 @@
  * implementation would risk sharing state next.
  */
 
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
-import { describeMcpGrantBlockers } from './workspace/mcp-grant-schema.js';
+import { describeMcpGrantBlockers, mcpGrantCoversCase } from './workspace/mcp-grant-schema.js';
+import { CV_EVIDENCE_LIMITS, describeCvEvidenceOverlayGaps, mintManualCaseKey, vacancyKeyFor } from './workspace/cv-evidence-schema.js';
+import { stableCvSourceJson } from './workspace/cv-source-schema.js';
+import { CV_PROPOSAL_LIMITS, type CvProposalPayload } from './workspace/cv-proposal-schema.js';
+import type { McpClientGrantRecord } from './workspace/types.js';
+import { LIMITS } from './workspace/validate.js';
+
+/** The JD text a `get_tailoring_case` call reads one page of at a time -- a page count and an
+ * explicit `isLastPage` marker so truncation is never mistaken for complete coverage (#421). */
+const JD_PAGE_SIZE = 4_000;
 
 /** Generous for a real MCP JSON-RPC payload (tool arguments, JD text excerpts in a future slice),
  * finite against a hostile or malfunctioning caller -- the same two-tier reasoning
@@ -41,18 +52,253 @@ export interface McpServerHandle {
  * itself changes, not on every unrelated release. */
 const SERVER_INFO = { name: 'open-vacancy-radar-cv-assistant', version: '0.1.0' };
 
+function auditTool(
+  db: WorkspaceDb,
+  grant: McpClientGrantRecord,
+  toolName: string,
+  caseId: string,
+  outcome: 'success' | 'denied' | 'error',
+  revision = '',
+): void {
+  workspace.appendMcpAuditLogEntry(db, { grantId: grant.id, toolName, caseId, outcome, revision });
+}
+
+function toolTextResult(value: unknown): { content: [{ type: 'text'; text: string }] } {
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+/** Shared by every `propose_*` tool and `get_tailoring_case`/`get_tailoring_status`/
+ * `read_approved_resume`: a grant that does not cover `caseId` gets exactly the same denial a
+ * nonexistent case would, never a hint that the case exists but is out of scope. */
+function requireCoverage(grant: McpClientGrantRecord, caseId: string): void {
+  if (!mcpGrantCoversCase(grant, caseId)) throw new Error('this grant does not cover this case');
+}
+
+const requirementProposalShape = {
+  caseId: z.string().min(1),
+  text: z.string().min(1).max(CV_EVIDENCE_LIMITS.requirementText),
+  jdAnchor: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  classification: z.enum(['required', 'preferred', 'unclear']),
+  evidenceClass: z.enum(['direct', 'transferable', 'unsupported', 'needs_verification']),
+  anchorParentId: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+};
+
+const evidenceLinkProposalShape = {
+  caseId: z.string().min(1),
+  requirementId: z.string().min(1),
+  anchorParentId: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  evidenceClass: z.enum(['direct', 'transferable', 'unsupported', 'needs_verification']),
+};
+
+const clarificationQuestionProposalShape = {
+  caseId: z.string().min(1),
+  requirementId: z.string().min(1),
+  question: z.string().min(1).max(CV_PROPOSAL_LIMITS.question),
+};
+
+const factProposalShape = {
+  caseId: z.string().min(1),
+  parentId: z.string().min(1),
+  parentType: z.enum(['experience', 'project']),
+  client: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  activity: z.string().min(1).max(CV_EVIDENCE_LIMITS.activity),
+  mechanism: z.string().max(CV_EVIDENCE_LIMITS.mechanism).default(''),
+  result: z.string().max(CV_EVIDENCE_LIMITS.result).default(''),
+  ownership: z.enum(['sole', 'shared', 'unknown']).default('unknown'),
+  sourceReference: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  metricValue: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  metricUnit: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  metricBasis: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+};
+
+const wordingProposalShape = {
+  caseId: z.string().min(1),
+  targetField: z.enum(['summary', 'skill', 'experience_bullet', 'project_description']),
+  parentId: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
+  text: z.string().min(1).max(CV_EVIDENCE_LIMITS.wordingText),
+  factIds: z.array(z.string()).max(CV_EVIDENCE_LIMITS.factIdsPerVariant).default([]),
+};
+
+const selectionProposalShape = {
+  caseId: z.string().min(1),
+  includedEntryIds: z.array(z.string()).max(CV_PROPOSAL_LIMITS.includedEntryIdsPerProposal).default([]),
+};
+
 /**
- * A fresh `McpServer` per request, matching `StreamableHTTPServerTransport`'s own stateless usage
- * pattern -- and not merely a style choice: the underlying `Server.connect` throws ("Already
+ * Registers one `propose_*` tool. Every proposal write and its audit entry happen in the same
+ * transaction (#421: "a failed audit write blocks a mutating call") -- `createCvTailoringProposal`
+ * itself re-validates every id the payload cites against the case's current state, so this
+ * function's own job is only the grant-scope check and wiring the payload through unchanged.
+ */
+function registerProposalTool(
+  server: McpServer,
+  db: WorkspaceDb,
+  grant: McpClientGrantRecord,
+  toolName: string,
+  kind: CvProposalPayload['kind'],
+  shape: Record<string, z.ZodTypeAny>,
+  description: string,
+): void {
+  server.registerTool(toolName, { description, inputSchema: shape }, async (rawArgs) => {
+    const { caseId, ...data } = rawArgs as { caseId: string } & Record<string, unknown>;
+    return db.transaction((tx) => {
+      requireCoverage(grant, caseId);
+      const proposal = workspace.createCvTailoringProposal(tx, {
+        caseId,
+        grantId: grant.id,
+        payload: { kind, data } as unknown as CvProposalPayload,
+      });
+      auditTool(tx, grant, toolName, caseId, 'success', proposal.caseRevisionAtProposal);
+      return toolTextResult({ proposalId: proposal.id, status: proposal.status });
+    });
+  });
+}
+
+/**
+ * Builds a fresh `McpServer` for one request, registering every #421 tool against this specific
+ * `grant` and `db` -- fresh per request, matching `StreamableHTTPServerTransport`'s own stateless
+ * usage pattern, and not merely a style choice: the underlying `Server.connect` throws ("Already
  * connected to a transport... use a separate Protocol instance per connection") if the same
  * `McpServer` is reconnected to a second transport, which a shared, reused instance would hit on
  * this server's very first follow-up request (the client's own `notifications/initialized` is a
- * second HTTP POST, hitting a second transport). Tool registration (slice 3) is static and cheap
- * to repeat per request; there is no per-client state worth keeping across requests that a fresh
- * instance would lose.
+ * second HTTP POST, hitting a second transport). Registering ten tools per request is cheap; there
+ * is no per-client state worth keeping across requests that a fresh instance would lose.
  */
-function createMcpServerInstance(): McpServer {
-  return new McpServer(SERVER_INFO);
+function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): McpServer {
+  const server = new McpServer(SERVER_INFO);
+
+  server.registerTool(
+    'start_tailoring_case',
+    {
+      description: 'Start a new CV tailoring case from an OVR vacancy reference or a pasted job description.',
+      inputSchema: {
+        vacancy: z
+          .object({
+            title: z.string().min(1).max(LIMITS.short),
+            company: z.string().min(1).max(LIMITS.short),
+            location: z.string().max(LIMITS.short).default(''),
+            url: z.string().max(LIMITS.short).default(''),
+            postingText: z.string().min(1).max(LIMITS.jdSnapshot),
+          })
+          .optional(),
+        manualJd: z
+          .object({
+            role: z.string().min(1).max(LIMITS.short),
+            company: z.string().min(1).max(LIMITS.short),
+            jdText: z.string().min(1).max(LIMITS.jdSnapshot),
+            url: z.string().max(LIMITS.short).default(''),
+          })
+          .optional(),
+      },
+    },
+    async ({ vacancy, manualJd }) => {
+      if (!vacancy === !manualJd) throw new Error('provide exactly one of "vacancy" or "manualJd"');
+      if (grant.scopeType !== 'source_cv') throw new Error('this grant cannot start new cases, only work on previously named ones');
+
+      const doc = workspace.getCvDocument(db, grant.sourceCvId);
+      if (!doc.source) throw new Error('this CV has no reviewed source yet, so there is nothing to tailor from');
+      const sourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+
+      const jdSnapshot = vacancy ? vacancy.postingText : (manualJd as NonNullable<typeof manualJd>).jdText;
+      const jdSnapshotHash = createHash('sha256').update(jdSnapshot).digest('hex');
+      const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : mintManualCaseKey();
+
+      const overlay = workspace.createCvEvidenceOverlay(db, {
+        cvId: grant.sourceCvId,
+        vacancyKey,
+        sourceCvContentHash,
+        jdSnapshot,
+        jdSnapshotHash,
+        jdComplete: true,
+        origin: vacancy ? 'vacancy' : 'manual',
+      });
+      workspace.appendMcpClientGrantCaseId(db, grant.id, overlay.id);
+      auditTool(db, grant, 'start_tailoring_case', overlay.id, 'success', overlay.caseRevision);
+
+      return toolTextResult({
+        caseId: overlay.id,
+        caseRevision: overlay.caseRevision,
+        gaps: describeCvEvidenceOverlayGaps(overlay, sourceCvContentHash),
+      });
+    },
+  );
+
+  server.registerTool(
+    'get_tailoring_case',
+    {
+      description: 'Read one page of a tailoring case: the JD text, requirements, reviewed evidence, and open proposals.',
+      inputSchema: { caseId: z.string().min(1), page: z.number().int().min(0).default(0) },
+    },
+    async ({ caseId, page }) => {
+      requireCoverage(grant, caseId);
+      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+      const start = page * JD_PAGE_SIZE;
+      const jdPage = overlay.jdSnapshot.slice(start, start + JD_PAGE_SIZE);
+      const totalPages = Math.max(1, Math.ceil(overlay.jdSnapshot.length / JD_PAGE_SIZE));
+      const pendingProposals = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending');
+
+      return toolTextResult({
+        caseId: overlay.id,
+        caseRevision: overlay.caseRevision,
+        state: overlay.state,
+        jd: { page, totalPages, text: jdPage, isLastPage: page >= totalPages - 1, isComplete: overlay.jdComplete },
+        requirements: overlay.requirements,
+        facts: overlay.facts,
+        pendingProposals,
+      });
+    },
+  );
+
+  registerProposalTool(server, db, grant, 'propose_requirements', 'requirement', requirementProposalShape, 'Propose a new JD requirement for this case.');
+  registerProposalTool(server, db, grant, 'propose_evidence_link', 'evidence_link', evidenceLinkProposalShape, 'Propose linking an existing requirement to reviewed source evidence.');
+  registerProposalTool(server, db, grant, 'propose_clarification_question', 'clarification_question', clarificationQuestionProposalShape, 'Propose a question for the candidate to answer about a requirement.');
+  registerProposalTool(server, db, grant, 'propose_fact', 'fact', factProposalShape, 'Propose a claimed fact about the candidate\'s own work, for the candidate to confirm.');
+  registerProposalTool(server, db, grant, 'propose_wording', 'wording', wordingProposalShape, 'Propose exact CV wording grounded in existing facts, for the candidate to approve.');
+  registerProposalTool(server, db, grant, 'propose_selection', 'selection', selectionProposalShape, 'Propose which reviewed roles or projects this case should draw from.');
+
+  server.registerTool(
+    'get_tailoring_status',
+    {
+      description: 'Poll a tailoring case\'s current state without creating new work.',
+      inputSchema: { caseId: z.string().min(1) },
+    },
+    async ({ caseId }) => {
+      requireCoverage(grant, caseId);
+      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+      const doc = workspace.getCvDocument(db, overlay.cvId);
+      const currentSourceCvContentHash = doc.source ? createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex') : '';
+      const pendingProposalCount = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending').length;
+
+      return toolTextResult({
+        caseId: overlay.id,
+        caseRevision: overlay.caseRevision,
+        state: overlay.state,
+        gaps: describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash),
+        pendingProposalCount,
+        artifactState: overlay.state === 'artifact_approved' ? 'exported' : overlay.state === 'candidate_approved' ? 'approved_not_exported' : 'not_approved',
+      });
+    },
+  );
+
+  server.registerTool(
+    'read_approved_resume',
+    {
+      description: 'Read the exact, immutable resume the candidate approved for this case, if still current.',
+      inputSchema: { caseId: z.string().min(1) },
+    },
+    async ({ caseId }) => {
+      if (!grant.canReadFinalSnapshot) throw new Error('this grant does not have permission to read the approved resume');
+      requireCoverage(grant, caseId);
+      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+      if (!overlay.approvedResumeSnapshot) throw new Error('this case has not been approved yet');
+      if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+        throw new Error('the case has changed since it was approved; the approved snapshot is no longer current');
+      }
+      return toolTextResult(overlay.approvedResumeSnapshot);
+    },
+  );
+
+  return server;
 }
 
 function extractBearerToken(header: string | string[] | undefined): string | undefined {
@@ -153,11 +399,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, getDb: (
       }
     }
 
-    const mcpServer = createMcpServerInstance();
+    // No audit entry for the exchange itself beyond this point: `initialize`/`tools/list`/
+    // notifications carry no case id or tool call worth recording, and every real tool call below
+    // audits itself, atomically with whatever it writes.
+    const mcpServer = createMcpServerInstance(db, grant);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, parsedBody);
-    workspace.appendMcpAuditLogEntry(db, { grantId: grant.id, toolName: '', outcome: 'success' });
   } catch {
     // Never a stack trace or an internal message across this boundary -- the same "sanitize
     // anything without a known 4xx shape" discipline the daemon's own error handler documents.

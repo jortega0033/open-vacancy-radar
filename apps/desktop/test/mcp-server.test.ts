@@ -9,22 +9,28 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
 import { startMcpServer, type McpServerHandle } from '../electron/mcp-server.js';
+import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
 
 /**
- * Exercises the real local MCP endpoint (#421, slice 2) against a real HTTP server on a real port
- * and a real SQLite file -- not mocks. No tool is registered yet (that is slice 3), so the
- * meaningful behavior here is entirely the transport/auth/audit gate every future tool call will
- * also pass through: Origin/Host rejection, per-grant credential auth, size/shape limits on the
- * body, and that a real `@modelcontextprotocol/sdk` client can complete the MCP handshake end to
- * end once authorized. This is the "real client interoperability" proof for the transport layer;
- * #421's own phase-3 line about an interop test is specifically about the *tool* surface, added
- * once tools exist.
+ * Exercises the real local MCP endpoint (#421) against a real HTTP server on a real port and a
+ * real SQLite file -- not mocks. The first describe block covers the transport/auth/audit gate
+ * every tool call passes through (Origin/Host rejection, per-grant credential auth, size/shape
+ * limits, a real `@modelcontextprotocol/sdk` client completing the MCP handshake). The second
+ * drives the actual tool surface end to end through that same real client -- the "real client
+ * interoperability" proof #421's own phase-3 line asks for.
  */
 
 const CV = {
   name: 'Resume',
   kind: 'manual' as const,
   profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+};
+const SOURCE = {
+  ...EMPTY_CV_SOURCE,
+  summary: 'Original summary.',
+  experience: [
+    { id: 'experience-1', company: 'Redwood Software', title: 'Frontend Engineer', dates: '2021 - Present', engagement: 'employment' as const, client: '', bullets: ['Built things.'] },
+  ],
 };
 const FUTURE = '2099-01-01T00:00:00.000Z';
 const PAST = '2000-01-01T00:00:00.000Z';
@@ -48,14 +54,34 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function createGrant(overrides: { expiresAt?: string } = {}) {
-  const cv = workspace.createCvDocument(db, CV);
-  return workspace.createMcpClientGrant(db, {
+function createGrant(overrides: { expiresAt?: string; withSource?: boolean; canReadFinalSnapshot?: boolean } = {}) {
+  const cv = workspace.createCvDocument(db, { ...CV, ...(overrides.withSource ? { source: SOURCE } : {}) });
+  const { grant, credential } = workspace.createMcpClientGrant(db, {
     name: 'Test client',
     scopeType: 'source_cv',
     sourceCvId: cv.id,
     expiresAt: overrides.expiresAt ?? FUTURE,
+    canReadFinalSnapshot: overrides.canReadFinalSnapshot ?? false,
   });
+  return { cv, grant, credential };
+}
+
+async function connectedClient(credential: string): Promise<Client> {
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${handle.port}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${credential}` } },
+    }),
+  );
+  return client;
+}
+
+/** `callTool` resolves even when the tool threw (the SDK converts it to `isError: true`), so
+ * callers that expect a *successful* call assert on `.isError` rather than relying on a rejection. */
+function toolJson<T = unknown>(result: Record<string, unknown>): T {
+  const content = result.content as Array<{ type: string; text?: string }> | undefined;
+  const text = content?.find((c) => c.type === 'text')?.text ?? '{}';
+  return JSON.parse(text) as T;
 }
 
 /** Raw `node:http` rather than `fetch`: the Host-header test specifically needs a client that
@@ -138,22 +164,26 @@ describe('local MCP endpoint transport and auth gate (#421)', () => {
     expect(entries.every((e) => e.outcome === 'denied')).toBe(true);
   });
 
-  it('completes a real MCP handshake for a properly authorized client, advertising no tools capability yet', async () => {
+  it('completes a real MCP handshake for a properly authorized client, listing all ten tools', async () => {
     const { credential } = createGrant();
-    const client = new Client({ name: 'test-client', version: '1.0.0' });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${handle.port}/mcp`), {
-      requestInit: { headers: { authorization: `Bearer ${credential}` } },
-    });
-    await client.connect(transport);
-    // No tool is registered yet (slice 3's job) -- a zero-tool `McpServer` never advertises the
-    // `tools` capability at all, so `listTools()` itself would correctly fail with "Method not
-    // found" rather than resolve to an empty list. The handshake succeeding at all, with no
-    // `tools` capability offered, is the correct proof for this slice.
-    expect(client.getServerCapabilities()?.tools).toBeUndefined();
+    const client = await connectedClient(credential);
+    expect(client.getServerCapabilities()?.tools).toBeDefined();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      [
+        'start_tailoring_case',
+        'get_tailoring_case',
+        'propose_requirements',
+        'propose_evidence_link',
+        'propose_clarification_question',
+        'propose_fact',
+        'propose_wording',
+        'propose_selection',
+        'get_tailoring_status',
+        'read_approved_resume',
+      ].sort(),
+    );
     await client.close();
-
-    const entries = workspace.listMcpAuditLogEntries(db);
-    expect(entries.some((e) => e.outcome === 'success')).toBe(true);
   });
 
   it('a second client authenticates independently of the first, on the same running endpoint', async () => {
@@ -174,8 +204,166 @@ describe('local MCP endpoint transport and auth gate (#421)', () => {
         requestInit: { headers: { authorization: `Bearer ${credentialB}` } },
       }),
     );
+    // Both handshakes completed without error, each under its own credential -- a ping proves the
+    // connection is actually live, not just that `connect()` resolved.
+    await expect(clientB.ping()).resolves.toBeDefined();
     await clientB.close();
+  });
+});
 
-    expect(workspace.listMcpAuditLogEntries(db).filter((e) => e.outcome === 'success').length).toBeGreaterThanOrEqual(2);
+describe('local MCP endpoint tool surface (#421)', () => {
+  it('starts a case from a pasted JD, and the grant earns coverage of it', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+
+    const started = toolJson<{ caseId: string; caseRevision: string; gaps: string[] }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'Frontend Engineer', company: 'Acme', jdText: 'We need a frontend engineer.' } } }),
+    );
+    expect(started.caseId).toBeTruthy();
+    // Vacuously gap-free: there are no requirements at all yet to be unreviewed. Gaps appear once
+    // something is proposed and accepted -- see the pagination test below.
+    expect(started.gaps).toEqual([]);
+
+    // Coverage was earned by this call, not pre-granted: a second tool call against the same
+    // caseId from the same grant succeeds.
+    const status = toolJson(await client.callTool({ name: 'get_tailoring_status', arguments: { caseId: started.caseId } }));
+    expect(status).toMatchObject({ caseId: started.caseId });
+    await client.close();
+  });
+
+  it('refuses to start a case from both a vacancy and a manual JD, or from neither', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const neither = await client.callTool({ name: 'start_tailoring_case', arguments: {} });
+    expect(neither.isError).toBe(true);
+    const both = await client.callTool({
+      name: 'start_tailoring_case',
+      arguments: {
+        vacancy: { title: 'x', company: 'y', postingText: 'z' },
+        manualJd: { role: 'x', company: 'y', jdText: 'z' },
+      },
+    });
+    expect(both.isError).toBe(true);
+    await client.close();
+  });
+
+  it('refuses to start a new case for a case_ids-scoped grant', async () => {
+    const { cv } = createGrant({ withSource: true });
+    const overlay = workspace.createCvEvidenceOverlay(db, { cvId: cv.id, vacancyKey: 'v-1', sourceCvContentHash: 'a'.repeat(64), jdSnapshotHash: 'b'.repeat(64) });
+    const { credential } = workspace.createMcpClientGrant(db, { name: 'Narrow', scopeType: 'case_ids', caseIds: [overlay.id], expiresAt: FUTURE });
+    const client = await connectedClient(credential);
+    const result = await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } });
+    expect(result.isError).toBe(true);
+    await client.close();
+  });
+
+  it('a grant cannot touch a case outside its scope', async () => {
+    const { credential: credentialA } = createGrant({ withSource: true });
+    const clientA = await connectedClient(credentialA);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await clientA.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    await clientA.close();
+
+    const { credential: credentialB } = createGrant({ withSource: true });
+    const clientB = await connectedClient(credentialB);
+    const denied = await clientB.callTool({ name: 'get_tailoring_status', arguments: { caseId } });
+    expect(denied.isError).toBe(true);
+    await clientB.close();
+  });
+
+  it('get_tailoring_case paginates the JD and reports requirements, facts, and pending proposals', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'Short JD text.' } } }),
+    );
+    await client.callTool({
+      name: 'propose_requirements',
+      arguments: { caseId, text: 'React experience', jdAnchor: '', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' },
+    });
+
+    const page = toolJson<{ jd: { text: string; totalPages: number; isLastPage: boolean }; requirements: unknown[]; pendingProposals: unknown[] }>(
+      await client.callTool({ name: 'get_tailoring_case', arguments: { caseId, page: 0 } }),
+    );
+    expect(page.jd.text).toBe('Short JD text.');
+    expect(page.jd.totalPages).toBe(1);
+    expect(page.jd.isLastPage).toBe(true);
+    expect(page.pendingProposals).toHaveLength(1);
+    await client.close();
+  });
+
+  it('propose_fact rejects a parentId that does not resolve in the reviewed source', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    const result = await client.callTool({
+      name: 'propose_fact',
+      arguments: { caseId, parentId: 'invented-entry', parentType: 'experience', activity: 'Did a thing' },
+    });
+    expect(result.isError).toBe(true);
+    await client.close();
+  });
+
+  it('propose_fact accepted later becomes a real self_reported fact, never from the client\'s own claim alone', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    const proposed = toolJson<{ proposalId: string }>(
+      await client.callTool({ name: 'propose_fact', arguments: { caseId, parentId: 'experience-1', parentType: 'experience', activity: 'Shipped the redesign' } }),
+    );
+    await client.close();
+
+    // Acceptance is the app's own action, never the MCP tool's -- there is no "approve" tool.
+    const { overlay } = workspace.acceptCvTailoringProposal(db, proposed.proposalId);
+    expect(overlay.facts[0]).toMatchObject({ activity: 'Shipped the redesign', verification: 'self_reported' });
+  });
+
+  it('read_approved_resume refuses without the separate final-snapshot permission, even within scope', async () => {
+    const { credential } = createGrant({ withSource: true, canReadFinalSnapshot: false });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    const result = await client.callTool({ name: 'read_approved_resume', arguments: { caseId } });
+    expect(result.isError).toBe(true);
+    await client.close();
+  });
+
+  it('read_approved_resume returns the frozen snapshot once approved, for a grant with the permission', async () => {
+    const { credential } = createGrant({ withSource: true, canReadFinalSnapshot: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+
+    const notApprovedYet = await client.callTool({ name: 'read_approved_resume', arguments: { caseId } });
+    expect(notApprovedYet.isError).toBe(true);
+
+    const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+    workspace.approveCvEvidenceOverlay(db, caseId, overlay.caseRevision);
+
+    const snapshot = toolJson<{ resume: { summary: string }; digest: string }>(
+      await client.callTool({ name: 'read_approved_resume', arguments: { caseId } }),
+    );
+    expect(snapshot.resume.summary).toBe('Original summary.');
+    expect(snapshot.digest).toBeTruthy();
+    await client.close();
+  });
+
+  it('every tool call is audited with the real tool name and case id', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    await client.close();
+
+    const entries = workspace.listMcpAuditLogEntries(db);
+    expect(entries.some((e) => e.toolName === 'start_tailoring_case' && e.caseId === caseId && e.outcome === 'success')).toBe(true);
   });
 });

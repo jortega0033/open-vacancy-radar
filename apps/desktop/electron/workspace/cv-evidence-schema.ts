@@ -443,6 +443,42 @@ export function proposeWordingFromFacts(
 }
 
 /**
+ * A stable identity string for one vacancy lead, so per-vacancy state (#419's evidence overlay)
+ * has something to key on. Takes a minimal structural shape rather than importing the renderer's
+ * own `VacancyLead` type, so this file's "no runtime imports" discipline extends to type imports
+ * too -- every real `VacancyLead` already has these four fields, so passing one here needs no cast.
+ *
+ * The source URL wins whenever one exists: it is exactly what a real posting resolves to, and two
+ * leads with the same URL are the same vacancy by construction. Only a hand-entered vacancy with no
+ * URL falls back to a normalized role/company/location composite, normalized case- and
+ * whitespace-insensitively so two spellings of the same vacancy still key together.
+ *
+ * Moved here from the renderer's own `vacancy-key.ts` (#421) so Electron main (the MCP tool
+ * handlers starting a case from a vacancy reference) can call it too, without main importing from
+ * `src/` -- the same "dependency-free shared module lives under `electron/workspace`, the renderer
+ * imports from there" direction `resume-source.ts`/`cv-source-schema.ts` already establish.
+ * `src/components/cv/vacancy-key.ts` re-exports this unchanged.
+ */
+export function vacancyKeyFor(vacancy: { title: string; company: string; location: string; url: string }): string {
+  const url = vacancy.url.trim();
+  if (url.length > 0) return `url:${url}`;
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/gu, ' ');
+  return `fields:${normalize(vacancy.title)}|${normalize(vacancy.company)}|${normalize(vacancy.location)}`;
+}
+
+/**
+ * A stable key for a case with no vacancy behind it at all -- #421's MCP case contract, where an
+ * external client may start a case from pasted JD text alone. Freshly minted per call, never
+ * derived from the JD text itself: two cases started from identical JD text are still two distinct
+ * cases the candidate may want to track separately, the same "app assigns ids, never derives them
+ * from content" discipline this module already follows for `factId`/`variantId`. The `manual:`
+ * prefix can never collide with `vacancyKeyFor`'s own `url:`/`fields:` prefixes.
+ */
+export function mintManualCaseKey(): string {
+  return `manual:${crypto.randomUUID()}`;
+}
+
+/**
  * The new `jdRevisions` history after a JD-text write, appending a fresh immutable revision only
  * when the text actually changed -- a write that merely re-sends today's own JD text (an
  * idempotent retry, or a caller that always includes it) must not pad the history with an

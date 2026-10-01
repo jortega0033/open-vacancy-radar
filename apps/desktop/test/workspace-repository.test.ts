@@ -582,6 +582,22 @@ describe('mcp client grants and audit trail (#421)', () => {
     expect(entries[0]).toMatchObject({ toolName: 'get_tailoring_case', caseId: 'case-1', outcome: 'success', revision: '3' });
     expect(entries[1]).toMatchObject({ grantId: '', toolName: '', caseId: '', outcome: 'denied', revision: '' });
   });
+
+  describe('appendMcpClientGrantCaseId', () => {
+    it('appends a case id a source_cv grant has newly earned, idempotently', () => {
+      const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
+      const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: '2099-01-01T00:00:00.000Z' });
+      expect(grant.caseIds).toEqual([]);
+      const once = workspace.appendMcpClientGrantCaseId(db, grant.id, 'case-1');
+      expect(once.caseIds).toEqual(['case-1']);
+      const twice = workspace.appendMcpClientGrantCaseId(db, grant.id, 'case-1');
+      expect(twice.caseIds).toEqual(['case-1']); // not duplicated
+    });
+
+    it('throws WorkspaceNotFoundError for a missing grant', () => {
+      expect(() => workspace.appendMcpClientGrantCaseId(db, 'missing-grant', 'case-1')).toThrow(workspace.WorkspaceNotFoundError);
+    });
+  });
 });
 
 describe('cv tailoring proposals (#421)', () => {

@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
 import {
   invalidatedOverlayState,
@@ -860,6 +860,28 @@ export function findMcpClientGrantByCredential(db: WorkspaceDb, credential: stri
   return null;
 }
 
+/**
+ * Appends `caseId` to a `source_cv` grant's `caseIds`, if not already present -- the mechanism
+ * behind `mcp-grant-schema.ts`'s own documented behavior: a `source_cv` grant earns coverage of a
+ * case one at a time, only as its own `start_tailoring_case` calls succeed, never by reading every
+ * case that CV happens to have. Idempotent: calling it twice with the same `caseId` is a no-op the
+ * second time, not a duplicate entry.
+ */
+export function appendMcpClientGrantCaseId(db: WorkspaceDb, grantId: string, caseId: string): McpClientGrantRecord {
+  const existing = db.select().from(mcpClientGrants).where(eq(mcpClientGrants.id, grantId)).get();
+  if (!existing) throw new WorkspaceNotFoundError('MCP client grant', grantId);
+  const caseIds = existing.caseIds ?? [];
+  if (caseIds.includes(caseId)) return toMcpClientGrant(existing);
+  const [row] = db
+    .update(mcpClientGrants)
+    .set({ caseIds: [...caseIds, caseId] })
+    .where(eq(mcpClientGrants.id, grantId))
+    .returning()
+    .all();
+  if (!row) throw new WorkspaceNotFoundError('MCP client grant', grantId);
+  return toMcpClientGrant(row);
+}
+
 // ----------------------------------------------------------------------- mcp audit trail (#421)
 
 type McpAuditLogEntryRow = typeof mcpAuditLogEntries.$inferSelect;
@@ -898,8 +920,21 @@ export function appendMcpAuditLogEntry(db: WorkspaceDb, entry: McpAuditLogEntryI
   return toMcpAuditLogEntry(row);
 }
 
+/**
+ * `rowid` breaks a tie `createdAt` alone cannot: two calls in the same millisecond (entirely
+ * realistic for back-to-back tool calls, and exactly what made this nondeterministic in testing)
+ * would otherwise leave SQLite free to return either order for rows whose timestamp is identical.
+ * `rowid` is monotonically increasing with insertion order on this ordinary (non-`WITHOUT ROWID`)
+ * table, so it is both a correct and a free tiebreaker -- no separate sequence column needed.
+ */
 export function listMcpAuditLogEntries(db: WorkspaceDb, limit = 500): McpAuditLogEntry[] {
-  return db.select().from(mcpAuditLogEntries).orderBy(desc(mcpAuditLogEntries.createdAt)).limit(limit).all().map(toMcpAuditLogEntry);
+  return db
+    .select()
+    .from(mcpAuditLogEntries)
+    .orderBy(desc(mcpAuditLogEntries.createdAt), desc(sql`rowid`))
+    .limit(limit)
+    .all()
+    .map(toMcpAuditLogEntry);
 }
 
 // ----------------------------------------------------------------- mcp tailoring proposals (#421)
