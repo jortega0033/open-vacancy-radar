@@ -1077,7 +1077,10 @@ export function listCvTailoringProposals(db: WorkspaceDb, caseId: string): CvTai
     .select()
     .from(cvTailoringProposals)
     .where(eq(cvTailoringProposals.caseId, caseId))
-    .orderBy(desc(cvTailoringProposals.createdAt))
+    // createdAt alone ties for two proposals landing in the same millisecond -- the same ordering
+    // bug self-caught in listMcpAuditLogEntries, fixed the same way with rowid as a free, correct
+    // secondary sort key.
+    .orderBy(desc(cvTailoringProposals.createdAt), desc(sql`rowid`))
     .all()
     .map(toCvTailoringProposal);
 }
