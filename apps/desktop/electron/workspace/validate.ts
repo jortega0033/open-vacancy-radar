@@ -32,6 +32,7 @@ import {
   CV_EVIDENCE_LIMITS,
   CV_EVIDENCE_OVERLAY_ORIGINS,
   CV_EVIDENCE_OVERLAY_STATES,
+  CV_FACT_APPROVALS,
   CV_FACT_OWNERSHIPS,
   CV_FACT_SOURCE_KINDS,
   CV_FACT_VERIFICATIONS,
@@ -613,6 +614,10 @@ function parseEvidenceFact(value: unknown, index: number): CvEvidenceFact {
     // .approvedAt`'s doc comment), so re-blanking just this one timestamp would not raise the
     // trust bar, only make it inconsistent with its neighbours.
     createdAt: entry.createdAt === undefined ? '' : str(entry.createdAt, `facts[${index}].createdAt`, CV_EVIDENCE_LIMITS.shortField),
+    // A fact the caller does not say is approved starts as proposed: approval is the candidate's
+    // explicit act and is never assumed from silence.
+    approval: entry.approval === undefined ? 'proposed' : oneOf(entry.approval, `facts[${index}].approval`, CV_FACT_APPROVALS),
+    timePhase: entry.timePhase === undefined ? '' : str(entry.timePhase, `facts[${index}].timePhase`, CV_EVIDENCE_LIMITS.shortField),
   };
 }
 
@@ -636,11 +641,19 @@ function parseApprovedWording(value: unknown, index: number): CvApprovedWording 
     approvedAt: entry.approvedAt === undefined ? '' : str(entry.approvedAt, `wordingVariants[${index}].approvedAt`, CV_EVIDENCE_LIMITS.shortField),
     sourceRevision:
       entry.sourceRevision === undefined ? '' : str(entry.sourceRevision, `wordingVariants[${index}].sourceRevision`, CV_EVIDENCE_LIMITS.shortField),
+    supersedes: entry.supersedes === undefined ? '' : str(entry.supersedes, `wordingVariants[${index}].supersedes`, CV_EVIDENCE_LIMITS.shortField),
+    rejectedAt: entry.rejectedAt === undefined ? '' : str(entry.rejectedAt, `wordingVariants[${index}].rejectedAt`, CV_EVIDENCE_LIMITS.shortField),
   };
 }
 
 function parseRequirementMapping(value: unknown, index: number): CvRequirementMapping {
   const entry = asRecord(value, `"requirements[${index}]"`);
+  const excluded = entry.excluded === undefined ? false : bool(entry.excluded, `requirements[${index}].excluded`);
+  const exclusionReason =
+    entry.exclusionReason === undefined ? '' : str(entry.exclusionReason, `requirements[${index}].exclusionReason`, CV_EVIDENCE_LIMITS.requirementText);
+  if (excluded && exclusionReason.trim().length === 0) {
+    fail(`"requirements[${index}].exclusionReason" is required when a requirement is marked as not a requirement`);
+  }
   return {
     requirementId: requiredNonEmpty(entry.requirementId, `requirements[${index}].requirementId`, CV_EVIDENCE_LIMITS.shortField),
     text: requiredNonEmpty(entry.text, `requirements[${index}].text`, CV_EVIDENCE_LIMITS.requirementText),
@@ -651,6 +664,16 @@ function parseRequirementMapping(value: unknown, index: number): CvRequirementMa
       entry.anchorParentId === undefined ? '' : str(entry.anchorParentId, `requirements[${index}].anchorParentId`, CV_EVIDENCE_LIMITS.shortField),
     candidateAdded: entry.candidateAdded === undefined ? false : bool(entry.candidateAdded, `requirements[${index}].candidateAdded`),
     reviewed: entry.reviewed === undefined ? false : bool(entry.reviewed, `requirements[${index}].reviewed`),
+    // The span and revision are recomputed by the repository against the stored JD text. They are
+    // parsed only so an unchanged round-trip keeps its shape; a caller cannot vouch for a quote.
+    quoteStart: entry.quoteStart === undefined ? -1 : integerField(entry.quoteStart, `requirements[${index}].quoteStart`),
+    quoteEnd: entry.quoteEnd === undefined ? -1 : integerField(entry.quoteEnd, `requirements[${index}].quoteEnd`),
+    jdRevisionId:
+      entry.jdRevisionId === undefined ? '' : str(entry.jdRevisionId, `requirements[${index}].jdRevisionId`, CV_EVIDENCE_LIMITS.shortField),
+    excluded,
+    exclusionReason: excluded ? exclusionReason.trim() : '',
+    sourceIds: stringList(entry.sourceIds ?? [], `requirements[${index}].sourceIds`, CV_EVIDENCE_LIMITS.linksPerRequirement, CV_EVIDENCE_LIMITS.shortField),
+    factIds: stringList(entry.factIds ?? [], `requirements[${index}].factIds`, CV_EVIDENCE_LIMITS.linksPerRequirement, CV_EVIDENCE_LIMITS.shortField),
   };
 }
 
@@ -678,6 +701,19 @@ const PATCHABLE_OVERLAY_STATES: readonly Exclude<CvEvidenceOverlayState, 'candid
   (candidate): candidate is Exclude<CvEvidenceOverlayState, 'candidate_approved'> => candidate !== 'candidate_approved',
 );
 
+function integerField(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < -1) fail(`"${field}" must be an integer of at least -1`);
+  return value as number;
+}
+
+function parseRequirementCoverageInput(value: unknown): { status: 'partial' | 'complete'; batches: number } {
+  const entry = asRecord(value, '"requirementCoverage"');
+  return {
+    status: oneOf(entry.status, 'requirementCoverage.status', ['partial', 'complete'] as const),
+    batches: nonNegativeInt(entry.batches ?? 0, 'requirementCoverage.batches', 1_000),
+  };
+}
+
 export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPatch {
   const input = asRecord(value, '"patch"');
   const out: CvEvidenceOverlayPatch = {};
@@ -691,6 +727,7 @@ export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPa
   patch(input, out, 'jdConfirmedComplete', (v) => bool(v, 'jdConfirmedComplete'));
   patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
   patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
+  patch(input, out, 'requirementCoverage', (v) => parseRequirementCoverageInput(v));
   patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));
   patch(input, out, 'facts', (v) => boundedArray(v, 'facts', CV_EVIDENCE_LIMITS.facts).map(parseEvidenceFact));
   patch(input, out, 'wordingVariants', (v) => boundedArray(v, 'wordingVariants', CV_EVIDENCE_LIMITS.wordingVariants).map(parseApprovedWording));

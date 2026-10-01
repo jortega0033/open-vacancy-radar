@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveWordingFromFact,
   describeCvEvidenceOverlayGaps,
-  EMPTY_CV_EVIDENCE_OVERLAY,
   invalidatedOverlayState,
   isCvEvidenceOverlayApprovable,
   proposeWordingFromFacts,
@@ -12,39 +11,18 @@ import {
   type CvEvidenceOverlay,
   type CvRequirementMapping,
 } from '../electron/workspace/cv-evidence-schema.js';
-
-const HASH = 'a'.repeat(64);
+import { FIXTURE_HASH as HASH, makeFact, makeOverlay, makeRequirement, makeVariant } from './fixtures/cv-evidence.js';
 
 function overlay(partial: Partial<CvEvidenceOverlay> = {}): CvEvidenceOverlay {
-  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, jdSnapshot: 'A full job description.', ...partial };
+  return makeOverlay(partial);
 }
 
 function requirement(partial: Partial<CvRequirementMapping> = {}): CvRequirementMapping {
-  return {
-    requirementId: 'r-1',
-    text: 'Experience with React',
-    jdAnchor: '',
-    classification: 'required',
-    evidenceClass: 'direct',
-    anchorParentId: 'experience-1',
-    candidateAdded: false,
-    reviewed: true,
-    ...partial,
-  };
+  return makeRequirement(partial);
 }
 
 function wording(partial: Partial<CvApprovedWording> = {}): CvApprovedWording {
-  return {
-    variantId: 'v-1',
-    targetField: 'summary',
-    parentId: '',
-    text: 'Approved wording.',
-    factIds: ['fact-1'],
-    status: 'candidate_approved',
-    approvedAt: '2026-09-30T00:00:00.000Z',
-    sourceRevision: HASH,
-    ...partial,
-  };
+  return makeVariant(partial);
 }
 
 describe('describeCvEvidenceOverlayGaps', () => {
@@ -140,25 +118,13 @@ describe('invalidatedOverlayState', () => {
 });
 
 function fact(partial: Partial<CvEvidenceFact> = {}): CvEvidenceFact {
-  return {
-    factId: 'fact-1',
-    parentId: 'experience-1',
-    parentType: 'experience',
-    client: '',
+  return makeFact({
     activity: 'Designed the GraphQL schema',
     mechanism: 'Apollo Server, schema-first',
     result: 'cut client-side overfetching',
     ownership: 'unknown',
-    sourceKind: 'candidate_testimony',
-    sourceReference: '',
-    verification: 'self_reported',
-    metricValue: '',
-    metricUnit: '',
-    metricBasis: '',
-    supersedes: '',
-    createdAt: '2026-09-30T00:00:00.000Z',
     ...partial,
-  };
+  });
 }
 
 describe('deriveWordingFromFact (#419, step 4)', () => {
@@ -174,24 +140,32 @@ describe('deriveWordingFromFact (#419, step 4)', () => {
 });
 
 describe('proposeWordingFromFacts (#419, step 4)', () => {
-  it('proposes one candidate_approved variant per self-reported fact with no existing wording', () => {
-    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()] }), HASH);
+  it('proposes one draft variant per approved self-reported fact with no existing wording', () => {
+    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()] }));
     expect(proposed).toHaveLength(1);
     expect(proposed[0]).toMatchObject({
       targetField: 'experience_bullet',
       parentId: 'experience-1',
       text: deriveWordingFromFact(fact()),
       factIds: ['fact-1'],
-      status: 'candidate_approved',
-      sourceRevision: HASH,
+      status: 'draft',
+      approvedAt: '',
     });
-    expect(proposed[0]?.approvedAt).not.toBe('');
+  });
+
+  it('proposes nothing for a fact the candidate has not approved or that is rejected', () => {
+    expect(proposeWordingFromFacts(overlay({ facts: [fact({ approval: 'proposed' })] }))).toEqual([]);
+    expect(proposeWordingFromFacts(overlay({ facts: [fact({ approval: 'rejected' })] }))).toEqual([]);
+  });
+
+  it('never re-proposes wording the candidate rejected', () => {
+    const rejected = wording({ status: 'rejected', rejectedAt: '2026-10-01T00:00:00.000Z' });
+    expect(proposeWordingFromFacts(overlay({ facts: [fact()], wordingVariants: [rejected] }))).toEqual([]);
   });
 
   it('targets project_description for a project-scoped fact', () => {
     const proposed = proposeWordingFromFacts(
       overlay({ facts: [fact({ parentId: 'project-1', parentType: 'project' })] }),
-      HASH,
     );
     expect(proposed[0]?.targetField).toBe('project_description');
     expect(proposed[0]?.parentId).toBe('project-1');
@@ -205,21 +179,20 @@ describe('proposeWordingFromFacts (#419, step 4)', () => {
           fact({ factId: 'fact-3', verification: 'corroborated' }),
         ],
       }),
-      HASH,
     );
     expect(proposed).toEqual([]);
   });
 
   it('never proposes wording twice for a fact that already backs an existing variant', () => {
     const existing = wording({ factIds: ['fact-1'] });
-    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()], wordingVariants: [existing] }), HASH);
+    const proposed = proposeWordingFromFacts(overlay({ facts: [fact()], wordingVariants: [existing] }));
     expect(proposed).toEqual([]);
   });
 });
 
 describe('withJdRevision (#421)', () => {
   it('appends a new revision when the JD text actually changes', () => {
-    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true });
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true, jdRevisions: [] });
     const revisions = withJdRevision(base, 'v2', 'h2', true, '2026-10-01T00:00:00.000Z');
     expect(revisions).toHaveLength(1);
     expect(revisions[0]).toMatchObject({ text: 'v2', textHash: 'h2', complete: true, capturedAt: '2026-10-01T00:00:00.000Z' });
@@ -232,7 +205,7 @@ describe('withJdRevision (#421)', () => {
   });
 
   it('treats only jdComplete flipping as a change too, even with identical text', () => {
-    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: false });
+    const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: false, jdRevisions: [] });
     const revisions = withJdRevision(base, 'v1', 'h1', true, '2026-10-01T00:00:00.000Z');
     expect(revisions).toHaveLength(1);
   });

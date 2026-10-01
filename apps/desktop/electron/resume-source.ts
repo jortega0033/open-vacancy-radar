@@ -5,7 +5,12 @@ import {
   type CvSourceExperienceEntry,
   type CvSourceProjectEntry,
 } from './workspace/cv-source-schema.js';
-import { describeCvEvidenceOverlayGaps, type CvEvidenceOverlay } from './workspace/cv-evidence-schema.js';
+import {
+  describeCvEvidenceOverlayGaps,
+  findCvFactConflicts,
+  isCvFactUsable,
+  type CvEvidenceOverlay,
+} from './workspace/cv-evidence-schema.js';
 import type { ResumeExperienceEntry, ResumeProjectEntry, TailoredResume } from './resume-schema.js';
 
 /**
@@ -250,8 +255,20 @@ export function composeApprovedTailoredResume(
   const experienceById = new Map(source.experience.map((entry) => [entry.id, entry]));
   const projectById = new Map(source.projects.map((entry) => [entry.id, entry]));
 
+  // Both the variant and every fact it cites must be active and approved (#419 step 7). A model
+  // can emit a plausible fact id or a sentence, but neither is usable until the candidate approved
+  // it here, and a fact in an unresolved contradiction blocks the wording that stands on it.
+  const factById = new Map(overlay.facts.map((fact) => [fact.factId, fact]));
+  const conflicted = new Set(findCvFactConflicts(overlay.facts).flatMap((conflict) => conflict.factIds));
   const usable = overlay.wordingVariants.filter((variant) => {
     if (variant.status !== 'candidate_approved') return false;
+    const backed =
+      variant.factIds.length > 0 &&
+      variant.factIds.every((factId) => {
+        const fact = factById.get(factId);
+        return fact !== undefined && isCvFactUsable(fact, conflicted);
+      });
+    if (!backed) return false;
     if (variant.sourceRevision !== currentSourceCvContentHash) {
       blockers.push(`an approved "${variant.targetField}" variant was approved against a source CV revision that no longer matches`);
       return false;

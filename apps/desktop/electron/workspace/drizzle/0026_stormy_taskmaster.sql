@@ -1,0 +1,2 @@
+ALTER TABLE `cv_evidence_overlays` ADD `requirement_coverage` text DEFAULT '{"status":"not_run","revisionId":"","batches":0}' NOT NULL;--> statement-breakpoint
+UPDATE `cv_evidence_overlays` SET `requirement_coverage` = json_object('status', 'complete', 'revisionId', COALESCE(json_extract(`jd_revisions`, '$[#-1].revisionId'), ''), 'batches', 0) WHERE `state` IN ('candidate_approved', 'artifact_approved');

@@ -14,8 +14,17 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, withStableExperienceIds, type CvSourceDocument } from './cv-source-schema.js';
 import {
+  currentCvJdRevisionId,
+  EMPTY_CV_REQUIREMENT_COVERAGE,
+  findCvFactConflicts,
   invalidatedOverlayState,
-  proposeWordingFromFacts,
+  locateJdQuote,
+  reconcileCvEvidence,
+  requirementDedupeKeys,
+  upgradeStoredFacts,
+  upgradeStoredRequirements,
+  upgradeStoredVariants,
+  verifyCvRequirementQuotes,
   withJdRevision,
   CV_JD_UNWAIVABLE_REASONS,
   type CvEvidenceOverlay,
@@ -550,6 +559,19 @@ export function deleteCvDocument(db: WorkspaceDb, id: string): DeleteResult {
 type CvEvidenceOverlayRow = typeof cvEvidenceOverlays.$inferSelect;
 
 function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord {
+  // A revision stored before #419's metadata existed has none of it. It is filled from what the
+  // case itself says (a manual case's text was entered by hand, any other was read from a found
+  // vacancy) rather than left undefined for every reader to guard against.
+  const jdRevisions = (row.jdRevisions ?? []).map((revision) => ({
+    ...revision,
+    origin: revision.origin ?? (row.origin === 'manual' ? 'manual' : 'found'),
+    url: revision.url ?? '',
+    requisition: revision.requisition ?? '',
+    incompleteReasons: revision.incompleteReasons ?? [],
+    warning: revision.warning ?? '',
+  }));
+  const currentRevisionId = currentCvJdRevisionId({ jdRevisions });
+  const wordingVariants = upgradeStoredVariants(row.wordingVariants ?? []);
   return {
     id: row.id,
     cvId: row.cvId,
@@ -568,20 +590,11 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     // JSON columns: a row from before a later field was added to these shapes could be missing it,
     // so entries are defaulted rather than trusted, the same discipline `toCvDocument` already
     // applies to `profile`.
-    requirements: row.requirements ?? [],
-    facts: row.facts ?? [],
-    wordingVariants: row.wordingVariants ?? [],
-    // A revision stored before #419's metadata existed has none of it. It is filled from what the
-    // case itself says (a manual case's text was entered by hand, any other was read from a found
-    // vacancy) rather than left undefined for every reader to guard against.
-    jdRevisions: (row.jdRevisions ?? []).map((revision) => ({
-      ...revision,
-      origin: revision.origin ?? (row.origin === 'manual' ? 'manual' : 'found'),
-      url: revision.url ?? '',
-      requisition: revision.requisition ?? '',
-      incompleteReasons: revision.incompleteReasons ?? [],
-      warning: revision.warning ?? '',
-    })),
+    requirements: upgradeStoredRequirements(row.requirements ?? [], row.jdSnapshot, currentRevisionId),
+    requirementCoverage: row.requirementCoverage ?? EMPTY_CV_REQUIREMENT_COVERAGE,
+    facts: upgradeStoredFacts(row.facts ?? [], wordingVariants),
+    wordingVariants,
+    jdRevisions,
     origin: (row.origin ?? 'vacancy') as CvEvidenceOverlayRecord['origin'],
     caseRevision: row.caseRevision ?? '0',
     approvedResumeSnapshot: row.approvedResumeSnapshot ?? null,
@@ -765,9 +778,32 @@ export function updateCvEvidenceOverlay(
     set.requirements = existing.requirements.map((requirement) => ({ ...requirement, reviewed: false }));
   }
   if (values.listingStatus !== undefined) set.listingStatus = values.listingStatus;
-  if (values.requirements !== undefined) set.requirements = values.requirements;
-  if (values.facts !== undefined) set.facts = values.facts;
-  if (values.wordingVariants !== undefined) set.wordingVariants = values.wordingVariants;
+  const nextJdText = set.jdSnapshot ?? existing.jdSnapshot;
+  const currentRevisionId = currentCvJdRevisionId({ jdRevisions: set.jdRevisions ?? existing.jdRevisions });
+  // Facts and wording go through the evidence invariants (#419 step 7) before anything else reads
+  // them: revoked wording, forbidden revivals, server-stamped approvals.
+  let nextFacts = existing.facts;
+  if (values.facts !== undefined || values.wordingVariants !== undefined) {
+    const reconciled = reconcileCvEvidence(
+      existing,
+      { facts: values.facts ?? existing.facts, wordingVariants: values.wordingVariants ?? existing.wordingVariants },
+      { sourceCvContentHash: set.sourceCvContentHash ?? existing.sourceCvContentHash, now: new Date().toISOString() },
+    );
+    set.facts = reconciled.facts;
+    set.wordingVariants = reconciled.wordingVariants;
+    nextFacts = reconciled.facts;
+  }
+  if (values.requirements !== undefined) {
+    const verified = verifyCvRequirementQuotes(values.requirements, existing.requirements, nextJdText, currentRevisionId);
+    assertRequirementLinks(db, existing.cvId, verified, nextFacts);
+    set.requirements = verified;
+  }
+  if (values.requirementCoverage !== undefined) {
+    if (nextJdText.trim().length === 0) {
+      throw new Error('there is no job description text yet, so its requirements cannot be marked as covered');
+    }
+    set.requirementCoverage = { ...values.requirementCoverage, revisionId: currentRevisionId };
+  }
   // An explicit `state` in the patch wins outright -- a caller setting it (the composition/QA gate
   // slices) knows exactly what state it is asserting. Absent an explicit one, a patch that touches
   // any input the approval depended on invalidates a prior approval rather than leaving it standing
@@ -781,6 +817,7 @@ export function updateCvEvidenceOverlay(
     values.jdSnapshotHash !== undefined ||
     values.jdConfirmedComplete !== undefined ||
     values.requirements !== undefined ||
+    values.requirementCoverage !== undefined ||
     values.facts !== undefined ||
     values.wordingVariants !== undefined;
   if (values.state !== undefined) {
@@ -788,10 +825,40 @@ export function updateCvEvidenceOverlay(
   } else if (touchesInputs) {
     set.state = invalidatedOverlayState(existing.state);
   }
+  // A contradiction among facts puts the whole case in `conflict` until the candidate resolves it
+  // (#419 step 7: contradictions block use). Resolving the last one lifts it back to `draft`.
+  if (values.facts !== undefined && values.state === undefined) {
+    if (findCvFactConflicts(nextFacts).length > 0) set.state = 'conflict';
+    else if (existing.state === 'conflict') set.state = 'draft';
+  }
 
   const [row] = db.update(cvEvidenceOverlays).set(set).where(eq(cvEvidenceOverlays.id, id)).returning().all();
   if (!row) throw new WorkspaceNotFoundError('CV evidence overlay', id);
   return toCvEvidenceOverlay(row);
+}
+
+/** Refuses a requirement that links a fact the case does not have, or a source entry the reviewed
+ * source does not have: a plausible-looking id is not evidence (#419 step 6). */
+function assertRequirementLinks(
+  db: WorkspaceDb,
+  cvId: string,
+  requirements: readonly CvEvidenceOverlay['requirements'][number][],
+  facts: readonly CvEvidenceOverlay['facts'][number][],
+): void {
+  const factIds = new Set(facts.map((fact) => fact.factId));
+  for (const requirement of requirements) {
+    if (requirement.factIds.some((factId) => !factIds.has(factId))) {
+      throw new Error('a requirement links a fact that does not exist on this case');
+    }
+  }
+  if (requirements.some((requirement) => requirement.sourceIds.length > 0)) {
+    const source = getCvDocument(db, cvId).source;
+    for (const requirement of requirements) {
+      if (!requirement.sourceIds.every((id) => resolvesInSource(source, id))) {
+        throw new Error('a requirement links a role or project that does not exist in the reviewed source');
+      }
+    }
+  }
 }
 
 /**
@@ -816,12 +883,10 @@ function bumpCaseRevision(current: string): string {
 
 /**
  * The *only* path that may move `state` to `'candidate_approved'` (#421's case contract). Unlike
- * the generic patch above, this never trusts a caller-supplied `wordingVariants` for the wording it
- * is about to approve: it re-derives proposed wording from the overlay's own facts
- * (`proposeWordingFromFacts`), the exact computation `ComposedCvReview.tsx`'s preview already runs
- * client-side, then re-verifies every gap (`describeCvEvidenceOverlayGaps`, via
- * `composeApprovedTailoredResume`'s own blockers) against the CV's *current* reviewed source before
- * writing anything. `expectedCaseRevision` must match the overlay's current `caseRevision`, checked
+ * the generic patch above, this never approves any wording itself: it composes only the variants the
+ * candidate already approved one by one (and whose facts are still approved), then re-verifies every
+ * gap (`describeCvEvidenceOverlayGaps`, via `composeApprovedTailoredResume`'s own blockers) against
+ * the CV's *current* reviewed source before writing anything. `expectedCaseRevision` must match the overlay's current `caseRevision`, checked
  * and applied inside one transaction so a second writer's change in between cannot be silently lost
  * or silently overwritten -- a mismatch throws `CvEvidenceOverlayRevisionConflictError` naming the
  * actual current revision, with nothing partially applied.
@@ -845,11 +910,9 @@ export function approveCvEvidenceOverlay(
     }
     const currentSourceCvContentHash = computeSourceCvContentHash(doc.source);
 
-    const proposed = proposeWordingFromFacts(existing, currentSourceCvContentHash);
-    const wordingVariants = [...existing.wordingVariants, ...proposed];
-    const candidate: CvEvidenceOverlay = { ...existing, wordingVariants };
-
-    const { resume, blockers } = composeApprovedTailoredResume(doc.source, candidate, currentSourceCvContentHash, doc.profile.skills);
+    // Wording is never approved here (#419 step 7): only variants the candidate already approved,
+    // one by one, are composed. A draft sentence, or a fact id nobody approved, adds nothing.
+    const { resume, blockers } = composeApprovedTailoredResume(doc.source, existing, currentSourceCvContentHash, doc.profile.skills);
     if (blockers.length > 0) {
       throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);
     }
@@ -865,7 +928,6 @@ export function approveCvEvidenceOverlay(
     const [row] = tx
       .update(cvEvidenceOverlays)
       .set({
-        wordingVariants,
         state: 'candidate_approved',
         approvedResumeSnapshot,
         caseRevision: newCaseRevision,
@@ -1216,19 +1278,32 @@ export function acceptCvTailoringProposal(
         if (!resolvesInSource(doc.source, data.anchorParentId)) {
           throw new Error('this proposal anchors to a role or project that no longer exists in this case');
         }
-        patch.requirements = [
-          ...overlay.requirements,
-          {
-            requirementId: randomUUID(),
-            text: data.text,
-            jdAnchor: data.jdAnchor,
-            classification: data.classification,
-            evidenceClass: data.evidenceClass,
-            anchorParentId: data.anchorParentId,
-            candidateAdded: true,
-            reviewed: false,
-          },
-        ];
+        // A proposed requirement needs an exact quote from the frozen JD (#419 step 5), the same
+        // rule a candidate-added one follows, and it must not repeat one already on the list.
+        const span = locateJdQuote(overlay.jdSnapshot, data.jdAnchor);
+        if (!span) throw new Error('this proposal quotes text that is not in the job description, so it cannot be added');
+        const added = {
+          requirementId: randomUUID(),
+          text: data.text,
+          jdAnchor: data.jdAnchor.trim(),
+          classification: data.classification,
+          evidenceClass: data.evidenceClass,
+          anchorParentId: data.anchorParentId,
+          candidateAdded: true,
+          reviewed: false,
+          quoteStart: span.start,
+          quoteEnd: span.end,
+          jdRevisionId: currentCvJdRevisionId(overlay),
+          excluded: false,
+          exclusionReason: '',
+          sourceIds: [],
+          factIds: [],
+        };
+        const seen = new Set(overlay.requirements.flatMap(requirementDedupeKeys));
+        if (requirementDedupeKeys(added).some((key) => seen.has(key))) {
+          throw new Error('this requirement is already on the list');
+        }
+        patch.requirements = [...overlay.requirements, added];
         break;
       }
       case 'evidence_link': {
@@ -1278,6 +1353,9 @@ export function acceptCvTailoringProposal(
             metricBasis: data.metricBasis,
             supersedes: '',
             createdAt: new Date().toISOString(),
+            // An accepted proposal is still a fact the candidate has not reviewed field by field.
+            approval: 'proposed',
+            timePhase: '',
           },
         ];
         break;
@@ -1298,9 +1376,13 @@ export function acceptCvTailoringProposal(
             parentId: data.parentId,
             text: data.text,
             factIds: data.factIds,
-            status: 'candidate_approved',
-            approvedAt: new Date().toISOString(),
-            sourceRevision: overlay.sourceCvContentHash,
+            // Accepting a proposal puts its wording in front of the candidate; approving the exact
+            // text is a separate, per-variant step (#419 step 7).
+            status: 'draft',
+            approvedAt: '',
+            sourceRevision: '',
+            supersedes: '',
+            rejectedAt: '',
           },
         ];
         break;
@@ -1316,6 +1398,7 @@ export function acceptCvTailoringProposal(
 
     const touchesInputs = patch.requirements !== undefined || patch.facts !== undefined || patch.wordingVariants !== undefined;
     if (touchesInputs) patch.state = invalidatedOverlayState(overlay.state);
+    if (patch.facts !== undefined && findCvFactConflicts(patch.facts).length > 0) patch.state = 'conflict';
 
     const [updatedOverlayRow] = tx
       .update(cvEvidenceOverlays)

@@ -5,11 +5,13 @@ import {
   CV_EVIDENCE_OVERLAY_ORIGINS,
   CV_EVIDENCE_OVERLAY_STATES,
   CV_LISTING_STATUSES,
+  EMPTY_CV_REQUIREMENT_COVERAGE,
   type CvApprovedResumeSnapshot,
   type CvApprovedWording,
   type CvEvidenceFact,
   type CvJdIncompleteReason,
   type CvJdRevision,
+  type CvRequirementCoverage,
   type CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
@@ -151,6 +153,12 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
     .notNull()
     .default('needs_input'),
   requirements: text('requirements', { mode: 'json' }).notNull().$type<CvRequirementMapping[]>().default([]),
+  /** #419: how far requirement extraction has got for the current JD revision. See
+   * `CvRequirementCoverage`. */
+  requirementCoverage: text('requirement_coverage', { mode: 'json' })
+    .notNull()
+    .$type<CvRequirementCoverage>()
+    .default(EMPTY_CV_REQUIREMENT_COVERAGE),
   facts: text('facts', { mode: 'json' }).notNull().$type<CvEvidenceFact[]>().default([]),
   wordingVariants: text('wording_variants', { mode: 'json' }).notNull().$type<CvApprovedWording[]>().default([]),
   /** #421's case contract: how this case began -- see `CvEvidenceOverlayOrigin`. */
