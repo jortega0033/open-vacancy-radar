@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { CvProposalPayload, CvSourceDocument, CvTailoringProposalRecord } from '../../window.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
-import { vacancyKeyFor } from './vacancy-key.js';
+import { caseKeyFor } from './vacancy-key.js';
 
 export interface TailoringProposalsPanelProps {
   cvId: string | null;
@@ -60,7 +60,7 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv }: TailoringPr
   const [error, setError] = useState<string>();
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
+  const vacancyKey = vacancy ? caseKeyFor(vacancy) : null;
 
   const refresh = useCallback(() => {
     if (!cvId || !vacancyKey) {

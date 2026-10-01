@@ -17,6 +17,7 @@ import {
   WORLDWIDE_VERIFICATION,
   type SearchResult,
 } from '../../../src/components/search/results.js';
+import { selectedVacancyFor, toVacancyLead } from '../../../src/components/search/SearchPage.js';
 import { UNSPECIFIED_LOCATION } from '../../../src/components/search/countries.js';
 
 function discoveryVacancy(overrides: Partial<DiscoveryVacancyAudit> = {}): DiscoveryVacancyAudit {
@@ -66,6 +67,30 @@ function worldwideResult(overrides: { key: string; location: string | null }): S
     lead: { title: 'Frontend Engineer', company: 'Acme', location: 'Not stated', url: 'https://example.com/job' },
   };
 }
+
+describe('vacancy lead handoff (#419)', () => {
+  it('carries the real posting description into the lead, marked as found', () => {
+    const [result] = toPartialResults([discoveryVacancy({ description: 'Build freight planning tools.' })]);
+    expect(result?.lead).toMatchObject({ description: 'Build freight planning tools.', jdOrigin: 'found' });
+  });
+
+  it('keeps an absent description absent rather than inventing text or requirements', () => {
+    const [result] = toPartialResults([discoveryVacancy({ description: null })]);
+    expect(result?.lead.description).toBeNull();
+    expect(result?.lead.requirements).toBeUndefined();
+  });
+});
+
+describe('letters handoff keeps its old inputs (#419)', () => {
+  it('leaves the posting text and origin off the letter vacancy', () => {
+    const [result] = toPartialResults([discoveryVacancy({ description: 'Build freight planning tools.' })]);
+    const selected = selectedVacancyFor(result!);
+    expect(selected).toMatchObject({ key: 'ww-1', title: 'Frontend Engineer' });
+    expect(selected).not.toHaveProperty('description');
+    expect(selected).not.toHaveProperty('jdOrigin');
+    expect(toVacancyLead(result!).description).toBe('Build freight planning tools.');
+  });
+});
 
 describe('toPartialResults (issue #252)', () => {
   it('converts a discovery row to a row with no official cross-reference and an honest "not available" verification', () => {

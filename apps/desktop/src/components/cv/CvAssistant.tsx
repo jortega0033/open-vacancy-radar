@@ -1,17 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
+import { describeCvSourceGaps } from '../../../electron/workspace/cv-source-schema.js';
 import type { CvDocumentRecord } from '../../window.js';
 import { ComposedCvReview } from './ComposedCvReview.js';
 import { CoverLetter } from './CoverLetter.js';
 import { CvUpload } from './CvUpload.js';
 import { GapAnalysis } from './GapAnalysis.js';
+import { JdReview } from './JdReview.js';
 import { RequirementMapping } from './RequirementMapping.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
 import { ResumeToolkit } from './ResumeToolkit.js';
 import { TailorCv } from './TailorCv.js';
 import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
+import { caseKeyFor } from './vacancy-key.js';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
@@ -35,13 +38,40 @@ function cvDocumentFromLibrary(doc: CvDocumentRecord): CvDocument {
   return { fileName: doc.name, text: doc.text };
 }
 
-export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: CvAssistantProps) {
+export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBackToVacancy }: CvAssistantProps) {
   const [cv, setCv] = useState<CvDocument | null>(null);
   const [libraryCvs, setLibraryCvs] = useState<CvDocumentRecord[]>([]);
   const [selectedLibraryCvId, setSelectedLibraryCvId] = useState('');
   const [libraryError, setLibraryError] = useState<string>();
   const [model, setModel] = useState('');
   const { provider, providerStatus } = useEffectiveProvider();
+
+  // #419: text the candidate pasted over this vacancy's job description. Held here so every panel
+  // below reads the same text, and tied to one case key so moving to another vacancy drops it.
+  const [pasted, setPasted] = useState<{ key: string; text: string; requisition: string } | null>(null);
+  // Bumped when the saved JD changes, so panels that cached the case reload it (their requirement
+  // reviews are cleared server-side when the text changes).
+  const [jdVersion, setJdVersion] = useState(0);
+  const vacancy = useMemo<VacancyLead | null>(() => {
+    if (!selectedVacancy) return null;
+    if (pasted && pasted.key === caseKeyFor(selectedVacancy)) {
+      return {
+        ...selectedVacancy,
+        description: pasted.text,
+        requirements: null,
+        jdOrigin: selectedVacancy.jdOrigin === 'manual' ? 'manual' : 'pasted',
+        ...(pasted.requisition ? { jdRequisition: pasted.requisition } : {}),
+      };
+    }
+    return selectedVacancy;
+  }, [selectedVacancy, pasted]);
+  const handleReplaceJd = useCallback(
+    (text: string, requisition: string) => {
+      if (selectedVacancy) setPasted({ key: caseKeyFor(selectedVacancy), text, requisition });
+    },
+    [selectedVacancy],
+  );
+  const handleJdSaved = useCallback(() => setJdVersion((version) => version + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +105,15 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
   const selectedLibraryCv = usableLibraryCvs.find((doc) => doc.id === selectedLibraryCvId);
   const selectedSourceCv = selectedLibraryCv?.source ?? null;
   const selectedProfile = selectedLibraryCv?.profile ?? null;
+  // #419: an approved tailored CV is built from the reviewed structured source. The advisory tools
+  // below do not need it, so this explains the gap instead of hiding anything.
+  const sourceNotice = !selectedLibraryCv
+    ? null
+    : !selectedSourceCv
+      ? 'This CV has no reviewed structured source yet. The advisory tools below still work. To approve a tailored CV, open this CV in the CV Library, read its source and review it first.'
+      : describeCvSourceGaps(selectedSourceCv).length > 0
+        ? `This CV's structured source is not ready for approval: ${describeCvSourceGaps(selectedSourceCv).join(', ')}. Review it in the CV Library first.`
+        : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -160,9 +199,25 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
         <div className="rounded-box border border-base-300 p-4 text-sm">
           <div className="font-semibold">{vacancy.title}</div>
           <div className="text-base-content/60">
-            {vacancy.company}, {vacancy.location}
+            {[vacancy.company, vacancy.location].filter((part) => part.trim().length > 0).join(', ')}
           </div>
         </div>
+      )}
+
+      {vacancy && sourceNotice && (
+        <div className="alert alert-warning text-sm" role="status">
+          {sourceNotice}
+        </div>
+      )}
+
+      {vacancy && (
+        <JdReview
+          cvId={selectedLibraryCv?.id ?? null}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+          onReplaceText={handleReplaceJd}
+          onSaved={handleJdSaved}
+        />
       )}
 
       {!pinnedModel && availableModels.length > 0 && (
@@ -217,6 +272,7 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
           {...(effectiveModel ? { model: effectiveModel } : {})}
         />
         <RequirementMapping
+          key={`requirements-${jdVersion}`}
           cvId={selectedLibraryCv?.id ?? null}
           cv={cv}
           vacancy={vacancy}
@@ -224,8 +280,14 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
           provider={provider}
           {...(effectiveModel ? { model: effectiveModel } : {})}
         />
-        <TailoringProposalsPanel cvId={selectedLibraryCv?.id ?? null} vacancy={vacancy} sourceCv={selectedSourceCv} />
+        <TailoringProposalsPanel
+          key={`proposals-${jdVersion}`}
+          cvId={selectedLibraryCv?.id ?? null}
+          vacancy={vacancy}
+          sourceCv={selectedSourceCv}
+        />
         <ComposedCvReview
+          key={`composed-${jdVersion}`}
           cvId={selectedLibraryCv?.id ?? null}
           vacancy={vacancy}
           sourceCv={selectedSourceCv}
