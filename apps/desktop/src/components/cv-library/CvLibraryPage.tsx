@@ -1,17 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
+import type { CvDocumentRecord, CvEvidenceOverlayRecord, CvExportFormat } from '../../window.js';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
 import emptyCvIllustration from '../../../assets/illustrations/empty-cv.svg?no-inline';
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
+import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
+import { ManualCaseForm } from './ManualCaseForm.js';
 
 /** How long the "Exported" confirmation stays up next to a row, matching `TailorCv`'s own
  * copy-feedback window. */
 const EXPORT_FEEDBACK_MS = 2_000;
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
+
+/** What the candidate sees for one tailoring case in the delete confirmation. A case stores a key
+ * rather than a title, so the label is read back from the key (and, for a pasted job, from the start
+ * of its saved text). */
+export function describeTailoringCase(overlay: CvEvidenceOverlayRecord): string {
+  const key = overlay.vacancyKey;
+  if (key.startsWith('fields:')) {
+    const [title = '', company = ''] = key.slice('fields:'.length).split('|');
+    if (title || company) return [title, company].filter(Boolean).join(' at ');
+  }
+  if (key.startsWith('url:')) return key.slice('url:'.length);
+  const firstLine = overlay.jdSnapshot.trim().split('\n')[0]?.slice(0, 60) ?? '';
+  return firstLine ? `Pasted job: ${firstLine}` : 'Pasted job with no text saved yet';
+}
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -92,6 +108,10 @@ export function CvLibraryPage() {
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
+  /** The tailoring cases that go with `deleteTarget`: `null` when they could not be listed. */
+  const [deleteCases, setDeleteCases] = useState<CvEvidenceOverlayRecord[] | null>([]);
+  /** `'form'` while the candidate fills in the job, then the vacancy the workspace opens on. */
+  const [tailoring, setTailoring] = useState<'form' | VacancyLead | null>(null);
   const [actionError, setActionError] = useState<string>();
   const [actionStatus, setActionStatus] = useState<string>();
 
@@ -197,9 +217,16 @@ export function CvLibraryPage() {
     }
   }, []);
 
-  const requestDelete = useCallback((doc: CvDocumentRecord) => {
+  const requestDelete = useCallback(async (doc: CvDocumentRecord) => {
     setActionError(undefined);
     setActionStatus(undefined);
+    // Deleting a CV deletes its tailoring cases with it (#419), so they are listed before the
+    // candidate confirms. A listing failure is stated in the dialog rather than hidden.
+    try {
+      setDeleteCases(await window.workspace.listCvEvidenceOverlays(doc.id));
+    } catch {
+      setDeleteCases(null);
+    }
     setDeleteTarget(doc);
   }, []);
 
@@ -224,11 +251,29 @@ export function CvLibraryPage() {
   const isLoading = documents === null;
   const hasAnyDocuments = (documents?.length ?? 0) > 0;
 
+  if (tailoring !== null) {
+    return (
+      <div className="flex flex-col gap-4">
+        <button type="button" className="btn btn-ghost btn-sm self-start" onClick={() => setTailoring(null)}>
+          Back to CV library
+        </button>
+        {tailoring === 'form' ? (
+          <ManualCaseForm onSubmit={setTailoring} onCancel={() => setTailoring(null)} />
+        ) : (
+          <CvAssistant vacancy={tailoring} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>{hasAnyDocuments && <p className="text-sm text-base-content/60">{documents?.length} on file</p>}</div>
         <div className="flex items-center gap-2">
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => setTailoring('form')}>
+            Tailor for a job
+          </button>
           <CvUploadAction onSaved={() => void reloadDocuments()} />
           <button className="btn btn-outline btn-sm" type="button" onClick={openAddDrawer}>
             Add manual profile
@@ -265,7 +310,7 @@ export function CvLibraryPage() {
             documents={documents ?? []}
             onEdit={openEditDrawer}
             onSetDefault={(doc) => void handleSetDefault(doc)}
-            onDelete={requestDelete}
+            onDelete={(doc) => void requestDelete(doc)}
             onExport={(doc, format) => void handleExport(doc, format)}
             exportingId={exportingId}
             exportedId={exportedId}
@@ -288,8 +333,30 @@ export function CvLibraryPage() {
           title="Delete this CV?"
           message={
             <>
-              This permanently removes <span className="font-medium text-base-content">{deleteTarget.name}</span>{' '}
-              from your CV library, including any extracted text. This cannot be undone.
+              <p>
+                This permanently removes <span className="font-medium text-base-content">{deleteTarget.name}</span>{' '}
+                from your CV library, including any extracted text. This cannot be undone.
+              </p>
+              {deleteCases === null && (
+                <p className="mt-2">
+                  The tailoring cases for this CV could not be listed, so any that exist will be deleted
+                  without being shown here.
+                </p>
+              )}
+              {deleteCases !== null && deleteCases.length > 0 && (
+                <div className="mt-2">
+                  <p>
+                    {deleteCases.length === 1 ? 'This tailoring case is' : `These ${deleteCases.length} tailoring cases are`}{' '}
+                    deleted with it, including their job descriptions, answers and approvals:
+                  </p>
+                  <ul className="mt-1 list-disc pl-5" aria-label="Tailoring cases that will be deleted">
+                    {deleteCases.map((tailoringCase) => (
+                      <li key={tailoringCase.id}>{describeTailoringCase(tailoringCase)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="mt-2">Files you already exported from this CV outside the app are not deleted.</p>
             </>
           }
           onConfirm={() => void confirmDelete()}

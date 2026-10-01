@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
-import { describeCvSourceContentGaps } from '../../../electron/workspace/cv-source-schema.js';
+import { describeCvSourceContentGaps, reconcileExperienceIds } from '../../../electron/workspace/cv-source-schema.js';
 import { buildCvParsePrompt, buildSourceCvPrompt } from '../cv/prompts.js';
 import { parseSourceCvResponse } from '../cv/source-cv-response.js';
 import { useAgentRun } from '../cv/useAgentRun.js';
@@ -111,6 +111,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   const [parseError, setParseError] = useState<string>();
   const [source, setSource] = useState<CvSourceDocument | null>(() => record?.source ?? null);
   const [sourceError, setSourceError] = useState<string>();
+  /** Roles from a fresh extraction that could not be matched to a saved role (#419). */
+  const [unmatchedRoles, setUnmatchedRoles] = useState<string[]>([]);
   /** The fields the last click filled in from the source CV instead of from an AI run, in the
    * user's wording. `null` means that has not happened for this drawer. */
   const [derivedFields, setDerivedFields] = useState<string[] | null>(null);
@@ -172,7 +174,12 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     if (sourceRun.status !== 'completed' || sourceAppliedRef.current || !record) return;
     sourceAppliedRef.current = true;
     try {
-      setSource(parseSourceCvResponse(sourceRun.text, record.text));
+      const extracted = parseSourceCvResponse(sourceRun.text, record.text);
+      // A re-extraction keeps the ids of roles it can match unambiguously. The rest get new ids and
+      // are listed below for the candidate to check, never renumbered onto a saved role.
+      const { experience, needsReview } = reconcileExperienceIds(record.source?.experience ?? [], extracted.experience);
+      setSource({ ...extracted, experience });
+      setUnmatchedRoles(record.source ? needsReview : []);
     } catch (err) {
       setSourceError(err instanceof Error ? err.message : 'could not read the AI response');
     }
@@ -228,6 +235,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     if (!record || !canParseWithAi) return;
     sourceAppliedRef.current = false;
     setSourceError(undefined);
+    setUnmatchedRoles([]);
     void sourceRun.start(buildSourceCvPrompt(record.name, record.text), { provider });
   }
 
@@ -365,6 +373,15 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
               </div>
             )}
 
+            {source && unmatchedRoles.length > 0 && (
+              <div className="alert alert-warning text-sm" role="status">
+                <div>
+                  These roles could not be matched to a role in your saved record, so they were given new
+                  identities. Facts and approved wording you gave for an earlier role stay with that earlier
+                  role until you review them: {unmatchedRoles.join(', ')}.
+                </div>
+              </div>
+            )}
             {source && <CvSourceReview source={source} disabled={submitting} onChange={setSource} />}
             {source && sourceGaps.length > 0 && (
               <p className="text-xs text-warning" role="status">
