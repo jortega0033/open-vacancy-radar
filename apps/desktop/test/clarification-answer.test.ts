@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { applyClarificationAnswer } from '../src/components/cv/clarification-answer.js';
+import { applyClarificationAnswer, metricBasisProblem } from '../src/components/cv/clarification-answer.js';
 import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
 import type { CvRequirementMapping, CvSourceDocument } from '../src/window.js';
+import { makeRequirement } from './fixtures/cv-evidence.js';
 
 const SOURCE: CvSourceDocument = {
   ...EMPTY_CV_SOURCE,
@@ -14,17 +15,17 @@ const SOURCE: CvSourceDocument = {
 };
 
 function requirement(partial: Partial<CvRequirementMapping> = {}): CvRequirementMapping {
-  return {
+  return makeRequirement({
     requirementId: 'req-1',
     text: 'GraphQL schema design',
     jdAnchor: '',
-    classification: 'required',
     evidenceClass: 'needs_verification',
     anchorParentId: '',
-    candidateAdded: false,
     reviewed: false,
+    quoteStart: -1,
+    quoteEnd: -1,
     ...partial,
-  };
+  });
 }
 
 describe('applyClarificationAnswer (#419, step 3)', () => {
@@ -42,9 +43,9 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
     expect(result.fact).toBeNull();
   });
 
-  it('"not my work" records a candidate_confirmed_gap fact and marks the requirement unsupported', () => {
+  it('"not my work" records a candidate_confirmed_gap fact and marks the requirement a confirmed gap', () => {
     const result = applyClarificationAnswer(requirement({ anchorParentId: 'experience-1' }), { kind: 'not_my_work' }, SOURCE);
-    expect(result.requirement.evidenceClass).toBe('unsupported');
+    expect(result.requirement.evidenceClass).toBe('candidate_confirmed_gap');
     expect(result.requirement.anchorParentId).toBe('');
     expect(result.requirement.reviewed).toBe(true);
     expect(result.fact).toMatchObject({ verification: 'candidate_confirmed_gap', activity: '', parentType: 'experience', parentId: 'experience-1' });
@@ -80,6 +81,10 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
       result: 'cut client-side overfetching',
     });
     expect(result.requirement).toMatchObject({ anchorParentId: 'experience-1', evidenceClass: 'direct', reviewed: true });
+    // The answer links the new fact, but the fact itself is only proposed until the candidate
+    // approves it field by field.
+    expect(result.requirement.factIds).toEqual([result.fact?.factId]);
+    expect(result.fact?.approval).toBe('proposed');
     expect(result.fact).toMatchObject({
       parentId: 'experience-1',
       parentType: 'experience',
@@ -91,21 +96,20 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
     });
   });
 
-  it('keeps a stated metric only when a basis is given, dropping value and unit otherwise', () => {
-    const withoutBasis = applyClarificationAnswer(requirement(), {
-      kind: 'answered',
+  it('refuses a stated metric with no basis, and keeps one that has a basis', () => {
+    const base = {
+      kind: 'answered' as const,
       parentId: 'experience-1',
-      parentType: 'experience',
+      parentType: 'experience' as const,
       activity: 'X',
       mechanism: 'Y',
       result: 'Z',
       metricValue: '30%',
       metricUnit: 'percent',
-    });
-    // No explicit metricBasis passed: hasMetric is still true (value present), so the caller not
-    // stating a basis is the UI's job to prevent, not this function's -- it only drops the value
-    // when the caller sends nothing for it.
-    expect(withoutBasis.fact?.metricValue).toBe('30%');
+    };
+    expect(() => applyClarificationAnswer(requirement(), base)).toThrow(/needs a stated source/);
+    const withBasis = applyClarificationAnswer(requirement(), { ...base, metricBasis: 'a report the team sent me' });
+    expect(withBasis.fact).toMatchObject({ metricValue: '30%', metricBasis: 'a report the team sent me' });
 
     const noMetricAtAll = applyClarificationAnswer(requirement(), {
       kind: 'answered',
@@ -129,5 +133,18 @@ describe('applyClarificationAnswer (#419, step 3)', () => {
       result: 'Z',
     });
     expect(answered.fact?.ownership).toBe('unknown');
+  });
+});
+
+describe('metricBasisProblem (#419, step 6)', () => {
+  it('refuses a basis that infers a result from test counts, commits or a deployed address', () => {
+    expect(metricBasisProblem('counted from the number of tests')).not.toBeNull();
+    expect(metricBasisProblem('inferred from the commit history')).not.toBeNull();
+    expect(metricBasisProblem('the site is deployed at the live URL')).not.toBeNull();
+  });
+
+  it('accepts a basis that says where the figure came from, and refuses an empty one', () => {
+    expect(metricBasisProblem('a figure my manager sent in a report')).toBeNull();
+    expect(metricBasisProblem('   ')).not.toBeNull();
   });
 });

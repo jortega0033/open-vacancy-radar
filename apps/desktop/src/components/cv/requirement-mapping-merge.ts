@@ -1,3 +1,4 @@
+import { requirementDedupeKeys } from '../../../electron/workspace/cv-evidence-schema.js';
 import type { CvRequirementMapping } from '../../window.js';
 
 /**
@@ -6,10 +7,11 @@ import type { CvRequirementMapping } from '../../window.js';
  * model's list as complete", and no requirement may silently disappear once a person has looked at
  * it).
  *
- * Matched by normalized text: a requirement the extraction re-surfaces that already exists (by
- * text, case- and whitespace-insensitive) is left exactly as it was -- its `reviewed` flag, any
- * candidate correction to `classification`/`evidenceClass`/`anchorParentId`, all untouched. Only
- * requirements the extraction found that are not already present are appended.
+ * Matched by normalized text or normalized quote (`requirementDedupeKeys`): a requirement the
+ * extraction re-surfaces that already exists is left exactly as it was -- its `reviewed` flag, any
+ * candidate correction to `classification`/`evidenceClass`/`anchorParentId`, its exclusion, all
+ * untouched. An excluded requirement therefore stays excluded when a later batch proposes it again.
+ * Only requirements the extraction found that are not already present are appended.
  *
  * `parseRequirementMappingResponse` assigns each entry a positional id (`requirement-1`,
  * `requirement-2`, ...) that is only unique *within one parse*, not across merges into a growing
@@ -22,13 +24,12 @@ export function mergeRequirementMappings(
   existing: readonly CvRequirementMapping[],
   extracted: readonly CvRequirementMapping[],
 ): CvRequirementMapping[] {
-  const normalize = (text: string) => text.trim().toLowerCase().replace(/\s+/gu, ' ');
-  const seen = new Set(existing.map((requirement) => normalize(requirement.text)));
+  const seen = new Set(existing.flatMap(requirementDedupeKeys));
   const appended: CvRequirementMapping[] = [];
   for (const requirement of extracted) {
-    const key = normalize(requirement.text);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const keys = requirementDedupeKeys(requirement);
+    if (keys.some((key) => seen.has(key))) continue;
+    for (const key of keys) seen.add(key);
     appended.push({ ...requirement, requirementId: crypto.randomUUID() });
   }
   return [...existing, ...appended];

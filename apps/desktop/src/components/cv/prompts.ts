@@ -13,7 +13,7 @@ import {
   type GenerationPromptContext,
 } from '../../../electron/generation-input.js';
 import { RESUME_JSON_SHAPE } from '../../../electron/resume-schema.js';
-import { CV_REQUIREMENT_MAPPING_JSON_SHAPE } from '../../../electron/workspace/cv-evidence-schema.js';
+import { CV_REQUIREMENT_BATCH_SIZE, CV_REQUIREMENT_MAPPING_JSON_SHAPE } from '../../../electron/workspace/cv-evidence-schema.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -488,7 +488,7 @@ ${clamp(cv.text, MAX_CV_PROMPT_CHARS)}`;
  * magnitude as `ATS_FIT_MAX_REQUIREMENTS`, and named separately so either can be tuned without
  * affecting the other -- they read different output shapes (Markdown advice vs. a structured,
  * persisted, candidate-editable mapping) for different purposes. */
-export const REQUIREMENT_MAPPING_MAX_REQUIREMENTS = 20;
+export const REQUIREMENT_MAPPING_MAX_REQUIREMENTS = CV_REQUIREMENT_BATCH_SIZE;
 
 /**
  * Lists each reviewed-source experience/project entry with its stable id, so the model can anchor
@@ -532,6 +532,9 @@ export function buildRequirementMappingPrompt(
   vacancy: VacancyLead,
   source: CvSourceDocument | null,
   context?: GenerationPromptContext,
+  /** Requirements already extracted from earlier batches of this same posting. A follow-up batch
+   * lists them so the model continues past them instead of repeating them. */
+  alreadyListed: readonly string[] = [],
 ): string {
   const seeds = extractCriticalRequirements(vacancy);
   return `You map every material requirement in one job posting to what a candidate's reviewed CV evidence actually supports. Reply with a single JSON object only: no Markdown code fence, no commentary before or after it.
@@ -551,13 +554,13 @@ Use "evidenceClass" to say what the source CV supports, using only these four la
 
 Set "anchorParentId" to the bracketed id of the one role or project in the reviewed source's anchor list below that most directly evidences this requirement, or an empty string ("") when "evidenceClass" is "unsupported" or when there is no reviewed source to anchor to. Never invent an id that is not in that list.
 
-Set "jdAnchor" to a short verbatim quote from the posting below that this requirement comes from.
+Set "jdAnchor" to a short quote copied character for character from the posting below that this requirement comes from. The app checks every quote against the posting text and rejects any that is not an exact passage of it, so do not paraphrase, reorder or fix spelling.
 
 Start from this list of requirement-shaped lines already pulled from the full posting (before any excerpt below was clamped), and classify each one. You may add a material requirement this list missed, and you may merge two lines that state the same requirement twice; do not invent a requirement the posting does not state.
 ${seeds.length > 0 ? seeds.map((line) => `- ${line}`).join('\n') : '(none extracted automatically; read the posting below for its requirements)'}
 
-Review at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements, prioritising explicit mandatory conditions first.
-
+Return at most ${REQUIREMENT_MAPPING_MAX_REQUIREMENTS} deduplicated requirements in this reply, prioritising explicit mandatory conditions first. Set "hasMore" to true when the posting states further requirements you did not list because of that limit, and to false only when you have listed every material requirement it states.
+${alreadyListed.length > 0 ? `These requirements were already listed in earlier replies. Do not repeat them; continue with the ones not yet listed:\n${alreadyListed.map((line) => `- ${line}`).join('\n')}\n` : ''}
 Reply with exactly this JSON shape (all keys required):
 ${CV_REQUIREMENT_MAPPING_JSON_SHAPE}
 
