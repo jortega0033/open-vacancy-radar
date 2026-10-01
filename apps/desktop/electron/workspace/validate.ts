@@ -18,7 +18,7 @@
  */
 
 import { CV_PROFILE_LIMITS, CV_PROFILE_SHORT_FIELDS } from './cv-profile-schema.js';
-import { CV_ENGAGEMENT_TYPES, CV_SOURCE_LIMITS, PROJECTS_UNLIMITED } from './cv-source-schema.js';
+import { CV_ENGAGEMENT_TYPES, CV_SOURCE_LIMITS, PROJECTS_UNLIMITED, mintExperienceId } from './cv-source-schema.js';
 import type {
   CvEngagementType,
   CvSourceDocument,
@@ -35,6 +35,7 @@ import {
   CV_FACT_OWNERSHIPS,
   CV_FACT_SOURCE_KINDS,
   CV_FACT_VERIFICATIONS,
+  CV_JD_ORIGINS,
   CV_LISTING_STATUSES,
   CV_REQUIREMENT_CLASSIFICATIONS,
   CV_WORDING_APPROVAL_STATUSES,
@@ -406,12 +407,12 @@ function parseSourceExperience(value: unknown, index: number): CvSourceExperienc
     entry.engagement === undefined
       ? 'employment'
       : oneOf(entry.engagement, `source.experience[${index}].engagement`, CV_ENGAGEMENT_TYPES);
-  // Same fallback `parseSourceProject` already uses for its own `id`: an empty/missing id gets a
-  // stable, position-keyed one rather than being rejected, so a legacy record without ids is
-  // never blocked from being saved back.
+  // An empty/missing id gets a freshly minted stable one rather than being rejected, so a record
+  // without ids is never blocked from being saved back. Never positional: a reorder must not
+  // renumber a role.
   const id = str(entry.id ?? '', `source.experience[${index}].id`, LIMITS.short).trim();
   return {
-    id: id.length > 0 ? id : `experience-${index + 1}`,
+    id: id.length > 0 ? id : mintExperienceId(),
     company: str(entry.company ?? '', `source.experience[${index}].company`, CV_SOURCE_LIMITS.shortField),
     title: str(entry.title ?? '', `source.experience[${index}].title`, CV_SOURCE_LIMITS.shortField),
     dates: str(entry.dates ?? '', `source.experience[${index}].dates`, CV_SOURCE_LIMITS.shortField),
@@ -662,6 +663,9 @@ export function parseCvEvidenceOverlayInput(value: unknown): CvEvidenceOverlayIn
     jdSnapshot: input.jdSnapshot === undefined ? '' : str(input.jdSnapshot, 'jdSnapshot', LIMITS.jdSnapshot),
     jdSnapshotHash: sha256Hex(input.jdSnapshotHash, 'jdSnapshotHash'),
     jdComplete: input.jdComplete === undefined ? true : bool(input.jdComplete, 'jdComplete'),
+    ...(input.jdOrigin === undefined ? {} : { jdOrigin: oneOf(input.jdOrigin, 'jdOrigin', CV_JD_ORIGINS) }),
+    jdUrl: input.jdUrl === undefined ? '' : str(input.jdUrl, 'jdUrl', LIMITS.short),
+    jdRequisition: input.jdRequisition === undefined ? '' : str(input.jdRequisition, 'jdRequisition', LIMITS.short),
     listingStatus: input.listingStatus === undefined ? 'unknown' : oneOf(input.listingStatus, 'listingStatus', CV_LISTING_STATUSES),
     origin: input.origin === undefined ? 'vacancy' : oneOf(input.origin, 'origin', CV_EVIDENCE_OVERLAY_ORIGINS),
   };
@@ -681,6 +685,10 @@ export function parseCvEvidenceOverlayPatch(value: unknown): CvEvidenceOverlayPa
   patch(input, out, 'jdSnapshot', (v) => str(v, 'jdSnapshot', LIMITS.jdSnapshot));
   patch(input, out, 'jdSnapshotHash', (v) => sha256Hex(v, 'jdSnapshotHash'));
   patch(input, out, 'jdComplete', (v) => bool(v, 'jdComplete'));
+  patch(input, out, 'jdOrigin', (v) => oneOf(v, 'jdOrigin', CV_JD_ORIGINS));
+  patch(input, out, 'jdUrl', (v) => str(v, 'jdUrl', LIMITS.short));
+  patch(input, out, 'jdRequisition', (v) => str(v, 'jdRequisition', LIMITS.short));
+  patch(input, out, 'jdConfirmedComplete', (v) => bool(v, 'jdConfirmedComplete'));
   patch(input, out, 'listingStatus', (v) => oneOf(v, 'listingStatus', CV_LISTING_STATUSES));
   patch(input, out, 'state', (v) => oneOf(v, 'state', PATCHABLE_OVERLAY_STATES));
   patch(input, out, 'requirements', (v) => boundedArray(v, 'requirements', CV_EVIDENCE_LIMITS.requirements).map(parseRequirementMapping));

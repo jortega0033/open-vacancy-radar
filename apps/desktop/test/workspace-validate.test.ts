@@ -599,12 +599,17 @@ describe('workspace structured source CV (#274)', () => {
     expect(parseCvSource({ projects: [{ name: 'Aurora Design System' }] })?.projects[0]?.id).toBe('project-1');
   });
 
-  it('assigns an experience id when the caller supplies none (#419), keyed by position', () => {
+  it('mints a distinct, non-positional experience id when the caller supplies none (#419)', () => {
     const parsed = parseCvSource({
-      experience: [{ company: 'Redwood Software' }, { company: 'Harbour Analytics' }],
+      experience: [
+        { company: 'Redwood Software', title: 'Engineer' },
+        { company: 'Redwood Software', title: 'Engineer' },
+      ],
     });
-    expect(parsed?.experience[0]?.id).toBe('experience-1');
-    expect(parsed?.experience[1]?.id).toBe('experience-2');
+    const ids = parsed?.experience.map((entry) => entry.id) ?? [];
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^experience-[0-9a-f-]{36}$/u);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('keeps an explicit experience id rather than overwriting it', () => {

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
-import { CV_EVIDENCE_CLASSES, CV_REQUIREMENT_CLASSIFICATIONS } from '../../../electron/workspace/cv-evidence-schema.js';
+import {
+  CV_EVIDENCE_CLASSES,
+  CV_REQUIREMENT_CLASSIFICATIONS,
+  describeCvJdGaps,
+} from '../../../electron/workspace/cv-evidence-schema.js';
 import type {
   CvEvidenceClass,
   CvEvidenceOverlayRecord,
@@ -19,7 +23,7 @@ import { parseRequirementMappingResponse } from './requirement-mapping-response.
 import { sourceAnchors } from './source-anchors.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
-import { vacancyKeyFor } from './vacancy-key.js';
+import { caseKeyFor } from './vacancy-key.js';
 
 export interface RequirementMappingProps {
   /** The CV Library record this session's evidence belongs to. This feature needs a persisted CV
@@ -63,6 +67,10 @@ async function getOrCreateOverlay(
     sourceCvContentHash,
     jdSnapshotHash,
     jdSnapshot: jobDescriptionBody(vacancy),
+    origin: vacancyKey.startsWith('manual:') ? 'manual' : 'vacancy',
+    jdOrigin: vacancy.jdOrigin ?? 'found',
+    jdUrl: vacancy.url,
+    ...(vacancy.jdRequisition ? { jdRequisition: vacancy.jdRequisition } : {}),
   });
 }
 
@@ -93,7 +101,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   /** Which requirement's clarification form is open, at most one at a time. */
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null);
 
-  const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
+  const vacancyKey = vacancy ? caseKeyFor(vacancy) : null;
 
   // Loads (or clears) the overlay whenever the CV or the selected vacancy changes. A missing
   // overlay is the normal first-visit state (`getCvEvidenceOverlay` returns null, never throws),
@@ -154,6 +162,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           sourceCvContentHash,
           jdSnapshot: jobDescriptionBody(vacancy),
           jdSnapshotHash,
+          jdOrigin: vacancy.jdOrigin ?? 'found',
+          jdUrl: vacancy.url,
+          ...(vacancy.jdRequisition ? { jdRequisition: vacancy.jdRequisition } : {}),
           requirements: merged,
         });
         if (!cancelled) setOverlay(updated);
@@ -241,6 +252,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   // at the composition/approval gate (slice 3), where a *live* current-source hash is actually
   // being checked against something about to be approved, not just displayed.
   const unreviewedCount = overlay?.requirements.filter((requirement) => !requirement.reviewed).length ?? 0;
+  // Unlike the rest of the approval gate, the JD itself is shown here: a mapping built on an empty
+  // or cut-off posting is worth nothing, and the candidate should see that before reviewing rows.
+  const jdGaps = overlay ? describeCvJdGaps(overlay) : [];
 
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
@@ -265,6 +279,15 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         {loadError && (
           <div className="alert alert-error text-sm" role="alert">
             {loadError}
+          </div>
+        )}
+        {jdGaps.length > 0 && (
+          <div className="alert alert-warning text-sm" role="status">
+            <ul className="list-disc pl-4">
+              {jdGaps.map((gap) => (
+                <li key={gap}>This CV cannot reach approved status: {gap}.</li>
+              ))}
+            </ul>
           </div>
         )}
 

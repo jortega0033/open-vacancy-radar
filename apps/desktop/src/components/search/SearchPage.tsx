@@ -65,8 +65,9 @@ function useSearchSessionField<K extends keyof SearchSessionState>(
  * `SearchResult` → `VacancyLead`, the shape the CV assistant's prompt builders take.
  *
  * The normalisation in `results.ts` already assembles this, because only it knows which fields the
- * report genuinely carries. `description`/`requirements` stay absent: the pipeline stores no
- * posting text, and the prompt builders say so to the model explicitly.
+ * report genuinely carries. `description` is the posting text the discovery result holds, or null
+ * when the source had none; the CV workspace shows that state and lets the candidate paste the
+ * posting. `requirements` stays absent because the discovery audit carries no separate list.
  */
 export function toVacancyLead(result: SearchResult): VacancyLead {
   return result.lead;
@@ -76,12 +77,13 @@ export function toVacancyLead(result: SearchResult): VacancyLead {
  * `SearchResult` → `SelectedVacancy`, for the "Generate Letter" handoff to the Letters page.
  *
  * `SelectedVacancy` is `VacancyLead` plus the discovery `key` (see components/letters/types.ts),
- * so this is `toVacancyLead` with that one extra field attached -- the same `result.lead` fields a
- * letter can already use, nothing invented on top of it (no `description`/`requirements` beyond
- * what the lead already carries).
+ * so this is `toVacancyLead` with that one extra field attached. The posting text and its origin
+ * are left off: they belong to the CV workspace's tailoring case (#419), and the letters flow keeps
+ * the inputs it always had.
  */
 export function selectedVacancyFor(result: SearchResult): SelectedVacancy {
-  return { ...result.lead, key: result.key };
+  const { description: _description, jdOrigin: _jdOrigin, ...lead } = result.lead;
+  return { ...lead, key: result.key };
 }
 
 /**

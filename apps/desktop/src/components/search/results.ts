@@ -274,6 +274,11 @@ function toSearchResult(
       currency: vacancy.currency,
       salaryPeriod: vacancy.salaryPeriod,
       advertisedMinimum: vacancy.advertisedMinimum,
+      // The real posting text the discovery result carries, null when the source had none. Passed
+      // through as found so the CV workspace can show a missing or partial JD plainly instead of
+      // working from a title alone. The discovery audit carries no separate requirement lines.
+      description: vacancy.description,
+      jdOrigin: 'found',
     },
   };
 }

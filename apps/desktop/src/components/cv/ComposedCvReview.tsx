@@ -5,7 +5,7 @@ import type { CvEvidenceOverlayRecord, CvExportFormat, CvProfile, CvSourceDocume
 import { sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
-import { vacancyKeyFor } from './vacancy-key.js';
+import { caseKeyFor } from './vacancy-key.js';
 
 export interface ComposedCvReviewProps {
   cvId: string | null;
@@ -41,7 +41,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
   const [exporting, setExporting] = useState<CvExportFormat | null>(null);
   const [exportedPath, setExportedPath] = useState<string>();
 
-  const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : null;
+  const vacancyKey = vacancy ? caseKeyFor(vacancy) : null;
 
   useEffect(() => {
     setComposed(null);

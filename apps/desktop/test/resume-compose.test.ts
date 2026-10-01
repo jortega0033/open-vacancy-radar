@@ -19,7 +19,7 @@ const SOURCE: CvSourceDocument = {
 };
 
 function overlay(partial: Partial<CvEvidenceOverlay> = {}): CvEvidenceOverlay {
-  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, ...partial };
+  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, jdSnapshot: 'A full job description.', ...partial };
 }
 
 function wording(partial: Partial<CvApprovedWording> = {}): CvApprovedWording {

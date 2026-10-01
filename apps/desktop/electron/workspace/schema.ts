@@ -8,6 +8,7 @@ import {
   type CvApprovedResumeSnapshot,
   type CvApprovedWording,
   type CvEvidenceFact,
+  type CvJdIncompleteReason,
   type CvJdRevision,
   type CvRequirementMapping,
 } from './cv-evidence-schema.js';
@@ -135,6 +136,12 @@ export const cvEvidenceOverlays = sqliteTable('cv_evidence_overlays', {
   jdSnapshot: text('jd_snapshot').notNull().default(''),
   jdSnapshotHash: text('jd_snapshot_hash').notNull(),
   jdComplete: integer('jd_complete', { mode: 'boolean' }).notNull().default(true),
+  /** The completeness heuristic's findings for the current `jdSnapshot` (#419). Separate from
+   * `jdComplete` and from the candidate's confirmation below. */
+  jdIncompleteReasons: text('jd_incomplete_reasons', { mode: 'json' }).notNull().$type<CvJdIncompleteReason[]>().default([]),
+  jdWarning: text('jd_warning').notNull().default(''),
+  /** The candidate read the whole JD and confirmed a short one is complete. Reset on a text change. */
+  jdConfirmedComplete: integer('jd_confirmed_complete', { mode: 'boolean' }).notNull().default(false),
   /** #421's case contract: every past `jdSnapshot`, oldest first -- see `CvJdRevision`. */
   jdRevisions: text('jd_revisions', { mode: 'json' }).notNull().$type<CvJdRevision[]>().default([]),
   listingStatus: text('listing_status', { enum: CV_LISTING_STATUSES as unknown as [string, ...string[]] })

@@ -286,6 +286,7 @@ export type {
   CvFactOwnership,
   CvFactSourceKind,
   CvFactVerification,
+  CvJdOrigin,
   CvKind,
   CvListingStatus,
   CvProfile,

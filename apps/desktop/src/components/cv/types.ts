@@ -35,4 +35,11 @@ export interface VacancyLead {
   currency?: string | null;
   salaryPeriod?: string | null;
   advertisedMinimum?: number | null;
+  /** #419: the case key for a vacancy that has no URL or search result behind it (a manual case).
+   * Absent for every found vacancy, whose key is derived from the posting itself. */
+  caseKey?: string;
+  /** #419: where `description` came from. Absent means a found vacancy's own posting text. */
+  jdOrigin?: 'found' | 'pasted' | 'manual';
+  /** #419: the employer's requisition number, when the candidate entered one. */
+  jdRequisition?: string;
 }

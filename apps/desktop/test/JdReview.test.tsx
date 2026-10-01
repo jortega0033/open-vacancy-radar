@@ -1,0 +1,234 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CvAssistant } from '../src/components/cv/CvAssistant.js';
+import { JdReview } from '../src/components/cv/JdReview.js';
+import type { VacancyLead } from '../src/components/cv/types.js';
+import type { CvDocumentRecord, CvEvidenceOverlayRecord } from '../src/window.js';
+import { installBridges } from './cv-bridges.js';
+import { FULL_JD } from './fixtures/job-description.js';
+import { installWorkspaceBridge } from './workspace-bridge.js';
+
+const FOUND: VacancyLead = {
+  title: 'Logistics Platform Engineer',
+  company: 'Northwind Freight',
+  location: 'Rotterdam',
+  url: 'https://jobs.example.invalid/logistics',
+  description: FULL_JD,
+  requirements: null,
+  jdOrigin: 'found',
+};
+
+const SHORT_FOUND: VacancyLead = { ...FOUND, description: 'We need an engineer who must know TypeScript.' };
+const ABSENT: VacancyLead = { ...FOUND, description: null };
+
+function overlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidenceOverlayRecord {
+  return {
+    id: 'overlay-1',
+    cvId: 'cv-1',
+    vacancyKey: `url:${FOUND.url}`,
+    sourceCvContentHash: 'a'.repeat(64),
+    jdSnapshot: FULL_JD,
+    jdSnapshotHash: 'b'.repeat(64),
+    jdComplete: true,
+    jdIncompleteReasons: [],
+    jdWarning: '',
+    jdConfirmedComplete: false,
+    jdRevisions: [
+      {
+        revisionId: 'rev-1',
+        text: FULL_JD,
+        textHash: 'c'.repeat(64),
+        complete: true,
+        capturedAt: '2026-10-01T09:00:00.000Z',
+        origin: 'found',
+        url: FOUND.url,
+        requisition: '',
+        incompleteReasons: [],
+        warning: '',
+      },
+    ],
+    listingStatus: 'unknown',
+    state: 'draft',
+    requirements: [],
+    facts: [],
+    wordingVariants: [],
+    origin: 'vacancy',
+    caseRevision: '1',
+    approvedResumeSnapshot: null,
+    capturedAt: '2026-10-01T09:00:00.000Z',
+    updatedAt: '2026-10-01T09:00:00.000Z',
+    ...partial,
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('JdReview (#419, step 4)', () => {
+  it('shows the full posting text a found vacancy carries, with its origin', () => {
+    installWorkspaceBridge();
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    expect(screen.getByLabelText('Full job description text')).toHaveTextContent('Northwind Freight is hiring a Logistics Platform Engineer');
+    expect(screen.getByText(/Posting text from the search result/)).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /completeness/i })).not.toBeInTheDocument();
+  });
+
+  it('says plainly that no posting text arrived, and fetches nothing', () => {
+    installWorkspaceBridge();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    render(<JdReview cvId="cv-1" vacancy={ABSENT} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    expect(screen.getByText(/No posting text came with this vacancy/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Full job description text')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /paste job description/i })).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows the completeness warning for a short posting', () => {
+    installWorkspaceBridge();
+    render(<JdReview cvId="cv-1" vacancy={SHORT_FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    const warning = screen.getByRole('status', { name: /completeness/i });
+    expect(warning).toHaveTextContent(/characters of posting text were captured/);
+  });
+
+  it('saves the found text as the case JD with its origin and URL', async () => {
+    const createCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay());
+    installWorkspaceBridge({ createCvEvidenceOverlay });
+    const onSaved = vi.fn();
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={onSaved} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save job description/i }));
+
+    await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalled());
+    expect(createCvEvidenceOverlay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cvId: 'cv-1',
+        vacancyKey: `url:${FOUND.url}`,
+        jdSnapshot: FULL_JD,
+        origin: 'vacancy',
+        jdOrigin: 'found',
+        jdUrl: FOUND.url,
+      }),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(await screen.findByText(/Saved as revision 1/)).toHaveTextContent('Digest cccccccccccc');
+  });
+
+  it('pasting a replacement hands the new text up and saves it as a new pasted revision', async () => {
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'Pasted text.' }));
+    installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay()), updateCvEvidenceOverlay });
+    const onReplaceText = vi.fn();
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={onReplaceText} onSaved={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /replace job description/i }));
+    fireEvent.change(screen.getByLabelText('Job description text'), { target: { value: '  Pasted text.  ' } });
+    fireEvent.change(screen.getByLabelText(/requisition/i), { target: { value: 'REQ-9' } });
+    fireEvent.click(screen.getByRole('button', { name: /use this text/i }));
+
+    expect(onReplaceText).toHaveBeenCalledWith('Pasted text.', 'REQ-9');
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalled());
+    expect(updateCvEvidenceOverlay).toHaveBeenCalledWith(
+      'overlay-1',
+      expect.objectContaining({ jdSnapshot: 'Pasted text.', jdOrigin: 'pasted', jdRequisition: 'REQ-9' }),
+    );
+  });
+
+  it('offers the confirmation for a short saved JD, and records it', async () => {
+    const saved = overlay({
+      jdSnapshot: SHORT_FOUND.description as string,
+      jdComplete: false,
+      jdIncompleteReasons: ['posting_text_too_thin'],
+      jdWarning: 'short',
+    });
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue({ ...saved, jdConfirmedComplete: true });
+    installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(saved), updateCvEvidenceOverlay });
+    render(<JdReview cvId="cv-1" vacancy={SHORT_FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    const checkbox = await screen.findByRole('checkbox', { name: /read the whole job description/i });
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', { jdConfirmedComplete: true }));
+  });
+
+  it('never offers the confirmation for a cut-off JD', async () => {
+    const saved = overlay({ jdComplete: false, jdIncompleteReasons: ['truncated_at_source'], jdWarning: 'cut off' });
+    installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(saved) });
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    await screen.findByText(/Saved as revision 1/);
+    expect(screen.queryByRole('checkbox', { name: /read the whole job description/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the save disabled until a CV is selected', () => {
+    installWorkspaceBridge();
+    render(<JdReview cvId={null} vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /save job description/i })).toBeDisabled();
+  });
+});
+
+describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
+  function makeCv(): CvDocumentRecord {
+    return {
+      id: 'cv-1',
+      name: 'Frontend CV',
+      kind: 'uploaded',
+      targetRole: '',
+      text: 'Angular architect.',
+      profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' },
+      source: null,
+      textSource: 'text_layer',
+      isDefault: true,
+      uploadedAt: '2026-08-01T09:00:00.000Z',
+      updatedAt: '2026-08-01T09:00:00.000Z',
+    };
+  }
+
+  it('passes the real posting text of a found vacancy into the workspace', async () => {
+    installBridges();
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+    render(<CvAssistant vacancy={FOUND} />);
+
+    expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('Requirements:');
+    expect(screen.getByLabelText('Full job description text')).toHaveTextContent('Fluent English is essential');
+  });
+
+  it('lets the candidate paste a JD over a vacancy that arrived with none', async () => {
+    installBridges();
+    const createCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'My pasted posting text.' }));
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]), createCvEvidenceOverlay });
+    render(<CvAssistant vacancy={ABSENT} />);
+
+    expect(await screen.findByText(/No posting text came with this vacancy/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /paste job description/i }));
+    fireEvent.change(screen.getByLabelText('Job description text'), { target: { value: 'My pasted posting text.' } });
+    fireEvent.click(screen.getByRole('button', { name: /use this text/i }));
+
+    expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('My pasted posting text.');
+    await waitFor(() =>
+      expect(createCvEvidenceOverlay).toHaveBeenCalledWith(
+        expect.objectContaining({ jdSnapshot: 'My pasted posting text.', jdOrigin: 'pasted' }),
+      ),
+    );
+  });
+
+  it('uses the minted case key of a manual vacancy rather than one derived from its fields', async () => {
+    installBridges();
+    const getCvEvidenceOverlay = vi.fn().mockResolvedValue(null);
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]), getCvEvidenceOverlay });
+    render(<CvAssistant vacancy={{ ...FOUND, url: '', caseKey: 'manual:test-key', jdOrigin: 'manual' }} />);
+
+    await waitFor(() => expect(getCvEvidenceOverlay).toHaveBeenCalledWith('cv-1', 'manual:test-key'));
+    expect(getCvEvidenceOverlay).not.toHaveBeenCalledWith('cv-1', expect.stringMatching(/^(url|fields):/));
+  });
+
+  it('explains when the selected CV has no reviewed structured source', async () => {
+    installBridges();
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+    render(<CvAssistant vacancy={FOUND} />);
+
+    expect(await screen.findByText(/no reviewed structured source yet/i)).toBeInTheDocument();
+  });
+});

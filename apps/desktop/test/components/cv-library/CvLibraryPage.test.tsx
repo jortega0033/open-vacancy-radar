@@ -705,4 +705,167 @@ describe('CvLibraryPage', () => {
 
     await waitFor(() => expect(screen.getByText(/database unreachable/i)).toBeInTheDocument());
   });
+
+  describe('Tailor for a job (#419)', () => {
+    async function openForm() {
+      render(<CvLibraryPage />);
+      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
+      return screen.findByRole('form', { name: /tailor for a job/i });
+    }
+
+    it('is a visible action on the page', async () => {
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      expect(await screen.findByRole('button', { name: /tailor for a job/i })).toBeVisible();
+    });
+
+    it('requires role, company and a pasted job description, but not a link', async () => {
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+      installCvBridge();
+      const form = await openForm();
+
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+      expect(within(form).getByRole('alert')).toHaveTextContent(/role, company and the job description are all required/i);
+
+      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+      expect(within(form).getByRole('alert')).toBeInTheDocument();
+    });
+
+    it('opens the workspace on a manual case without creating a Saved Job or writing a case row yet', async () => {
+      const createSavedJob = vi.fn();
+      const updateSavedJob = vi.fn();
+      const createCvEvidenceOverlay = vi.fn();
+      const getCvEvidenceOverlay = vi.fn().mockResolvedValue(null);
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
+        createSavedJob,
+        updateSavedJob,
+        createCvEvidenceOverlay,
+        getCvEvidenceOverlay,
+      });
+      installCvBridge();
+      const form = await openForm();
+
+      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Job description'), {
+        target: { value: 'Build the freight planner. You must know TypeScript.' },
+      });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('Build the freight planner.');
+      expect(screen.getByText('Platform Engineer')).toBeInTheDocument();
+      await waitFor(() => expect(getCvEvidenceOverlay).toHaveBeenCalledWith('cv-1', expect.stringMatching(/^manual:/)));
+      expect(createSavedJob).not.toHaveBeenCalled();
+      expect(updateSavedJob).not.toHaveBeenCalled();
+      expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
+    });
+
+    it('saves a manual case under a minted manual key with origin manual', async () => {
+      const createCvEvidenceOverlay = vi
+        .fn()
+        .mockImplementation(async (input) => ({ ...input, id: 'o-1', jdRevisions: [], jdIncompleteReasons: [] }));
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
+        createCvEvidenceOverlay,
+      });
+      installCvBridge();
+      const form = await openForm();
+
+      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText(/link to the posting/i), {
+        target: { value: 'https://jobs.example.invalid/9' },
+      });
+      fireEvent.change(within(form).getByLabelText('Job description'), { target: { value: 'Build the freight planner.' } });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      fireEvent.click(await screen.findByRole('button', { name: /save job description/i }));
+      await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalled());
+      expect(createCvEvidenceOverlay).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vacancyKey: expect.stringMatching(/^manual:/),
+          origin: 'manual',
+          jdOrigin: 'manual',
+          jdUrl: 'https://jobs.example.invalid/9',
+          jdSnapshot: 'Build the freight planner.',
+        }),
+      );
+    });
+
+    it('goes back to the library from the workspace', async () => {
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+      installCvBridge();
+      await openForm();
+      fireEvent.click(screen.getByRole('button', { name: /back to cv library/i }));
+      expect(await screen.findByRole('button', { name: /tailor for a job/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('delete confirmation (#419)', () => {
+    const tailoringCase = (overrides: Record<string, unknown>) =>
+      ({
+        id: 'case-1',
+        cvId: 'cv-1',
+        vacancyKey: 'url:https://jobs.example.invalid/1',
+        jdSnapshot: '',
+        ...overrides,
+      }) as never;
+
+    it('lists the tailoring cases that will be deleted and says exported files are not', async () => {
+      const listCvEvidenceOverlays = vi.fn().mockResolvedValue([
+        tailoringCase({ id: 'a', vacancyKey: 'fields:platform engineer|northwind freight|rotterdam' }),
+        tailoringCase({ id: 'b', vacancyKey: 'manual:abc', jdSnapshot: 'Build the freight planner.\nMore text' }),
+        tailoringCase({ id: 'c', vacancyKey: 'url:https://jobs.example.invalid/3' }),
+      ]);
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ name: 'Frontend CV' })]),
+        listCvEvidenceOverlays,
+      });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      const dialog = await screen.findByRole('alertdialog');
+
+      expect(listCvEvidenceOverlays).toHaveBeenCalledWith('cv-1');
+      const list = within(dialog).getByRole('list', { name: /tailoring cases that will be deleted/i });
+      expect(within(list).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+        'platform engineer at northwind freight',
+        'Pasted job: Build the freight planner.',
+        'https://jobs.example.invalid/3',
+      ]);
+      expect(dialog).toHaveTextContent(/These 3 tailoring cases are deleted with it/);
+      expect(dialog).toHaveTextContent(/Files you already exported from this CV outside the app are not deleted/);
+    });
+
+    it('still says exported files are kept when the CV has no cases', async () => {
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv({ name: 'Frontend CV' })]) });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).queryByRole('list')).not.toBeInTheDocument();
+      expect(dialog).toHaveTextContent(/outside the app are not deleted/);
+    });
+
+    it('states that the cases could not be listed instead of hiding it', async () => {
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ name: 'Frontend CV' })]),
+        listCvEvidenceOverlays: vi.fn().mockRejectedValue(new Error('db busy')),
+      });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      expect(await screen.findByRole('alertdialog')).toHaveTextContent(/could not be listed/);
+    });
+  });
 });

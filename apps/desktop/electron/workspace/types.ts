@@ -20,6 +20,8 @@ import type {
   CvEvidenceFact,
   CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
+  CvJdIncompleteReason,
+  CvJdOrigin,
   CvJdRevision,
   CvListingStatus,
   CvRequirementMapping,
@@ -94,6 +96,8 @@ export type {
   CvFactOwnership,
   CvFactSourceKind,
   CvFactVerification,
+  CvJdIncompleteReason,
+  CvJdOrigin,
   CvJdRevision,
   CvListingStatus,
   CvRequirementClassification,
@@ -269,6 +273,12 @@ export interface CvEvidenceOverlayRecord {
   jdSnapshot: string;
   jdSnapshotHash: string;
   jdComplete: boolean;
+  /** #419: what the completeness heuristic found in the current JD, and its own warning text.
+   * Kept apart from `jdComplete` and from `jdConfirmedComplete`. */
+  jdIncompleteReasons: CvJdIncompleteReason[];
+  jdWarning: string;
+  /** #419: the candidate's own "I read it and it is complete" confirmation for a short JD. */
+  jdConfirmedComplete: boolean;
   /** #421's case contract: see `CvJdRevision`. */
   jdRevisions: CvJdRevision[];
   listingStatus: CvListingStatus;
@@ -299,6 +309,12 @@ export interface CvEvidenceOverlayInput {
   jdSnapshot?: string;
   jdSnapshotHash: string;
   jdComplete?: boolean;
+  /** #419: how this JD text reached the case. Defaults to `'manual'` for a `'manual'` origin and
+   * `'found'` otherwise. */
+  jdOrigin?: CvJdOrigin;
+  /** Optional posting URL and requisition number, stored on the JD revision. Never fetched. */
+  jdUrl?: string;
+  jdRequisition?: string;
   listingStatus?: CvListingStatus;
   /** Defaults to `'vacancy'` -- the only origin every existing caller creates today. #421's future
    * MCP `start_tailoring_case` tool is what will pass `'manual'`. */
@@ -323,6 +339,13 @@ export interface CvEvidenceOverlayPatch {
   jdSnapshot?: string;
   jdSnapshotHash?: string;
   jdComplete?: boolean;
+  /** #419: metadata for the JD revision a text change creates. Ignored when the text is unchanged. */
+  jdOrigin?: CvJdOrigin;
+  jdUrl?: string;
+  jdRequisition?: string;
+  /** #419: the candidate's confirmation that a short JD is complete. Rejected for an empty or
+   * known-truncated JD, and reset to `false` by any text change that does not also set it. */
+  jdConfirmedComplete?: boolean;
   listingStatus?: CvListingStatus;
   state?: Exclude<CvEvidenceOverlayState, 'candidate_approved'>;
   requirements?: CvRequirementMapping[];

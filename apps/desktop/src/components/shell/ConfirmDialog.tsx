@@ -28,7 +28,7 @@ export function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfi
         <h3 id="confirm-dialog-title" className="text-base font-semibold">
           {title}
         </h3>
-        <p className="mt-2 text-sm text-base-content/70">{message}</p>
+        <div className="mt-2 text-sm text-base-content/70">{message}</div>
         <div className="modal-action">
           <button className="btn btn-sm" type="button" onClick={onCancel}>
             Cancel
