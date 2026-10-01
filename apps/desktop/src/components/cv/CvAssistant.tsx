@@ -10,6 +10,7 @@ import { RequirementMapping } from './RequirementMapping.js';
 import { SaveCvToLibrary } from './SaveCvToLibrary.js';
 import { ResumeToolkit } from './ResumeToolkit.js';
 import { TailorCv } from './TailorCv.js';
+import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
 
 /**
@@ -223,6 +224,7 @@ export function CvAssistant({ vacancy, model: pinnedModel, onBackToVacancy }: Cv
           provider={provider}
           {...(effectiveModel ? { model: effectiveModel } : {})}
         />
+        <TailoringProposalsPanel cvId={selectedLibraryCv?.id ?? null} vacancy={vacancy} sourceCv={selectedSourceCv} />
         <ComposedCvReview
           cvId={selectedLibraryCv?.id ?? null}
           vacancy={vacancy}

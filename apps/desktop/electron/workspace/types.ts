@@ -15,12 +15,17 @@
 
 import type { CvSourceDocument } from './cv-source-schema.js';
 import type {
+  CvApprovedResumeSnapshot,
   CvApprovedWording,
   CvEvidenceFact,
+  CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
+  CvJdRevision,
   CvListingStatus,
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
+import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
+import type { CvProposalPayload, CvProposalStatus } from './cv-proposal-schema.js';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -79,19 +84,39 @@ export type {
 /** #419's evidence/approved-wording overlay, re-exported for the same reason the source-CV types
  * above are: the renderer reaches every workspace record type through this one module. */
 export type {
+  CvApprovedResumeSnapshot,
   CvApprovedWording,
   CvClaimField,
   CvEvidenceClass,
   CvEvidenceFact,
+  CvEvidenceOverlayOrigin,
   CvEvidenceOverlayState,
   CvFactOwnership,
   CvFactSourceKind,
   CvFactVerification,
+  CvJdRevision,
   CvListingStatus,
   CvRequirementClassification,
   CvRequirementMapping,
   CvWordingApprovalStatus,
 } from './cv-evidence-schema.js';
+
+/** #421's MCP client grants and audit trail, re-exported for the same reason the CV-tailoring
+ * types above are. */
+export type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
+
+/** #421's proposal staging layer, re-exported for the same reason. */
+export type {
+  CvClarificationQuestionProposalPayload,
+  CvEvidenceLinkProposalPayload,
+  CvFactProposalPayload,
+  CvProposalKind,
+  CvProposalPayload,
+  CvProposalStatus,
+  CvRequirementProposalPayload,
+  CvSelectionProposalPayload,
+  CvWordingProposalPayload,
+} from './cv-proposal-schema.js';
 
 export interface SavedJobRecord {
   id: string;
@@ -244,11 +269,23 @@ export interface CvEvidenceOverlayRecord {
   jdSnapshot: string;
   jdSnapshotHash: string;
   jdComplete: boolean;
+  /** #421's case contract: see `CvJdRevision`. */
+  jdRevisions: CvJdRevision[];
   listingStatus: CvListingStatus;
   state: CvEvidenceOverlayState;
   requirements: CvRequirementMapping[];
   facts: CvEvidenceFact[];
   wordingVariants: CvApprovedWording[];
+  /** #421's case contract: see `CvEvidenceOverlayOrigin`. */
+  origin: CvEvidenceOverlayOrigin;
+  /** #421's case contract: an opaque token bumped by the repository layer on every write, never
+   * accepted from a caller (see `updateCvEvidenceOverlay`'s patch type below, which has no field
+   * for it). `approveCvEvidenceOverlay` takes the caller's last-known value back as
+   * `expectedCaseRevision`, purely to detect a conflicting write in between; it is never itself
+   * writable. */
+  caseRevision: string;
+  /** #421's case contract: `null` until the first approval. See `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: CvApprovedResumeSnapshot | null;
   /** ISO-8601 */
   capturedAt: string;
   /** ISO-8601 */
@@ -263,14 +300,23 @@ export interface CvEvidenceOverlayInput {
   jdSnapshotHash: string;
   jdComplete?: boolean;
   listingStatus?: CvListingStatus;
+  /** Defaults to `'vacancy'` -- the only origin every existing caller creates today. #421's future
+   * MCP `start_tailoring_case` tool is what will pass `'manual'`. */
+  origin?: CvEvidenceOverlayOrigin;
 }
 
 /**
  * Every field a later step writes is patchable, `cvId`/`vacancyKey` are not: those are the row's
  * identity, and changing them would silently reassign an overlay to a different tailoring session
- * rather than update this one. `state` is patchable directly (unlike, say, `CvDocumentInput`'s
- * `isDefault`) because the composition/QA gate slices need to set it as a plain consequence of
- * their own checks, not through a separate verb per transition.
+ * rather than update this one. `state` is patchable directly for every value except
+ * `'candidate_approved'` (unlike, say, `CvDocumentInput`'s `isDefault`) because the composition/QA
+ * gate slices need to set most transitions as a plain consequence of their own checks, not through
+ * a separate verb per transition -- `'candidate_approved'` is the one exception, gated instead
+ * behind `approveCvEvidenceOverlay` below, because #421 requires that specific transition to
+ * re-derive wording from facts and freeze an approved-resume snapshot atomically, not merely accept
+ * whatever the caller already computed (see that method's own doc comment). `caseRevision`,
+ * `jdRevisions`, and `approvedResumeSnapshot` have no field here at all: they are write-layer-owned
+ * derived state, never directly settable by any caller, MCP or otherwise.
  */
 export interface CvEvidenceOverlayPatch {
   sourceCvContentHash?: string;
@@ -278,11 +324,90 @@ export interface CvEvidenceOverlayPatch {
   jdSnapshotHash?: string;
   jdComplete?: boolean;
   listingStatus?: CvListingStatus;
-  state?: CvEvidenceOverlayState;
+  state?: Exclude<CvEvidenceOverlayState, 'candidate_approved'>;
   requirements?: CvRequirementMapping[];
   facts?: CvEvidenceFact[];
   wordingVariants?: CvApprovedWording[];
 }
+
+/** #421: a named local client's authorization to act on the local MCP endpoint. See
+ * `mcp-grant-schema.ts`'s `McpClientGrant` for the full shape this mirrors -- this record never
+ * carries the credential itself, only that a verifier exists, since the credential crosses into
+ * the renderer at no point (see `createMcpClientGrant` below). */
+export interface McpClientGrantRecord {
+  id: string;
+  name: string;
+  scopeType: McpGrantScopeType;
+  sourceCvId: string;
+  caseIds: string[];
+  canReadFinalSnapshot: boolean;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601 */
+  expiresAt: string;
+  /** ISO-8601, or `''` while active. */
+  revokedAt: string;
+}
+
+export interface McpClientGrantInput {
+  name: string;
+  scopeType: McpGrantScopeType;
+  /** Required when `scopeType === 'source_cv'`, ignored otherwise. */
+  sourceCvId?: string;
+  /** Required when `scopeType === 'case_ids'`, ignored otherwise -- the candidate names the exact
+   * existing cases this grant may work on. */
+  caseIds?: string[];
+  canReadFinalSnapshot?: boolean;
+  /** ISO-8601 */
+  expiresAt: string;
+}
+
+/** #421's audit trail entry. See `mcp-grant-schema.ts`'s own doc comment on why every field here
+ * is structurally incapable of carrying raw CV/JD text or a credential. */
+export interface McpAuditLogEntry {
+  id: string;
+  /** `''` when no grant matched at all. */
+  grantId: string;
+  toolName: string;
+  /** `''` when no case was involved. */
+  caseId: string;
+  outcome: McpAuditOutcome;
+  /** `''` when not applicable. */
+  revision: string;
+  /** ISO-8601 */
+  createdAt: string;
+}
+
+export interface McpAuditLogEntryInput {
+  /** `''` when no grant matched at all. */
+  grantId: string;
+  toolName: string;
+  caseId?: string;
+  outcome: McpAuditOutcome;
+  revision?: string;
+}
+
+/** #421's staging layer: what an MCP client proposed, before any of it reaches a real
+ * `CvRequirementMapping`/`CvEvidenceFact`/`CvApprovedWording`. See `cv-proposal-schema.ts`'s own
+ * header for why a proposal is never the same type as what it promotes into. There is no
+ * `CvTailoringProposalInput` here: a proposal is created only by an MCP tool handler calling
+ * `createCvTailoringProposal` directly (same process, no IPC channel), never by the renderer --
+ * the renderer only ever lists, accepts, or rejects one that already exists.
+ */
+export interface CvTailoringProposalRecord {
+  id: string;
+  caseId: string;
+  /** `''` if the grant that proposed this no longer exists. */
+  grantId: string;
+  status: CvProposalStatus;
+  payload: CvProposalPayload;
+  caseRevisionAtProposal: string;
+  /** ISO-8601 */
+  createdAt: string;
+  /** ISO-8601, or `''` while `status === 'pending'`. */
+  decidedAt: string;
+}
+
 
 /** #156: the two formats the manual CV Library export action offers, matching what the existing
  * Letters export already supports (`letters/export.ts`'s `exportDocx`/`exportPdf`) minus markdown,
@@ -766,6 +891,10 @@ export interface AppSettingsRecord {
   confirmApplicationDelete: boolean;
   autoArchiveRejected: boolean;
   defaultProvider: DefaultAiProvider;
+  /** #421: whether the local MCP endpoint listens at all. See `schema.ts`'s comment on the column
+   * for the full reasoning; unlike `autoApplyEnabled` above, `parseSettingsPatch` does accept this
+   * one -- it is the literal on/off switch the candidate flips in Settings. */
+  mcpEndpointEnabled: boolean;
   /**
    * ADI-07: the AI Workspace's renderer-local view state, persisted here rather than in
    * `localStorage` so it travels with the workspace database like every other preference. See
@@ -807,6 +936,9 @@ export interface ApplicationDataResetResult {
     automationGrants: number;
     applicationAnswers: number;
     cvEvidenceOverlays: number;
+    mcpClientGrants: number;
+    mcpAuditLogEntries: number;
+    cvTailoringProposals: number;
   };
 }
 
@@ -896,6 +1028,18 @@ export interface WorkspaceBridge {
   getCvEvidenceOverlay(cvId: string, vacancyKey: string): Promise<CvEvidenceOverlayRecord | null>;
   createCvEvidenceOverlay(input: CvEvidenceOverlayInput): Promise<CvEvidenceOverlayRecord>;
   updateCvEvidenceOverlay(id: string, patch: CvEvidenceOverlayPatch): Promise<CvEvidenceOverlayRecord>;
+  /**
+   * #421's case contract: the *only* path that may move `state` to `'candidate_approved'`. Unlike
+   * `updateCvEvidenceOverlay` (which accepts and stores whatever `wordingVariants` the caller sends
+   * as a plain patch), this re-derives wording from the overlay's own facts server-side
+   * (`proposeWordingFromFacts`) rather than trusting a caller-computed value, re-checks every gap
+   * (`describeCvEvidenceOverlayGaps`) before applying anything, and freezes an
+   * `approvedResumeSnapshot` in the same write -- so an MCP tool (or a compromised renderer) cannot
+   * approve arbitrary text merely by getting it validated and stored through the generic patch
+   * verb. `expectedCaseRevision` must match the overlay's current `caseRevision` or the call
+   * rejects with a conflict naming the actual current revision, never a partial apply.
+   */
+  approveCvEvidenceOverlay(id: string, expectedCaseRevision: string): Promise<CvEvidenceOverlayRecord>;
   deleteCvEvidenceOverlay(id: string): Promise<DeleteResult>;
   /**
    * #419, slice 4: renders the *candidate-approved* composition (`composeApprovedTailoredResume`,
@@ -908,6 +1052,33 @@ export interface WorkspaceBridge {
    * approval and application/submission readiness are separate states").
    */
   exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvExportResult>;
+
+  /**
+   * #421: named local-client grants for the local MCP endpoint. Deliberately never returns a
+   * credential value -- `createMcpClientGrant`'s one-time secret is delivered to the candidate
+   * through a main-process-owned native dialog or clipboard action and never crosses into the
+   * renderer at all (the same "the daemon's bearer token never crosses into the renderer" rule
+   * SECURITY.md already states, generalized to a per-client credential). This resolved value is
+   * only ever the grant record itself.
+   */
+  listMcpClientGrants(): Promise<McpClientGrantRecord[]>;
+  createMcpClientGrant(input: McpClientGrantInput): Promise<McpClientGrantRecord>;
+  revokeMcpClientGrant(id: string): Promise<McpClientGrantRecord>;
+  /** `port` is `null` whenever `running` is `false`. Not itself a secret -- see `main.ts`'s own
+   * comment on this channel for why this is a plain read, unlike the daemon's base URL/token. */
+  getMcpServerStatus(): Promise<{ running: boolean; port: number | null }>;
+
+  /**
+   * #421's proposal review surface. `acceptCvTailoringProposal` promotes the proposal's payload
+   * into the case's real `CvEvidenceOverlay` (the exact promotion depends on `payload.kind`, see
+   * `acceptCvTailoringProposal`'s own doc comment in `repository.ts`) and returns both the decided
+   * proposal and the overlay it just updated, since the caller's screen is watching the overlay,
+   * not the proposal list. `rejectCvTailoringProposal` has no promotion step: the overlay is
+   * unchanged, only the proposal's own `status` moves to `'rejected'`.
+   */
+  listCvTailoringProposals(caseId: string): Promise<CvTailoringProposalRecord[]>;
+  acceptCvTailoringProposal(id: string): Promise<{ proposal: CvTailoringProposalRecord; overlay: CvEvidenceOverlayRecord }>;
+  rejectCvTailoringProposal(id: string): Promise<CvTailoringProposalRecord>;
 
   /**
    * The reusable application-answer library (#372). See `schema.ts`'s comment on

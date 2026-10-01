@@ -26,8 +26,12 @@
  *
  * Deliberately no runtime imports, the same discipline `cv-source-schema.ts` and
  * `cv-profile-schema.ts` follow: this file is bundled into both the renderer and the Electron
- * main process, and that is only safe while it never touches an Electron- or Node-only API.
+ * main process, and that is only safe while it never touches an Electron- or Node-only API. The
+ * one `import type` below (`TailoredResume`) is erased entirely at compile time and carries no
+ * runtime dependency, so it does not break that discipline.
  */
+
+import type { TailoredResume } from '../resume-schema.js';
 
 /** Whether a candidate's testimony has been independently corroborated. `self_reported` is the
  * default and the common case; upgrading it is a deliberate, separate action, never implicit in
@@ -209,6 +213,55 @@ export type CvListingStatus = 'open' | 'closed' | 'unknown';
 
 export const CV_LISTING_STATUSES: readonly CvListingStatus[] = ['open', 'closed', 'unknown'];
 
+/** Which of the two ways a case can start: read from an existing OVR-discovered vacancy, or begun
+ * from a job description a client pasted in directly with no vacancy behind it (#421's MCP case
+ * contract -- an external client may propose a case from JD text alone). Distinct from how
+ * `vacancyKey` itself is built (`vacancy-key.ts`'s `vacancyKeyFor`/`mintManualCaseKey`) so a
+ * reader never has to parse the key's own string shape to answer "did a real vacancy back this". */
+export type CvEvidenceOverlayOrigin = 'vacancy' | 'manual';
+
+export const CV_EVIDENCE_OVERLAY_ORIGINS: readonly CvEvidenceOverlayOrigin[] = ['vacancy', 'manual'];
+
+/** One immutable capture of the JD text this overlay read, at some point in its life. Appended,
+ * never edited or removed, whenever the JD text actually changes -- the same "a correction
+ * supersedes, it never silently erases" discipline this module's header already states for facts
+ * and wording. The last entry always mirrors the overlay's current `jdSnapshot`/`jdSnapshotHash`/
+ * `jdComplete`; earlier entries exist so a requirement or fact captured against an older posting
+ * can still be read against the exact wording it was captured from (#421: "retain immutable JD
+ * revisions"), not just against whatever the JD currently says. */
+export interface CvJdRevision {
+  /** App-assigned, never derived from content -- the same discipline every other id in this module
+   * follows. */
+  revisionId: string;
+  text: string;
+  /** SHA-256 hex of `text`, supplied by the caller -- this file has no runtime crypto import. */
+  textHash: string;
+  complete: boolean;
+  /** ISO-8601, when this revision was captured. */
+  capturedAt: string;
+}
+
+/**
+ * An immutable copy of the exact `TailoredResume` a candidate approved, taken at the moment
+ * `state` moved to `'candidate_approved'` -- #421's `read_approved_resume` MCP tool reads this
+ * rather than recomposing on every call, so a client with final-snapshot permission sees a fixed
+ * artifact rather than one that could shift under it between reads. `caseRevision` records which
+ * case revision this snapshot belongs to, stamped by the write layer at approval time, never by
+ * the caller (the same "app assigns ids, never the caller" discipline generalized to a revision
+ * number). A later case mutation invalidates `state` the same way it always has
+ * (`invalidatedOverlayState`); nothing here re-reads this snapshot once stale, it is left in place
+ * as the historical record of what was approved.
+ */
+export interface CvApprovedResumeSnapshot {
+  resume: TailoredResume;
+  /** SHA-256 hex of the resume's own serialization, supplied by the caller. */
+  digest: string;
+  /** ISO-8601 */
+  approvedAt: string;
+  /** The `caseRevision` this snapshot was approved against. */
+  caseRevision: string;
+}
+
 /**
  * One (CV, vacancy) tailoring session's full reviewable state. Not a replacement for
  * `CvSourceDocument`: this is the vacancy-specific overlay on top of it, the way an
@@ -221,17 +274,36 @@ export interface CvEvidenceOverlay {
    * overlay was built no longer matches, and every fact/wording variant scoped to the changed
    * entry needs re-confirming before the overlay can be approved again. */
   sourceCvContentHash: string;
-  /** The full JD text this overlay read, exactly as captured -- not a truncated excerpt. */
+  /** The full JD text this overlay read, exactly as captured -- not a truncated excerpt. Always
+   * equal to `jdRevisions.at(-1).text`; kept as its own field rather than derived on every read
+   * because nearly every existing reader (`RequirementMapping.tsx`, `describeCvEvidenceOverlayGaps`)
+   * only ever needs the current text, not the history. */
   jdSnapshot: string;
   /** SHA-256 hex of `jdSnapshot`. */
   jdSnapshotHash: string;
   /** Whether `jdSnapshot` is believed complete, or was truncated by a source-side limit. */
   jdComplete: boolean;
+  /** #421's case contract: every past version of `jdSnapshot`, oldest first, the last entry always
+   * mirroring the three fields above. See `CvJdRevision`. */
+  jdRevisions: CvJdRevision[];
   listingStatus: CvListingStatus;
   state: CvEvidenceOverlayState;
   requirements: CvRequirementMapping[];
   facts: CvEvidenceFact[];
   wordingVariants: CvApprovedWording[];
+  /** #421's case contract: how this case began. See `CvEvidenceOverlayOrigin`. */
+  origin: CvEvidenceOverlayOrigin;
+  /** #421's case contract: a value that changes whenever any field on this overlay changes,
+   * stamped by the write layer (never the caller) on every write. Distinct from
+   * `sourceCvContentHash`, which is an *input* digest (of the reviewed source CV only) rather than
+   * a record of this case's own write history -- an MCP tool's revision check is against this
+   * field, not that one. Monotonically increasing, but callers should treat it as an opaque token
+   * to compare for equality, not as an arithmetic value. */
+  caseRevision: string;
+  /** #421's case contract: the exact resume a candidate approved, frozen at the moment `state`
+   * moved to `'candidate_approved'`. `null` until the first approval. See
+   * `CvApprovedResumeSnapshot`. */
+  approvedResumeSnapshot: CvApprovedResumeSnapshot | null;
 }
 
 export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
@@ -239,11 +311,15 @@ export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
   jdSnapshot: '',
   jdSnapshotHash: '',
   jdComplete: true,
+  jdRevisions: [],
   listingStatus: 'unknown',
   state: 'needs_input',
   requirements: [],
   facts: [],
   wordingVariants: [],
+  origin: 'vacancy',
+  caseRevision: '0',
+  approvedResumeSnapshot: null,
 };
 
 /** Field size budgets, the same two-tier discipline (generous for real content, finite against a
@@ -364,6 +440,64 @@ export function proposeWordingFromFacts(
       approvedAt: now,
       sourceRevision: currentSourceCvContentHash,
     }));
+}
+
+/**
+ * A stable identity string for one vacancy lead, so per-vacancy state (#419's evidence overlay)
+ * has something to key on. Takes a minimal structural shape rather than importing the renderer's
+ * own `VacancyLead` type, so this file's "no runtime imports" discipline extends to type imports
+ * too -- every real `VacancyLead` already has these four fields, so passing one here needs no cast.
+ *
+ * The source URL wins whenever one exists: it is exactly what a real posting resolves to, and two
+ * leads with the same URL are the same vacancy by construction. Only a hand-entered vacancy with no
+ * URL falls back to a normalized role/company/location composite, normalized case- and
+ * whitespace-insensitively so two spellings of the same vacancy still key together.
+ *
+ * Moved here from the renderer's own `vacancy-key.ts` (#421) so Electron main (the MCP tool
+ * handlers starting a case from a vacancy reference) can call it too, without main importing from
+ * `src/` -- the same "dependency-free shared module lives under `electron/workspace`, the renderer
+ * imports from there" direction `resume-source.ts`/`cv-source-schema.ts` already establish.
+ * `src/components/cv/vacancy-key.ts` re-exports this unchanged.
+ */
+export function vacancyKeyFor(vacancy: { title: string; company: string; location: string; url: string }): string {
+  const url = vacancy.url.trim();
+  if (url.length > 0) return `url:${url}`;
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/gu, ' ');
+  return `fields:${normalize(vacancy.title)}|${normalize(vacancy.company)}|${normalize(vacancy.location)}`;
+}
+
+/**
+ * A stable key for a case with no vacancy behind it at all -- #421's MCP case contract, where an
+ * external client may start a case from pasted JD text alone. Freshly minted per call, never
+ * derived from the JD text itself: two cases started from identical JD text are still two distinct
+ * cases the candidate may want to track separately, the same "app assigns ids, never derives them
+ * from content" discipline this module already follows for `factId`/`variantId`. The `manual:`
+ * prefix can never collide with `vacancyKeyFor`'s own `url:`/`fields:` prefixes.
+ */
+export function mintManualCaseKey(): string {
+  return `manual:${crypto.randomUUID()}`;
+}
+
+/**
+ * The new `jdRevisions` history after a JD-text write, appending a fresh immutable revision only
+ * when the text actually changed -- a write that merely re-sends today's own JD text (an
+ * idempotent retry, or a caller that always includes it) must not pad the history with an
+ * identical entry. `capturedAt` is supplied by the caller, the same "no runtime clock" discipline
+ * `createdAt`/`approvedAt` already follow elsewhere in this module (`new Date()` itself is a plain
+ * JS global, not an Electron/Node-only API, so calling it here does not break the file's "no
+ * runtime imports" discipline the way reading a clock through `node:` would).
+ */
+export function withJdRevision(
+  overlay: CvEvidenceOverlay,
+  text: string,
+  textHash: string,
+  complete: boolean,
+  capturedAt: string,
+): CvJdRevision[] {
+  if (text === overlay.jdSnapshot && textHash === overlay.jdSnapshotHash && complete === overlay.jdComplete) {
+    return overlay.jdRevisions;
+  }
+  return [...overlay.jdRevisions, { revisionId: crypto.randomUUID(), text, textHash, complete, capturedAt }];
 }
 
 /** The JSON shape the requirement-mapping extraction prompt asks for, and the shape the response

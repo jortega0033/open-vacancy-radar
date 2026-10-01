@@ -14,6 +14,7 @@ import {
   parseApplicationPatch,
   parseCvDocumentInput,
   parseCvDocumentPatch,
+  parseCvEvidenceOverlayApproveInput,
   parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
   parseCvEvidenceOverlayLookup,
@@ -25,6 +26,7 @@ import {
   parseIdEnvelope,
   parseLetterInput,
   parseLetterPatch,
+  parseMcpClientGrantInput,
   parseSavedJobInput,
   parseSavedJobPatch,
   parseSettingsPatch,
@@ -232,6 +234,58 @@ describe('workspace settings patch', () => {
 
   it('ignores keys that are not settings at all', () => {
     expect(parseSettingsPatch({ id: 2, theme: 'light', databasePath: '/etc/passwd' })).toEqual({ theme: 'light' });
+  });
+
+  it('accepts mcpEndpointEnabled -- the candidate\'s own on/off switch, unlike autoApplyEnabled (#421)', () => {
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+    expect(() => parseSettingsPatch({ mcpEndpointEnabled: 'yes' })).toThrow(/"mcpEndpointEnabled" must be a boolean/);
+    // Still refuses the kill switch even sent alongside a legitimate field.
+    expect(parseSettingsPatch({ mcpEndpointEnabled: true, autoApplyEnabled: true })).toEqual({ mcpEndpointEnabled: true });
+  });
+});
+
+describe('workspace mcp client grant input (#421)', () => {
+  const FUTURE = '2099-01-01T00:00:00.000Z';
+
+  it('parses a source_cv grant, defaulting canReadFinalSnapshot to false', () => {
+    expect(parseMcpClientGrantInput({ name: 'Claude Desktop', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toEqual({
+      name: 'Claude Desktop',
+      scopeType: 'source_cv',
+      sourceCvId: 'cv-1',
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('parses a case_ids grant with its caseIds list', () => {
+    expect(parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a', 'b'], expiresAt: FUTURE })).toEqual({
+      name: 'x',
+      scopeType: 'case_ids',
+      caseIds: ['a', 'b'],
+      canReadFinalSnapshot: false,
+      expiresAt: FUTURE,
+    });
+  });
+
+  it('rejects mixing the two scopes\' fields', () => {
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', caseIds: ['a'], expiresAt: FUTURE }),
+    ).toThrow(/"caseIds" must not be set for a "source_cv" grant/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'case_ids', caseIds: ['a'], sourceCvId: 'cv-1', expiresAt: FUTURE }),
+    ).toThrow(/"sourceCvId" must not be set for a "case_ids" grant/);
+  });
+
+  it('requires a name and a well-formed expiresAt', () => {
+    expect(() => parseMcpClientGrantInput({ scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" must be a string/);
+    expect(() => parseMcpClientGrantInput({ name: '   ', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: FUTURE })).toThrow(/"name" is required/);
+    expect(() =>
+      parseMcpClientGrantInput({ name: 'x', scopeType: 'source_cv', sourceCvId: 'cv-1', expiresAt: 'not-a-date' }),
+    ).toThrow(/"expiresAt" must be an ISO-8601 date-time/);
+  });
+
+  it('rejects an unknown scopeType', () => {
+    expect(() => parseMcpClientGrantInput({ name: 'x', scopeType: 'everything', expiresAt: FUTURE })).toThrow(/"scopeType" must be one of/);
   });
 });
 
@@ -707,6 +761,47 @@ describe('workspace cv evidence overlays (#419)', () => {
   it('parses the (cvId, vacancyKey) lookup and cvId list envelopes', () => {
     expect(parseCvEvidenceOverlayLookup({ cvId: 'cv-1', vacancyKey: 'v-1' })).toEqual({ cvId: 'cv-1', vacancyKey: 'v-1' });
     expect(parseCvIdEnvelope({ cvId: 'cv-1' })).toBe('cv-1');
+  });
+
+  it('defaults origin to "vacancy" and accepts an explicit "manual" (#421)', () => {
+    const vacancyOrigin = parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B });
+    expect(vacancyOrigin.origin).toBe('vacancy');
+    const manualOrigin = parseCvEvidenceOverlayInput({
+      cvId: 'cv-1',
+      vacancyKey: 'manual:case-1',
+      sourceCvContentHash: HASH_A,
+      jdSnapshotHash: HASH_B,
+      origin: 'manual',
+    });
+    expect(manualOrigin.origin).toBe('manual');
+    expect(() =>
+      parseCvEvidenceOverlayInput({ cvId: 'cv-1', vacancyKey: 'v-1', sourceCvContentHash: HASH_A, jdSnapshotHash: HASH_B, origin: 'ai' }),
+    ).toThrow(/"origin" must be one of/);
+  });
+
+  it('never accepts "candidate_approved" through the generic patch (#421: only approveCvEvidenceOverlay may set it)', () => {
+    expect(() => parseCvEvidenceOverlayPatch({ state: 'candidate_approved' })).toThrow(/"state" must be one of/);
+    // Every other state is still a plain patch value.
+    expect(parseCvEvidenceOverlayPatch({ state: 'artifact_approved' }).state).toBe('artifact_approved');
+  });
+
+  it('never accepts caseRevision, jdRevisions or approvedResumeSnapshot through the generic patch (#421)', () => {
+    const patch = parseCvEvidenceOverlayPatch({
+      caseRevision: '999',
+      jdRevisions: [{ revisionId: 'r-1', text: 'x', textHash: HASH_A, complete: true, capturedAt: '2026-10-01T00:00:00.000Z' }],
+      approvedResumeSnapshot: { resume: {}, digest: HASH_A, approvedAt: '2026-10-01T00:00:00.000Z', caseRevision: '999' },
+    });
+    expect('caseRevision' in patch).toBe(false);
+    expect('jdRevisions' in patch).toBe(false);
+    expect('approvedResumeSnapshot' in patch).toBe(false);
+  });
+
+  it('parses the { id, expectedCaseRevision } approve envelope (#421)', () => {
+    expect(parseCvEvidenceOverlayApproveInput({ id: 'overlay-1', expectedCaseRevision: '3' })).toEqual({
+      id: 'overlay-1',
+      expectedCaseRevision: '3',
+    });
+    expect(() => parseCvEvidenceOverlayApproveInput({ id: 'overlay-1' })).toThrow();
   });
 
   it('parses the export request (#419 slice 4) and rejects an unknown format', () => {

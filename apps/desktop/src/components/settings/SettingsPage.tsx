@@ -11,6 +11,7 @@ import { AboutSection } from './AboutSection.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
+import { McpEndpointSection } from './McpEndpointSection.js';
 import { SavedAnswersSection } from './SavedAnswersSection.js';
 import { SearchProfileSection } from './SearchProfileSection.js';
 import { ALL_COUNTRIES } from '../search/countries.js';
@@ -52,6 +53,7 @@ const SETTINGS_DEFAULTS: AppSettingsPatch = {
   confirmApplicationDelete: true,
   autoArchiveRejected: false,
   defaultProvider: 'claude',
+  mcpEndpointEnabled: false,
 };
 
 const START_PAGE_OPTIONS = [
@@ -604,6 +606,13 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             </SettingsRow>
           </SettingsSection>
 
+          <McpEndpointSection
+            settings={settings}
+            cvDocuments={cvDocuments}
+            disabled={disabled}
+            onToggled={changeField}
+          />
+
           <DataManagement
             busy={busy}
             onRequestResetSettings={() => setConfirmTarget('settings')}
@@ -626,7 +635,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
       {confirmTarget === 'data' && (
         <ConfirmDialog
           title="Reset application data?"
-          message="This permanently deletes saved jobs, applications, attempts, CVs, letters, submission receipts, automation grants, generated application files and the search profile. It also restores default settings. The public vacancy cache stays available. This cannot be undone."
+          message="This permanently deletes saved jobs, applications, attempts, CVs, letters, submission receipts, automation grants, MCP client grants, generated application files and the search profile. It also restores default settings. The public vacancy cache stays available. This cannot be undone."
           confirmLabel="Delete everything"
           onConfirm={() => runReset('data')}
           onCancel={() => setConfirmTarget(null)}
