@@ -86,10 +86,14 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Tailored CV</div>
+        <div className="card-title flex flex-wrap items-center gap-2 text-base font-bold">
+          Tailored CV
+          <span className="badge badge-warning badge-sm">Draft</span>
+        </div>
         <p className="text-sm text-base-content/60">
           Your actual CV content, reordered and re-emphasized for this specific vacancy. It is a
-          draft to review, not a replacement for the CV on file.
+          draft to read, not a replacement for the CV on file. It is never approved, and copying it
+          does not approve it. Only the Approved CV panel builds a CV you can approve.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}

@@ -75,6 +75,8 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     origin: 'vacancy',
     caseRevision: '1',
     approvedResumeSnapshot: null,
+    projectSelection: null,
+    sourceBaseline: null,
     capturedAt: '2026-09-30T00:00:00.000Z',
     updatedAt: '2026-09-30T00:00:00.000Z',
     ...partial,
@@ -99,6 +101,13 @@ function fact(partial: Partial<CvEvidenceFact> = {}): CvEvidenceFact {
   });
 }
 
+/** The button is disabled until the case has loaded, so a click before then would do nothing. */
+async function clickPreview() {
+  const button = await screen.findByRole('button', { name: /preview approved cv/i });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
 const FACT_WORDING = 'Designed the GraphQL schema, using Apollo Server, schema-first, cut client-side overfetching';
 
 describe('ComposedCvReview (#419, step 5-6)', () => {
@@ -113,7 +122,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
+    await clickPreview();
 
     const preview = await screen.findByLabelText('Composed CV preview');
     expect(preview).toHaveTextContent('Original summary.');
@@ -157,7 +166,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     );
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
+    await clickPreview();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/still need verification/i);
     expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
@@ -183,7 +192,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     installOverlayBridge(baseOverlay({ sourceCvContentHash: hash, facts: [fact()], wordingVariants: [draft] }));
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
+    await clickPreview();
 
     const preview = await screen.findByLabelText('Composed CV preview');
     expect(preview).toHaveTextContent('Built things.');
@@ -203,7 +212,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     );
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /preview approved cv/i }));
+    await clickPreview();
 
     const preview = await screen.findByLabelText('Composed CV preview');
     expect(preview).toHaveTextContent('Built things.');
@@ -231,7 +240,7 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
 
     // Mount fetch sees the requirement unreviewed.
-    await screen.findByRole('button', { name: /preview approved cv/i });
+    await waitFor(() => expect(screen.getByRole('button', { name: /preview approved cv/i })).toBeEnabled());
     expect(getCvEvidenceOverlay).toHaveBeenCalledTimes(1);
 
     // RequirementMapping (a sibling component, not this one) resolves it -- simulated here by
@@ -243,5 +252,112 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     await screen.findByLabelText('Composed CV preview');
     expect(getCvEvidenceOverlay).toHaveBeenCalledTimes(2); // preview re-fetched, not reused from mount
     expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // no longer reports the stale gap
+  });
+
+  it('shows the complete assembled CV: contact, roles with dates, projects, education and skills', async () => {
+    const full: CvSourceDocument = {
+      ...SOURCE,
+      contact: { name: 'Sam Example', title: 'Engineer', location: 'Utrecht', email: 'sam@example.invalid', phone: '', links: [] },
+      education: [{ institution: 'State University', credential: 'BSc Computing', dates: '2015 - 2018' }],
+      projects: [{ id: 'project-1', name: 'Toolkit', role: 'Author', dates: '2022', organization: '', description: 'Plugin toolkit.', technologies: [], links: [], pinned: false }],
+    };
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: await hashOf(full), projectSelection: { projectIds: ['project-1'], maxProjects: 0, approvedAt: '2026-10-01T00:00:00.000Z' } }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={full} profile={{ title: '', years: '', location: '', languages: '', skills: ['TypeScript'], summary: '', auth: '' }} />);
+    await clickPreview();
+    const preview = await screen.findByLabelText('Composed CV preview');
+    for (const text of ['Sam Example', 'Utrecht', 'Frontend Engineer at Redwood Software', '2021 - Present', 'Toolkit', 'Plugin toolkit.', 'BSc Computing', 'TypeScript']) {
+      expect(preview).toHaveTextContent(text);
+    }
+  });
+
+  describe('project selection and source changes (#419 step 8)', () => {
+    const WITH_PROJECTS: CvSourceDocument = {
+      ...SOURCE,
+      maxProjects: 1,
+      projects: [
+        { id: 'project-1', name: 'Toolkit', role: '', dates: '', organization: '', description: 'A.', technologies: [], links: [], pinned: true },
+        { id: 'project-2', name: 'Dashboard', role: '', dates: '', organization: '', description: 'B.', technologies: [], links: [], pinned: false },
+      ],
+    };
+
+    function bridge(initial: CvEvidenceOverlayRecord, plan: Partial<import('../src/window.js').CvRebasePlan> = {}) {
+      let current = initial;
+      let currentPlan = { baselineKnown: true, inputsChanged: false, changes: [], keptVariantIds: [], droppedVariants: [], orphanedFactIds: [], requirementIdsToReview: [], ...plan };
+      const workspace = installWorkspaceBridge({
+        getCvEvidenceOverlay: vi.fn().mockImplementation(async () => current),
+        previewCvEvidenceRebase: vi.fn().mockImplementation(async () => currentPlan),
+        approveCvProjectSelection: vi.fn().mockImplementation(async () => {
+          current = {
+            ...current,
+            projectSelection: { projectIds: ['project-1'], maxProjects: 1, approvedAt: '2026-10-01T00:00:00.000Z' },
+            caseRevision: String(Number(current.caseRevision) + 1),
+          };
+          return current;
+        }),
+        rebaseCvEvidenceOverlay: vi.fn().mockImplementation(async () => {
+          currentPlan = { ...currentPlan, inputsChanged: false, changes: [] };
+          current = { ...current, caseRevision: String(Number(current.caseRevision) + 1) };
+          return current;
+        }),
+        approveCvEvidenceOverlay: vi.fn().mockImplementation(async () => {
+          current = { ...current, state: 'candidate_approved', caseRevision: String(Number(current.caseRevision) + 1) };
+          return current;
+        }),
+      });
+      return workspace;
+    }
+
+    it('lists the selected projects with their pins and blocks approval until the selection is approved', async () => {
+      const hash = await hashOf(WITH_PROJECTS);
+      const workspace = bridge(baseOverlay({ sourceCvContentHash: hash }));
+      render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
+
+      const selection = await screen.findByLabelText('Project selection');
+      expect(selection).toHaveTextContent('Toolkit (pinned)');
+      expect(selection).not.toHaveTextContent('Dashboard');
+
+      await clickPreview();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/projects for this CV have not been approved/i);
+      expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole('button', { name: /approve these projects/i }));
+      await waitFor(() => expect(workspace.approveCvProjectSelection).toHaveBeenCalledWith('overlay-1', '1'));
+      expect(await screen.findByRole('button', { name: /projects approved/i })).toBeDisabled();
+      await waitFor(() => expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeEnabled());
+    });
+
+    it('says when the selection changed after it was approved', async () => {
+      const hash = await hashOf(WITH_PROJECTS);
+      bridge(baseOverlay({ sourceCvContentHash: hash, projectSelection: { projectIds: ['project-2'], maxProjects: 0, approvedAt: '2026-10-01T00:00:00.000Z' } }));
+      render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
+      expect(await screen.findByText(/projects changed since you approved them/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /approve these projects/i })).toBeEnabled();
+    });
+
+    it('shows what changed in the CV and holds approval until the candidate rebases explicitly', async () => {
+      const hash = await hashOf(WITH_PROJECTS);
+      const workspace = bridge(
+        baseOverlay({ sourceCvContentHash: hash, projectSelection: { projectIds: ['project-1'], maxProjects: 1, approvedAt: '2026-10-01T00:00:00.000Z' } }),
+        {
+          inputsChanged: true,
+          changes: [{ area: 'Skills', detail: 'Added: Terraform.' }],
+          droppedVariants: [{ variantId: 'v-old', text: 'Old wording for a removed role', reason: 'its role is no longer in your CV' }],
+        },
+      );
+      render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={WITH_PROJECTS} />);
+
+      const panel = await screen.findByLabelText('Changes since this case was started');
+      expect(panel).toHaveTextContent('Skills: Added: Terraform.');
+      expect(panel).toHaveTextContent('Old wording for a removed role');
+
+      await clickPreview();
+      await screen.findByLabelText('Composed CV preview');
+      expect(screen.getByRole('button', { name: /^approve cv$/i })).toBeDisabled();
+      expect(workspace.rebaseCvEvidenceOverlay).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: /use my current cv for this case/i }));
+      await waitFor(() => expect(workspace.rebaseCvEvidenceOverlay).toHaveBeenCalledWith('overlay-1', '1'));
+      await waitFor(() => expect(screen.queryByLabelText('Changes since this case was started')).not.toBeInTheDocument());
+    });
   });
 });
