@@ -1,0 +1,4 @@
+ALTER TABLE `cv_evidence_overlays` ADD `jd_incomplete_reasons` text DEFAULT '[]' NOT NULL;--> statement-breakpoint
+ALTER TABLE `cv_evidence_overlays` ADD `jd_warning` text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE `cv_evidence_overlays` ADD `jd_confirmed_complete` integer DEFAULT false NOT NULL;--> statement-breakpoint
+UPDATE `cv_documents` SET `source_cv` = json_set(`source_cv`, '$.experience', (SELECT json_group_array(json(CASE WHEN json_extract(`e`.`value`, '$.id') IS NULL OR trim(json_extract(`e`.`value`, '$.id')) = '' THEN json_set(`e`.`value`, '$.id', 'experience-' || (`e`.`key` + 1)) ELSE `e`.`value` END)) FROM (SELECT `key`, `value` FROM json_each(`cv_documents`.`source_cv`, '$.experience') ORDER BY `key`) AS `e`)) WHERE `source_cv` IS NOT NULL AND json_valid(`source_cv`) AND json_type(`source_cv`, '$.experience') = 'array' AND json_array_length(`source_cv`, '$.experience') > 0;

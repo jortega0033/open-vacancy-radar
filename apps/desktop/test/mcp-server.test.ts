@@ -10,6 +10,7 @@ import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/clien
 import * as workspace from '../electron/workspace/repository.js';
 import { startMcpServer, type McpServerHandle } from '../electron/mcp-server.js';
 import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
+import { FULL_JD } from './fixtures/job-description.js';
 
 /**
  * Exercises the real local MCP endpoint (#421) against a real HTTP server on a real port and a
@@ -222,7 +223,8 @@ describe('local MCP endpoint tool surface (#421)', () => {
     expect(started.caseId).toBeTruthy();
     // Vacuously gap-free: there are no requirements at all yet to be unreviewed. Gaps appear once
     // something is proposed and accepted -- see the pagination test below.
-    expect(started.gaps).toEqual([]);
+    // A job description this short is flagged, so the case reports that gap from the start.
+    expect(started.gaps).toEqual([expect.stringMatching(/job description/)]);
 
     // Coverage was earned by this call, not pre-granted: a second tool call against the same
     // caseId from the same grant succeeds.
@@ -338,7 +340,7 @@ describe('local MCP endpoint tool surface (#421)', () => {
     const { credential } = createGrant({ withSource: true, canReadFinalSnapshot: true });
     const client = await connectedClient(credential);
     const { caseId } = toolJson<{ caseId: string }>(
-      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: FULL_JD } } }),
     );
 
     const notApprovedYet = await client.callTool({ name: 'read_approved_resume', arguments: { caseId } });

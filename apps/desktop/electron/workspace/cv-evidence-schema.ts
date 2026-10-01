@@ -222,6 +222,32 @@ export type CvEvidenceOverlayOrigin = 'vacancy' | 'manual';
 
 export const CV_EVIDENCE_OVERLAY_ORIGINS: readonly CvEvidenceOverlayOrigin[] = ['vacancy', 'manual'];
 
+/** How a JD revision's text reached the case. */
+export type CvJdOrigin = 'found' | 'pasted' | 'manual';
+
+export const CV_JD_ORIGINS: readonly CvJdOrigin[] = ['found', 'pasted', 'manual'];
+
+/** Why a JD was flagged incomplete. Mirrors `generation-input.ts`'s `JdIncompleteReason`, restated
+ * here because this file carries no runtime imports. `no_posting_text` and `truncated_at_source`
+ * can never be waived by the candidate; the other two are the "genuinely short" cases a candidate
+ * may confirm complete after reading. */
+export type CvJdIncompleteReason =
+  | 'no_posting_text'
+  | 'posting_text_too_thin'
+  | 'no_requirements_captured'
+  | 'truncated_at_source';
+
+export const CV_JD_INCOMPLETE_REASONS: readonly CvJdIncompleteReason[] = [
+  'no_posting_text',
+  'posting_text_too_thin',
+  'no_requirements_captured',
+  'truncated_at_source',
+];
+
+/** Reasons the candidate cannot waive: there is nothing to confirm, or the text is known to stop
+ * before the posting does. */
+export const CV_JD_UNWAIVABLE_REASONS: readonly CvJdIncompleteReason[] = ['no_posting_text', 'truncated_at_source'];
+
 /** One immutable capture of the JD text this overlay read, at some point in its life. Appended,
  * never edited or removed, whenever the JD text actually changes -- the same "a correction
  * supersedes, it never silently erases" discipline this module's header already states for facts
@@ -239,6 +265,21 @@ export interface CvJdRevision {
   complete: boolean;
   /** ISO-8601, when this revision was captured. */
   capturedAt: string;
+  /** Where this text came from: read from a found vacancy, pasted or replaced by the candidate on a
+   * found vacancy, or entered by hand for a manual case. Absent on a revision stored before this
+   * field existed; `toCvEvidenceOverlay` fills it in on read. */
+  origin: CvJdOrigin;
+  /** The posting URL the candidate or the discovery result supplied, if any. Never fetched. */
+  url: string;
+  /** The employer's requisition or reference number, if the candidate supplied one. */
+  requisition: string;
+  /** Why the completeness heuristic flagged this text (`JdIncompleteReason` values plus
+   * `'truncated_at_source'` when a caller reported a source-side cut). Empty when nothing was
+   * flagged. */
+  incompleteReasons: CvJdIncompleteReason[];
+  /** The heuristic's own sentence(s), kept apart from `complete` and from the candidate's
+   * confirmation. Empty when nothing was flagged. */
+  warning: string;
 }
 
 /**
@@ -283,6 +324,14 @@ export interface CvEvidenceOverlay {
   jdSnapshotHash: string;
   /** Whether `jdSnapshot` is believed complete, or was truncated by a source-side limit. */
   jdComplete: boolean;
+  /** The completeness heuristic's findings for the current `jdSnapshot`, kept apart from
+   * `jdComplete` and from `jdConfirmedComplete`. See `CvJdRevision.incompleteReasons`. */
+  jdIncompleteReasons: CvJdIncompleteReason[];
+  /** The heuristic's own sentence(s) for the current `jdSnapshot`; empty when nothing was flagged. */
+  jdWarning: string;
+  /** The candidate read the whole JD and says a short one is complete. Reset to `false` whenever
+   * the JD text changes. It never overrides an empty or known-truncated JD. */
+  jdConfirmedComplete: boolean;
   /** #421's case contract: every past version of `jdSnapshot`, oldest first, the last entry always
    * mirroring the three fields above. See `CvJdRevision`. */
   jdRevisions: CvJdRevision[];
@@ -311,6 +360,9 @@ export const EMPTY_CV_EVIDENCE_OVERLAY: CvEvidenceOverlay = {
   jdSnapshot: '',
   jdSnapshotHash: '',
   jdComplete: true,
+  jdIncompleteReasons: [],
+  jdWarning: '',
+  jdConfirmedComplete: false,
   jdRevisions: [],
   listingStatus: 'unknown',
   state: 'needs_input',
@@ -355,9 +407,7 @@ export function describeCvEvidenceOverlayGaps(
   if (overlay.sourceCvContentHash !== currentSourceCvContentHash) {
     reasons.push('the reviewed source CV has changed since this draft was built');
   }
-  if (!overlay.jdComplete) {
-    reasons.push('the job description was not read in full');
-  }
+  reasons.push(...describeCvJdGaps(overlay));
   const unreviewed = overlay.requirements.filter((requirement) => !requirement.reviewed);
   if (unreviewed.length > 0) {
     reasons.push(`${unreviewed.length} requirement(s) have not been reviewed`);
@@ -384,6 +434,30 @@ export function describeCvEvidenceOverlayGaps(
     reasons.push('unresolved conflicting corrections remain');
   }
   return reasons;
+}
+
+/**
+ * Why the current JD cannot back an approved CV (#419 step 4). An empty JD and a JD known to stop
+ * before the posting does can never be approved against. A JD the heuristic flagged as thin or
+ * requirement-free needs the candidate's own confirmation after reading it; the heuristic's
+ * warning stays on record either way. A row stored before completeness was assessed has no
+ * reasons and falls through to the legacy `jdComplete` flag.
+ */
+export function describeCvJdGaps(
+  overlay: Pick<CvEvidenceOverlay, 'jdSnapshot' | 'jdComplete' | 'jdIncompleteReasons' | 'jdConfirmedComplete'>,
+): string[] {
+  if (overlay.jdSnapshot.trim().length === 0) {
+    return ['there is no job description text yet, so nothing can be approved against it'];
+  }
+  if (overlay.jdIncompleteReasons.includes('truncated_at_source')) {
+    return ['the job description is cut off, so paste the full text before approving'];
+  }
+  if (overlay.jdIncompleteReasons.length > 0) {
+    return overlay.jdConfirmedComplete
+      ? []
+      : ['the job description looks incomplete and you have not confirmed it is complete after reading it'];
+  }
+  return overlay.jdComplete ? [] : ['the job description was not read in full'];
 }
 
 export function isCvEvidenceOverlayApprovable(overlay: CvEvidenceOverlay, currentSourceCvContentHash: string): boolean {
@@ -487,17 +561,40 @@ export function mintManualCaseKey(): string {
  * JS global, not an Electron/Node-only API, so calling it here does not break the file's "no
  * runtime imports" discipline the way reading a clock through `node:` would).
  */
+export interface CvJdRevisionMeta {
+  origin: CvJdOrigin;
+  url: string;
+  requisition: string;
+  incompleteReasons: CvJdIncompleteReason[];
+  warning: string;
+}
+
 export function withJdRevision(
   overlay: CvEvidenceOverlay,
   text: string,
   textHash: string,
   complete: boolean,
   capturedAt: string,
+  meta: Partial<CvJdRevisionMeta> = {},
 ): CvJdRevision[] {
   if (text === overlay.jdSnapshot && textHash === overlay.jdSnapshotHash && complete === overlay.jdComplete) {
     return overlay.jdRevisions;
   }
-  return [...overlay.jdRevisions, { revisionId: crypto.randomUUID(), text, textHash, complete, capturedAt }];
+  return [
+    ...overlay.jdRevisions,
+    {
+      revisionId: crypto.randomUUID(),
+      text,
+      textHash,
+      complete,
+      capturedAt,
+      origin: meta.origin ?? 'found',
+      url: meta.url ?? '',
+      requisition: meta.requisition ?? '',
+      incompleteReasons: meta.incompleteReasons ?? [],
+      warning: meta.warning ?? '',
+    },
+  ];
 }
 
 /** The JSON shape the requirement-mapping extraction prompt asks for, and the shape the response

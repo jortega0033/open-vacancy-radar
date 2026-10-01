@@ -48,10 +48,9 @@ export interface CvSourceExperienceEntry {
   /** Stable across edits, the same guarantee `CvSourceProjectEntry.id` makes and for the same
    * reason (issue #419): a clarification answer or an approved wording variant has to keep
    * pointing at the right role even after the list is reordered or re-extracted. Assigned by the
-   * app, never by the model. Absent on every record written before #419 -- `withStableExperienceIds`
-   * below backfills a fallback keyed on position, on both the read path (`repository.ts`'s
-   * `toCvSource`) and the write path (`validate.ts`'s `parseSourceExperience`), so a caller never
-   * observes an entry with no id. */
+   * app, never by the model. Absent on every record written before #419; migration `0025` persists an id for each
+   * such entry, `withStableExperienceIds` below is the read-path safety net, and a write mints a
+   * random one (`mintExperienceId`) so a caller never observes an entry with no id. */
   id: string;
   /** The direct employer, agency, or own company -- never the end client of a contract. */
   company: string;
@@ -215,16 +214,80 @@ export function isCvSourceExportable(source: CvSourceDocument): boolean {
   return describeCvSourceGaps(source).length === 0;
 }
 
-/** Assigns a stable, position-keyed fallback id to any experience entry that has none -- every
- * record written before #419 existed. Position is stable here for the same reason it already is
- * for `CvSourceProjectEntry`'s own fallback (`project-${index + 1}` in `validate.ts`): this array
- * is replaced wholesale on every edit (see `parseCvDocumentPatch`'s comment on `source`), never
- * spliced, so an entry's index does not shift out from under a reference that was taken from an
- * earlier read. */
+/** A fresh, app-assigned experience id. Random rather than positional or content-derived: two
+ * roles with the same employer and title must keep distinct ids, and an id must not change when
+ * an entry is edited or the list is reordered. */
+export function mintExperienceId(): string {
+  return `experience-${crypto.randomUUID()}`;
+}
+
+/** Makes every experience entry carry a non-empty id that no other entry shares, without ever
+ * touching an id that is already unique. Only a record that predates stable ids (or a corrupted
+ * one) has anything to fix: the migration `0025_stable_experience_ids` persists a legacy
+ * `experience-N` id for each such entry in the database, so on a migrated database this is a
+ * no-op. A missing id here falls back to the same legacy `experience-N` value the migration
+ * writes (existing facts may already point at it), and a duplicate gets a freshly minted id so
+ * two roles can never share one. */
 export function withStableExperienceIds(experience: CvSourceExperienceEntry[]): CvSourceExperienceEntry[] {
-  return experience.map((entry, index) =>
-    entry.id && entry.id.trim().length > 0 ? entry : { ...entry, id: `experience-${index + 1}` },
-  );
+  const seen = new Set<string>();
+  const taken = new Set(experience.map((entry) => entry.id?.trim()).filter((id): id is string => !!id));
+  return experience.map((entry, index) => {
+    let id = entry.id?.trim() ?? '';
+    if (id.length === 0) {
+      const legacy = `experience-${index + 1}`;
+      id = taken.has(legacy) ? mintExperienceId() : legacy;
+    } else if (seen.has(id)) {
+      id = mintExperienceId();
+    }
+    seen.add(id);
+    taken.add(id);
+    return id === entry.id ? entry : { ...entry, id };
+  });
+}
+
+function experienceMatchKey(entry: CvSourceExperienceEntry): string {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/gu, ' ');
+  return [entry.company, entry.title, entry.dates, entry.client].map(normalize).join('|');
+}
+
+export interface ReconciledExperience {
+  experience: CvSourceExperienceEntry[];
+  /** Entries that kept a fresh id because no existing entry matched them unambiguously. Each is
+   * `"<title> at <company>"` for the candidate to check against the previous record. */
+  needsReview: string[];
+}
+
+/**
+ * Carries existing experience ids onto a freshly extracted list. An extracted entry takes an
+ * existing id only when exactly one existing entry has the same company, title, dates and client
+ * and no other extracted entry claims that same key. Anything else (a changed title, two roles
+ * with identical text, a role that appeared or vanished) gets a fresh id and is reported in
+ * `needsReview` rather than silently renumbered onto the wrong role. Facts and wording scoped to
+ * an old id stay attached to that old id until the candidate decides what they belong to.
+ */
+export function reconcileExperienceIds(
+  existing: CvSourceExperienceEntry[],
+  extracted: CvSourceExperienceEntry[],
+): ReconciledExperience {
+  const countBy = (list: CvSourceExperienceEntry[]) => {
+    const counts = new Map<string, number>();
+    for (const entry of list) counts.set(experienceMatchKey(entry), (counts.get(experienceMatchKey(entry)) ?? 0) + 1);
+    return counts;
+  };
+  const existingCounts = countBy(existing);
+  const extractedCounts = countBy(extracted);
+  const needsReview: string[] = [];
+  const experience = extracted.map((entry) => {
+    const key = experienceMatchKey(entry);
+    if (existing.length === 0) return { ...entry, id: mintExperienceId() };
+    if (existingCounts.get(key) === 1 && extractedCounts.get(key) === 1) {
+      const match = existing.find((candidate) => experienceMatchKey(candidate) === key);
+      if (match && match.id) return { ...entry, id: match.id };
+    }
+    needsReview.push(`${entry.title || 'Untitled role'} at ${entry.company || 'unknown employer'}`);
+    return { ...entry, id: mintExperienceId() };
+  });
+  return { experience, needsReview };
 }
 
 /**

@@ -6,6 +6,7 @@ import { ComposedCvReview } from '../src/components/cv/ComposedCvReview.js';
 import type { VacancyLead } from '../src/components/cv/types.js';
 import type { CvEvidenceFact, CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvSourceDocument } from '../src/window.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
+import { FULL_JD } from './fixtures/job-description.js';
 
 const VACANCY: VacancyLead = {
   title: 'Senior Frontend Engineer',
@@ -60,9 +61,12 @@ function baseOverlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     cvId: 'cv-1',
     vacancyKey: `url:${VACANCY.url}`,
     sourceCvContentHash: '', // filled by the test to match the real hash of SOURCE
-    jdSnapshot: '',
+    jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),
     jdComplete: true,
+    jdIncompleteReasons: [],
+    jdWarning: '',
+    jdConfirmedComplete: false,
     jdRevisions: [],
     listingStatus: 'unknown',
     state: 'draft',

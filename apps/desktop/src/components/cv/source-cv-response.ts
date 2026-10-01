@@ -2,6 +2,7 @@ import {
   CV_SOURCE_LIMITS,
   EMPTY_CV_SOURCE,
   PROJECTS_UNLIMITED,
+  mintExperienceId,
   type CvSourceDocument,
   type CvSourceEducationEntry,
   type CvSourceExperienceEntry,
@@ -39,7 +40,7 @@ function stringArray(value: unknown, itemLimit: number, maxItems: number): strin
     .slice(0, maxItems);
 }
 
-function toExperienceEntry(value: unknown, index: number): CvSourceExperienceEntry | undefined {
+function toExperienceEntry(value: unknown): CvSourceExperienceEntry | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
   const company = stringField(record.company, CV_SOURCE_LIMITS.shortField);
@@ -47,8 +48,9 @@ function toExperienceEntry(value: unknown, index: number): CvSourceExperienceEnt
   if (!company && !title) return undefined;
   const engagement = record.engagement === 'client_engagement' ? 'client_engagement' : 'employment';
   return {
-    // App-assigned, never read from the answer -- same reasoning as `toProjectEntry`'s own `id`.
-    id: `experience-${index + 1}`,
+    // App-assigned, never read from the answer, and never positional: a re-extraction must not
+    // renumber roles. `CvDrawer` reconciles these fresh ids against the stored ones.
+    id: mintExperienceId(),
     company,
     title,
     dates: stringField(record.dates, CV_SOURCE_LIMITS.shortField),

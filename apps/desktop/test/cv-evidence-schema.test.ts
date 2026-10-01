@@ -16,7 +16,7 @@ import {
 const HASH = 'a'.repeat(64);
 
 function overlay(partial: Partial<CvEvidenceOverlay> = {}): CvEvidenceOverlay {
-  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, ...partial };
+  return { ...EMPTY_CV_EVIDENCE_OVERLAY, sourceCvContentHash: HASH, jdSnapshot: 'A full job description.', ...partial };
 }
 
 function requirement(partial: Partial<CvRequirementMapping> = {}): CvRequirementMapping {
@@ -238,7 +238,7 @@ describe('withJdRevision (#421)', () => {
   });
 
   it('preserves earlier revisions rather than replacing them', () => {
-    const earlier = { revisionId: 'r-1', text: 'v1', textHash: 'h1', complete: true, capturedAt: '2026-09-30T00:00:00.000Z' };
+    const earlier = { revisionId: 'r-1', text: 'v1', textHash: 'h1', complete: true, capturedAt: '2026-09-30T00:00:00.000Z', origin: 'found' as const, url: '', requisition: '', incompleteReasons: [], warning: '' };
     const base = overlay({ jdSnapshot: 'v1', jdSnapshotHash: 'h1', jdComplete: true, jdRevisions: [earlier] });
     const revisions = withJdRevision(base, 'v2', 'h2', true, '2026-10-01T00:00:00.000Z');
     expect(revisions).toHaveLength(2);

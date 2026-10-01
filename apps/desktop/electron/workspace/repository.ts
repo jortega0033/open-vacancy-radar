@@ -17,10 +17,13 @@ import {
   invalidatedOverlayState,
   proposeWordingFromFacts,
   withJdRevision,
+  CV_JD_UNWAIVABLE_REASONS,
   type CvEvidenceOverlay,
+  type CvJdIncompleteReason,
 } from './cv-evidence-schema.js';
 import type { CvProposalPayload } from './cv-proposal-schema.js';
 import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
+import { assessJdCompleteness } from '../generation-input.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
@@ -555,6 +558,11 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     jdSnapshot: row.jdSnapshot,
     jdSnapshotHash: row.jdSnapshotHash,
     jdComplete: row.jdComplete,
+    // Rows from before JD completeness was assessed carry the column defaults, which read as "no
+    // finding" rather than inventing one.
+    jdIncompleteReasons: row.jdIncompleteReasons ?? [],
+    jdWarning: row.jdWarning ?? '',
+    jdConfirmedComplete: row.jdConfirmedComplete ?? false,
     listingStatus: row.listingStatus as CvEvidenceOverlayRecord['listingStatus'],
     state: row.state as CvEvidenceOverlayRecord['state'],
     // JSON columns: a row from before a later field was added to these shapes could be missing it,
@@ -563,7 +571,17 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     requirements: row.requirements ?? [],
     facts: row.facts ?? [],
     wordingVariants: row.wordingVariants ?? [],
-    jdRevisions: row.jdRevisions ?? [],
+    // A revision stored before #419's metadata existed has none of it. It is filled from what the
+    // case itself says (a manual case's text was entered by hand, any other was read from a found
+    // vacancy) rather than left undefined for every reader to guard against.
+    jdRevisions: (row.jdRevisions ?? []).map((revision) => ({
+      ...revision,
+      origin: revision.origin ?? (row.origin === 'manual' ? 'manual' : 'found'),
+      url: revision.url ?? '',
+      requisition: revision.requisition ?? '',
+      incompleteReasons: revision.incompleteReasons ?? [],
+      warning: revision.warning ?? '',
+    })),
     origin: (row.origin ?? 'vacancy') as CvEvidenceOverlayRecord['origin'],
     caseRevision: row.caseRevision ?? '0',
     approvedResumeSnapshot: row.approvedResumeSnapshot ?? null,
@@ -604,6 +622,29 @@ export function getCvEvidenceOverlay(db: WorkspaceDb, cvId: string, vacancyKey: 
 }
 
 /**
+ * Reads the JD text itself (#281's `assessJdCompleteness`) and folds in a caller-reported
+ * source-side cut. The digest is computed here from the text rather than trusted from the caller
+ * whenever there is text (#419: digests come from canonical content in the main process).
+ */
+function assessJdText(
+  text: string,
+  reportedComplete: boolean,
+): { complete: boolean; reasons: CvJdIncompleteReason[]; warning: string } {
+  const assessment = assessJdCompleteness({ title: '', company: '', location: '', url: '', description: text });
+  const reasons: CvJdIncompleteReason[] = [...assessment.reasons];
+  const details = [...assessment.details];
+  if (!reportedComplete && !reasons.includes('truncated_at_source')) {
+    reasons.push('truncated_at_source');
+    details.push('The source reported that this text was cut off before the posting ended.');
+  }
+  return { complete: reasons.length === 0, reasons, warning: details.join(' ') };
+}
+
+function jdDigest(text: string, supplied: string): string {
+  return text.length > 0 ? createHash('sha256').update(text).digest('hex') : supplied;
+}
+
+/**
  * One overlay per (cvId, vacancyKey): a second `create` call for the same pair returns the
  * existing row unchanged rather than erroring or duplicating it, so a caller does not have to
  * `get` before every `create` just to find out whether today is this vacancy's first visit. This
@@ -623,7 +664,10 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
     if (existing) return toCvEvidenceOverlay(existing);
 
     const jdSnapshot = input.jdSnapshot ?? '';
+    const origin = input.origin ?? 'vacancy';
     const now = new Date().toISOString();
+    const jdSnapshotHash = jdDigest(jdSnapshot, input.jdSnapshotHash);
+    const assessment = assessJdText(jdSnapshot, input.jdComplete ?? true);
     const [row] = tx
       .insert(cvEvidenceOverlays)
       .values({
@@ -631,15 +675,30 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
         vacancyKey: input.vacancyKey,
         sourceCvContentHash: input.sourceCvContentHash,
         jdSnapshot,
-        jdSnapshotHash: input.jdSnapshotHash,
-        jdComplete: input.jdComplete ?? true,
+        jdSnapshotHash,
+        jdComplete: assessment.complete,
+        jdIncompleteReasons: assessment.reasons,
+        jdWarning: assessment.warning,
         // The overlay's first JD capture is already a revision, not a blank starting point -- an
         // empty `jdSnapshot` (no JD read yet) stays out of the history until real text arrives.
         jdRevisions: jdSnapshot
-          ? [{ revisionId: randomUUID(), text: jdSnapshot, textHash: input.jdSnapshotHash, complete: input.jdComplete ?? true, capturedAt: now }]
+          ? [
+              {
+                revisionId: randomUUID(),
+                text: jdSnapshot,
+                textHash: jdSnapshotHash,
+                complete: assessment.complete,
+                capturedAt: now,
+                origin: input.jdOrigin ?? (origin === 'manual' ? 'manual' : 'found'),
+                url: input.jdUrl ?? '',
+                requisition: input.jdRequisition ?? '',
+                incompleteReasons: assessment.reasons,
+                warning: assessment.warning,
+              },
+            ]
           : [],
         listingStatus: input.listingStatus ?? 'unknown',
-        origin: input.origin ?? 'vacancy',
+        origin,
         caseRevision: '1',
       })
       .returning()
@@ -665,14 +724,45 @@ export function updateCvEvidenceOverlay(
     caseRevision: bumpCaseRevision(existing.caseRevision),
   };
   if (values.sourceCvContentHash !== undefined) set.sourceCvContentHash = values.sourceCvContentHash;
+  let jdTextChanged = false;
   if (values.jdSnapshot !== undefined || values.jdSnapshotHash !== undefined || values.jdComplete !== undefined) {
     const jdSnapshot = values.jdSnapshot ?? existing.jdSnapshot;
-    const jdSnapshotHash = values.jdSnapshotHash ?? existing.jdSnapshotHash;
-    const jdComplete = values.jdComplete ?? existing.jdComplete;
+    const jdSnapshotHash = jdDigest(jdSnapshot, values.jdSnapshotHash ?? existing.jdSnapshotHash);
+    jdTextChanged = jdSnapshot !== existing.jdSnapshot;
+    // A source-side cut the caller reports applies to the text it is reported with. When the text
+    // is unchanged and the caller says nothing, the earlier report stands.
+    const reportedComplete =
+      values.jdComplete ?? (jdTextChanged ? true : !existing.jdIncompleteReasons.includes('truncated_at_source'));
+    const assessment = assessJdText(jdSnapshot, reportedComplete);
+    const lastRevision = existing.jdRevisions.at(-1);
     set.jdSnapshot = jdSnapshot;
     set.jdSnapshotHash = jdSnapshotHash;
-    set.jdComplete = jdComplete;
-    set.jdRevisions = withJdRevision(existing, jdSnapshot, jdSnapshotHash, jdComplete, new Date().toISOString());
+    set.jdComplete = assessment.complete;
+    set.jdIncompleteReasons = assessment.reasons;
+    set.jdWarning = assessment.warning;
+    set.jdRevisions = withJdRevision(existing, jdSnapshot, jdSnapshotHash, assessment.complete, new Date().toISOString(), {
+      origin: values.jdOrigin ?? (existing.origin === 'manual' ? 'manual' : 'pasted'),
+      url: values.jdUrl ?? lastRevision?.url ?? '',
+      requisition: values.jdRequisition ?? lastRevision?.requisition ?? '',
+      incompleteReasons: assessment.reasons,
+      warning: assessment.warning,
+    });
+    // The confirmation belonged to the text the candidate read. New text needs a new reading.
+    if (jdTextChanged) set.jdConfirmedComplete = false;
+  }
+  if (values.jdConfirmedComplete !== undefined) {
+    const reasons = set.jdIncompleteReasons ?? existing.jdIncompleteReasons;
+    const text = set.jdSnapshot ?? existing.jdSnapshot;
+    const unwaivable = CV_JD_UNWAIVABLE_REASONS.some((reason) => reasons.includes(reason));
+    if (values.jdConfirmedComplete && (text.trim().length === 0 || unwaivable)) {
+      throw new Error('an empty or cut-off job description cannot be confirmed as complete, so paste the full text instead');
+    }
+    set.jdConfirmedComplete = values.jdConfirmedComplete;
+  }
+  // A changed JD makes every requirement review stale (#419): the candidate reviewed the list
+  // against the old text. Reviews are cleared unless this same patch supplies a fresh list.
+  if (jdTextChanged && values.requirements === undefined && existing.requirements.some((r) => r.reviewed)) {
+    set.requirements = existing.requirements.map((requirement) => ({ ...requirement, reviewed: false }));
   }
   if (values.listingStatus !== undefined) set.listingStatus = values.listingStatus;
   if (values.requirements !== undefined) set.requirements = values.requirements;
@@ -689,6 +779,7 @@ export function updateCvEvidenceOverlay(
     values.sourceCvContentHash !== undefined ||
     values.jdSnapshot !== undefined ||
     values.jdSnapshotHash !== undefined ||
+    values.jdConfirmedComplete !== undefined ||
     values.requirements !== undefined ||
     values.facts !== undefined ||
     values.wordingVariants !== undefined;

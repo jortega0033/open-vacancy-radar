@@ -12,6 +12,7 @@ import * as schema from '../electron/workspace/schema.js';
 import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import { MCP_GRANT_LIMITS } from '../electron/workspace/mcp-grant-schema.js';
+import { FULL_JD } from './fixtures/job-description.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
@@ -208,7 +209,10 @@ describe('cv evidence overlays (#419)', () => {
       cvId: cv.id,
       vacancyKey: 'vacancy-1',
       sourceCvContentHash: HASH_A,
-      jdComplete: true,
+      // No JD text yet: the completeness check records that instead of assuming it is complete.
+      jdComplete: false,
+      jdIncompleteReasons: ['no_posting_text'],
+      jdConfirmedComplete: false,
       jdRevisions: [],
       listingStatus: 'unknown',
       state: 'needs_input',
@@ -232,7 +236,14 @@ describe('cv evidence overlays (#419)', () => {
       jdSnapshotHash: HASH_B,
     });
     expect(created.jdRevisions).toHaveLength(1);
-    expect(created.jdRevisions[0]).toMatchObject({ text: 'We need a frontend engineer.', textHash: HASH_B, complete: true });
+    // The digest is computed in the main process from the text, not taken from the caller.
+    expect(created.jdRevisions[0]).toMatchObject({
+      text: 'We need a frontend engineer.',
+      textHash: createHash('sha256').update('We need a frontend engineer.').digest('hex'),
+      origin: 'found',
+      url: '',
+      requisition: '',
+    });
   });
 
   it('creates a manual-origin overlay when asked, defaulting to vacancy otherwise (#421)', () => {
@@ -450,6 +461,7 @@ describe('cv evidence overlays (#419)', () => {
         cvId: cv.id,
         vacancyKey: 'vacancy-1',
         sourceCvContentHash: sourceHash,
+        jdSnapshot: FULL_JD,
         jdSnapshotHash: HASH_B,
       });
       workspace.updateCvEvidenceOverlay(db, overlay.id, { facts: [FACT] });

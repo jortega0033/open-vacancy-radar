@@ -231,6 +231,7 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
             jdSnapshot,
             jdSnapshotHash,
             jdComplete: true,
+            jdOrigin: vacancy ? 'found' : 'manual',
             origin: vacancy ? 'vacancy' : 'manual',
           });
           workspace.appendMcpClientGrantCaseId(tx, grant.id, overlay.id);
