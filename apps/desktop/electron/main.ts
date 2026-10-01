@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -164,7 +164,6 @@ import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import { composeApprovedTailoredResume } from './resume-source.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import type { TailoredResume } from './resume-schema.js';
-import { stableCvSourceJson } from './workspace/cv-source-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2964,7 +2963,7 @@ guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input:
   if (!doc.source) {
     throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
   }
-  const currentSourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+  const currentSourceCvContentHash = workspace.computeSourceCvContentHash(doc.source);
   const { resume, blockers } = composeApprovedTailoredResume(doc.source, overlay, currentSourceCvContentHash, doc.profile.skills);
   if (blockers.length > 0) {
     throw new Error(`this CV cannot be approved for export yet: ${blockers.join('; ')}`);

@@ -29,7 +29,6 @@ import * as workspace from './workspace/repository.js';
 import type { WorkspaceDb } from './workspace/client.js';
 import { describeMcpGrantBlockers, mcpGrantCoversCase } from './workspace/mcp-grant-schema.js';
 import { CV_EVIDENCE_LIMITS, describeCvEvidenceOverlayGaps, mintManualCaseKey, vacancyKeyFor } from './workspace/cv-evidence-schema.js';
-import { stableCvSourceJson } from './workspace/cv-source-schema.js';
 import { CV_PROPOSAL_LIMITS, type CvProposalPayload } from './workspace/cv-proposal-schema.js';
 import type { McpClientGrantRecord } from './workspace/types.js';
 import { LIMITS } from './workspace/validate.js';
@@ -116,7 +115,7 @@ const wordingProposalShape = {
   targetField: z.enum(['summary', 'skill', 'experience_bullet', 'project_description']),
   parentId: z.string().max(CV_EVIDENCE_LIMITS.shortField).default(''),
   text: z.string().min(1).max(CV_EVIDENCE_LIMITS.wordingText),
-  factIds: z.array(z.string()).max(CV_EVIDENCE_LIMITS.factIdsPerVariant).default([]),
+  factIds: z.array(z.string()).max(CV_PROPOSAL_LIMITS.factIdsPerProposal).default([]),
 };
 
 const selectionProposalShape = {
@@ -141,16 +140,24 @@ function registerProposalTool(
 ): void {
   server.registerTool(toolName, { description, inputSchema: shape }, async (rawArgs) => {
     const { caseId, ...data } = rawArgs as { caseId: string } & Record<string, unknown>;
-    return db.transaction((tx) => {
-      requireCoverage(grant, caseId);
-      const proposal = workspace.createCvTailoringProposal(tx, {
-        caseId,
-        grantId: grant.id,
-        payload: { kind, data } as unknown as CvProposalPayload,
+    try {
+      return db.transaction((tx) => {
+        requireCoverage(grant, caseId);
+        const proposal = workspace.createCvTailoringProposal(tx, {
+          caseId,
+          grantId: grant.id,
+          payload: { kind, data } as unknown as CvProposalPayload,
+        });
+        auditTool(tx, grant, toolName, caseId, 'success', proposal.caseRevisionAtProposal);
+        return toolTextResult({ proposalId: proposal.id, status: proposal.status });
       });
-      auditTool(tx, grant, toolName, caseId, 'success', proposal.caseRevisionAtProposal);
-      return toolTextResult({ proposalId: proposal.id, status: proposal.status });
-    });
+    } catch (err) {
+      // A throw inside the transaction above rolls back any audit write attempted alongside it
+      // (#421: "every attempt, not only successful ones") -- audit the denial here, against the
+      // outer, un-rolled-back `db`, so a denied propose_* call is never silently lost.
+      auditTool(db, grant, toolName, caseId, 'denied');
+      throw err;
+    }
   });
 }
 
@@ -192,34 +199,53 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
       },
     },
     async ({ vacancy, manualJd }) => {
-      if (!vacancy === !manualJd) throw new Error('provide exactly one of "vacancy" or "manualJd"');
-      if (grant.scopeType !== 'source_cv') throw new Error('this grant cannot start new cases, only work on previously named ones');
+      let deniedCaseId = '';
+      try {
+        if (!vacancy === !manualJd) throw new Error('provide exactly one of "vacancy" or "manualJd"');
+        if (grant.scopeType !== 'source_cv') throw new Error('this grant cannot start new cases, only work on previously named ones');
 
-      const doc = workspace.getCvDocument(db, grant.sourceCvId);
-      if (!doc.source) throw new Error('this CV has no reviewed source yet, so there is nothing to tailor from');
-      const sourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+        return db.transaction((tx) => {
+          const doc = workspace.getCvDocument(tx, grant.sourceCvId);
+          if (!doc.source) throw new Error('this CV has no reviewed source yet, so there is nothing to tailor from');
+          const sourceCvContentHash = workspace.computeSourceCvContentHash(doc.source);
 
-      const jdSnapshot = vacancy ? vacancy.postingText : (manualJd as NonNullable<typeof manualJd>).jdText;
-      const jdSnapshotHash = createHash('sha256').update(jdSnapshot).digest('hex');
-      const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : mintManualCaseKey();
+          const jdSnapshot = vacancy ? vacancy.postingText : (manualJd as NonNullable<typeof manualJd>).jdText;
+          const jdSnapshotHash = createHash('sha256').update(jdSnapshot).digest('hex');
+          const vacancyKey = vacancy ? vacancyKeyFor(vacancy) : mintManualCaseKey();
 
-      const overlay = workspace.createCvEvidenceOverlay(db, {
-        cvId: grant.sourceCvId,
-        vacancyKey,
-        sourceCvContentHash,
-        jdSnapshot,
-        jdSnapshotHash,
-        jdComplete: true,
-        origin: vacancy ? 'vacancy' : 'manual',
-      });
-      workspace.appendMcpClientGrantCaseId(db, grant.id, overlay.id);
-      auditTool(db, grant, 'start_tailoring_case', overlay.id, 'success', overlay.caseRevision);
+          // createCvEvidenceOverlay is idempotent per (cvId, vacancyKey): a second call for the
+          // same vacancy returns the existing overlay rather than erroring. Without this check, a
+          // second grant on the same source CV would silently inherit coverage of a case it never
+          // created -- mcp-grant-schema.ts's own documented invariant is that a source_cv grant
+          // covers only the cases *it* created, not every case linked to that CV.
+          const existing = vacancy ? workspace.getCvEvidenceOverlay(tx, grant.sourceCvId, vacancyKey) : null;
+          if (existing && !mcpGrantCoversCase(grant, existing.id)) {
+            deniedCaseId = existing.id;
+            throw new Error('a case for this vacancy already exists under a different client\'s grant');
+          }
 
-      return toolTextResult({
-        caseId: overlay.id,
-        caseRevision: overlay.caseRevision,
-        gaps: describeCvEvidenceOverlayGaps(overlay, sourceCvContentHash),
-      });
+          const overlay = workspace.createCvEvidenceOverlay(tx, {
+            cvId: grant.sourceCvId,
+            vacancyKey,
+            sourceCvContentHash,
+            jdSnapshot,
+            jdSnapshotHash,
+            jdComplete: true,
+            origin: vacancy ? 'vacancy' : 'manual',
+          });
+          workspace.appendMcpClientGrantCaseId(tx, grant.id, overlay.id);
+          auditTool(tx, grant, 'start_tailoring_case', overlay.id, 'success', overlay.caseRevision);
+
+          return toolTextResult({
+            caseId: overlay.id,
+            caseRevision: overlay.caseRevision,
+            gaps: describeCvEvidenceOverlayGaps(overlay, sourceCvContentHash),
+          });
+        });
+      } catch (err) {
+        auditTool(db, grant, 'start_tailoring_case', deniedCaseId, 'denied');
+        throw err;
+      }
     },
   );
 
@@ -230,22 +256,28 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
       inputSchema: { caseId: z.string().min(1), page: z.number().int().min(0).default(0) },
     },
     async ({ caseId, page }) => {
-      requireCoverage(grant, caseId);
-      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
-      const start = page * JD_PAGE_SIZE;
-      const jdPage = overlay.jdSnapshot.slice(start, start + JD_PAGE_SIZE);
-      const totalPages = Math.max(1, Math.ceil(overlay.jdSnapshot.length / JD_PAGE_SIZE));
-      const pendingProposals = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending');
+      try {
+        requireCoverage(grant, caseId);
+        const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+        const start = page * JD_PAGE_SIZE;
+        const jdPage = overlay.jdSnapshot.slice(start, start + JD_PAGE_SIZE);
+        const totalPages = Math.max(1, Math.ceil(overlay.jdSnapshot.length / JD_PAGE_SIZE));
+        const pendingProposals = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending');
+        auditTool(db, grant, 'get_tailoring_case', caseId, 'success', overlay.caseRevision);
 
-      return toolTextResult({
-        caseId: overlay.id,
-        caseRevision: overlay.caseRevision,
-        state: overlay.state,
-        jd: { page, totalPages, text: jdPage, isLastPage: page >= totalPages - 1, isComplete: overlay.jdComplete },
-        requirements: overlay.requirements,
-        facts: overlay.facts,
-        pendingProposals,
-      });
+        return toolTextResult({
+          caseId: overlay.id,
+          caseRevision: overlay.caseRevision,
+          state: overlay.state,
+          jd: { page, totalPages, text: jdPage, isLastPage: page >= totalPages - 1, isComplete: overlay.jdComplete },
+          requirements: overlay.requirements,
+          facts: overlay.facts,
+          pendingProposals,
+        });
+      } catch (err) {
+        auditTool(db, grant, 'get_tailoring_case', caseId, 'denied');
+        throw err;
+      }
     },
   );
 
@@ -263,20 +295,26 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
       inputSchema: { caseId: z.string().min(1) },
     },
     async ({ caseId }) => {
-      requireCoverage(grant, caseId);
-      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
-      const doc = workspace.getCvDocument(db, overlay.cvId);
-      const currentSourceCvContentHash = doc.source ? createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex') : '';
-      const pendingProposalCount = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending').length;
+      try {
+        requireCoverage(grant, caseId);
+        const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+        const doc = workspace.getCvDocument(db, overlay.cvId);
+        const currentSourceCvContentHash = doc.source ? workspace.computeSourceCvContentHash(doc.source) : '';
+        const pendingProposalCount = workspace.listCvTailoringProposals(db, caseId).filter((p) => p.status === 'pending').length;
+        auditTool(db, grant, 'get_tailoring_status', caseId, 'success', overlay.caseRevision);
 
-      return toolTextResult({
-        caseId: overlay.id,
-        caseRevision: overlay.caseRevision,
-        state: overlay.state,
-        gaps: describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash),
-        pendingProposalCount,
-        artifactState: overlay.state === 'artifact_approved' ? 'exported' : overlay.state === 'candidate_approved' ? 'approved_not_exported' : 'not_approved',
-      });
+        return toolTextResult({
+          caseId: overlay.id,
+          caseRevision: overlay.caseRevision,
+          state: overlay.state,
+          gaps: describeCvEvidenceOverlayGaps(overlay, currentSourceCvContentHash),
+          pendingProposalCount,
+          artifactState: overlay.state === 'artifact_approved' ? 'exported' : overlay.state === 'candidate_approved' ? 'approved_not_exported' : 'not_approved',
+        });
+      } catch (err) {
+        auditTool(db, grant, 'get_tailoring_status', caseId, 'denied');
+        throw err;
+      }
     },
   );
 
@@ -287,14 +325,20 @@ function createMcpServerInstance(db: WorkspaceDb, grant: McpClientGrantRecord): 
       inputSchema: { caseId: z.string().min(1) },
     },
     async ({ caseId }) => {
-      if (!grant.canReadFinalSnapshot) throw new Error('this grant does not have permission to read the approved resume');
-      requireCoverage(grant, caseId);
-      const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
-      if (!overlay.approvedResumeSnapshot) throw new Error('this case has not been approved yet');
-      if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
-        throw new Error('the case has changed since it was approved; the approved snapshot is no longer current');
+      try {
+        if (!grant.canReadFinalSnapshot) throw new Error('this grant does not have permission to read the approved resume');
+        requireCoverage(grant, caseId);
+        const overlay = workspace.getCvEvidenceOverlayById(db, caseId);
+        if (!overlay.approvedResumeSnapshot) throw new Error('this case has not been approved yet');
+        if (overlay.state !== 'candidate_approved' && overlay.state !== 'artifact_approved') {
+          throw new Error('the case has changed since it was approved; the approved snapshot is no longer current');
+        }
+        auditTool(db, grant, 'read_approved_resume', caseId, 'success', overlay.caseRevision);
+        return toolTextResult(overlay.approvedResumeSnapshot);
+      } catch (err) {
+        auditTool(db, grant, 'read_approved_resume', caseId, 'denied');
+        throw err;
       }
-      return toolTextResult(overlay.approvedResumeSnapshot);
     },
   );
 
@@ -314,7 +358,7 @@ function extractBearerToken(header: string | string[] | undefined): string | und
 function hasAllowedHost(header: string | string[] | undefined): boolean {
   const value = Array.isArray(header) ? header[0] : header;
   if (!value) return false;
-  const hostname = value.split(':')[0]?.toLowerCase();
+  const hostname = value.startsWith('[') ? value.slice(0, value.indexOf(']') + 1).toLowerCase() : value.split(':')[0]?.toLowerCase();
   return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
 }
 

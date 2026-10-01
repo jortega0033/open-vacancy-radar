@@ -366,4 +366,57 @@ describe('local MCP endpoint tool surface (#421)', () => {
     const entries = workspace.listMcpAuditLogEntries(db);
     expect(entries.some((e) => e.toolName === 'start_tailoring_case' && e.caseId === caseId && e.outcome === 'success')).toBe(true);
   });
+
+  it('a second grant on the same source CV cannot inherit coverage of a vacancy case the first grant started', async () => {
+    const cv = workspace.createCvDocument(db, { ...CV, source: SOURCE });
+    const { credential: credentialA } = workspace.createMcpClientGrant(db, { name: 'A', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    const { credential: credentialB } = workspace.createMcpClientGrant(db, { name: 'B', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: FUTURE });
+    const vacancy = { title: 'Frontend Engineer', company: 'Acme', postingText: 'We need a frontend engineer.' };
+
+    const clientA = await connectedClient(credentialA);
+    const { caseId } = toolJson<{ caseId: string }>(await clientA.callTool({ name: 'start_tailoring_case', arguments: { vacancy } }));
+    await clientA.close();
+
+    const clientB = await connectedClient(credentialB);
+    const result = await clientB.callTool({ name: 'start_tailoring_case', arguments: { vacancy } });
+    expect(result.isError).toBe(true);
+    await clientB.close();
+
+    // Grant B never earned coverage of A's case.
+    const stillDenied = await (await connectedClient(credentialB)).callTool({ name: 'get_tailoring_status', arguments: { caseId } });
+    expect(stillDenied.isError).toBe(true);
+
+    const entries = workspace.listMcpAuditLogEntries(db);
+    expect(entries.some((e) => e.toolName === 'start_tailoring_case' && e.caseId === caseId && e.outcome === 'denied')).toBe(true);
+  });
+
+  it('get_tailoring_case, get_tailoring_status, and read_approved_resume are audited on both success and denial', async () => {
+    const { credential } = createGrant({ withSource: true, canReadFinalSnapshot: true });
+    const client = await connectedClient(credential);
+    const { caseId } = toolJson<{ caseId: string }>(
+      await client.callTool({ name: 'start_tailoring_case', arguments: { manualJd: { role: 'x', company: 'y', jdText: 'z' } } }),
+    );
+    await client.callTool({ name: 'get_tailoring_case', arguments: { caseId } });
+    await client.callTool({ name: 'get_tailoring_status', arguments: { caseId } });
+    await client.callTool({ name: 'read_approved_resume', arguments: { caseId } }); // not approved yet -- denied
+    await client.callTool({ name: 'get_tailoring_case', arguments: { caseId: 'nonexistent' } }); // denied (no coverage)
+    await client.close();
+
+    const entries = workspace.listMcpAuditLogEntries(db);
+    const outcomesFor = (toolName: string) => entries.filter((e) => e.toolName === toolName).map((e) => e.outcome);
+    expect(outcomesFor('get_tailoring_case')).toEqual(expect.arrayContaining(['success', 'denied']));
+    expect(outcomesFor('get_tailoring_status')).toContain('success');
+    expect(outcomesFor('read_approved_resume')).toContain('denied');
+  });
+
+  it('a denied propose_* call is still audited, even though its proposal write rolled back', async () => {
+    const { credential } = createGrant({ withSource: true });
+    const client = await connectedClient(credential);
+    const result = await client.callTool({ name: 'propose_fact', arguments: { caseId: 'nonexistent', parentId: 'experience-1', parentType: 'experience', activity: 'x' } });
+    expect(result.isError).toBe(true);
+    await client.close();
+
+    const entries = workspace.listMcpAuditLogEntries(db);
+    expect(entries.some((e) => e.toolName === 'propose_fact' && e.outcome === 'denied')).toBe(true);
+  });
 });

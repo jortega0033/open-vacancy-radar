@@ -11,6 +11,7 @@ import { WorkspaceNotFoundError } from '../electron/workspace/repository.js';
 import * as schema from '../electron/workspace/schema.js';
 import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
+import { MCP_GRANT_LIMITS } from '../electron/workspace/mcp-grant-schema.js';
 
 /**
  * Runs against a real migrated SQLite file in a temp directory, not a mock. The behaviors worth
@@ -597,6 +598,15 @@ describe('mcp client grants and audit trail (#421)', () => {
     it('throws WorkspaceNotFoundError for a missing grant', () => {
       expect(() => workspace.appendMcpClientGrantCaseId(db, 'missing-grant', 'case-1')).toThrow(workspace.WorkspaceNotFoundError);
     });
+
+    it('refuses to grow a grant\'s caseIds past the documented cap', () => {
+      const cv = workspace.createCvDocument(db, { name: 'Resume', kind: 'manual' as const, profile: { title: '', years: '', location: '', languages: '', skills: [], summary: '', auth: '' } });
+      const { grant } = workspace.createMcpClientGrant(db, { name: 'x', scopeType: 'source_cv', sourceCvId: cv.id, expiresAt: '2099-01-01T00:00:00.000Z' });
+      for (let i = 0; i < MCP_GRANT_LIMITS.caseIdsPerGrant; i += 1) {
+        workspace.appendMcpClientGrantCaseId(db, grant.id, `case-${i}`);
+      }
+      expect(() => workspace.appendMcpClientGrantCaseId(db, grant.id, 'one-too-many')).toThrow();
+    });
   });
 });
 
@@ -801,6 +811,29 @@ describe('cv tailoring proposals (#421)', () => {
 
     it('throws WorkspaceNotFoundError for a missing proposal', () => {
       expect(() => workspace.acceptCvTailoringProposal(db, 'missing-proposal')).toThrow(workspace.WorkspaceNotFoundError);
+    });
+
+    it('re-validates every anchor against the case\'s current state, not the state at proposal time', () => {
+      const { cv, overlay } = caseWithRequirementAndFact();
+      const requirement = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'requirement', data: { text: 'x', jdAnchor: '', classification: 'required', evidenceClass: 'direct', anchorParentId: 'experience-1' } },
+      });
+      const fact = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'fact', data: { parentId: 'experience-1', parentType: 'experience', client: '', activity: 'x', mechanism: '', result: '', ownership: 'unknown', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
+      });
+      const selection = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: ['experience-1'] } } });
+
+      // The candidate removes the entry the proposals above anchored to, in between proposal and
+      // acceptance -- the exact gap `acceptCvTailoringProposal`'s own doc comment calls out.
+      workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, experience: [] } });
+
+      expect(() => workspace.acceptCvTailoringProposal(db, requirement.id)).toThrow(/no longer exists in this case/);
+      expect(() => workspace.acceptCvTailoringProposal(db, fact.id)).toThrow(/no longer exists in this case/);
+      expect(() => workspace.acceptCvTailoringProposal(db, selection.id)).toThrow(/no longer exists in this case/);
     });
   });
 

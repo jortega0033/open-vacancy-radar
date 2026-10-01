@@ -20,6 +20,7 @@ import {
   type CvEvidenceOverlay,
 } from './cv-evidence-schema.js';
 import type { CvProposalPayload } from './cv-proposal-schema.js';
+import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
 import { applicationAnswerKey } from './application-answer-key.js';
@@ -661,7 +662,7 @@ export function updateCvEvidenceOverlay(
     updatedAt: new Date(),
     // #421's case contract: every write bumps this, regardless of which fields changed -- an MCP
     // tool's revision check is against this, never against a specific field.
-    caseRevision: String(Number(existing.caseRevision) + 1),
+    caseRevision: bumpCaseRevision(existing.caseRevision),
   };
   if (values.sourceCvContentHash !== undefined) set.sourceCvContentHash = values.sourceCvContentHash;
   if (values.jdSnapshot !== undefined || values.jdSnapshotHash !== undefined || values.jdComplete !== undefined) {
@@ -703,6 +704,26 @@ export function updateCvEvidenceOverlay(
 }
 
 /**
+ * The one place this file hashes a reviewed source CV. `main.ts`'s export handler and every
+ * MCP tool that needs a fresh hash (`start_tailoring_case`, `get_tailoring_status`) call this
+ * rather than each re-typing `createHash('sha256').update(stableCvSourceJson(...))...` -- a
+ * self-caught duplication from this PR's own review: four independent copies of the same three
+ * calls meant a future change to hash computation had four places to find and patch by hand.
+ */
+export function computeSourceCvContentHash(source: CvSourceDocument): string {
+  return createHash('sha256').update(stableCvSourceJson(source)).digest('hex');
+}
+
+/** `caseRevision` is an opaque token to every reader, but something has to own the one place that
+ * actually increments it. Three call sites (`updateCvEvidenceOverlay`, `approveCvEvidenceOverlay`,
+ * `acceptCvTailoringProposal`) independently re-typed `String(Number(x) + 1)` before this existed --
+ * another self-caught duplication, since a future change to the revision scheme (an overflow
+ * guard, a different encoding) would otherwise need finding and patching in three places. */
+function bumpCaseRevision(current: string): string {
+  return String(Number(current) + 1);
+}
+
+/**
  * The *only* path that may move `state` to `'candidate_approved'` (#421's case contract). Unlike
  * the generic patch above, this never trusts a caller-supplied `wordingVariants` for the wording it
  * is about to approve: it re-derives proposed wording from the overlay's own facts
@@ -731,7 +752,7 @@ export function approveCvEvidenceOverlay(
     if (!doc.source) {
       throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
     }
-    const currentSourceCvContentHash = createHash('sha256').update(stableCvSourceJson(doc.source)).digest('hex');
+    const currentSourceCvContentHash = computeSourceCvContentHash(doc.source);
 
     const proposed = proposeWordingFromFacts(existing, currentSourceCvContentHash);
     const wordingVariants = [...existing.wordingVariants, ...proposed];
@@ -742,7 +763,7 @@ export function approveCvEvidenceOverlay(
       throw new Error(`this CV cannot be approved yet: ${blockers.join('; ')}`);
     }
 
-    const newCaseRevision = String(Number(existing.caseRevision) + 1);
+    const newCaseRevision = bumpCaseRevision(existing.caseRevision);
     const approvedResumeSnapshot: CvApprovedResumeSnapshot = {
       resume,
       digest: createHash('sha256').update(JSON.stringify(resume)).digest('hex'),
@@ -846,18 +867,21 @@ export function revokeMcpClientGrant(db: WorkspaceDb, id: string): McpClientGran
  * Finds the grant, if any, whose stored verifier matches `credential`. Authentication only -- a
  * match here says nothing about whether the grant is still active; a caller needing that checks
  * `describeMcpGrantBlockers` (`mcp-grant-schema.ts`) against the returned record itself. Every
- * stored hash is compared with `timingSafeEqual` rather than stopping at the first `===` mismatch,
- * the same discipline the daemon's own `tokensMatch` already follows for its single token.
+ * stored hash is compared with `timingSafeEqual`, and the loop never stops early on a match --
+ * self-caught in review: returning as soon as a match is found makes *overall* lookup time depend
+ * on the matching row's position even though each individual comparison is constant-time, which
+ * is exactly the timing channel the daemon's own single-token `tokensMatch` never had to avoid.
  */
 export function findMcpClientGrantByCredential(db: WorkspaceDb, credential: string): McpClientGrantRecord | null {
   const providedHash = Buffer.from(createHash('sha256').update(credential).digest('hex'), 'utf8');
+  let matched: McpClientGrantRow | null = null;
   for (const row of db.select().from(mcpClientGrants).all()) {
     const storedHash = Buffer.from(row.credentialVerifierHash, 'utf8');
     if (storedHash.length === providedHash.length && timingSafeEqual(storedHash, providedHash)) {
-      return toMcpClientGrant(row);
+      matched = row;
     }
   }
-  return null;
+  return matched ? toMcpClientGrant(matched) : null;
 }
 
 /**
@@ -865,13 +889,18 @@ export function findMcpClientGrantByCredential(db: WorkspaceDb, credential: stri
  * behind `mcp-grant-schema.ts`'s own documented behavior: a `source_cv` grant earns coverage of a
  * case one at a time, only as its own `start_tailoring_case` calls succeed, never by reading every
  * case that CV happens to have. Idempotent: calling it twice with the same `caseId` is a no-op the
- * second time, not a duplicate entry.
+ * second time, not a duplicate entry. Bounded by the same `MCP_GRANT_LIMITS.caseIdsPerGrant` a
+ * `case_ids` grant's initial list is bounded to at creation (`validate.ts`) -- a long-lived
+ * `source_cv` grant that keeps starting new cases must not grow this array without limit either.
  */
 export function appendMcpClientGrantCaseId(db: WorkspaceDb, grantId: string, caseId: string): McpClientGrantRecord {
   const existing = db.select().from(mcpClientGrants).where(eq(mcpClientGrants.id, grantId)).get();
   if (!existing) throw new WorkspaceNotFoundError('MCP client grant', grantId);
   const caseIds = existing.caseIds ?? [];
   if (caseIds.includes(caseId)) return toMcpClientGrant(existing);
+  if (caseIds.length >= MCP_GRANT_LIMITS.caseIdsPerGrant) {
+    throw new Error(`this grant has already started the maximum of ${MCP_GRANT_LIMITS.caseIdsPerGrant} cases`);
+  }
   const [row] = db
     .update(mcpClientGrants)
     .set({ caseIds: [...caseIds, caseId] })
@@ -1077,12 +1106,22 @@ export function acceptCvTailoringProposal(
     const overlayRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, proposal.caseId)).get();
     if (!overlayRow) throw new WorkspaceNotFoundError('CV evidence overlay', proposal.caseId);
     const overlay = toCvEvidenceOverlay(overlayRow);
+    // Self-caught in review: this function's own doc comment above claims every id is re-checked
+    // against the case's *current* state, but only `requirementId`/`factIds` actually were --
+    // `anchorParentId`/`parentId` were written straight through unchecked. Loading the CV document
+    // here, the same way `createCvTailoringProposal` does at proposal time, closes that gap: a
+    // source entry the candidate deleted between proposal and acceptance is caught here too, not
+    // only silently dropped later by `composeApprovedTailoredResume`'s own defensive filtering.
+    const doc = getCvDocument(tx, overlay.cvId);
 
     const patch: Partial<CvEvidenceOverlayRow> = {};
     const payload = proposal.payload;
     switch (payload.kind) {
       case 'requirement': {
         const data = payload.data;
+        if (!resolvesInSource(doc.source, data.anchorParentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
         patch.requirements = [
           ...overlay.requirements,
           {
@@ -1103,6 +1142,9 @@ export function acceptCvTailoringProposal(
         if (!overlay.requirements.some((r) => r.requirementId === data.requirementId)) {
           throw new Error('the requirement this proposal links to no longer exists in this case');
         }
+        if (!resolvesInSource(doc.source, data.anchorParentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
         patch.requirements = overlay.requirements.map((r) =>
           r.requirementId === data.requirementId ? { ...r, anchorParentId: data.anchorParentId, evidenceClass: data.evidenceClass } : r,
         );
@@ -1120,6 +1162,9 @@ export function acceptCvTailoringProposal(
       }
       case 'fact': {
         const data = payload.data;
+        if (!resolvesInSource(doc.source, data.parentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
         patch.facts = [
           ...overlay.facts,
           {
@@ -1148,6 +1193,9 @@ export function acceptCvTailoringProposal(
         if (!data.factIds.every((factId) => overlay.facts.some((f) => f.factId === factId))) {
           throw new Error('this proposal cites a fact id that no longer exists in this case');
         }
+        if (!resolvesInSource(doc.source, data.parentId)) {
+          throw new Error('this proposal anchors to a role or project that no longer exists in this case');
+        }
         patch.wordingVariants = [
           ...overlay.wordingVariants,
           {
@@ -1164,6 +1212,9 @@ export function acceptCvTailoringProposal(
         break;
       }
       case 'selection':
+        if (!payload.data.includedEntryIds.every((entryId) => resolvesInSource(doc.source, entryId))) {
+          throw new Error('this proposal references a role or project that no longer exists in this case');
+        }
         // Not yet wired into composition -- see `CvSelectionProposalPayload`'s own doc comment.
         // Nothing to patch onto the overlay; the decision is still recorded below.
         break;
@@ -1174,7 +1225,7 @@ export function acceptCvTailoringProposal(
 
     const [updatedOverlayRow] = tx
       .update(cvEvidenceOverlays)
-      .set({ ...patch, caseRevision: String(Number(overlay.caseRevision) + 1), updatedAt: new Date() })
+      .set({ ...patch, caseRevision: bumpCaseRevision(overlay.caseRevision), updatedAt: new Date() })
       .where(eq(cvEvidenceOverlays.id, overlay.id))
       .returning()
       .all();
