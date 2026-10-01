@@ -47,6 +47,16 @@ describe('assertNoLiveDaemon', () => {
     expect(() => assertNoLiveDaemon()).toThrow(DaemonLockConflictError);
   });
 
+  it('names the error DaemonLockConflictError, not the inherited "Error"', () => {
+    writeDiscoveryFile({ port: 9999, token: 'x', pid: process.pid, startedAt: new Date().toISOString() });
+    try {
+      assertNoLiveDaemon();
+      expect.unreachable('assertNoLiveDaemon should have thrown');
+    } catch (err) {
+      expect((err as Error).name).toBe('DaemonLockConflictError');
+    }
+  });
+
   it('does not throw when the discovery file is corrupt/partially written', () => {
     // Created 0700 to match what writeDiscoveryFile's own ensureSecureRuntimeDir would produce.
     // Otherwise a later test in this file that calls writeDiscoveryFile() would find this

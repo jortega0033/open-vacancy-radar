@@ -15,13 +15,11 @@
  * discovery file" -- is extracted behind two small IO seams instead.
  */
 
+import type { HealthResponse } from '@agent-dock/client';
+
 export interface DiscoveredDaemon {
   baseUrl: string;
   token: string;
-}
-
-export interface DaemonHealth {
-  daemonInstanceId: string | undefined;
 }
 
 export interface DaemonLockAttachDeps {
@@ -30,8 +28,10 @@ export interface DaemonLockAttachDeps {
   readDiscoveryFile: () => DiscoveredDaemon | undefined;
   /** Calls the candidate daemon's health endpoint. `undefined` if it isn't actually reachable --
    * the discovery file could be stale (its daemon died after writing it, before this process got
-   * here) or mid-write by a daemon that hasn't finished starting yet. */
-  checkHealth: (daemon: DiscoveredDaemon) => Promise<DaemonHealth | undefined>;
+   * here) or mid-write by a daemon that hasn't finished starting yet. Returns the real
+   * `HealthResponse` (not a hand-picked subset) so a field this module doesn't use today -- e.g.
+   * `supportedProtocolVersions` -- doesn't need a second, drifting declaration here to use later. */
+  checkHealth: (daemon: DiscoveredDaemon) => Promise<HealthResponse | undefined>;
 }
 
 /**
@@ -41,7 +41,7 @@ export interface DaemonLockAttachDeps {
  */
 export async function tryAttachToWinningDaemon(
   deps: DaemonLockAttachDeps,
-): Promise<{ daemon: DiscoveredDaemon; health: DaemonHealth } | undefined> {
+): Promise<{ daemon: DiscoveredDaemon; health: HealthResponse } | undefined> {
   const daemon = deps.readDiscoveryFile();
   if (!daemon) return undefined;
   const health = await deps.checkHealth(daemon);

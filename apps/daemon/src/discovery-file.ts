@@ -109,7 +109,15 @@ export function removeDiscoveryFile(appId: string = DEFAULT_APP_ID): void {
  * the generic startup-failure one. See that constant's own comment for why the exit code -- not
  * this error type -- is the part that actually crosses into the parent process.
  */
-export class DaemonLockConflictError extends Error {}
+export class DaemonLockConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    // Without this, `name` stays the inherited "Error", so any future logging/telemetry path that
+    // reports `err.name` (rather than `instanceof`-checking, as every current caller does) can't
+    // tell a lock conflict apart from an ordinary startup error.
+    this.name = 'DaemonLockConflictError';
+  }
+}
 
 function isProcessAlive(pid: number): boolean {
   try {

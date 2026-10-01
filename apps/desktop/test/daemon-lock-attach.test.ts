@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { HealthResponse } from '@agent-dock/client';
 import { tryAttachToWinningDaemon, type DiscoveredDaemon } from '../electron/daemon-lock-attach.js';
 
 /**
@@ -10,17 +11,18 @@ import { tryAttachToWinningDaemon, type DiscoveredDaemon } from '../electron/dae
  */
 
 const DAEMON: DiscoveredDaemon = { baseUrl: 'http://127.0.0.1:4321', token: 'tok' };
+const HEALTH: HealthResponse = { status: 'ok', uptimeSeconds: 12, protocolVersion: 1, daemonInstanceId: 'inst-1' };
 
 describe('tryAttachToWinningDaemon', () => {
   it('attaches when the discovery file is present and the daemon answers health()', async () => {
-    const checkHealth = vi.fn().mockResolvedValue({ daemonInstanceId: 'inst-1' });
+    const checkHealth = vi.fn().mockResolvedValue(HEALTH);
 
     const result = await tryAttachToWinningDaemon({
       readDiscoveryFile: () => DAEMON,
       checkHealth,
     });
 
-    expect(result).toEqual({ daemon: DAEMON, health: { daemonInstanceId: 'inst-1' } });
+    expect(result).toEqual({ daemon: DAEMON, health: HEALTH });
     expect(checkHealth).toHaveBeenCalledWith(DAEMON);
   });
 

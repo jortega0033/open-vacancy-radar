@@ -626,6 +626,7 @@ let adoptedGeneration: number | undefined;
  * the other path (see `adoptedGeneration`).
  */
 function finishDaemonAdoption(
+  connectedClient: AgentDockClient,
   baseUrl: string,
   token: string,
   daemonInstanceId: string | undefined,
@@ -635,7 +636,11 @@ function finishDaemonAdoption(
   if (adoptedGeneration === generation) return;
   adoptedGeneration = generation;
   ownsDaemonProcess = owns;
-  client = new AgentDockClient({ baseUrl, token });
+  // Reuses the exact client instance the caller already called `.health()` on, rather than
+  // building a fresh one: `AgentDockClient` memoizes its protocol-compatibility check per
+  // instance, so a fresh client here would silently repeat that `/health` round trip on this
+  // client's first real call.
+  client = connectedClient;
   daemonConnection = { baseUrl, token };
   // ADI-06: a daemon whose instance id differs from the one grants were issued against is a
   // different process, so every outstanding approval is void. Done before the status goes
@@ -654,6 +659,20 @@ function finishDaemonAdoption(
   void recoverApplicationPipelineOnStartup();
 }
 
+/** Reads and parses a discovery file into the `{baseUrl, token}` shape `AgentDockClient` wants.
+ * Shared by `waitForDaemonReady` and `attachToDaemonAfterLockConflict` so the discovery file's
+ * on-disk shape is only decoded in one place. `undefined` for anything that isn't a daemon to
+ * connect to: missing, mid-write, or left behind corrupt. */
+function readDiscoveryFileConnection(file: string): DiscoveredDaemon | undefined {
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
+    return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Called from the daemon-exit handler when this generation's child died with
  * `DAEMON_EXIT_CODE_LOCK_CONFLICT`: reads the discovery file the winning instance already wrote
@@ -663,28 +682,24 @@ function finishDaemonAdoption(
  */
 async function attachToDaemonAfterLockConflict(generation: number): Promise<boolean> {
   if (isQuitting) return false; // nothing worth attaching to if the app is already shutting down
+  // Stashed by `checkHealth` below so a successful adoption reuses the exact client instance that
+  // already passed the health check, instead of `finishDaemonAdoption` building another one.
+  let healthyClient: AgentDockClient | undefined;
   const attached = await tryAttachToWinningDaemon({
-    readDiscoveryFile: (): DiscoveredDaemon | undefined => {
-      const file = discoveryFilePath();
-      if (!existsSync(file)) return undefined;
-      try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        return { baseUrl: `http://127.0.0.1:${parsed.port}`, token: parsed.token };
-      } catch {
-        return undefined; // discovery file mid-write, or left behind corrupt
-      }
-    },
+    readDiscoveryFile: () => readDiscoveryFileConnection(discoveryFilePath()),
     checkHealth: async (daemon) => {
       try {
         // health() also verifies protocol compatibility (see @agent-dock/client).
-        const health = await new AgentDockClient(daemon).health();
-        return { daemonInstanceId: health.daemonInstanceId };
+        const candidate = new AgentDockClient(daemon);
+        const health = await candidate.health();
+        healthyClient = candidate;
+        return health;
       } catch {
         return undefined; // stale file from a daemon that already exited, or not listening yet
       }
     },
   });
-  if (!attached) return false;
+  if (!attached || !healthyClient) return false;
   if (isQuitting || !daemonRespawn.isCurrentGeneration(generation)) {
     // Superseded, or the app started quitting while the attach was in flight: either way this
     // generation has nothing left to retry, so report "handled" without applying any side effects.
@@ -692,7 +707,7 @@ async function attachToDaemonAfterLockConflict(generation: number): Promise<bool
     return true;
   }
   console.warn('[daemon] attached to a sibling instance\'s already-running daemon after a discovery-file lock conflict');
-  finishDaemonAdoption(attached.daemon.baseUrl, attached.daemon.token, attached.health.daemonInstanceId, generation, false);
+  finishDaemonAdoption(healthyClient, attached.daemon.baseUrl, attached.daemon.token, attached.health.daemonInstanceId, generation, false);
   return true;
 }
 
@@ -708,18 +723,19 @@ async function waitForDaemonReady(spawnedAt: number, generation: number, timeout
     if (adoptedGeneration === generation) return;
     if (existsSync(file) && statSync(file).mtimeMs >= spawnedAt - 1000) {
       try {
-        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { port: number; token: string };
-        const baseUrl = `http://127.0.0.1:${parsed.port}`;
+        const daemon = readDiscoveryFileConnection(file);
+        if (!daemon) throw new Error('discovery file mid-write'); // caught below; keep polling
+        const candidate = new AgentDockClient(daemon);
         // health() also verifies protocol compatibility (see @agent-dock/client). This doubles
         // as both the readiness check and the version-compatibility check in one call.
-        const health = await new AgentDockClient({ baseUrl, token: parsed.token }).health();
+        const health = await candidate.health();
         if (!daemonRespawn.isCurrentGeneration(generation)) {
           // Superseded: a later spawnDaemon() attempt already owns `client`/status by the time this
           // stale loop's poll finally landed. Stand down instead of clobbering its state.
           console.warn('[daemon] ignoring stale readiness result from a superseded spawn attempt');
           return;
         }
-        finishDaemonAdoption(baseUrl, parsed.token, health.daemonInstanceId, generation, true);
+        finishDaemonAdoption(candidate, daemon.baseUrl, daemon.token, health.daemonInstanceId, generation, true);
         return;
       } catch {
         // discovery file mid-write, daemon not reachable yet, or (in dev only, across a protocol
