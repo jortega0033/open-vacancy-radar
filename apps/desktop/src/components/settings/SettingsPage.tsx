@@ -650,7 +650,15 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             </div>
           ) : (
             <div role="alert" className="alert alert-error py-2 text-sm">
-              {status.message}
+              <span>{status.message}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                aria-label="Dismiss error"
+                onClick={() => setStatus(null)}
+              >
+                Close
+              </button>
             </div>
           )}
         </div>

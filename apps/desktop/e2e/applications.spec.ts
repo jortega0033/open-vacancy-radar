@@ -5,7 +5,7 @@ test.describe('Applications', () => {
     window,
   }) => {
     await goto(window, 'Applications');
-    await window.getByRole('button', { name: /add application/i }).click();
+    await window.getByRole('button', { name: /add (your first )?application/i }).click();
 
     const createDialog = window.getByRole('dialog').filter({ hasText: 'New application' });
     await createDialog.getByLabel(/^role/i).fill('Senior Frontend Engineer');
@@ -50,6 +50,6 @@ test.describe('Applications', () => {
     await window.getByRole('tab', { name: 'Review queue' }).click();
 
     await expect(window.getByText('Nothing to review')).toBeVisible();
-    await expect(window.getByRole('button', { name: /add application/i })).toHaveCount(0);
+    await expect(window.getByRole('button', { name: /add (your first )?application/i })).toHaveCount(0);
   });
 });
