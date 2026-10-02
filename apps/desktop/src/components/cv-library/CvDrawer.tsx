@@ -9,7 +9,7 @@ import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
-import { CvSourceReview } from './CvSourceReview.js';
+import { CvSourceReview, type CvSourceReviewHandle } from './CvSourceReview.js';
 
 /**
  * Everything the drawer can change (deliberately not `CvDocumentInput`/`CvDocumentPatch`
@@ -136,6 +136,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
   // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
   // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
+  const sourceReviewRef = useRef<CvSourceReviewHandle>(null);
+
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
@@ -266,6 +268,15 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     }
     setValidationError(undefined);
 
+    // Check for unsaved validation errors in the source CV review
+    if (source && sourceReviewRef.current) {
+      const maxProjectsError = sourceReviewRef.current.getMaxProjectsError();
+      if (maxProjectsError) {
+        setError(`Fix the project count: ${maxProjectsError}`);
+        return;
+      }
+    }
+
     const payload: CvDrawerSubmitPayload = {
       name,
       targetRole: form.targetRole.trim(),
@@ -313,7 +324,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
           </button>
         </div>
 
-        <form className="flex flex-1 flex-col overflow-y-auto" onSubmit={handleSubmit}>
+        <form className="flex flex-1 flex-col overflow-y-auto" noValidate onSubmit={handleSubmit}>
           <div className="flex-1 space-y-3 px-5 py-4">
             {canParseWithAi && (
               <div className="rounded-box border border-base-300 bg-base-200 p-3">
@@ -400,7 +411,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 </div>
               </div>
             )}
-            {source && <CvSourceReview source={source} disabled={submitting} onChange={setSource} />}
+            {source && <CvSourceReview ref={sourceReviewRef} source={source} disabled={submitting} onChange={setSource} />}
             {source && sourceGaps.length > 0 && (
               <p className="text-xs text-warning" role="status">
                 Saved, this CV still cannot be exported: {sourceGaps.join('; ')}.
