@@ -33,6 +33,7 @@ import type {
 import type { CvRebasePlan } from './cv-case-rebase.js';
 import type { McpAuditOutcome, McpGrantScopeType } from './mcp-grant-schema.js';
 import type { CvProposalPayload, CvProposalStatus } from './cv-proposal-schema.js';
+import type { SupportPromptState } from './support-prompt.js';
 
 export type SavedJobStatus = 'considering' | 'preparing' | 'applied';
 
@@ -965,6 +966,8 @@ export interface AppSettingsRecord {
   agentSelectedSessionId: string | null;
   agentArchivedSessionIds: string[];
   agentUnreadCounts: Record<string, number>;
+  /** #503: the one-time "Support OVR" ask state. See `support-prompt.ts`. */
+  supportPrompt: SupportPromptState;
 }
 
 export type AppSettingsPatch = Partial<AppSettingsRecord>;

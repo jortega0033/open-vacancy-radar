@@ -18,7 +18,7 @@ export type { ConfirmDialogProps } from './ConfirmDialog.js';
 export { UndoToast } from './UndoToast.js';
 export type { UndoToastProps } from './UndoToast.js';
 export { LiveAnnouncerProvider, useAnnounce } from './LiveAnnouncer.js';
-export { useEscapeToClose } from './useEscapeToClose.js';
+export { hasOpenOverlay, useEscapeToClose } from './useEscapeToClose.js';
 export { OpenVacancyRadarMark } from '../brand/OpenVacancyRadarMark.js';
 export type { OpenVacancyRadarMarkProps } from '../brand/OpenVacancyRadarMark.js';
 export { NavIcon } from './NavIcon.js';

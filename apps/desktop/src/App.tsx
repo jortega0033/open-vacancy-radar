@@ -11,6 +11,7 @@ import { RuntimePage } from './components/runtime/index.js';
 import { SettingsPage, type SettingsFocusSection, type SettingsTab } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import { WelcomeModal } from './components/WelcomeModal.js';
+import { SupportPromptProvider } from './components/support/index.js';
 import {
   AI_HELPER_NOTICE_PAGES,
   AiHelperNotice,
@@ -305,6 +306,7 @@ export function App() {
 
   return (
     <LiveAnnouncerProvider>
+    <SupportPromptProvider page={nav} welcomeOpen={showWelcome}>
     <div className="flex h-screen overflow-hidden font-sans text-base text-base-content">
       <AppSidebar
         active={nav}
@@ -421,6 +423,7 @@ export function App() {
         />
       )}
     </div>
+    </SupportPromptProvider>
     </LiveAnnouncerProvider>
   );
 }

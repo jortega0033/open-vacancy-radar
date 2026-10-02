@@ -50,6 +50,7 @@ import {
 } from './cv-evidence-schema.js';
 import { CV_PROPOSAL_KINDS, type CvProposalPayload } from './cv-proposal-schema.js';
 import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
+import { readSupportPrompt } from './support-prompt.js';
 import { assessJdCompleteness } from '../generation-input.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
 import type { WorkspaceDb } from './client.js';
@@ -2938,6 +2939,7 @@ function toSettings(row: AppSettingsRow): AppSettingsRecord {
       row.agentUnreadCounts && typeof row.agentUnreadCounts === 'object' && !Array.isArray(row.agentUnreadCounts)
         ? { ...row.agentUnreadCounts }
         : {},
+    supportPrompt: readSupportPrompt(row.supportPrompt),
   };
 }
 

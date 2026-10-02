@@ -19,6 +19,7 @@ import {
 } from './cv-evidence-schema.js';
 import { MCP_AUDIT_OUTCOMES, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
 import { CV_PROPOSAL_KINDS, CV_PROPOSAL_STATUSES } from './cv-proposal-schema.js';
+import type { SupportPromptState } from './support-prompt.js';
 import type { PreparedApplicationFields } from './types.js';
 
 /**
@@ -707,4 +708,12 @@ export const appSettings = sqliteTable('app_settings', {
     .notNull()
     .$type<Record<string, number>>()
     .default({}),
+  /** #503: the one-time "Support OVR" ask. One small JSON value, following the precedent of the
+   * two JSON columns above; read tolerantly by `readSupportPrompt`, so a missing or malformed
+   * value means "never asked". Lives here for the same reason as ADI-07's state: it travels with
+   * the workspace database. */
+  supportPrompt: text('support_prompt', { mode: 'json' })
+    .notNull()
+    .$type<SupportPromptState>()
+    .default({ answered: false, asks: 0, successesSinceDismissal: 0 }),
 });

@@ -225,6 +225,10 @@ This app sends no usage analytics, crash reports, or telemetry of any kind to th
 anyone else. There is no telemetry SDK in the dependency tree and no such endpoint in the daemon or
 renderer code. If that ever changes, it will be opt-in and disclosed here first.
 
+The Star on GitHub and Buy me a coffee links open only when you click them, in your own browser, and the
+app sends nothing to GitHub or Buy Me a Coffee. Whether you have been asked to support the project is
+stored in the local workspace database and goes nowhere else.
+
 ## Retention and deletion
 
 - **Saved jobs, applications, CVs, letters**: retained until you delete them through the app (with
