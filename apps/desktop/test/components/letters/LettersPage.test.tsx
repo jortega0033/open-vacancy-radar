@@ -172,7 +172,7 @@ describe('LettersPage', () => {
       const bridges = setup({ listLetters: vi.fn().mockResolvedValue([letter]) });
       render(<LettersPage />);
       await waitFor(() => expect(screen.getByText(letter.title)).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: /^open$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^open /i }));
       const body = await screen.findByRole('textbox', { name: /letter body/i });
       fireEvent.change(body, { target: { value: 'Saved body text, edited.' } });
       return bridges;
@@ -241,7 +241,7 @@ describe('LettersPage', () => {
       setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
       render(<LettersPage />);
       await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: /^open$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^open /i }));
       await screen.findByRole('textbox', { name: /letter body/i });
 
       fireEvent.click(screen.getByRole('button', { name: /back to library/i }));

@@ -203,7 +203,7 @@ describe('LettersLibrary', () => {
       render(<LettersLibrary onOpen={vi.fn()} onCountChanged={onCountChanged} />);
       await waitFor(() => expect(screen.getByText(letter.title)).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
       const dialog = await screen.findByRole('alertdialog');
       expect(within(dialog).getByText(/you can undo this/i)).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }));
@@ -239,7 +239,7 @@ describe('LettersLibrary', () => {
 
       render(<LettersLibrary onOpen={vi.fn()} />);
       await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
 
       expect(await screen.findByText(/already been deleted/i)).toBeInTheDocument();
@@ -253,7 +253,7 @@ describe('LettersLibrary', () => {
 
       render(<LettersLibrary onOpen={vi.fn()} />);
       await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete /i }));
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^delete$/i }));
       fireEvent.click(await screen.findByRole('button', { name: /^undo$/i }));
 
