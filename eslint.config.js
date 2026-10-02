@@ -2,6 +2,7 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import globals from 'globals';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 
 export default tseslint.config(
   js.configs.recommended,
@@ -28,6 +29,22 @@ export default tseslint.config(
     files: ['apps/desktop/src/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser },
+    },
+  },
+  {
+    // #501: accessibility guard rails for the renderer. Violations that already existed when the
+    // rules landed are recorded in eslint-suppressions.json (ESLint bulk suppressions), so only a
+    // NEW violation fails CI. Fix one and run `pnpm exec eslint --prune-suppressions` to shrink the
+    // file. eslint-plugin-jsx-a11y does not declare ESLint 10 in its peer range yet; the
+    // peerDependencyRules entry in package.json allows it.
+    files: ['apps/desktop/src/**/*.{ts,tsx}'],
+    ...jsxA11y.flatConfigs.recommended,
+    rules: {
+      ...jsxA11y.flatConfigs.recommended.rules,
+      'jsx-a11y/control-has-associated-label': 'error',
+      'jsx-a11y/no-noninteractive-tabindex': 'error',
+      'jsx-a11y/interactive-supports-focus': 'error',
+      'jsx-a11y/aria-role': 'error',
     },
   },
   {

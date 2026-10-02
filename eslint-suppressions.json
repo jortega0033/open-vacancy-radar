@@ -1,0 +1,85 @@
+{
+  "apps/desktop/src/components/applications/ApplicationDrawer.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 7
+    }
+  },
+  "apps/desktop/src/components/applications/ApplicationPreparedSummary.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 1
+    }
+  },
+  "apps/desktop/src/components/cv-library/CvDrawer.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 9
+    }
+  },
+  "apps/desktop/src/components/cv-library/CvSourceReview.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 5
+    }
+  },
+  "apps/desktop/src/components/cv-library/ManualCaseForm.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 4
+    }
+  },
+  "apps/desktop/src/components/cv/ClarificationForm.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 7
+    }
+  },
+  "apps/desktop/src/components/cv/CvPdfPageReview.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 1
+    },
+    "jsx-a11y/no-noninteractive-tabindex": {
+      "count": 1
+    }
+  },
+  "apps/desktop/src/components/cv/EvidenceReview.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 4
+    }
+  },
+  "apps/desktop/src/components/cv/JdReview.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 3
+    }
+  },
+  "apps/desktop/src/components/cv/RequirementMapping.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 6
+    }
+  },
+  "apps/desktop/src/components/cv/ResumeToolkit.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 1
+    }
+  },
+  "apps/desktop/src/components/letters/LetterGenerator.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 5
+    }
+  },
+  "apps/desktop/src/components/saved/SavedJobDrawer.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 8
+    }
+  },
+  "apps/desktop/src/components/search/SearchFilterBar.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 2
+    }
+  },
+  "apps/desktop/src/components/settings/FillProfileFromCv.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 9
+    }
+  },
+  "apps/desktop/src/components/settings/McpEndpointSection.tsx": {
+    "jsx-a11y/control-has-associated-label": {
+      "count": 1
+    }
+  }
+}

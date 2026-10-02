@@ -1,0 +1,21 @@
+{
+  "arbitrary-px-font": {},
+  "raw-alert": {
+    "components/applications/ApplicationAttemptDrawer.tsx": 1,
+    "components/applications/ApplicationReviewSession.tsx": 2,
+    "components/cv-library/CvDrawer.tsx": 1,
+    "components/cv-library/CvSourceReview.tsx": 1,
+    "components/cv/ClarificationForm.tsx": 1,
+    "components/cv/ComposedCvReview.tsx": 2,
+    "components/cv/CvArtifactPanel.tsx": 1,
+    "components/cv/CvTranscriptionFlow.tsx": 2,
+    "components/cv/EvidenceReview.tsx": 1,
+    "components/cv/JdReview.tsx": 1,
+    "components/cv/RequirementMapping.tsx": 3,
+    "components/cv/TailorCv.tsx": 1,
+    "components/search/SearchPage.tsx": 4,
+    "components/settings/SearchProfileSection.tsx": 2,
+    "components/settings/SettingsPage.tsx": 1,
+    "components/WelcomeModal.tsx": 1
+  }
+}
