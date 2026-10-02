@@ -69,6 +69,11 @@ describe('UndoToast', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it('takes a custom stacking class for a toast shown above a dialog', () => {
+    const { container } = render(<UndoToast message="Skipped." onUndo={vi.fn()} onDismiss={vi.fn()} layerClassName="z-[1000]" />);
+    expect(container.firstElementChild?.className).toContain('z-[1000]');
+  });
+
   it('runs Undo and then dismisses', () => {
     const onUndo = vi.fn();
     const onDismiss = vi.fn();
