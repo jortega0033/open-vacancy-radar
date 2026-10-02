@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { VacancyDetail } from '../../../src/components/search/VacancyDetail.js';
 import type { SearchResult } from '../../../src/components/search/results.js';
