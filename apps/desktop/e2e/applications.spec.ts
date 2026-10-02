@@ -21,14 +21,14 @@ test.describe('Applications', () => {
     await row.getByLabel(/^Status for /).selectOption('applied');
     await expect(row.getByLabel(/^Status for /)).toHaveValue('applied');
 
-    await row.getByRole('button', { name: /^edit$/i }).click();
+    await row.getByRole('button', { name: /^edit /i }).click();
     const editDialog = window.getByRole('dialog').filter({ hasText: 'Edit application' });
     await editDialog.getByLabel(/next step/i).fill('Technical interview · 2 Sep');
     await editDialog.getByRole('button', { name: /save changes/i }).click();
     await expect(editDialog).toBeHidden();
     await expect(window.getByRole('row', { name: /Redwood Software/ })).toContainText('Technical interview');
 
-    await window.getByRole('row', { name: /Redwood Software/ }).getByRole('button', { name: /^delete$/i }).click();
+    await window.getByRole('row', { name: /Redwood Software/ }).getByRole('button', { name: /^delete /i }).click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/delete this application/i);
     await confirm.getByRole('button', { name: /^delete$/i }).click();

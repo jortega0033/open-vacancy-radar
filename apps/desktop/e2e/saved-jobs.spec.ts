@@ -18,7 +18,7 @@ test.describe('Saved Jobs', () => {
     const row = window.getByRole('row', { name: /Redwood Software/ });
     await expect(row).toContainText('Senior Frontend Engineer');
 
-    await row.getByRole('button', { name: /^edit$/i }).click();
+    await row.getByRole('button', { name: /^edit /i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit saved job/i });
     await expect(editDialog.getByLabel('Role')).toHaveValue('Senior Frontend Engineer');
     await editDialog.getByLabel('Role').fill('Staff Frontend Engineer');
@@ -33,7 +33,7 @@ test.describe('Saved Jobs', () => {
     // (their text can't be reconstructed), which makes this the one place undo must actually work.
     await window
       .getByRole('row', { name: /Redwood Software/ })
-      .getByRole('button', { name: /^delete$/i })
+      .getByRole('button', { name: /^delete /i })
       .click();
     const confirm = window.getByRole('alertdialog');
     await expect(confirm).toContainText(/Delete saved job/i);
