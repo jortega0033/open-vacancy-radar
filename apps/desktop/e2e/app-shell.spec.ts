@@ -99,7 +99,7 @@ test.describe('app shell', () => {
     expect(state.bounds.height).toBeGreaterThanOrEqual(600);
 
     await goto(window, 'Applications');
-    await window.getByRole('button', { name: /add application/i }).click();
+    await window.getByRole('button', { name: /add (your first )?application/i }).click();
     const dialog = window.getByRole('dialog').filter({ hasText: 'New application' });
     await expect(dialog).toBeVisible();
     const dialogBounds = await dialog.evaluate((element) => {

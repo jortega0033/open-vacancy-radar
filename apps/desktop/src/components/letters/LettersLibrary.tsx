@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { LetterRecord } from '../../window.js';
+import type { LetterInput, LetterRecord } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { describeError } from '../cv/useAgentRun.js';
-import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
 import {
   formatUpdatedAt,
   labelFor,
@@ -10,6 +10,28 @@ import {
   LETTER_STATUS_OPTIONS,
   LETTER_TYPE_OPTIONS,
 } from './types.js';
+
+/** A letter that was just deleted, kept so Undo can write the same content back. */
+interface PendingUndo {
+  message: string;
+  letter: LetterRecord;
+}
+
+/** Same idea as `toSavedJobInput`: undo is a fresh `createLetter` with the deleted row's fields. */
+function toLetterInput(letter: LetterRecord): LetterInput {
+  return {
+    title: letter.title,
+    company: letter.company,
+    role: letter.role,
+    type: letter.type,
+    tone: letter.tone,
+    length: letter.length,
+    status: letter.status,
+    vacancyKey: letter.vacancyKey,
+    cvId: letter.cvId,
+    body: letter.body,
+  };
+}
 
 export interface LettersLibraryProps {
   /**
@@ -50,6 +72,7 @@ export function LettersLibrary({
   const [actionError, setActionError] = useState<string>();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<LetterRecord | null>(null);
+  const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,7 +121,11 @@ export function LettersLibrary({
       // way so the table matches reality, and say so rather than reporting a phantom success.
       const result = await window.workspace.deleteLetter(letter.id);
       setLetters((prev) => (prev ?? []).filter((row) => row.id !== letter.id));
-      if (!result.deleted) setActionError('That letter had already been deleted.');
+      if (result.deleted) {
+        setPendingUndo({ message: `Deleted "${letter.title}".`, letter });
+      } else {
+        setActionError('That letter had already been deleted.');
+      }
       onCountChanged?.();
     } catch (err) {
       setActionError(describeError(err, 'could not delete this letter'));
@@ -106,6 +133,20 @@ export function LettersLibrary({
       setBusyId(null);
     }
   }, [deleteTarget, onCountChanged]);
+
+  const dismissUndo = useCallback(() => setPendingUndo(null), []);
+
+  const handleUndo = useCallback(async () => {
+    const undo = pendingUndo;
+    if (!undo) return;
+    try {
+      const recreated = await window.workspace.createLetter(toLetterInput(undo.letter));
+      setLetters((prev) => [recreated, ...(prev ?? [])]);
+      onCountChanged?.();
+    } catch (err) {
+      setActionError(describeError(err, 'could not undo the delete'));
+    }
+  }, [pendingUndo, onCountChanged]);
 
   const isLoading = letters === null;
   const rows = letters ?? [];
@@ -116,7 +157,8 @@ export function LettersLibrary({
         <p className="min-w-0 flex-1 text-sm text-base-content/60">
           Generated and saved application documents. Open a letter to edit or regenerate it.
         </p>
-        {onNew && (
+        {/* The empty state carries its own New letter button, so the toolbar one waits for rows. */}
+        {onNew && rows.length > 0 && (
           <button className="btn btn-primary btn-sm" type="button" onClick={onNew}>
             New letter
           </button>
@@ -236,10 +278,14 @@ export function LettersLibrary({
       {deleteTarget && (
         <ConfirmDialog
           title="Delete letter?"
-          message={`This permanently removes "${deleteTarget.title}" from your letters. It cannot be undone.`}
+          message={`This removes "${deleteTarget.title}" from your letters. You can undo this for a few seconds after deleting.`}
           onConfirm={() => void confirmDelete()}
           onCancel={() => setDeleteTarget(null)}
         />
+      )}
+
+      {pendingUndo && (
+        <UndoToast message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LetterRecord } from '../../window.js';
-import { LetterGenerator } from './LetterGenerator.js';
+import { ConfirmDialog } from '../shell/index.js';
+import { LetterGenerator, type UnsavedKind } from './LetterGenerator.js';
 import { LettersLibrary } from './LettersLibrary.js';
 import type { SelectedVacancy } from './types.js';
 
@@ -40,6 +41,8 @@ export interface LettersPageProps {
    */
   onVacancyConsumed?: () => void;
   onBackToVacancy?: (vacancy: SelectedVacancy) => void;
+  /** Opens the CV page, for the generator's "No CVs yet" link. */
+  onOpenCvPage?: () => void;
 }
 
 /**
@@ -57,7 +60,9 @@ export interface LettersPageProps {
  *
  * Switching to the Library tab unmounts the editor, exactly as the prototype's two routes would.
  * Returning to it reopens the last letter *as last saved*: an unsaved draft is not carried across,
- * which is why the editor labels unsaved changes and offers Save before anything else.
+ * so every way out of an editor with unsaved text (Library tab, "Back to library", "New letter",
+ * back to the vacancy) asks first. While the question is open the editor stays mounted, which is
+ * what lets "Keep editing" return to the exact text, letter type and job.
  */
 export function LettersPage({
   vacancy = null,
@@ -66,6 +71,7 @@ export function LettersPage({
   openOnGenerator = false,
   onVacancyConsumed,
   onBackToVacancy,
+  onOpenCvPage,
 }: LettersPageProps) {
   // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
   // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
@@ -90,7 +96,20 @@ export function LettersPage({
     if (handoffVacancy) onVacancyConsumed?.();
   }, []);
 
+  const [unsaved, setUnsaved] = useState<UnsavedKind>(null);
+  /** The navigation that is waiting on the user's answer to the discard question. */
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
+
   const openLibrary = useCallback(() => setView({ tab: 'library' }), []);
+
+  /** Runs `leave` now, or after the user agrees to drop the unsaved text. */
+  const leaveEditor = useCallback(
+    (leave: () => void) => {
+      if (unsaved) setPendingLeave(() => leave);
+      else leave();
+    },
+    [unsaved],
+  );
 
   const openGenerator = useCallback((letter: LetterRecord | null) => {
     editorSeq.current += 1;
@@ -101,7 +120,7 @@ export function LettersPage({
   const handleTab = useCallback(
     (tab: View['tab']) => {
       if (tab === 'library') {
-        openLibrary();
+        leaveEditor(openLibrary);
         return;
       }
       // Switching *to* the generator tab resumes whatever it was last editing; only "New letter"
@@ -110,7 +129,7 @@ export function LettersPage({
         current.tab === 'generator' ? current : { tab: 'generator', ...lastEditor.current },
       );
     },
-    [openLibrary],
+    [openLibrary, leaveEditor],
   );
 
   const handleSaved = useCallback(
@@ -155,7 +174,7 @@ export function LettersPage({
           </button>
         </div>
         {view.tab === 'generator' && (
-          <button className="btn btn-ghost btn-sm" type="button" onClick={() => openGenerator(null)}>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => leaveEditor(() => openGenerator(null))}>
             New letter
           </button>
         )}
@@ -176,13 +195,35 @@ export function LettersPage({
             vacancy={handoffVacancy}
             {...(model ? { model } : {})}
             onSaved={handleSaved}
-            onClose={openLibrary}
+            onClose={() => leaveEditor(openLibrary)}
+            onUnsavedChange={setUnsaved}
+            {...(onOpenCvPage ? { onOpenCvPage } : {})}
             {...(handoffVacancy && onBackToVacancy
-              ? { onBackToVacancy: () => onBackToVacancy(handoffVacancy) }
+              ? { onBackToVacancy: () => leaveEditor(() => onBackToVacancy(handoffVacancy)) }
               : {})}
           />
         )}
       </div>
+
+      {pendingLeave && (
+        <ConfirmDialog
+          title={unsaved === 'edited' ? 'Discard your changes?' : 'Discard this letter?'}
+          message={
+            unsaved === 'edited'
+              ? 'Your edits to this letter have not been saved.'
+              : 'It has not been saved.'
+          }
+          confirmLabel="Discard"
+          cancelLabel="Keep editing"
+          onConfirm={() => {
+            const leave = pendingLeave;
+            setPendingLeave(null);
+            setUnsaved(null);
+            leave();
+          }}
+          onCancel={() => setPendingLeave(null)}
+        />
+      )}
     </div>
   );
 }

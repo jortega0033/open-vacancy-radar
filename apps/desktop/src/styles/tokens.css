@@ -324,8 +324,11 @@
 }
 
 /* Saved Jobs keeps the comparison table on wide desktop, then turns each native table row into
-   a labeled record before the shell leaves enough room for every low-priority column. */
+   a labeled record before the shell leaves enough room for every low-priority column. The switch
+   is a container query on the table shell, not a viewport media query: the sidebar takes 236px,
+   so a 1280px window leaves only about 1040px for the table. 71.875rem is 1150px of content. */
 .saved-jobs-table-shell {
+  container: saved-jobs-table / inline-size;
   width: 100%;
   min-width: 0;
   overflow-x: hidden;
@@ -361,49 +364,107 @@
   white-space: nowrap;
 }
 
-@media (min-width: 80rem) {
-  /* The action column gets enough room for its three labeled controls; metadata takes the
-     remaining space and is allowed to wrap rather than pushing the primary controls away. */
-  .saved-job-col-role {
-    width: 14%;
+@container saved-jobs-table (width >= 71.875rem) {
+  /* One grid per row instead of eleven squeezed columns. Salary, Arrangement and Notes sit on a
+     second line under Role and Company so the first line keeps room for the status select and the
+     three row actions. The DOM is the same as the card layout, only the placement differs. */
+  .saved-jobs-table,
+  .saved-jobs-table thead,
+  .saved-jobs-table tbody {
+    display: block;
   }
-  .saved-job-col-company {
-    width: 12%;
+
+  .saved-jobs-table :is(thead, tbody) tr {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1.4fr)
+      3.5rem 6.5rem 9.5rem 16.5rem;
+    column-gap: 0.75rem;
+    align-items: start;
+    padding-inline: 0.75rem;
   }
-  .saved-job-col-location {
-    width: 8%;
+
+  .saved-jobs-table :is(th, td) {
+    padding-inline: 0;
+    overflow-wrap: break-word;
   }
-  .saved-job-col-salary {
-    width: 6%;
+
+  /* Header and body cells share the same first-line tracks. */
+  .saved-jobs-table th:nth-child(1),
+  .saved-jobs-table td[data-label='Role'] {
+    grid-column: 1;
   }
-  .saved-job-col-arrangement {
-    width: 7%;
+  .saved-jobs-table th:nth-child(2),
+  .saved-jobs-table td[data-label='Company'] {
+    grid-column: 2;
   }
-  .saved-job-col-verification {
-    width: 7%;
+  .saved-jobs-table th:nth-child(3),
+  .saved-jobs-table td[data-label='Location'] {
+    grid-column: 3;
   }
-  .saved-job-col-match {
-    width: 4%;
+  .saved-jobs-table th:nth-child(6),
+  .saved-jobs-table td[data-label='Verification'] {
+    grid-column: 4;
   }
-  .saved-job-col-saved {
-    width: 6%;
+  .saved-jobs-table th:nth-child(7),
+  .saved-jobs-table td[data-label='Match'] {
+    grid-column: 5;
   }
-  .saved-job-col-notes {
-    width: 3%;
+  .saved-jobs-table th:nth-child(8),
+  .saved-jobs-table td[data-label='Saved'] {
+    grid-column: 6;
   }
-  .saved-job-col-status {
-    width: 10%;
+  .saved-jobs-table th:nth-child(10),
+  .saved-jobs-table td[data-label='Status'] {
+    grid-column: 7;
   }
-  .saved-job-col-actions {
-    width: 23%;
+  .saved-jobs-table th:nth-child(11),
+  .saved-jobs-table td[data-label='Actions'] {
+    grid-column: 8;
+  }
+
+  /* The folded columns have no header of their own: each value carries its label instead. */
+  .saved-jobs-table th:is(:nth-child(4), :nth-child(5), :nth-child(9)) {
+    display: none;
+  }
+  .saved-jobs-table td:is([data-label='Salary'], [data-label='Arrangement'], [data-label='Notes']) {
+    grid-row: 2;
+    padding-block: 0;
+    font-size: var(--text-xs);
+  }
+  .saved-jobs-table td[data-label='Salary'] {
+    grid-column: 1;
+  }
+  .saved-jobs-table td[data-label='Arrangement'] {
+    grid-column: 2;
+  }
+  .saved-jobs-table td[data-label='Notes'] {
+    grid-column: 3;
+  }
+  .saved-jobs-table td:is([data-label='Salary'], [data-label='Arrangement'])::before {
+    content: attr(data-label) ': ';
+    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+    font-weight: 600;
+  }
+
+  .saved-jobs-table .saved-job-status-cell .select {
+    width: 100%;
+  }
+
+  /* daisyUI badges have a fixed height, which lets wrapped text spill out of the pill. */
+  .saved-jobs-table .badge {
+    height: auto;
+    min-height: var(--size, 1.5rem);
+    padding-block: 0.125rem;
+    text-align: start;
   }
 
   .saved-job-actions-cell {
-    padding-inline: 0.5rem !important;
+    padding-inline: 0 !important;
   }
 }
 
-@media (max-width: 79.99rem) {
+@container saved-jobs-table (width < 71.875rem) {
   .saved-jobs-table,
   .saved-jobs-table tbody,
   .saved-jobs-table tr,
