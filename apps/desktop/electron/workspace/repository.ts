@@ -2471,8 +2471,10 @@ export function restartApplicationTailoring(
       .where(eq(applicationAttempts.id, id))
       .get();
     if (!current) throw new WorkspaceNotFoundError('application attempt', id);
-    if (current.checkpoint !== 'needs_user') {
-      throw new Error('only an application waiting for user input can restart tailoring');
+    // `failed` is allowed so a preparation that stopped can be retried (#468). Never a submitted or
+    // unconfirmed attempt: those checkpoints are not in this list.
+    if (current.checkpoint !== 'needs_user' && current.checkpoint !== 'failed') {
+      throw new Error('only an application waiting for user input or a failed preparation can restart tailoring');
     }
 
     tx.delete(applicationArtifacts).where(eq(applicationArtifacts.attemptId, id)).run();

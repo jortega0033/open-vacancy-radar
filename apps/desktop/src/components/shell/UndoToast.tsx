@@ -6,6 +6,8 @@ export interface UndoToastProps {
   onDismiss: () => void;
   /** ms before auto-dismiss. Defaults to 8 seconds. */
   durationMs?: number;
+  /** Stacking class for the toast container, for a toast shown above a modal. Defaults to `z-50`. */
+  layerClassName?: string;
 }
 
 /** Long enough to read the notice and reach the Undo button, including with a keyboard. */
@@ -22,7 +24,7 @@ const DEFAULT_UNDO_MS = 8000;
  * The countdown pauses while the pointer is over the toast or focus is inside it, and resumes with
  * whatever time was left rather than starting over.
  */
-export function UndoToast({ message, onUndo, onDismiss, durationMs = DEFAULT_UNDO_MS }: UndoToastProps) {
+export function UndoToast({ message, onUndo, onDismiss, durationMs = DEFAULT_UNDO_MS, layerClassName = 'z-50' }: UndoToastProps) {
   const [paused, setPaused] = useState(false);
   const remainingRef = useRef(durationMs);
 
@@ -42,7 +44,7 @@ export function UndoToast({ message, onUndo, onDismiss, durationMs = DEFAULT_UND
   }, [onDismiss, paused, message, durationMs]);
 
   return (
-    <div className="toast toast-end toast-bottom z-50">
+    <div className={`toast toast-end toast-bottom ${layerClassName}`}>
       <div
         className="alert flex items-center gap-3 shadow-lg"
         role="status"

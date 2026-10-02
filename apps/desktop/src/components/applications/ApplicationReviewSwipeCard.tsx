@@ -5,6 +5,7 @@ import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/app
 import type { ApplicationAnswerRecord, ApplicationArtifactSummary, ApplicationAttemptRecord, ConfirmApplicationAnswerResult } from '../../window.js';
 import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
+import { ReviewScreenshot } from './ReviewScreenshot.js';
 
 export interface ApplicationReviewSwipeCardProps {
   attempt: ApplicationAttemptRecord;
@@ -28,6 +29,10 @@ export interface ApplicationReviewSwipeCardProps {
   /** Commits one confirmed answer into a live `awaiting_you` text/textarea field (#372). Passed
    * straight through to `ApplicationPreparedSummary`; its absence keeps every such field read-only. */
   onConfirmAnswer?: (fieldIndex: number, fieldRef: string, value: string) => Promise<ConfirmApplicationAnswerResult>;
+  /** Two-pane layout (#469): the decision panel on the left and the form screenshot, always
+   * visible and uncapped, on the right. The decorative card stack is dropped so the content being
+   * approved is what takes the space. The compact layout is the default. */
+  wide?: boolean;
 }
 
 const SWIPE_THRESHOLD_PX = 120;
@@ -145,6 +150,7 @@ export function ApplicationReviewSwipeCard({
   onOpenArtifact,
   onOpenLiveView,
   onConfirmAnswer,
+  wide = false,
 }: ApplicationReviewSwipeCardProps) {
   const [dragX, setDragX] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
@@ -240,12 +246,22 @@ export function ApplicationReviewSwipeCard({
   const approveOpacity = canSubmit ? Math.min(1, Math.max(0, dragX / SWIPE_THRESHOLD_PX)) : 0;
   const skipOpacity = Math.min(1, Math.max(0, -dragX / SWIPE_THRESHOLD_PX));
   const activeFields = snapshot.fields.filter((field) => field.active);
+  const screenshotAlt = `Live application page preview for ${attempt.role} at ${attempt.company}`;
 
   return (
-    <div className="mx-auto flex w-full max-w-sm flex-col gap-3">
+    <div
+      data-testid="review-layout"
+      data-layout={wide ? 'wide' : 'compact'}
+      className={wide ? 'grid w-full grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start gap-6' : 'mx-auto w-full max-w-sm'}
+    >
+    <div className="flex min-w-0 flex-col gap-3">
       <div className="-mx-2 grid overflow-x-clip px-4 pb-2 pt-3">
-      <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-6 translate-y-2 rotate-[-2deg] rounded-lg border border-base-300 bg-base-300/70" />
-      <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-4 translate-y-1 rotate-[2deg] rounded-lg border border-base-300 bg-base-200" />
+      {wide ? null : (
+        <>
+          <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-6 translate-y-2 rotate-[-2deg] rounded-lg border border-base-300 bg-base-300/70" />
+          <div aria-hidden="true" data-testid="swipe-card-back" className="pointer-events-none col-start-1 row-start-1 mx-4 translate-y-1 rotate-[2deg] rounded-lg border border-base-300 bg-base-200" />
+        </>
+      )}
       <div
         data-testid="application-swipe-card"
         role="group"
@@ -415,21 +431,31 @@ export function ApplicationReviewSwipeCard({
         </div>
       </details>
 
-      <details className="rounded-lg border border-base-300 bg-base-100">
-        <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Review application form</summary>
-        <div className="max-h-72 overflow-auto border-t border-base-300 bg-base-200">
-          <img
-            src={`data:image/png;base64,${screenshotBase64}`}
-            alt={`Live application page preview for ${attempt.role} at ${attempt.company}`}
-            className="w-full"
-            draggable={false}
-          />
-        </div>
-      </details>
+      {wide ? null : (
+        <details className="rounded-lg border border-base-300 bg-base-100">
+          <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium">Review application form</summary>
+          <div className="border-t border-base-300">
+            <ReviewScreenshot screenshotBase64={screenshotBase64} alt={screenshotAlt} frameClassName="max-h-72 overflow-auto" />
+          </div>
+        </details>
+      )}
 
       <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onOpenLiveView}>
         Open the live page to finish it yourself
       </button>
+    </div>
+    {wide ? (
+      <section
+        data-testid="review-screenshot-pane"
+        aria-labelledby="review-screenshot-heading"
+        className="min-w-0 overflow-hidden rounded-lg border border-base-300 bg-base-100"
+      >
+        <h3 id="review-screenshot-heading" className="px-4 py-2.5 text-sm font-medium">Review application form</h3>
+        <div className="border-t border-base-300">
+          <ReviewScreenshot screenshotBase64={screenshotBase64} alt={screenshotAlt} />
+        </div>
+      </section>
+    ) : null}
     </div>
   );
 }
