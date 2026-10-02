@@ -150,7 +150,7 @@ describe('ApplicationsPage', () => {
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
     const row = screen.getByRole('row', { name: /senior frontend engineer/i });
-    fireEvent.change(within(row).getByLabelText('Application status'), { target: { value: 'interview' } });
+    fireEvent.change(within(row).getByLabelText(/^Status for /), { target: { value: 'interview' } });
 
     await waitFor(() => expect(updateApplication).toHaveBeenCalledWith('status-1', { status: 'interview' }));
   });
@@ -194,7 +194,7 @@ describe('ApplicationsPage', () => {
     render(<ApplicationsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/edit application/i)).toBeInTheDocument();
@@ -227,7 +227,7 @@ describe('ApplicationsPage', () => {
     render(<ApplicationsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete .+ at .+/i }));
 
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
@@ -251,7 +251,7 @@ describe('ApplicationsPage', () => {
     render(<ApplicationsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete .+ at .+/i }));
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^cancel$/i }));
 
@@ -351,7 +351,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'Staff Frontend Engineer' } });
       fireEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
@@ -369,7 +369,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^archive$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^archive /i }));
 
       await waitFor(() => expect(updateApplication).toHaveBeenCalledWith('arch-1', { archived: true }));
       await waitFor(() => expect(onApplicationsChanged).toHaveBeenCalledTimes(1));
@@ -391,7 +391,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete .+ at .+/i }));
       const confirmDialog = await screen.findByRole('alertdialog');
       fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
 
@@ -538,7 +538,7 @@ describe('ApplicationsPage', () => {
       expect(within(dialog).getByText('Tailoring the CV for this vacancy.')).toBeInTheDocument();
       expect(listApplicationArtifacts).toHaveBeenCalledWith(attempt.id);
       await waitFor(() => expect(within(dialog).getByText('Tailored CV')).toBeInTheDocument());
-      expect(within(dialog).queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: /^edit /i })).not.toBeInTheDocument();
 
       // Two buttons share the accessible name "Close" here (the header's icon button and the
       // footer's text button); the footer one is the second in document order.

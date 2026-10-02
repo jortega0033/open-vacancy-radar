@@ -44,7 +44,7 @@ describe('LettersPage', () => {
     render(<LettersPage />);
     await waitFor(() => expect(screen.getByText('Motivation letter — Redwood')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^open$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^open /i }));
 
     expect(await screen.findByRole('textbox', { name: /letter title/i })).toHaveValue(
       'Motivation letter — Redwood',
@@ -157,7 +157,7 @@ describe('LettersPage', () => {
     render(<LettersPage />);
     await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^open$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^open /i }));
     await screen.findByRole('textbox', { name: /letter title/i });
 
     fireEvent.click(screen.getByRole('button', { name: /back to library/i }));

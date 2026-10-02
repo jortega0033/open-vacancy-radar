@@ -70,7 +70,7 @@ describe('LettersLibrary', () => {
     render(<LettersLibrary onOpen={onOpen} />);
     await waitFor(() => expect(screen.getByText('Cover letter — Acme')).toBeInTheDocument());
 
-    fireEvent.click(within(rowFor('Cover letter — Acme')).getByRole('button', { name: /^open$/i }));
+    fireEvent.click(within(rowFor('Cover letter — Acme')).getByRole('button', { name: /open cover letter/i }));
 
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'open-1' }));
   });
@@ -117,7 +117,7 @@ describe('LettersLibrary', () => {
     render(<LettersLibrary onOpen={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Motivation letter — Redwood')).toBeInTheDocument());
 
-    fireEvent.click(within(rowFor('Motivation letter — Redwood')).getByRole('button', { name: /delete/i }));
+    fireEvent.click(within(rowFor('Motivation letter — Redwood')).getByRole('button', { name: /delete motivation/i }));
 
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText(/motivation letter — redwood/i)).toBeInTheDocument();
