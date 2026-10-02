@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, clipboard, dialog, Menu, Tray, shell } fro
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -143,6 +143,7 @@ import {
   parseCvDocumentInput,
   parseCvDocumentPatch,
   parseCvArtifactActionInput,
+  parseCvArtifactPagesViewedInput,
   parseCvEvidenceOverlayApproveInput,
   parseCvEvidenceOverlayExportInput,
   parseCvEvidenceOverlayInput,
@@ -3166,30 +3167,67 @@ guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input:
   return { saved: true, path: result.filePath, artifact: overlay.artifacts.at(-1) ?? null, overlay };
 });
 
+/** The largest saved file the app will hand to the renderer to show. A CV PDF is a few hundred KB;
+ * this only bounds what a replaced or malformed file could cost. */
+const MAX_REVIEW_FILE_BYTES = 10 * 1024 * 1024;
+
 /**
- * Opens a saved artifact in the system viewer so the candidate can read every page (PDF) or look at
- * it in their editor (DOCX), and records that it was opened. Only a file whose bytes still match the
- * hash recorded at export is opened: an externally changed or replaced file is never presented as the
- * verified one.
+ * Reads one saved artifact by id and returns its bytes only if they still match the hash recorded at
+ * export. The renderer never supplies a path: the path comes from the stored record, so this cannot
+ * read any other file. An externally changed or replaced file is never presented as the verified one.
  */
-guardedIpc.handle('workspace:cv-evidence-overlays:open-artifact', async (_event, input: unknown) => {
-  const { overlayId, artifactId } = parseCvArtifactActionInput(input);
+async function readVerifiedCvArtifact(overlayId: string, artifactId: string, action: string) {
   const db = await ensureWorkspaceDb();
   const overlay = workspace.getCvEvidenceOverlayById(db, overlayId);
   const artifact = overlay.artifacts.find((candidate) => candidate.artifactId === artifactId);
-  if (!artifact || !artifact.savedPath) throw new Error('this file was never saved, so there is nothing to open');
+  if (!artifact || !artifact.savedPath) throw new Error(`this file was never saved, so there is nothing to ${action}`);
   let bytes: Buffer;
   try {
+    if ((await stat(artifact.savedPath)).size > MAX_REVIEW_FILE_BYTES) throw new Error('too large');
     bytes = await readFile(artifact.savedPath);
   } catch {
-    throw new Error('the saved file could not be read. It may have been moved or deleted, so export it again');
+    throw new Error('the saved file could not be read. It may have been moved, deleted or replaced, so export it again');
   }
   if (createHash('sha256').update(bytes).digest('hex') !== artifact.contentHash) {
-    throw new Error('the file at that location is not the one saved at export, so it was not opened. Export it again to review it');
+    throw new Error(`the file at that location is not the one saved at export, so it was not ${action === 'open' ? 'opened' : 'shown'}. Export it again to review it`);
   }
+  return { db, artifact, bytes };
+}
+
+/**
+ * Opens a saved artifact in the system viewer (PDF) or the candidate's editor (DOCX), and records
+ * that it was opened. Only a file whose bytes still match the hash recorded at export is opened. For
+ * a PDF this is the secondary way to look at the file: accepting it needs the in-app page review.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:open-artifact', async (_event, input: unknown) => {
+  const { overlayId, artifactId } = parseCvArtifactActionInput(input);
+  const { db, artifact } = await readVerifiedCvArtifact(overlayId, artifactId, 'open');
   const failure = await shell.openPath(artifact.savedPath);
   if (failure) throw new Error(`the file could not be opened: ${failure}`);
   return applicationDataResetGate.runMutation(async () => workspace.markCvArtifactReviewOpened(db, overlayId, artifactId));
+});
+
+/**
+ * #434: the bytes of a saved PDF, so the review panel can draw every page in place. By artifact id
+ * only, after the hash check above; a Word file has no in-app view and is refused.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:read-artifact-bytes', async (_event, input: unknown): Promise<Uint8Array> => {
+  const { overlayId, artifactId } = parseCvArtifactActionInput(input);
+  const { artifact, bytes } = await readVerifiedCvArtifact(overlayId, artifactId, 'show');
+  if (artifact.format !== 'pdf') throw new Error('only a PDF is read page by page in the app');
+  // A copy, not the Buffer: a Buffer can be a view into a larger pooled ArrayBuffer, and structured
+  // clone would send the whole underlying buffer to the renderer.
+  return new Uint8Array(bytes);
+});
+
+/**
+ * #434: the renderer displayed every page. The file is checked against its recorded hash again here,
+ * and the repository refuses a page count that is not the one recorded at export.
+ */
+guardedIpc.handle('workspace:cv-evidence-overlays:mark-artifact-pages-viewed', async (_event, input: unknown) => {
+  const { overlayId, artifactId, pageCount } = parseCvArtifactPagesViewedInput(input);
+  const { db } = await readVerifiedCvArtifact(overlayId, artifactId, 'show');
+  return applicationDataResetGate.runMutation(async () => workspace.markCvArtifactPagesViewed(db, overlayId, artifactId, pageCount));
 });
 
 /** The candidate's explicit visual confirmation of one saved file (#419 step 9). */

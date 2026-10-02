@@ -128,6 +128,8 @@ export function installWorkspaceBridge(overrides: Partial<WorkspaceBridge> = {})
     deleteCvEvidenceOverlay: vi.fn().mockResolvedValue({ deleted: true }),
     exportCvEvidenceOverlay: vi.fn().mockResolvedValue({ saved: false, artifact: null, overlay: {} }),
     openCvArtifact: vi.fn(),
+    readCvArtifactBytes: vi.fn(),
+    markCvArtifactPagesViewed: vi.fn(),
     confirmCvArtifact: vi.fn(),
 
     listMcpClientGrants: vi.fn().mockResolvedValue([]),

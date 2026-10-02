@@ -5,6 +5,7 @@ import {
   latestArtifactOfFormat,
 } from '../../../electron/workspace/cv-artifact-status.js';
 import type { CvArtifactRecord, CvEvidenceOverlayRecord, CvExportFormat } from '../../window.js';
+import { CvPdfPageReview } from './CvPdfPageReview.js';
 import { describeError } from './useAgentRun.js';
 
 export interface CvArtifactPanelProps {
@@ -31,7 +32,7 @@ const STATUS_TEXT = {
 
 const STATUS_NOTE = {
   not_exported: '',
-  awaiting_review: 'Open the file and look at it before you accept it.',
+  awaiting_review: 'Look at the file before you accept it.',
   qa_failed: 'The file was not saved. Fix what is listed, then export it again. Your approved facts are unchanged.',
   accepted: 'You confirmed this file. The record covers the bytes saved at export. If you edit or replace the file afterwards, it is not checked again.',
   stale: 'Your CV, job description, facts, wording, projects or the document format changed after this file was made. It stays on disk with its recorded hash and no longer counts as the current CV.',
@@ -45,9 +46,10 @@ function shortHash(hash: string): string {
 /**
  * Per-format export and acceptance for an approved tailoring case (#419 step 9). Shows what each
  * format is worth right now, from the artifact records the main process wrote, and offers the
- * candidate's own review steps: open the saved file, then confirm it. A PDF is opened to read every
- * page; a Word file is looked at in the candidate's own editor, because pagination depends on the
- * editor and no page fit is claimed. Nothing here says the vacancy is ready to apply.
+ * candidate's own review steps: look at the saved file, then confirm it. A PDF's pages are shown in
+ * the panel and accepting unlocks only after every page was displayed (#434), with the system viewer
+ * as a second way to look; a Word file is looked at in the candidate's own editor, because
+ * pagination depends on the editor and no page fit is claimed. Nothing here says the vacancy is ready to apply.
  */
 export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: CvArtifactPanelProps) {
   const exportBlocked = sourceGaps.length > 0;
@@ -175,6 +177,10 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
               </ul>
             )}
 
+            {format === 'pdf' && current && current.validation.ok && current.savedPath && status !== 'accepted' && (
+              <CvPdfPageReview key={current.artifactId} overlayId={overlay.id} artifact={current} onOverlayChange={onOverlayChange} />
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" className="btn btn-outline" onClick={() => void exportFile(format)} disabled={busy !== null || exportBlocked}>
                 {busy === `export-${format}` && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
@@ -183,21 +189,21 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
               {current && current.validation.ok && current.savedPath && status !== 'accepted' && (
                 <>
                   <button type="button" className="btn btn-outline" onClick={() => void openFile(current)} disabled={busy !== null}>
-                    {format === 'pdf' ? 'Open the PDF to read every page' : 'Open in my editor'}
+                    {format === 'pdf' ? 'Open in my PDF viewer' : 'Open in my editor'}
                   </button>
                   <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void confirmFile(current)}
-                    disabled={busy !== null || (format === 'pdf' && !current.reviewOpenedAt)}
+                    disabled={busy !== null || (format === 'pdf' && !current.pagesViewedAt)}
                   >
                     {format === 'pdf' ? 'I read every page and it looks right' : 'I reviewed this in my editor'}
                   </button>
                 </>
               )}
             </div>
-            {format === 'pdf' && current && current.validation.ok && status === 'awaiting_review' && !current.reviewOpenedAt && (
-              <p className="text-xs text-base-content/60">Confirming unlocks after you open the PDF.</p>
+            {format === 'pdf' && current && current.validation.ok && status === 'awaiting_review' && !current.pagesViewedAt && (
+              <p className="text-xs text-base-content/60">Confirming unlocks after every page has been shown here.</p>
             )}
             {format === 'docx' && status !== 'not_exported' && (
               <p className="text-xs text-base-content/60">

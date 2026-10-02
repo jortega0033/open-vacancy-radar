@@ -4,6 +4,7 @@ import { renderResumePlainText } from '../electron/resume-text.js';
 import { CV_RENDER_CONTRACT_VERSION } from '../electron/workspace/cv-evidence-schema.js';
 import { CvArtifactPanel } from '../src/components/cv/CvArtifactPanel.js';
 import type { CvArtifactRecord, CvEvidenceOverlayRecord } from '../src/window.js';
+import type { PdfReview } from '../src/components/cv/pdf-pages.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
 import { FIXTURE_REVISION_ID, makeRevision } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
@@ -39,6 +40,7 @@ function artifact(partial: Partial<CvArtifactRecord> = {}): CvArtifactRecord {
     validation: { ok: true, reasons: [], pageCount: 2 },
     savedPath: 'C:\\fake\\cv.pdf',
     reviewOpenedAt: '',
+    pagesViewedAt: '',
     confirmedAt: '',
     ...partial,
   };
@@ -78,8 +80,18 @@ function overlayWith(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
   };
 }
 
+// jsdom has no canvas and cannot run pdf.js, so the page drawing is stood in for here. The real
+// pdf.js render under the renderer's CSP is proven by e2e/tailoring-case.spec.ts.
+const pdfPages = vi.hoisted(() => ({ openPdfForReview: vi.fn() }));
+vi.mock('../src/components/cv/pdf-pages.js', () => pdfPages);
+
+function fakeReview(pageCount: number, renderPage?: PdfReview['renderPage']): PdfReview {
+  return { pageCount, renderPage: renderPage ?? vi.fn().mockResolvedValue(undefined), destroy: vi.fn().mockResolvedValue(undefined) };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  pdfPages.openPdfForReview.mockReset();
 });
 
 function pdfRow() {
@@ -140,14 +152,19 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(within(wordRow()).getByRole('status')).toHaveTextContent('Not exported');
   });
 
-  it('a PDF can be confirmed only after it was opened, and the page count is shown', async () => {
+  it('a PDF can be confirmed only after every page was shown in the panel, and the page count is shown', async () => {
     const waiting = overlayWith({ artifacts: [artifact()] });
     const opened = overlayWith({ artifacts: [artifact({ reviewOpenedAt: '2026-10-01T11:05:00.000Z' })] });
-    const accepted = overlayWith({ artifacts: [artifact({ reviewOpenedAt: '2026-10-01T11:05:00.000Z', confirmedAt: '2026-10-01T11:06:00.000Z' })] });
+    const viewed = overlayWith({ artifacts: [artifact({ reviewOpenedAt: '2026-10-01T11:05:00.000Z', pagesViewedAt: '2026-10-01T11:06:00.000Z' })] });
+    const accepted = overlayWith({ artifacts: [artifact({ reviewOpenedAt: '2026-10-01T11:05:00.000Z', pagesViewedAt: '2026-10-01T11:06:00.000Z', confirmedAt: '2026-10-01T11:07:00.000Z' })] });
+    const bytes = new Uint8Array([37, 80, 68, 70]);
     const workspace = installWorkspaceBridge({
       openCvArtifact: vi.fn().mockResolvedValue(opened),
+      readCvArtifactBytes: vi.fn().mockResolvedValue(bytes),
+      markCvArtifactPagesViewed: vi.fn().mockResolvedValue(viewed),
       confirmCvArtifact: vi.fn().mockResolvedValue(accepted),
     });
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2));
     let current = waiting;
     const onChange = vi.fn((next: CvEvidenceOverlayRecord) => {
       current = next;
@@ -159,14 +176,91 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     const confirm = within(pdfRow()).getByRole('button', { name: /i read every page and it looks right/i });
     expect(confirm).toBeDisabled();
 
-    fireEvent.click(within(pdfRow()).getByRole('button', { name: /open the pdf to read every page/i }));
+    // Opening it in the system viewer is a second way to look and does not unlock confirming.
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /open in my pdf viewer/i }));
     await waitFor(() => expect(workspace.openCvArtifact).toHaveBeenCalledWith('overlay-1', 'artifact-1'));
+    await waitFor(() => expect(within(pdfRow()).getByRole('button', { name: /open in my pdf viewer/i })).toBeEnabled());
+    expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
+
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    await waitFor(() => expect(workspace.readCvArtifactBytes).toHaveBeenCalledWith('overlay-1', 'artifact-1'));
+    expect(pdfPages.openPdfForReview).toHaveBeenCalledWith(bytes);
+    await waitFor(() => expect(workspace.markCvArtifactPagesViewed).toHaveBeenCalledWith('overlay-1', 'artifact-1', 2));
     await waitFor(() => expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeEnabled());
 
     fireEvent.click(within(pdfRow()).getByRole('button', { name: /i read every page/i }));
     await waitFor(() => expect(workspace.confirmCvArtifact).toHaveBeenCalledWith('overlay-1', 'artifact-1'));
     await waitFor(() => expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Accepted'));
     expect(within(pdfRow()).queryByRole('button', { name: /i read every page/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a placeholder for every page and keeps confirming locked until the last page was drawn', async () => {
+    let finishSecond: () => void = () => undefined;
+    const renderPage = vi.fn((pageNumber: number) =>
+      pageNumber === 1 ? Promise.resolve() : new Promise<void>((resolve) => { finishSecond = resolve; }),
+    );
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2, renderPage));
+    const viewed = overlayWith({ artifacts: [artifact({ pagesViewedAt: '2026-10-01T11:06:00.000Z' })] });
+    const workspace = installWorkspaceBridge({
+      readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])),
+      markCvArtifactPagesViewed: vi.fn().mockResolvedValue(viewed),
+    });
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact()] })} onOverlayChange={vi.fn()} />);
+
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    expect(await screen.findByLabelText('Page 1 of 2')).toBeInTheDocument();
+    expect(screen.getByLabelText('Page 2 of 2')).toBeInTheDocument();
+    await waitFor(() => expect(within(pdfRow()).getByLabelText('Pages shown')).toHaveTextContent('Pages shown: 1 of 2'));
+    expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
+    expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
+
+    finishSecond();
+    await waitFor(() => expect(workspace.markCvArtifactPagesViewed).toHaveBeenCalledTimes(1));
+    expect(workspace.markCvArtifactPagesViewed).toHaveBeenCalledWith('overlay-1', 'artifact-1', 2);
+  });
+
+  it.each([
+    ['the file no longer matches its recorded hash', () => installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockRejectedValue(new Error('the file at that location is not the one saved at export')) }), /not the one saved at export/],
+    [
+      'pdf.js cannot parse it',
+      () => {
+        pdfPages.openPdfForReview.mockRejectedValue(new Error('Invalid PDF structure'));
+        return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+      },
+      /Invalid PDF structure/,
+    ],
+    [
+      'a page cannot be drawn',
+      () => {
+        pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2, vi.fn().mockRejectedValue(new Error('bad glyph data'))));
+        return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+      },
+      /bad glyph data/,
+    ],
+    [
+      'it has more pages than can be read here',
+      () => {
+        pdfPages.openPdfForReview.mockResolvedValue(fakeReview(50));
+        return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+      },
+      /50 pages/,
+    ],
+    [
+      'its pages do not match the count recorded at export',
+      () => {
+        pdfPages.openPdfForReview.mockResolvedValue(fakeReview(3));
+        return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+      },
+      /3 page\(s\) but 2 were recorded/,
+    ],
+  ])('shows the reason and keeps confirming locked when %s', async (_name, setup, reason) => {
+    const workspace = setup();
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact()] })} onOverlayChange={vi.fn()} />);
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    expect(await within(pdfRow()).findByRole('alert')).toHaveTextContent(reason);
+    expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
+    expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
+    expect(within(pdfRow()).getByRole('button', { name: /try showing the pages again/i })).toBeEnabled();
   });
 
   it('a Word file gets its own confirmation, worded as a review in the candidate editor, with no page fit claim', async () => {
@@ -186,7 +280,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
   });
 
   it('shows an accepted file as accepted and says the record covers only the bytes saved at export', () => {
-    const accepted = overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', confirmedAt: '2026-10-01T11:06:00.000Z' })] });
+    const accepted = overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', pagesViewedAt: 'x', confirmedAt: '2026-10-01T11:06:00.000Z' })] });
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={accepted} onOverlayChange={vi.fn()} />);
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Accepted');
@@ -244,13 +338,13 @@ describe('CvArtifactPanel (#419 step 9)', () => {
 
   it('keeps every action reachable at the minimum desktop width: rows wrap and nothing has a fixed width', () => {
     installWorkspaceBridge();
-    const waiting = overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x' })] });
+    const waiting = overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', pagesViewedAt: 'x' })] });
     const { container } = render(
       <div style={{ width: '360px' }}>
         <CvArtifactPanel overlay={waiting} onOverlayChange={vi.fn()} />
       </div>,
     );
-    for (const name of [/export pdf again/i, /open the pdf to read every page/i, /i read every page/i, /export as word/i, /copy as plain text/i]) {
+    for (const name of [/export pdf again/i, /open in my pdf viewer/i, /i read every page/i, /export as word/i, /copy as plain text/i]) {
       expect(screen.getByRole('button', { name })).toBeVisible();
     }
     for (const row of container.querySelectorAll('button')) {
