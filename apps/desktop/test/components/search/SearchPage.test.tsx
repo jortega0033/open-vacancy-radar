@@ -1218,11 +1218,82 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
-    // Collapsed by default; the detail line only appears once the toggle is opened. The provider id
-    // renders through `discoveryProviderLabel` ("Workable"), not the raw "workable_global" id.
-    expect(screen.queryByText(`Workable: ${warning}`)).not.toBeInTheDocument();
+    // Collapsed by default; the summary only appears once the toggle is opened, and the raw reason
+    // with the provider id lives in the "Scan details" disclosure rather than the default panel.
+    expect(screen.queryByText(/returned partial or no results/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
-    expect(screen.getByText(`Workable: ${warning}`)).toBeInTheDocument();
+    expect(screen.getByText('1 source returned partial or no results.')).toBeInTheDocument();
+    expect(screen.getByText('1 source stopped early.')).toBeInTheDocument();
+    expect(screen.getByText('Workable')).toBeInTheDocument();
+    expect(screen.queryByText(/Results from the other/i)).not.toBeInTheDocument();
+    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).not.toBeVisible();
+    expect(screen.getByText(/^Run ww-run-1/)).not.toBeVisible();
+    fireEvent.click(screen.getByText('Scan details'));
+    expect(screen.getByText(/^Run ww-run-1/)).toBeVisible();
+    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).toBeVisible();
+  });
+
+  it('groups failed, stopped and not-set-up sources and only claims the rest are complete when they are', async () => {
+    const onOpenSearchProfile = vi.fn();
+    const okSource = (provider: 'remotive' | 'jobicy' | 'dice') => ({
+      id: `${provider}:all`,
+      provider,
+      url: `https://example.test/${provider}`,
+      requests: 1,
+      listings: 2,
+      status: 'success' as const,
+      error: null,
+      networkAttempts: 1,
+      retries: 0,
+      complete: true,
+      completenessReason: null,
+      continuationCursor: null,
+    });
+    const report = makeWorldwideReport([makeWorldwideVacancy()], [
+      okSource('remotive'),
+      okSource('jobicy'),
+      { ...okSource('dice'), status: 'error' as const, error: 'HTTP 500', complete: false, completenessReason: 'HTTP 500' },
+      {
+        ...okSource('jobicy'),
+        id: 'ats_roster_lever:roster-scan',
+        provider: 'ats_roster_lever' as const,
+        requests: 0,
+        listings: 0,
+        error: 'No imported roster entries for this provider yet; run the ats-roster:import CLI command first.',
+      },
+    ]);
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+    render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Source coverage warning (2)' }));
+
+    expect(
+      screen.getByText('2 sources returned partial or no results. Results from the other sources are complete.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 source failed.')).toBeInTheDocument();
+    expect(screen.getByText('1 source not set up.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download company list' }));
+    expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the match count with the applied query and scan time, and keeps raw counts in the details', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+    report.statistics.rawRowsFetched = 12;
+    report.statistics.focusedMatches = 3;
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      runScan: vi.fn().mockResolvedValue(report),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('Frontend Engineer');
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+
+    const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
+    expect(bridge.runScan).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).not.toBeVisible();
   });
 
   it('reports the missing verification as absent for a vacancy with no sponsor match', async () => {
