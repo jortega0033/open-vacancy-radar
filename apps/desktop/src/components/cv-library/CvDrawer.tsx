@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useEffectiveProvider } from '../../use-effective-provider.js';
 import type { CvDocumentRecord, CvProfile, CvSourceDocument } from '../../window.js';
@@ -187,7 +188,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
     }
   }, [sourceRun.status, sourceRun.text, record]);
 
-  // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the ✕ button) while
+  // Cancels an in-flight parse if the drawer closes (Save, Cancel, backdrop, or the close button) while
   // it's still running, otherwise the daemon session keeps running unobserved until it times out.
   // A ref, not `parseRun` in the dependency array: `parseRun` is a fresh object every render, and
   // this must run its cleanup only on actual unmount, reading whatever the latest run was.
@@ -302,7 +303,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             onClick={onCancel}
             disabled={submitting}
           >
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
@@ -401,7 +402,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             )}
 
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Name *
               </span>
               <input
@@ -414,7 +415,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </label>
 
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Target role
               </span>
               <input
@@ -428,7 +429,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
             <div className="grid grid-cols-2 gap-2.5">
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                <span className="mb-1.5 block ovr-eyebrow">
                   Title
                 </span>
                 <input
@@ -439,7 +440,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 />
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                <span className="mb-1.5 block ovr-eyebrow">
                   Years of experience
                 </span>
                 <input
@@ -453,7 +454,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
             <div className="grid grid-cols-2 gap-2.5">
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                <span className="mb-1.5 block ovr-eyebrow">
                   Location
                 </span>
                 <input
@@ -464,7 +465,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 />
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                <span className="mb-1.5 block ovr-eyebrow">
                   Languages
                 </span>
                 <input
@@ -478,7 +479,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </div>
 
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Skills
               </span>
               <input
@@ -491,7 +492,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </label>
 
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Work authorization
               </span>
               <input
@@ -504,7 +505,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
             </label>
 
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Summary
               </span>
               <textarea

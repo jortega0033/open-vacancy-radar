@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OpenApplicationReviewResult } from '../../../electron/application-executor-types.js';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
@@ -5,6 +6,7 @@ import type { SelectedVacancy } from '../letters/types.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 export interface ApplicationReviewSessionProps {
   attempt: ApplicationAttemptRecord;
@@ -378,7 +380,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             {position && total ? <p className="text-xs text-base-content/60">{position} of {total} ready</p> : null}
           </div>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" disabled={closeDisabled} onClick={() => onClose('dismissed')}>
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
@@ -407,9 +409,9 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'tailoring_blocked' && (
           <div className="space-y-4">
-            <div className="alert alert-warning" role="alert">
-              <span>{state.message}</span>
-            </div>
+            <WarningBanner>
+              {state.message}
+            </WarningBanner>
             <p className="text-sm text-base-content/70">
               Retry the vacancy-specific tailoring, or explicitly continue with your unchanged reviewed CV.
             </p>
@@ -436,9 +438,9 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
         {state.phase === 'preparation_blocked' && (
           <div className="space-y-4">
-            <div className="alert alert-warning" role="alert">
-              <span>{state.message || 'Application preparation needs your attention.'}</span>
-            </div>
+            <WarningBanner>
+              {state.message || 'Application preparation needs your attention.'}
+            </WarningBanner>
             <p className="text-sm text-base-content/70">
               Open the vacancy to continue manually, or skip this attempt. No document is presented as ready until preparation succeeds.
             </p>
@@ -463,9 +465,9 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         )}
 
         {state.phase === 'error' && (
-          <div className="alert alert-error" role="alert">
-            <span>{state.message}</span>
-          </div>
+          <ErrorBanner>
+            {state.message}
+          </ErrorBanner>
         )}
 
         {(state.phase === 'ready' || state.phase === 'deciding') && (

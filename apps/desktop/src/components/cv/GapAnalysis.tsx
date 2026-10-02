@@ -9,6 +9,7 @@ import { findSavedJobForVacancy, saveGapAnalysis } from './gap-analysis-store.js
 import { buildAtsFitPrompt } from './prompts.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument, VacancyLead } from './types.js';
+import { ErrorBanner } from '../shell/index.js';
 
 /**
  * Compares the loaded CV against one vacancy via the user's own installed CLI and streams the
@@ -208,14 +209,14 @@ export function GapAnalysis({
         )}
 
         {saveState === 'failed' && saveError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {saveError}
-          </div>
+          </ErrorBanner>
         )}
         {copyState === 'failed' && copyError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {copyError}
-          </div>
+          </ErrorBanner>
         )}
         {copyState === 'copied' && (
           <span className="text-sm font-medium" role="status">

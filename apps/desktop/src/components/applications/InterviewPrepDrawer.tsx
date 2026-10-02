@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ApplicationAttemptRecord,
@@ -14,6 +15,7 @@ import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { INTERVIEW_PREPARABLE_STATUSES } from './application-status.js';
 import { sortAttempts } from './attempt-status.js';
 import { buildInterviewPrepPrompt, type InterviewPrepContext, type InterviewPrepStage } from './interview-prep-prompt.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 export interface InterviewPrepDrawerProps {
   application: ApplicationRecord;
@@ -182,7 +184,7 @@ export function InterviewPrepDrawer({
             <span className="text-base-content/60">at</span> {application.company}
           </h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
@@ -193,26 +195,26 @@ export function InterviewPrepDrawer({
           </p>
 
           {!context && (
-            <div className="alert alert-warning text-sm" role="alert">
+            <WarningBanner>
               Prepare interview is only available once this application has reached the recruiter
               screen or interview stage.
-            </div>
+            </WarningBanner>
           )}
 
           {context && (
             <>
               {providerUnavailable && (
-                <div className="alert alert-error text-sm" role="alert">
+                <ErrorBanner>
                   {providerLabel} is not installed or not detected, so this cannot run. Install and
                   authenticate the CLI, or choose a different default in AI Runtime, then reopen
                   this drawer.
-                </div>
+                </ErrorBanner>
               )}
 
               {attemptsError && (
-                <div className="alert alert-error text-sm" role="alert">
+                <ErrorBanner>
                   {attemptsError}
-                </div>
+                </ErrorBanner>
               )}
 
               {availableModels.length > 0 && (
@@ -254,9 +256,9 @@ export function InterviewPrepDrawer({
               </div>
 
               {copyState === 'failed' && copyError && (
-                <div className="alert alert-error text-sm" role="alert">
+                <ErrorBanner>
                   {copyError}
-                </div>
+                </ErrorBanner>
               )}
               {copyState === 'copied' && (
                 <span className="text-sm font-medium" role="status">

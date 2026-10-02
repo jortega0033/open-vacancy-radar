@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import { CvUploadAction } from './cv-library/CvUploadAction.js';
@@ -77,7 +78,7 @@ export function WelcomeModal({ onClose }: WelcomeModalProps) {
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">Welcome to Open Vacancy Radar</h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 

@@ -11,6 +11,7 @@ import {
 } from './prompts.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument } from './types.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export type ResumeToolMode = 'audit' | 'achievements' | 'roles';
 
@@ -251,9 +252,9 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
         </div>
 
         {copyState === 'failed' && copyError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {copyError}
-          </div>
+          </ErrorBanner>
         )}
 
         {mode === 'audit' && appliedFocus !== null && (

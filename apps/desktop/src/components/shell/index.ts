@@ -25,3 +25,5 @@ export {
   isNavPage,
 } from './nav.js';
 export type { NavBadge, NavItem, NavPage } from './nav.js';
+export { WarningBanner } from './WarningBanner.js';
+export type { WarningBannerProps } from './WarningBanner.js';

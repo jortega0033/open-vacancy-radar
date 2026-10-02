@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useState } from 'react';
 import type {
   ApplicationInput,
@@ -136,13 +137,13 @@ export function ApplicationDrawer({
             onClick={onCancel}
             disabled={submitting}
           >
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Link saved job
             </span>
             <select
@@ -160,7 +161,7 @@ export function ApplicationDrawer({
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Role *
             </span>
             <input
@@ -172,7 +173,7 @@ export function ApplicationDrawer({
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Company *
             </span>
             <input
@@ -184,7 +185,7 @@ export function ApplicationDrawer({
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Location
             </span>
             <input
@@ -197,7 +198,7 @@ export function ApplicationDrawer({
 
           <div className="grid grid-cols-2 gap-2.5">
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Status
               </span>
               <select
@@ -214,7 +215,7 @@ export function ApplicationDrawer({
               </select>
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Applied date
               </span>
               <input
@@ -228,7 +229,7 @@ export function ApplicationDrawer({
           </div>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Next step
             </span>
             <input
@@ -241,7 +242,7 @@ export function ApplicationDrawer({
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Contact person
             </span>
             <input
@@ -254,7 +255,7 @@ export function ApplicationDrawer({
 
           <div className="grid grid-cols-2 gap-2.5">
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 CV
               </span>
               <select className="select w-full" value={draft.cvId} onChange={(e) => update('cvId', e.target.value)}>
@@ -267,7 +268,7 @@ export function ApplicationDrawer({
               </select>
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1.5 block ovr-eyebrow">
                 Letter
               </span>
               <select
@@ -286,7 +287,7 @@ export function ApplicationDrawer({
           </div>
 
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1.5 block ovr-eyebrow">
               Notes
             </span>
             <textarea

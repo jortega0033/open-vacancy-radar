@@ -29,6 +29,7 @@ import { sourceAnchors } from './source-anchors.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface RequirementMappingProps {
   /** The CV Library record this session's evidence belongs to. This feature needs a persisted CV
@@ -450,9 +451,9 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         )}
 
         {loadError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {loadError}
-          </div>
+          </ErrorBanner>
         )}
         {jdGaps.length > 0 && (
           <div className="alert alert-warning text-sm" role="status">
@@ -489,14 +490,14 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           </div>
         )}
         {run.status === 'failed' && run.error && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {run.error}
-          </div>
+          </ErrorBanner>
         )}
         {saveError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {saveError}
-          </div>
+          </ErrorBanner>
         )}
         {rejectedProposals.length > 0 && (
           <div className="alert alert-warning text-sm" role="status">
@@ -603,7 +604,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                   <div className="font-medium">
                     {requirement.text}
                     {requirement.candidateAdded && (
-                      <span className="ml-2 text-xs font-normal text-base-content/50">(added by you)</span>
+                      <span className="ml-2 text-xs font-normal text-base-content/60">(added by you)</span>
                     )}
                     {requirement.excluded && <span className="ml-2 text-xs font-normal">(not a requirement)</span>}
                     {!requirement.excluded && requirement.jdRevisionId !== currentRevisionId && (

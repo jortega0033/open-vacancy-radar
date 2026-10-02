@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { AgentRunStatus } from './useAgentRun.js';
+import { ErrorBanner } from '../shell/index.js';
 
 /**
  * The streaming answer surface, shared by both AI features: a bordered, fixed-height, scrolling
@@ -44,9 +45,9 @@ export function AiOutput({ status, text, error, idleHint, busyLabel, label, prov
       )}
 
       {status === 'failed' && error && (
-        <div className="alert alert-error mb-3 text-sm" role="alert">
+        <ErrorBanner className="mb-3">
           {error}
-        </div>
+        </ErrorBanner>
       )}
 
       {status === 'cancelled' && (

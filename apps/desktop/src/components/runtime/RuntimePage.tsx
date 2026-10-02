@@ -1,3 +1,4 @@
+import { Check } from '@phosphor-icons/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
 import runtimeUnavailableIllustration from '../../../assets/illustrations/runtime-unavailable.svg?no-inline';
@@ -132,7 +133,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         Open Vacancy Radar uses an AI CLI already installed and authenticated on this computer,
         through the local AgentDock runtime.
       </p>
-      <p className="mt-1 text-xs text-base-content/50">
+      <p className="mt-1 text-xs text-base-content/60">
         AgentDock does not read or store your Claude Code or Codex login credentials.
         Authentication remains managed by the installed CLI.
       </p>
@@ -157,7 +158,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-box border border-base-300 p-4">
         <div>
-          <div className="text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+          <div className="ovr-eyebrow">
             Default runtime
           </div>
           <div className="mt-1 text-sm font-semibold">{PROVIDER_LABEL[defaultProvider]}</div>
@@ -173,20 +174,20 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       {verifyResult?.kind === 'ok' && (
         <div className="mt-2.5 rounded-box border border-base-300 bg-base-200 p-3.5 text-xs leading-loose">
           <div>
-            <span className="text-success">✓</span> Executable detected:{' '}
+            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Executable detected:{' '}
             <span className="font-mono">{verifyResult.executablePath}</span>
           </div>
           <div>
-            <span className="text-success">✓</span> Version check passed: {verifyResult.version}
+            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Version check passed: {verifyResult.version}
           </div>
           <div>
-            <span className="text-success">✓</span> Authentication status available: Authenticated
+            <Check size={14} weight="bold" aria-hidden="true" className="mr-1 inline text-success" /> Authentication status available: Authenticated
           </div>
         </div>
       )}
       {verifyResult?.kind === 'failed' && <ErrorBanner className="mt-2.5">{verifyResult.reason}</ErrorBanner>}
 
-      <p className="mt-5 max-w-xl text-xs text-base-content/50">
+      <p className="mt-5 max-w-xl text-xs text-base-content/60">
         Verification checks that the executable exists, responds to a version query, and reports
         its authentication status. It does not run a model request and does not consume usage.
       </p>

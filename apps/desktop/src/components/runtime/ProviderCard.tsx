@@ -1,3 +1,4 @@
+import { Check } from '@phosphor-icons/react';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 
 const CAPABILITY_LABEL: ReadonlyArray<{ key: keyof ProviderCapabilities; label: string }> = [
@@ -74,7 +75,7 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
 
         {capabilities.length > 0 && (
           <div>
-            <div className="mb-1.5 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+            <div className="mb-1.5 ovr-eyebrow">
               Capabilities
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -98,7 +99,7 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving }: Prov
           {/* "Not installed" always wins: the "Default" badge above already covers the
               is-this-the-configured-default case, and this button must never claim a CLI that
               cannot run a session is ready just because it happens to be the persisted default. */}
-          {!status.installed ? 'Not installed' : isDefault ? 'Default ✓' : 'Use as default'}
+          {!status.installed ? 'Not installed' : isDefault ? <>Default <Check size={14} weight="bold" aria-hidden="true" className="inline" /></> : 'Use as default'}
         </button>
       </div>
     </div>

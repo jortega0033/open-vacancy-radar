@@ -3,6 +3,7 @@ import type { CvProposalPayload, CvSourceDocument, CvTailoringProposalRecord } f
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface TailoringProposalsPanelProps {
   cvId: string | null;
@@ -117,9 +118,9 @@ export function TailoringProposalsPanel({ cvId, vacancy, sourceCv, onAccepted }:
         </p>
 
         {error && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {error}
-          </div>
+          </ErrorBanner>
         )}
 
         <ul>

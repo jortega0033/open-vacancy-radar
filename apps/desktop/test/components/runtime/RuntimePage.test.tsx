@@ -87,7 +87,7 @@ describe('RuntimePage', () => {
     const onDefaultProviderChanged = vi.fn();
 
     render(<RuntimePage daemonState="ready" onDefaultProviderChanged={onDefaultProviderChanged} />);
-    await waitFor(() => expect(screen.getByText('Default ✓')).toBeInTheDocument()); // Claude starts as default
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Default' })).toBeInTheDocument()); // Claude starts as default
 
     fireEvent.click(screen.getByRole('button', { name: 'Use as default' })); // Codex's button
 
@@ -127,7 +127,7 @@ describe('RuntimePage', () => {
   it('never claims "Default" readiness for a configured default that is not installed', async () => {
     // The persisted default (schema default: 'claude') can point at a CLI that was never
     // installed on this machine, e.g. a fresh Windows Sandbox run. The card must say so plainly
-    // instead of the button reading "Default ✓" as if the CLI were ready to use.
+    // instead of the button reading "Default" with a check mark as if the CLI were ready to use.
     installAgentDockBridge({
       listProviders: vi.fn().mockResolvedValue([{ ...CLAUDE, installed: false, authenticated: 'unknown' }, CODEX_NOT_INSTALLED]),
     });
@@ -136,7 +136,7 @@ describe('RuntimePage', () => {
     render(<RuntimePage daemonState="ready" />);
     await waitFor(() => expect(screen.getByText('Claude Code')).toBeInTheDocument());
 
-    expect(screen.queryByText('Default ✓')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Default' })).not.toBeInTheDocument();
     // Still surfaced as the configured default, just not via a button implying it is ready.
     expect(screen.getByText('Default')).toBeInTheDocument();
     // "Claude Code" also appears in the "Default runtime" summary panel below the card grid, so

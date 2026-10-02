@@ -675,7 +675,7 @@ describe('ApplicationsPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: /submit application/i }));
 
       await waitFor(() => expect(submitReview).toHaveBeenCalled());
-      // The header "✕" button and the modal-backdrop button share the accessible name "Close".
+      // The header close-icon button and the modal-backdrop button share the accessible name "Close".
       const closeButtons = within(dialog).getAllByRole('button', { name: /^close$/i });
       expect(closeButtons).toHaveLength(2);
       for (const button of closeButtons) expect(button).toBeDisabled();

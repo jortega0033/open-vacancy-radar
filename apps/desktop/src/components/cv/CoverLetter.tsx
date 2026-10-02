@@ -14,6 +14,7 @@ import {
 import { AiOutput } from './AiOutput.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument, VacancyLead } from './types.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface CoverLetterProps {
   cv: CvDocument | null;
@@ -194,9 +195,9 @@ export function CoverLetter({ cv, vacancy, sourceCv, profile, model, provider }:
         </div>
 
         {copyState === 'failed' && copyError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {copyError}
-          </div>
+          </ErrorBanner>
         )}
 
         <AiOutput
