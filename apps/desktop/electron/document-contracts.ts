@@ -6,6 +6,7 @@ import {
   type DocumentTarget,
   type RequiredContentItem,
 } from './document-acceptance.js';
+import { resumeClaims } from './resume-claims.js';
 import type { TailoredResume } from './resume-schema.js';
 
 /**
@@ -33,6 +34,11 @@ export interface ResumeContractOptions {
   /** Employers the reviewed source CV attests to. Lets a genuine re-application to a previous
    * employer through the work-history rule that otherwise refuses a fabricated one. */
   verifiedEmployers?: readonly string[];
+  /** Also require every other claim of the approved resume (bullets, summary, skills, dates, ...) to
+   * be in the PDF's text (#434). Off by default: the unattended staging path and structural fixtures
+   * check the contract's own items only. The manual export paths turn it on through
+   * `validateRenderedResumePdf`. */
+  checkClaims?: boolean;
 }
 
 export function resumeAcceptanceContract(resume: TailoredResume, options: ResumeContractOptions = {}): DocumentAcceptanceContract {
@@ -53,6 +59,15 @@ export function resumeAcceptanceContract(resume: TailoredResume, options: Resume
     if (project.name) requiredContent.push({ label: 'project', text: project.name });
   }
 
+  // #434: everything else the approved CV says, from the same claim list the Word check and the
+  // copyable text use, so a dropped bullet, summary line or skill fails the PDF as well. What the
+  // checks above already cover (the name as identity, roles, employers, clients, projects) is left
+  // out so one problem is not reported twice.
+  const covered = new Set(['name', 'role', 'employer', 'client', 'project']);
+  const requiredClaims: RequiredContentItem[] = (options.checkClaims ? resumeClaims(resume) : [])
+    .filter((claim) => claim.kind === 'content' && !covered.has(claim.label))
+    .map((claim) => ({ label: claim.label, text: claim.text }));
+
   const employmentHistoryText = [
     ...resume.experience.flatMap((entry) => [entry.company, entry.client, entry.title, ...entry.bullets]),
     ...resume.projects.flatMap((project) => [project.organization, project.description]),
@@ -68,6 +83,7 @@ export function resumeAcceptanceContract(resume: TailoredResume, options: Resume
       documentTitle: resume.contact.name || 'Resume',
     },
     requiredContent,
+    requiredClaims,
     requiredLinks: [...anchorableLinks(resume.contact.links), ...resume.projects.flatMap((project) => anchorableLinks(project.links))],
     target: options.target ?? null,
     targetRule: 'states_own_history',

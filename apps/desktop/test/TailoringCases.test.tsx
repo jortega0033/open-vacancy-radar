@@ -85,6 +85,7 @@ function pdfArtifact(snapshotDigest: string, snapshotApprovedAt: string): CvArti
     validation: { ok: true, reasons: [], pageCount: 1 },
     savedPath: 'C:\\fake\\cv.pdf',
     reviewOpenedAt: '',
+    pagesViewedAt: '',
     confirmedAt: '',
   };
 }
