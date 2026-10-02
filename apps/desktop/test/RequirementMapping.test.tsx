@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_CV_SOURCE } from '../electron/workspace/cv-source-schema.js';
-import type { CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvSourceDocument } from '../src/window.js';
+import type { CvEvidenceOverlayRecord, CvEvidenceOverlayPatch, CvRequirementMapping, CvSourceDocument } from '../src/window.js';
 import { RequirementMapping } from '../src/components/cv/RequirementMapping.js';
 import type { CvDocument } from '../src/components/cv/types.js';
 import { installBridges, TEST_VACANCY } from './cv-bridges.js';
@@ -196,7 +196,9 @@ describe('RequirementMapping (#419)', () => {
     await waitFor(() => expect(vi.mocked(workspace.updateCvEvidenceOverlay)).toHaveBeenCalledTimes(2));
     await screen.findByText(/requirement list is partial/i);
 
-    fireEvent.click(screen.getByRole('button', { name: /i read the whole job description/i }));
+    // While batches remain unread, the confirmation says that the candidate read the rest.
+    expect(screen.queryByRole('button', { name: /i read the whole job description/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /i read the rest myself and added anything missing/i }));
 
     await waitFor(() =>
       expect(vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.at(-1)?.[1].requirementCoverage?.status).toBe('complete'),
@@ -246,52 +248,208 @@ describe('RequirementMapping (#419)', () => {
     expect(lastPatch?.requirements?.[0]).toMatchObject({ excluded: true, exclusionReason: 'Describes the team, not the role' });
   });
 
-  it('lets the candidate add a requirement with an exact quote, already marked reviewed', async () => {
-    installBridges();
+  async function mapOneRequirement() {
+    const bridges = installBridges();
     const workspace = installStatefulOverlayBridge();
     render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+    fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+    emitAnswer(bridges, { requirements: [{ text: 'Angular experience', jdAnchor: QUOTE_ANGULAR }] });
+    await screen.findByText('Angular experience');
+    return workspace;
+  }
 
-    fireEvent.change(screen.getByLabelText(/new requirement text/i), { target: { value: 'Five years of frontend work' } });
-    fireEvent.change(screen.getByLabelText(/exact quote from the job description/i), { target: { value: QUOTE_YEARS } });
-    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+  it('offers no add form until a mapping exists, then shows it behind a disclosure with visible labels', async () => {
+    installBridges();
+    installStatefulOverlayBridge();
+    render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+    expect(screen.queryByText(/add a requirement the list missed/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/exact quote from the job description/i)).not.toBeInTheDocument();
+    cleanup();
+
+    await mapOneRequirement();
+    const summary = screen.getByText('Add a requirement the list missed');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    // Both fields carry a visible label, and no placeholder is the only thing naming them.
+    const text = screen.getByLabelText('What the requirement says');
+    const quote = screen.getByLabelText('Exact quote from the job description');
+    expect(text).not.toHaveAttribute('placeholder');
+    expect(quote).not.toHaveAttribute('placeholder');
+    expect(screen.getByText('What the requirement says').tagName).toBe('LABEL');
+  });
+
+  it('lets the candidate add a requirement with an exact quote, already marked reviewed', async () => {
+    const workspace = await mapOneRequirement();
+
+    fireEvent.change(screen.getByLabelText('What the requirement says'), { target: { value: 'Five years of frontend work' } });
+    fireEvent.change(screen.getByLabelText('Exact quote from the job description'), { target: { value: QUOTE_YEARS } });
+    fireEvent.click(screen.getByRole('button', { name: /^add requirement$/i }));
 
     await screen.findByText('Five years of frontend work');
     expect(screen.getByText(/added by you/i)).toBeInTheDocument();
-    expect(screen.queryByText(/have not been reviewed/i)).not.toBeInTheDocument();
+    // Only the mapped one is still unreviewed: the added one counts as read.
+    expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 2 reviewed. 1 need your answer.');
+    expect(screen.getByText(/1 requirement\(s\) have not been reviewed/i)).toBeInTheDocument();
     expect(workspace.createCvEvidenceOverlay).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a candidate-added requirement whose quote is not in the job description', async () => {
-    installBridges();
-    const workspace = installStatefulOverlayBridge();
-    render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+    const workspace = await mapOneRequirement();
+    vi.mocked(workspace.updateCvEvidenceOverlay).mockClear();
 
-    fireEvent.change(screen.getByLabelText(/new requirement text/i), { target: { value: 'Onsite 2 days a week' } });
-    fireEvent.change(screen.getByLabelText(/exact quote from the job description/i), { target: { value: 'Onsite twice a week' } });
-    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+    fireEvent.change(screen.getByLabelText('What the requirement says'), { target: { value: 'Onsite 2 days a week' } });
+    fireEvent.change(screen.getByLabelText('Exact quote from the job description'), { target: { value: 'Onsite twice a week' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add requirement$/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/copied exactly from the job description/i);
     expect(screen.queryByText('Onsite 2 days a week')).not.toBeInTheDocument();
     expect(workspace.updateCvEvidenceOverlay).not.toHaveBeenCalled();
   });
 
+  describe('review progress (#473)', () => {
+    async function mapThree() {
+      const bridges = installBridges();
+      installStatefulOverlayBridge();
+      render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+      fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+      emitAnswer(bridges, {
+        requirements: [
+          { text: 'Angular experience', jdAnchor: QUOTE_ANGULAR },
+          { text: 'Frontend years', jdAnchor: QUOTE_YEARS },
+          { text: 'Team lead', jdAnchor: 'Angular applications' },
+        ],
+      });
+      await screen.findByText('Team lead');
+    }
+
+    const rowOf = (text: string) => screen.getByText(text).closest('li')!;
+
+    it('always shows how many are reviewed and how many need an answer, and updates as rows are reviewed', async () => {
+      await mapThree();
+      const progress = screen.getByLabelText('Review progress');
+      expect(progress).toHaveTextContent('0 of 3 reviewed. 3 need your answer.');
+      fireEvent.click(within(rowOf('Frontend years')).getByRole('checkbox', { name: /reviewed/i }));
+      await waitFor(() => expect(progress).toHaveTextContent('1 of 3 reviewed. 2 need your answer.'));
+    });
+
+    it('moves keyboard focus to the next open row, carrying on from the row focus was last on and wrapping round', async () => {
+      await mapThree();
+      const next = screen.getByRole('button', { name: /next open item/i });
+      fireEvent.click(next);
+      await waitFor(() => expect(rowOf('Angular experience')).toHaveFocus());
+      fireEvent.click(next);
+      await waitFor(() => expect(rowOf('Frontend years')).toHaveFocus());
+      fireEvent.click(within(rowOf('Team lead')).getByRole('checkbox', { name: /reviewed/i }));
+      await waitFor(() => expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 3 reviewed'));
+      fireEvent.click(next);
+      await waitFor(() => expect(rowOf('Angular experience')).toHaveFocus());
+    });
+
+    it('has nothing to jump to once every row is reviewed', async () => {
+      await mapThree();
+      for (const text of ['Angular experience', 'Frontend years', 'Team lead']) {
+        fireEvent.click(within(rowOf(text)).getByRole('checkbox', { name: /reviewed/i }));
+      }
+      expect(await screen.findByText(/^3 of 3 reviewed\.$/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /next open item/i })).toBeDisabled();
+    });
+
+    it('can show only the rows that need the candidate', async () => {
+      await mapThree();
+      fireEvent.click(within(rowOf('Frontend years')).getByRole('checkbox', { name: /reviewed/i }));
+      await waitFor(() => expect(screen.getByLabelText('Review progress')).toHaveTextContent('1 of 3 reviewed'));
+      fireEvent.click(screen.getByRole('checkbox', { name: /show only what needs me/i }));
+      expect(screen.queryByText('Frontend years')).not.toBeInTheDocument();
+      expect(screen.getByText('Angular experience')).toBeInTheDocument();
+      expect(screen.getByText('Team lead')).toBeInTheDocument();
+
+      fireEvent.click(within(rowOf('Angular experience')).getByRole('checkbox', { name: /reviewed/i }));
+      fireEvent.click(within(rowOf('Team lead')).getByRole('checkbox', { name: /reviewed/i }));
+      expect(await screen.findByText(/nothing needs you right now/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /show only what needs me/i }));
+      expect(screen.getByText('Frontend years')).toBeInTheDocument();
+    });
+
+    it('makes each gap line a link that focuses its rows, one after another', async () => {
+      await mapThree();
+      const link = screen.getByRole('button', { name: /3 requirement\(s\) have not been reviewed/i });
+      fireEvent.click(link);
+      await waitFor(() => expect(rowOf('Angular experience')).toHaveFocus());
+      fireEvent.click(link);
+      await waitFor(() => expect(rowOf('Frontend years')).toHaveFocus());
+    });
+
+    it('turns the filter off when a gap link points at a row the filter hides', async () => {
+      installBridges();
+      const workspace = installStatefulOverlayBridge();
+      const row = (partial: Partial<CvRequirementMapping>): CvRequirementMapping => ({
+        requirementId: '', text: '', jdAnchor: '', classification: 'preferred', evidenceClass: 'direct', anchorParentId: '', candidateAdded: false, reviewed: false,
+        quoteStart: 0, quoteEnd: 0, jdRevisionId: '', excluded: false, exclusionReason: '', sourceIds: [], factIds: [], ...partial,
+      });
+      const created = await workspace.createCvEvidenceOverlay({ cvId: 'cv-1', vacancyKey: `url:${TEST_VACANCY.url}`, sourceCvContentHash: 'a'.repeat(64), jdSnapshotHash: 'b'.repeat(64), jdSnapshot: 'Build Angular applications.' });
+      await workspace.updateCvEvidenceOverlay(created.id, {
+        requirements: [
+          row({ requirementId: 'r-open', text: 'Still to review', jdAnchor: 'Build Angular', quoteEnd: 13 }),
+          row({ requirementId: 'r-quote', text: 'Quote went missing', jdAnchor: 'gone', reviewed: true, quoteStart: -1, quoteEnd: -1 }),
+        ],
+        requirementCoverage: { status: 'complete', batches: 1 },
+      });
+      render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+      await screen.findByText('Quote went missing');
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /show only what needs me/i }));
+      expect(screen.queryByText('Quote went missing')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /1 requirement\(s\) have no exact quote/i }));
+      await waitFor(() => expect(screen.getByText('Quote went missing').closest('li')).toHaveFocus());
+      expect(screen.getByRole('checkbox', { name: /show only what needs me/i })).not.toBeChecked();
+    });
+
+    it('labels the confirmation for the unread part and says how much was read while coverage is partial', async () => {
+      const bridges = installBridges();
+      installStatefulOverlayBridge();
+      render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+      fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
+      emitAnswer(bridges, { requirements: [{ text: 'Angular experience', jdAnchor: QUOTE_ANGULAR }], hasMore: true });
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(2));
+      emitAnswer(bridges, { requirements: [], hasMore: true });
+
+      await screen.findByText(/requirement list is partial/i);
+      expect(await screen.findByText(/read so far: 2 batches of the job description/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /i read the rest myself and added anything missing/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /i read the whole job description/i })).not.toBeInTheDocument();
+      // No made up percentage.
+      expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+    });
+  });
+
   it('reuses an already-started overlay instead of creating a second one for the same vacancy', async () => {
     installBridges();
     const workspace = installStatefulOverlayBridge();
-    await workspace.createCvEvidenceOverlay({
+    const created = await workspace.createCvEvidenceOverlay({
       cvId: 'cv-1',
       vacancyKey: `url:${TEST_VACANCY.url}`,
       sourceCvContentHash: 'a'.repeat(64),
       jdSnapshotHash: 'b'.repeat(64),
+    });
+    // The add form appears once a mapping exists, so the started case already has one.
+    await workspace.updateCvEvidenceOverlay(created.id, {
+      requirements: [
+        {
+          requirementId: 'r-1', text: 'Existing one', jdAnchor: QUOTE_YEARS, classification: 'preferred', evidenceClass: 'direct', anchorParentId: '',
+          candidateAdded: false, reviewed: true, quoteStart: 0, quoteEnd: 10, jdRevisionId: '', excluded: false, exclusionReason: '', sourceIds: [], factIds: [],
+        },
+      ],
     });
     vi.mocked(workspace.createCvEvidenceOverlay).mockClear();
 
     render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
     await screen.findByRole('button', { name: /re-map requirements|map requirements/i });
 
-    fireEvent.change(screen.getByLabelText(/new requirement text/i), { target: { value: 'A manual one' } });
-    fireEvent.change(screen.getByLabelText(/exact quote from the job description/i), { target: { value: QUOTE_ANGULAR } });
-    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+    fireEvent.change(await screen.findByLabelText('What the requirement says'), { target: { value: 'A manual one' } });
+    fireEvent.change(screen.getByLabelText('Exact quote from the job description'), { target: { value: QUOTE_ANGULAR } });
+    fireEvent.click(screen.getByRole('button', { name: /^add requirement$/i }));
 
     await screen.findByText('A manual one');
     expect(workspace.createCvEvidenceOverlay).not.toHaveBeenCalled();
@@ -353,8 +511,9 @@ describe('RequirementMapping (#419)', () => {
       const workspace = await seedOneNeedsVerificationRequirement();
       fireEvent.click(screen.getByRole('button', { name: /^answer$/i }));
 
-      // Step 1 shows only the first question.
+      // Step 1 shows only the first question, and what it is about.
       expect(screen.getByText(/question 1 of 3/i)).toBeInTheDocument();
+      expect(screen.getByText('About: GraphQL schema design')).toBeInTheDocument();
       expect(screen.queryByLabelText(/how did you do it/i)).not.toBeInTheDocument();
       fireEvent.change(screen.getByLabelText(/role or project/i), { target: { value: 'experience:experience-1' } });
       fireEvent.change(screen.getByLabelText(/what did you personally do/i), {

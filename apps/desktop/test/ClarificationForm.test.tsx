@@ -15,10 +15,10 @@ const SOURCE: CvSourceDocument = {
   ],
 };
 
-function setup() {
+function setup(requirementText?: string) {
   const onAnswer = vi.fn<(answer: ClarificationAnswer) => void>();
   const onCancel = vi.fn();
-  render(<ClarificationForm sourceCv={SOURCE} onAnswer={onAnswer} onCancel={onCancel} />);
+  render(<ClarificationForm requirementText={requirementText} sourceCv={SOURCE} onAnswer={onAnswer} onCancel={onCancel} />);
   return { onAnswer, onCancel };
 }
 
@@ -109,10 +109,10 @@ describe('ClarificationForm (#419, step 6)', () => {
         fireEvent.click(screen.getByRole('button', { name: /don.t know this part/i }));
       }
     }
+    // The role and activity typed on step one are discarded by these, so each asks first.
     fireEvent.click(screen.getByRole('button', { name: /i don.t know$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard and record/i }));
     expect(onAnswer).toHaveBeenLastCalledWith({ kind: 'unknown' });
-    fireEvent.click(screen.getByRole('button', { name: /not my work/i }));
-    expect(onAnswer).toHaveBeenLastCalledWith({ kind: 'not_my_work' });
     fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -168,6 +168,82 @@ describe('ClarificationForm (#419, step 6)', () => {
       expect(screen.getByRole('button', { name: /save answer/i })).toBeEnabled();
       fireEvent.click(screen.getByRole('button', { name: /save answer/i }));
       expect(onAnswer.mock.calls[0]?.[0]).not.toHaveProperty('metricValue');
+    });
+  });
+
+  describe('focus, subject and confirmation (#474)', () => {
+    it('shows which requirement the questions are about', () => {
+      setup('Experience with GraphQL APIs');
+      expect(screen.getByText('About: Experience with GraphQL APIs')).toBeInTheDocument();
+    });
+
+    it('moves focus to the first field of the new step after Next and after Back, and announces the step politely', () => {
+      setup();
+      expect(screen.getByText(/question 1 of 3/i)).toHaveAttribute('aria-live', 'polite');
+      chooseRoleAndActivity();
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+      expect(screen.getByLabelText(/how did you do it/i)).toHaveFocus();
+      expect(screen.getByText(/question 2 of 3/i)).toHaveAttribute('aria-live', 'polite');
+      fireEvent.change(screen.getByLabelText(/how did you do it/i), { target: { value: 'Apollo Server' } });
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+      expect(screen.getByLabelText(/what was the result/i)).toHaveFocus();
+      fireEvent.click(screen.getByRole('button', { name: /^back$/i }));
+      expect(screen.getByLabelText(/how did you do it/i)).toHaveFocus();
+      fireEvent.click(screen.getByRole('button', { name: /^back$/i }));
+      expect(screen.getByLabelText(/role or project/i)).toHaveFocus();
+    });
+
+    it('moves focus to the next step after Don.t know this part too', () => {
+      setup();
+      chooseRoleAndActivity();
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /don.t know this part/i }));
+      expect(screen.getByLabelText(/what was the result/i)).toHaveFocus();
+    });
+
+    it.each([
+      ['I don.t know', /i don.t know$/i, { kind: 'unknown' }, /discard your answer and record .i don.t know.\?/i],
+      ['Not my work', /not my work/i, { kind: 'not_my_work' }, /discard your answer and record .not my work.\?/i],
+    ])('asks before %s throws away typed text, and keeps the text when the candidate backs out', (_name, button, answer, question) => {
+      const { onAnswer } = setup();
+      chooseRoleAndActivity('Designed the schema');
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(screen.getByRole('alert')).toHaveTextContent(question);
+      expect(onAnswer).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: /keep my answer/i }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/what did you personally do/i)).toHaveValue('Designed the schema');
+
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      fireEvent.click(screen.getByRole('button', { name: /discard and record/i }));
+      expect(onAnswer).toHaveBeenCalledTimes(1);
+      expect(onAnswer).toHaveBeenCalledWith(answer);
+    });
+
+    it('records the exit at once when nothing was typed', () => {
+      const { onAnswer } = setup();
+      fireEvent.click(screen.getByRole('button', { name: /not my work/i }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(onAnswer).toHaveBeenCalledWith({ kind: 'not_my_work' });
+    });
+
+    it('asks before Don.t know this part clears text on step two and step three', () => {
+      setup();
+      chooseRoleAndActivity();
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+      fireEvent.change(screen.getByLabelText(/how did you do it/i), { target: { value: 'Apollo Server' } });
+      fireEvent.click(screen.getByRole('button', { name: /don.t know this part/i }));
+      expect(screen.getByRole('alert')).toHaveTextContent(/clear what you typed here/i);
+      expect(screen.getByText(/question 2 of 3/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^clear it$/i }));
+      expect(screen.getByText(/question 3 of 3/i)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/what was the result/i), { target: { value: 'less overfetching' } });
+      fireEvent.click(screen.getByRole('button', { name: /don.t know this part/i }));
+      expect(screen.getByLabelText(/what was the result/i)).toHaveValue('less overfetching');
+      fireEvent.click(screen.getByRole('button', { name: /^clear it$/i }));
+      expect(screen.getByLabelText(/what was the result/i)).toHaveValue('');
     });
   });
 });
