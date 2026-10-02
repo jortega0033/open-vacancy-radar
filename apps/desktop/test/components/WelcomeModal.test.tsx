@@ -39,6 +39,7 @@ function makeCv(overrides: Partial<CvDocumentRecord> = {}): CvDocumentRecord {
 function installAgentDockBridge(): void {
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
@@ -57,6 +58,7 @@ function installDrivableAgentDockBridge(): { agentDock: AgentDockBridge; emit: (
   const listeners: ((sessionId: string, event: AgentEvent) => void)[] = [];
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([]),
     createSession: vi.fn().mockResolvedValue({

@@ -1,25 +1,11 @@
 import { useEffect, useState } from 'react';
 import { SettingsSection } from './controls.js';
+import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
 
 const REPOSITORY_URL = 'https://github.com/jortega0033/open-vacancy-radar';
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
-const DIAGNOSTIC_TEXT_LIMIT = 4000;
 
 type CopyState = 'idle' | 'copied' | 'failed';
-
-function redactDiagnosticsText(value: string): string {
-  const withoutEmails = value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, '[redacted-email]');
-  const withoutWindowsPaths = withoutEmails.replace(/[A-Z]:\\[^\s"'<>`]+/giu, '[redacted-path]');
-  const withoutHomePaths = withoutWindowsPaths.replace(/\/Users\/[^\s"'<>`]+/gu, '[redacted-path]');
-  const withoutBearer = withoutHomePaths.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, 'Bearer [redacted-token]');
-  const withoutKeyValues = withoutBearer.replace(
-    /\b(token|api[_-]?key|authorization|password|secret)=([^\s&]+)/giu,
-    '$1=[redacted-secret]',
-  );
-  return withoutKeyValues.length > DIAGNOSTIC_TEXT_LIMIT
-    ? `${withoutKeyValues.slice(0, DIAGNOSTIC_TEXT_LIMIT)}\n[truncated]`
-    : withoutKeyValues;
-}
 
 function sanitizeForDiagnostics<T>(value: T): T {
   if (typeof value === 'string') return redactDiagnosticsText(value) as T;

@@ -46,16 +46,16 @@ test.describe('app shell', () => {
 
   test('Search and Settings page visual baselines', async ({ window }) => {
     await ensureLightTheme(window);
-    // The daemon connects asynchronously after launch (App.tsx's "Connecting to local daemon..."
+    // The daemon connects asynchronously after launch (App.tsx's "Starting the AI helper…"
     // banner); without waiting for it to settle, a screenshot taken this soon after launch is racing
     // daemon startup and its content/layout depends on how far that race got, not on the app itself.
     // Waiting for the connecting banner to disappear isn't enough on its own: App.tsx replaces it
-    // with either nothing (ready) or a "Daemon unavailable" banner (failed) — both hide the
+    // with either nothing (ready) or a "AI features cannot start." notice (failed) — both hide the
     // connecting text, so that wait alone could let a failed-to-start daemon through and quietly
     // lock in a broken-daemon screenshot as the accepted baseline. Asserting the unavailable banner
     // is absent turns that into a loud test failure instead.
-    await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
-    await expect(window.getByText(/^Daemon unavailable:/)).toHaveCount(0);
+    await expect(window.getByText('Starting the AI helper…')).toBeHidden({ timeout: 20_000 });
+    await expect(window.getByText('AI features cannot start.')).toHaveCount(0);
     // Already on Settings. ensureLightTheme just navigated here to click "Light".
     await expect(window).toHaveScreenshot('settings-page.png');
 

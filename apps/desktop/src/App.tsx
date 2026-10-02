@@ -12,8 +12,9 @@ import { SettingsPage } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import { WelcomeModal } from './components/WelcomeModal.js';
 import {
+  AI_HELPER_NOTICE_PAGES,
+  AiHelperNotice,
   AppSidebar,
-  ErrorBanner,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -50,6 +51,10 @@ export function App() {
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
+  // "Try again" on the AI helper notice (#478). `retryFailed` outlives the restart so the notice can
+  // say the last attempt did not work; it clears as soon as the helper reports ready.
+  const [daemonRetrying, setDaemonRetrying] = useState(false);
+  const [daemonRetryFailed, setDaemonRetryFailed] = useState(false);
 
   // The provider AI features (gap analysis, letters) currently run through: a persisted setting
   // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
@@ -225,11 +230,12 @@ export function App() {
     const unsubscribeStatus = window.agentDock.onDaemonStatus((status) => {
       setDaemonState(status.state);
       setDaemonError(status.state === 'unavailable' ? status.error : undefined);
+      if (status.state === 'ready') setDaemonRetryFailed(false);
     });
 
     const timeout = setTimeout(() => {
       setDaemonState((current) => (current === 'connecting' ? 'unavailable' : current));
-      setDaemonError((current) => current ?? 'timed out waiting for the local daemon to start');
+      setDaemonError((current) => current ?? 'timed out waiting for the AI helper to start');
     }, DAEMON_CONNECT_TIMEOUT_MS);
 
     return () => {
@@ -237,6 +243,28 @@ export function App() {
       clearTimeout(timeout);
       unsubscribeStatus();
     };
+  }, []);
+
+  const handleRetryDaemon = useCallback(() => {
+    setDaemonRetrying(true);
+    setDaemonRetryFailed(false);
+    window.agentDock
+      .restartDaemon()
+      .then((status) => {
+        setDaemonState(status.state);
+        if (status.state === 'unavailable') {
+          setDaemonError(status.error);
+          setDaemonRetryFailed(true);
+        } else {
+          setDaemonError(undefined);
+        }
+      })
+      .catch((err: unknown) => {
+        setDaemonState('unavailable');
+        setDaemonError(err instanceof Error ? err.message : 'restart failed');
+        setDaemonRetryFailed(true);
+      })
+      .finally(() => setDaemonRetrying(false));
   }, []);
 
   // Mirrors daemonState directly while the daemon itself isn't ready (there's nothing more
@@ -288,16 +316,21 @@ export function App() {
             nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
           }`}
         >
-          {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
-              destination you are on, "the CLI runtime is not running" is worth knowing. */}
+          {/* Helper state is app-wide, so its notice lives outside the page switch. The failure notice
+              only shows where AI work happens (the sidebar status covers every page, and the AI
+              Runtime page renders its own), so Applications and CV stay free of a red bar. */}
           <div className={nav === 'search' ? 'px-6' : undefined}>
-            {daemonState === 'connecting' && (
-              <div className="alert alert-info mb-5">Connecting to local daemon…</div>
+            {daemonState === 'connecting' && !daemonRetrying && (
+              <div className="alert alert-info mb-5">Starting the AI helper…</div>
             )}
-            {daemonState === 'unavailable' && (
-              <ErrorBanner className="mb-5">
-                Daemon unavailable: {daemonError ?? 'unknown error'}
-              </ErrorBanner>
+            {(daemonState === 'unavailable' || daemonRetrying) && AI_HELPER_NOTICE_PAGES.includes(nav) && (
+              <AiHelperNotice
+                className="mb-5"
+                {...(daemonError ? { error: daemonError } : {})}
+                retrying={daemonRetrying}
+                retryFailed={daemonRetryFailed}
+                onRetry={handleRetryDaemon}
+              />
             )}
           </div>
 
@@ -346,6 +379,9 @@ export function App() {
             <RuntimePage
               daemonState={daemonState}
               {...(daemonError ? { daemonError } : {})}
+              helperRetrying={daemonRetrying}
+              helperRetryFailed={daemonRetryFailed}
+              onRetryHelper={handleRetryDaemon}
               onDefaultProviderChanged={setDefaultProvider}
             />
           )}

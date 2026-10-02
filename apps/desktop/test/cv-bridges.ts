@@ -42,6 +42,7 @@ export function installBridges(
 
   const agentDock: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED]),
     createSession: vi.fn().mockResolvedValue({
