@@ -166,6 +166,7 @@ import { renderResumeDocx } from './resume-docx.js';
 import { renderResumeHtml } from './resume-html.js';
 import { validateRenderedResumePdf } from './resume-pdf-validation.js';
 import { renderApprovedSnapshot } from './cv-case-export.js';
+import { exportCvCase } from './cv-case-export-handler.js';
 import { startMcpServer, type McpServerHandle } from './mcp-server.js';
 import type { TailoredResume } from './resume-schema.js';
 import { parseCandidateProfilePatch } from './vacancy-profile-validate.js';
@@ -3123,47 +3124,20 @@ guardedIpc.handle('workspace:cv-evidence-overlays:delete', async (_event, input:
 guardedIpc.handle('workspace:cv-evidence-overlays:export', async (_event, input: unknown): Promise<CvCaseExportResult> => {
   const { overlayId, format } = parseCvEvidenceOverlayExportInput(input);
   const db = await ensureWorkspaceDb();
-
-  const before = workspace.checkCvCaseExportReadiness(db, overlayId);
-  if (before.blockers.length > 0 || !before.snapshot) {
-    throw new Error(`this CV cannot be exported yet: ${before.blockers.join('; ')}`);
-  }
-  const snapshot = before.snapshot;
-  if (!mainWindow) return { saved: false, artifact: null, overlay: before.overlay };
-
-  const rendered = await renderApprovedSnapshot(snapshot.resume, format, printHtmlToPdf);
-  const recordBase = {
+  return exportCvCase(
+    {
+      checkReadiness: (id) => workspace.checkCvCaseExportReadiness(db, id),
+      hasWindow: () => mainWindow !== undefined,
+      render: (resume, artifactFormat) => renderApprovedSnapshot(resume, artifactFormat, printHtmlToPdf),
+      defaultFileBaseName: (overlay) => sanitizeCvExportFileName(workspace.getCvDocument(db, overlay.cvId).name),
+      showSaveDialog: (options) => dialog.showSaveDialog(mainWindow!, options),
+      writeFile,
+      recordArtifact: (id, record) =>
+        applicationDataResetGate.runMutation(async () => workspace.recordCvArtifact(db, id, record)),
+    },
+    overlayId,
     format,
-    contentHash: rendered.contentHash,
-    snapshotDigest: snapshot.digest,
-    snapshotApprovedAt: snapshot.approvedAt,
-    renderContractVersion: snapshot.renderContractVersion,
-    validation: rendered.validation,
-  };
-
-  if (!rendered.validation.ok) {
-    const overlay = await applicationDataResetGate.runMutation(async () =>
-      workspace.recordCvArtifact(db, overlayId, { ...recordBase, savedPath: '' }),
-    );
-    return { saved: false, artifact: overlay.artifacts.at(-1) ?? null, overlay };
-  }
-
-  const doc = workspace.getCvDocument(db, before.overlay.cvId);
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Export approved CV',
-    defaultPath: `${sanitizeCvExportFileName(doc.name)}.${format}`,
-    filters: [format === 'pdf' ? { name: 'PDF document', extensions: ['pdf'] } : { name: 'Word document', extensions: ['docx'] }],
-  });
-  if (result.canceled || !result.filePath) return { saved: false, artifact: null, overlay: before.overlay };
-
-  await writeFile(result.filePath, rendered.buffer);
-  // The dialog can stay open for a long time. If the case changed meanwhile, the file still exists
-  // and is recorded as what it is: the status of a record is derived from the snapshot it was made
-  // from, so it reads as historical rather than current.
-  const overlay = await applicationDataResetGate.runMutation(async () =>
-    workspace.recordCvArtifact(db, overlayId, { ...recordBase, savedPath: result.filePath }),
   );
-  return { saved: true, path: result.filePath, artifact: overlay.artifacts.at(-1) ?? null, overlay };
 });
 
 /**
