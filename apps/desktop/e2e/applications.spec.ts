@@ -15,11 +15,11 @@ test.describe('Applications', () => {
 
     const row = window.getByRole('row', { name: /Redwood Software/ });
     await expect(row).toContainText('Senior Frontend Engineer');
-    await expect(row.getByLabel('Application status')).toHaveValue('preparing');
+    await expect(row.getByLabel(/^Status for /)).toHaveValue('preparing');
 
     // The status column is inline-editable right in the table, separate from the edit drawer below.
-    await row.getByLabel('Application status').selectOption('applied');
-    await expect(row.getByLabel('Application status')).toHaveValue('applied');
+    await row.getByLabel(/^Status for /).selectOption('applied');
+    await expect(row.getByLabel(/^Status for /)).toHaveValue('applied');
 
     await row.getByRole('button', { name: /^edit$/i }).click();
     const editDialog = window.getByRole('dialog').filter({ hasText: 'Edit application' });

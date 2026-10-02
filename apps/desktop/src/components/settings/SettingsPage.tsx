@@ -411,7 +411,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
               description={
                 settings.minimizeToTrayOnClose
                   ? 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app.'
-                  : 'Turn on Keep running in the background first'
+                  : 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Turn on Keep running in the background first.'
               }
             >
               <ToggleSwitch
