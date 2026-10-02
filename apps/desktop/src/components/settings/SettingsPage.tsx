@@ -362,11 +362,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
   return (
     <div className="max-w-3xl">
-      <p className="text-sm text-base-content/60">
-        Changes are saved automatically as you make them.
-      </p>
-
-      <div role="tablist" className="tabs tabs-box mt-4 w-fit" aria-label="Settings sections">
+      <div role="tablist" className="tabs tabs-box w-fit" aria-label="Settings sections">
         {SETTINGS_TABS.map((tab) => (
           <button
             key={tab.id}

@@ -43,17 +43,17 @@ test('application, CV, and letter actions stay reachable at supported desktop wi
     {
       destination: 'Applications',
       testId: 'applications-responsive-table',
-      actions: [/^edit$/i, /^archive$/i, /^delete$/i],
+      actions: [/^edit /i, /^archive /i, /^delete /i],
     },
     {
       destination: 'CV',
       testId: 'cv-responsive-table',
-      actions: [/^export$/i, /^edit$/i, /^delete$/i, /set as default/i],
+      actions: [/^export /i, /^edit /i, /^delete /i, /set as default/i],
     },
     {
       destination: 'Letters',
       testId: 'letters-responsive-table',
-      actions: [/^open$/i, /^duplicate$/i, /^delete$/i],
+      actions: [/^open /i, /^duplicate /i, /^delete /i],
     },
   ] as const;
 
