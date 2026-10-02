@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
 import type { FormReadiness, FormSnapshot, SnapshotField } from '@agent-dock/application-executor';
 import type { ApplicationAnswerRecord, ApplicationArtifactSummary, ApplicationAttemptRecord, ConfirmApplicationAnswerResult } from '../../window.js';
+import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
 import { ApplicationPreparedSummary } from './ApplicationPreparedSummary.js';
 import { ReviewScreenshot } from './ReviewScreenshot.js';
 
@@ -152,6 +153,7 @@ export function ApplicationReviewSwipeCard({
   wide = false,
 }: ApplicationReviewSwipeCardProps) {
   const [dragX, setDragX] = useState(0);
+  const reducedMotion = usePrefersReducedMotion();
   const dragXRef = useRef(0);
   const dragOriginRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -267,8 +269,10 @@ export function ApplicationReviewSwipeCard({
         title="Drag left to skip or right to submit"
         className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
         style={{
-          transform: `translateX(${dragX}px) rotate(${rotation}deg)`,
-          transition: dragging ? 'none' : 'transform 200ms ease-out',
+          // Reduced motion keeps the card following the pointer, but drops the tilt and the
+          // settle-back animation.
+          transform: reducedMotion ? `translateX(${dragX}px)` : `translateX(${dragX}px) rotate(${rotation}deg)`,
+          transition: reducedMotion || dragging ? 'none' : 'transform 200ms ease-out',
           touchAction: 'pan-y',
         }}
         onPointerDown={handlePointerDown}

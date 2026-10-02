@@ -173,6 +173,32 @@
   padding-bottom: var(--ovr-row-padding);
 }
 
+/*
+ * The selected result row (WCAG 1.4.11, issue #484): a background step alone was 1.04:1 against
+ * the page, so the row also carries a 3px marker on its inline start edge. An inset shadow rather
+ * than a border so the row's content and height do not move when the selection changes.
+ */
+@utility ovr-row-selected {
+  background-color: var(--color-base-300);
+  box-shadow: inset 3px 0 0 var(--color-base-content);
+
+  &:hover {
+    background-color: var(--color-base-300);
+  }
+}
+
+/*
+ * Form control borders (WCAG 1.4.11, issue #484). daisyUI draws .input, .select and .textarea
+ * borders at 20% of base-content, which is 1.54:1 on white. Unlayered, so it wins over daisyUI's
+ * layered default. 47% blends to at least 3:1 against base-100 in both themes (test/contrast-tokens.test.ts);
+ * 45% lands at 2.99:1 on white once composited.
+ */
+.input,
+.select,
+.textarea {
+  --input-color: color-mix(in oklab, var(--color-base-content) 47%, transparent);
+}
+
 /* Dense library tables become labelled row cards when the shell leaves too little inline space.
    The table DOM remains intact for keyboard and assistive-technology semantics. */
 .ovr-responsive-table {
@@ -496,5 +522,21 @@
   .saved-jobs-table .saved-job-actions {
     justify-content: flex-start;
     min-width: 0;
+  }
+}
+
+/*
+ * Reduced motion (issue #497). Transitions and animations drop to near zero rather than to
+ * `none`, so `transitionend`/`animationend` still fire. Spinners keep their element and stay
+ * visible as a static mark; scan progress is also carried by text, never by motion alone.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

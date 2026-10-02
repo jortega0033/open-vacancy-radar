@@ -96,6 +96,7 @@ import type {
 } from './application-executor-types.js';
 import { daemonSessionRefusalReason } from './daemon-session-refusals.js';
 import { isSafeExternalUrl } from './external-url.js';
+import { buildZoomMenuTemplate } from './zoom-menu.js';
 import { buildDaemonEnvironment } from './daemon-environment.js';
 import { createGuardedIpc } from './ipc-sender-guard.js';
 import { resolveDaemonEntry } from './resolve-daemon-entry.js';
@@ -186,9 +187,10 @@ app.setName('Open Vacancy Radar');
 // Electron's default application menu (File/Edit/View/Window) is generic boilerplate this app has
 // no use for: no menu-driven File action exists, and standard text-field editing (copy/paste/undo)
 // works through Chromium's native input handling regardless of whether an application menu is
-// installed, not through the menu's accelerators. Removing it entirely reads as a finished product
-// instead of an unconfigured Electron shell.
-Menu.setApplicationMenu(null);
+// installed, not through the menu's accelerators. Replacing it with a View menu that holds only the
+// zoom roles keeps Ctrl+=, Ctrl+- and Ctrl+0 working (WCAG 1.4.4, issue #457); the window's
+// `autoHideMenuBar` below means no menu bar is drawn unless the user presses Alt.
+Menu.setApplicationMenu(Menu.buildFromTemplate(buildZoomMenuTemplate()));
 
 // Two AgentDock windows would each spawn their own daemon sidecar and race over the same
 // discovery file (the daemon's own single-instance guard, see SECURITY.md, would make the
@@ -1223,6 +1225,7 @@ function createWindow(): void {
     height: 720,
     minWidth: 760,
     minHeight: 600,
+    autoHideMenuBar: true,
     ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
