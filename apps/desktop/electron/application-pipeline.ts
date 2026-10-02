@@ -833,7 +833,13 @@ export async function resumeApplicationAttempt(
   attemptId: string,
 ): Promise<RestartApplicationTailoringResult> {
   const attempt = workspace.getApplicationAttempt(deps.db, attemptId);
-  if (attempt.checkpoint !== 'needs_user' || attempt.checkpointDetail.includes('Your application documents are ready.')) {
+  // A `failed` attempt is a preparation that stopped before anything reached an employer, so it can
+  // be queued again from the history drawer (#468). One carrying a submission timestamp is refused:
+  // that attempt may already have been sent.
+  const retryableFailure = attempt.checkpoint === 'failed' && attempt.submittedAt === null;
+  const waitingOnBlocker =
+    attempt.checkpoint === 'needs_user' && !attempt.checkpointDetail.includes('Your application documents are ready.');
+  if (!retryableFailure && !waitingOnBlocker) {
     return {
       ok: false,
       attemptId,
