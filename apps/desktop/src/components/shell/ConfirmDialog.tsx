@@ -5,6 +5,8 @@ export interface ConfirmDialogProps {
   title: string;
   message: ReactNode;
   confirmLabel?: string;
+  /** The wording of the button that leaves things as they are. */
+  cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,7 +22,14 @@ export interface ConfirmDialogProps {
  * parent only mounts this while a delete is pending, so there is no internal open/closed state to
  * track here.
  */
-export function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }: ConfirmDialogProps) {
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Delete',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+}: ConfirmDialogProps) {
   useEscapeToClose(onCancel);
   return (
     <div className="modal modal-open" role="presentation">
@@ -31,7 +40,7 @@ export function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfi
         <div className="mt-2 text-sm text-base-content/70">{message}</div>
         <div className="modal-action">
           <button className="btn btn-sm" type="button" onClick={onCancel}>
-            Cancel
+            {cancelLabel}
           </button>
           <button className="btn btn-error btn-sm" type="button" onClick={onConfirm}>
             {confirmLabel}
