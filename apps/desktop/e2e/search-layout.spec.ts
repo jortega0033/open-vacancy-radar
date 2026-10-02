@@ -233,7 +233,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
         }
       }
 
-      await window.getByRole('button', { name: 'Use for AI' }).click();
+      await window.getByRole('button', { name: 'Compare with my CV' }).click();
       await expect(window.getByRole('heading', { name: 'CV assistant' })).toBeVisible();
       await expect(window.getByRole('heading', { name: 'CV-only tools' })).toBeVisible();
       await expect(window.getByRole('heading', { name: 'Vacancy tools' })).toBeVisible();

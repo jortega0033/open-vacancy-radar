@@ -401,7 +401,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
-      fireEvent.click(screen.getByRole('button', { name: /analyse against my cv/i }));
+      fireEvent.click(screen.getByRole('button', { name: /compare with my cv/i }));
       await waitFor(() => expect(screen.getByText('CV assistant')).toBeInTheDocument());
 
       const resultsScroller = screen.getByLabelText('Vacancy results');
