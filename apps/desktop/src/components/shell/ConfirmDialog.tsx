@@ -5,7 +5,7 @@ export interface ConfirmDialogProps {
   title: string;
   message: ReactNode;
   confirmLabel?: string;
-  /** The wording of the button that leaves things as they are. */
+  /** Label of the button that backs out. Defaults to "Cancel". */
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
@@ -22,10 +22,7 @@ export interface ConfirmDialogProps {
  * parent only mounts this while a delete is pending, so there is no internal open/closed state to
  * track here.
  */
-export function ConfirmDialog({
-  title,
-  message,
-  confirmLabel = 'Delete',
+export function ConfirmDialog({ title, message, confirmLabel = 'Delete',
   cancelLabel = 'Cancel',
   onConfirm,
   onCancel,
