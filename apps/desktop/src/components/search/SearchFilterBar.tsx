@@ -23,6 +23,9 @@ export interface SearchFilterBarProps {
   /** One honest line about the money the report actually carries. */
   salaryNote: string;
   hasReport: boolean;
+  /** The query the loaded report was scanned with. When it differs from the draft keywords, the
+   * bar says so, because the list below keeps showing the old report until a new scan succeeds. */
+  appliedQuery?: string;
   /**
    * Issue #398 Phase 1: whether the next scan should also run an on-demand AI-web-search discovery
    * pass. Deliberately not part of `SearchFilters`/`browseAllViewFilters` -- this is a scan-time
@@ -58,11 +61,15 @@ export function SearchFilterBar({
   busy,
   salaryNote,
   hasReport,
+  appliedQuery = '',
   aiWebDiscovery,
   onAiWebDiscoveryChange,
   aiWebDiscoveryAvailable,
 }: SearchFilterBarProps) {
   const hasQuery = filters.query.trim().length > 0;
+  const draftQuery = filters.query.trim();
+  const appliedQueryText = appliedQuery.trim();
+  const draftDiffersFromApplied = hasReport && hasQuery && appliedQueryText !== '' && draftQuery !== appliedQueryText;
 
   /**
    * The Salary popover is a native `<details>`, not a React-controlled overlay -- see below for why
@@ -95,23 +102,30 @@ export function SearchFilterBar({
   }, [salaryOpen]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter' && !hasReport) onSearch();
+    // Enter always means "Run new scan"; an empty keyword still reaches the page's own guard message
+    // rather than starting anything. Ignored while busy so a repeated Enter cannot start a second run,
+    // and while an IME composition is still being confirmed.
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing || busy) return;
+    onSearch();
   }
 
   return (
     <div className="flex-none border-b border-base-300 pb-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          className="input input-sm min-w-52 flex-1 md:max-w-96"
-          type="text"
-          role="searchbox"
-          aria-label="Role or keywords"
-          placeholder="Role or keywords, e.g. Frontend Engineer"
-          value={filters.query}
-          onChange={(event) => onFiltersChange({ query: event.target.value })}
-          onKeyDown={handleKeyDown}
-          disabled={busy}
-        />
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs font-medium text-base-content/70 md:max-w-96">
+          Role or keywords for next scan
+          <input
+            className="input input-sm w-full text-sm font-normal text-base-content"
+            type="text"
+            role="searchbox"
+            placeholder="Role or keywords, e.g. Frontend Engineer"
+            value={filters.query}
+            onChange={(event) => onFiltersChange({ query: event.target.value })}
+            onKeyDown={handleKeyDown}
+            disabled={busy}
+            {...(draftDiffersFromApplied ? { 'aria-describedby': 'search-draft-hint' } : {})}
+          />
+        </label>
 
         <select
           className="select select-sm w-48"
@@ -225,6 +239,12 @@ export function SearchFilterBar({
           </label>
         )}
       </div>
+
+      {draftDiffersFromApplied && (
+        <p id="search-draft-hint" className="mt-2 text-xs text-base-content/60" role="status">
+          Press Enter or Run new scan to search for &apos;{draftQuery}&apos;. The list still shows &apos;{appliedQueryText}&apos;.
+        </p>
+      )}
 
       {!hasQuery && (
         <p className="mt-2 text-xs text-base-content/60" role="status">

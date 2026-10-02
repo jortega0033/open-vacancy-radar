@@ -975,6 +975,7 @@ export function SearchPage({
           busy={busy}
           salaryNote={salaryNote}
           hasReport={hasReport}
+          appliedQuery={appliedFilters.query}
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}

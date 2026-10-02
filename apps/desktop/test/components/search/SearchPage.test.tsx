@@ -114,7 +114,7 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
 }
 
 function enterSearchQuery(value = 'frontend engineer') {
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
     target: { value },
   });
 }
@@ -813,7 +813,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), { target: { value: 'frontend' } });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), { target: { value: 'frontend' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalled());
@@ -915,7 +915,7 @@ describe('SearchPage', () => {
     resolveSettings({ ...DEFAULT_SETTINGS, defaultLocation: 'Germany' });
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany'));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Remote');
     expect(screen.getAllByText('Remote Engineer').length).toBeGreaterThan(0);
   });
 
@@ -954,7 +954,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
   });
 
-  it('does not start a fresh scan when Enter is pressed against an already-loaded report', async () => {
+  it('starts a fresh scan when Enter is pressed against an already-loaded report', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
       runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
@@ -964,14 +964,71 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Remote');
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       key: 'Enter',
       code: 'Enter',
     });
-    expect(bridge.runScan).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not start a scan when Enter is pressed with an empty keyword', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+      key: 'Enter',
+      code: 'Enter',
+    });
+    expect(await screen.findByText(/add a role or keyword before starting a new worldwide scan/i)).toBeInTheDocument();
+    expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second scan when Enter is pressed again while one is running', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockReturnValue(new Promise<GlobalRemoteReport>(() => {})),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    enterSearchQuery('Remote');
+    const box = screen.getByRole('searchbox', { name: 'Role or keywords for next scan' });
+    fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
+    await waitFor(() => expect(box).toBeDisabled());
+    fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
+    expect(bridge.runScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a visible label on the keyword field and says when the draft differs from the list', async () => {
+    const next = makeWorldwideReport([makeWorldwideVacancy()]);
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      runScan: vi.fn().mockResolvedValue(next),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('Frontend Engineer');
+    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
+
+    enterSearchQuery('Backend Developer');
+    expect(
+      screen.getByText("Press Enter or Run new scan to search for 'Backend Developer'. The list still shows 'Frontend Engineer'."),
+    ).toBeInTheDocument();
+
+    enterSearchQuery('Frontend Engineer');
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
   });
 
   it('keeps the applied report stable while editing a draft query', async () => {
@@ -988,7 +1045,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       target: { value: 'Remote' },
     });
 
@@ -1034,7 +1091,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       target: { value: 'backend engineer' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
@@ -1063,7 +1120,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
   });
 
   it('paginates the results list instead of rendering every row at once', async () => {
@@ -1557,7 +1614,7 @@ describe('SearchPage', () => {
     });
 
     await waitFor(() => expect(screen.getAllByText('Backend Role').length).toBeGreaterThan(0));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
   });
 
   it('a scan-failure Retry button re-runs the scan and clears the error on success', async () => {
