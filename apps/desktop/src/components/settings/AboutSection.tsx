@@ -1,11 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { SettingsSection } from './controls.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
+import type { NavPage } from '../shell/nav.js';
 
 const REPOSITORY_URL = 'https://github.com/jortega0033/open-vacancy-radar';
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 
 type CopyState = 'idle' | 'copied' | 'failed';
+
+export interface AboutSectionProps {
+  /** The page the shell is showing. Always "settings" while this section is on screen. */
+  currentPage?: NavPage;
+  /** The page the user opened Settings from, which is the one a bug report is usually about. */
+  previousPage?: NavPage;
+}
 
 function sanitizeForDiagnostics<T>(value: T): T {
   if (typeof value === 'string') return redactDiagnosticsText(value) as T;
@@ -18,16 +26,46 @@ function sanitizeForDiagnostics<T>(value: T): T {
   return value;
 }
 
+async function readEngineStatus() {
+  try {
+    const status = await window.vacancyRadar.getStatus();
+    // Seam for #441: once the engine reports an error category (corrupt, locked, migration failed,
+    // unknown), add it here next to the message. Today only the message exists.
+    return { ready: status.ready, ...(status.error ? { error: status.error } : {}) };
+  } catch (err) {
+    return { ready: false, error: err instanceof Error ? err.message : 'could not read engine status' };
+  }
+}
+
+async function readProviderStates() {
+  try {
+    const providers = await window.agentDock.listProviders();
+    return providers.map((p) => ({
+      id: p.id,
+      installed: p.installed,
+      authenticated: p.authenticated,
+      ready: p.installed && p.authenticated === 'authenticated',
+    }));
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'could not read provider status' };
+  }
+}
+
 /**
  * Static-but-real "About" information: version comes from `app.getVersion()` (never a
  * hand-maintained string that could drift), everything else is a fact about this specific build
  * rather than decoration copied from the prototype (which listed a placeholder repository URL and
  * an MIT license: this app is actually Apache-2.0, and the repository is real).
+ *
+ * The diagnostics report is built here, shown in a read-only preview, and that exact text is what
+ * "Copy diagnostics" copies and what "Open GitHub issue" puts in the issue body.
  */
-export function AboutSection() {
+export function AboutSection({ currentPage, previousPage }: AboutSectionProps = {}) {
   const [version, setVersion] = useState<string>();
   const [copyState, setCopyState] = useState<CopyState>('idle');
-  const [lastDiagnostics, setLastDiagnostics] = useState<string>();
+  const [preview, setPreview] = useState<string>();
+  const versionRef = useRef<string | undefined>(undefined);
+  versionRef.current = version;
 
   useEffect(() => {
     let cancelled = false;
@@ -48,27 +86,57 @@ export function AboutSection() {
     };
   }, []);
 
-  const copyDiagnostics = async () => {
-    // Fetched fresh here rather than threaded down as a prop: this is the one place in the app
-    // that needs the daemon's status purely to report it, not to react to it, and a user hitting
-    // "daemon failed to start" needs exactly this in what they paste into a bug report -- the
-    // AI Runtime page's own banner shows the same text, but isn't copyable as structured text.
-    const daemonStatus = await window.agentDock.getDaemonStatus().catch((err: unknown) => ({
-      state: 'unavailable' as const,
-      error: err instanceof Error ? err.message : 'could not read daemon status',
-    }));
-    const diagnostics = sanitizeForDiagnostics({
-      application: 'Open Vacancy Radar',
-      version: version ?? 'unknown',
-      generatedAt: new Date().toISOString(),
-      platform: navigator.userAgent,
-      route: window.location.hash || window.location.pathname || 'unknown',
-      daemonStatus,
+  const collectDiagnostics = useCallback(async (): Promise<string> => {
+    // Everything is read fresh each time the report is built, never cached from an earlier click.
+    // A failed read becomes an "unavailable" entry instead of aborting the report: a user whose
+    // helper or engine is broken needs this report most.
+    const [daemonStatus, engine, providers] = await Promise.all([
+      Promise.resolve()
+        .then(() => window.agentDock.getDaemonStatus())
+        .catch((err: unknown) => ({
+          state: 'unavailable' as const,
+          error: err instanceof Error ? err.message : 'could not read daemon status',
+        })),
+      readEngineStatus(),
+      readProviderStates(),
+    ]);
+    return JSON.stringify(
+      sanitizeForDiagnostics({
+        application: 'Open Vacancy Radar',
+        version: versionRef.current ?? 'unknown',
+        generatedAt: new Date().toISOString(),
+        platform: navigator.userAgent,
+        page: currentPage ?? 'unknown',
+        previousPage: previousPage ?? 'none',
+        daemonStatus,
+        vacancyEngine: engine,
+        providers,
+      }),
+      null,
+      2,
+    );
+  }, [currentPage, previousPage]);
+
+  const refreshPreview = useCallback(async () => {
+    setPreview(await collectDiagnostics());
+  }, [collectDiagnostics]);
+
+  // Built when the section shows (and once the version arrives) and again on "Refresh preview", so
+  // the text on screen is always what Copy and Open GitHub issue use. Neither builds its own copy.
+  useEffect(() => {
+    let cancelled = false;
+    void collectDiagnostics().then((text) => {
+      if (!cancelled) setPreview(text);
     });
-    const text = JSON.stringify(diagnostics, null, 2);
+    return () => {
+      cancelled = true;
+    };
+  }, [collectDiagnostics, version]);
+
+  const copyDiagnostics = async () => {
+    if (preview === undefined) return;
     try {
-      await navigator.clipboard.writeText(text);
-      setLastDiagnostics(text);
+      await navigator.clipboard.writeText(preview);
       setCopyState('copied');
     } catch {
       setCopyState('failed');
@@ -76,25 +144,13 @@ export function AboutSection() {
     setTimeout(() => setCopyState('idle'), 2000);
   };
 
-  const diagnosticIssueUrl = `${ISSUE_URL}?${new URLSearchParams({
-    title: '[Bug]: Installed app diagnostic report',
-    body:
-      '## What happened?\n\n\n## Diagnostic report\n\n```json\n' +
-      (lastDiagnostics ??
-        JSON.stringify(
-          {
-            application: 'Open Vacancy Radar',
-            version: version ?? 'unknown',
-            generatedAt: new Date().toISOString(),
-            platform: navigator.userAgent,
-            route: window.location.hash || window.location.pathname || 'unknown',
-            daemonStatus: 'Click Copy diagnostics first for live daemon status.',
-          },
-          null,
-          2,
-        )) +
-      '\n```\n',
-  }).toString()}`;
+  const diagnosticIssueUrl =
+    preview === undefined
+      ? undefined
+      : `${ISSUE_URL}?${new URLSearchParams({
+          title: '[Bug]: Installed app diagnostic report',
+          body: '## What happened?\n\n\n## Diagnostic report\n\n```json\n' + preview + '\n```\n',
+        }).toString()}`;
 
   return (
     <SettingsSection title="About">
@@ -114,13 +170,41 @@ export function AboutSection() {
           </a>
         </dd>
       </dl>
+      <details className="ovr-row" open>
+        <summary className="cursor-pointer text-sm font-medium">Diagnostics preview</summary>
+        <p className="mt-2 text-sm text-base-content/60">
+          This is the exact text that Copy diagnostics copies and Open GitHub issue puts in the draft. Paths, tokens
+          and web addresses are removed. Nothing is sent until you submit the issue on GitHub.
+        </p>
+        <textarea
+          aria-label="Diagnostics text"
+          readOnly
+          rows={12}
+          className="textarea textarea-bordered mt-2 w-full font-mono text-xs"
+          value={preview ?? 'Collecting diagnostics'}
+        />
+      </details>
       <div className="ovr-row flex items-center gap-2">
-        <button type="button" className="btn btn-sm btn-outline" onClick={() => void copyDiagnostics()}>
+        <button
+          type="button"
+          className="btn btn-sm btn-outline"
+          disabled={preview === undefined}
+          onClick={() => void copyDiagnostics()}
+        >
           Copy diagnostics
         </button>
-        <a className="btn btn-sm btn-outline" href={diagnosticIssueUrl} target="_blank" rel="noopener noreferrer">
-          Open GitHub issue
-        </a>
+        <button type="button" className="btn btn-sm btn-outline" onClick={() => void refreshPreview()}>
+          Refresh preview
+        </button>
+        {diagnosticIssueUrl ? (
+          <a className="btn btn-sm btn-outline" href={diagnosticIssueUrl} target="_blank" rel="noopener noreferrer">
+            Open GitHub issue
+          </a>
+        ) : (
+          <span className="btn btn-sm btn-outline btn-disabled" aria-disabled="true">
+            Open GitHub issue
+          </span>
+        )}
         {copyState === 'copied' && (
           <span className="text-sm" role="status">
             Copied
