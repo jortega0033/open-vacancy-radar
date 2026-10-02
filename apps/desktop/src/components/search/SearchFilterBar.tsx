@@ -106,7 +106,7 @@ export function SearchFilterBar({
           type="text"
           role="searchbox"
           aria-label="Role or keywords"
-          placeholder="Role or keywords, e.g. Frontend Engineer"
+          placeholder="Role or keywords, e.g. Nurse, Data analyst"
           value={filters.query}
           onChange={(event) => onFiltersChange({ query: event.target.value })}
           onKeyDown={handleKeyDown}
@@ -133,7 +133,11 @@ export function SearchFilterBar({
           className="relative"
           onToggle={(event) => setSalaryOpen(event.currentTarget.open)}
         >
-          <summary className="btn btn-outline btn-sm list-none">Salary</summary>
+          <summary className="btn btn-outline btn-sm list-none">
+            {filters.salaryMinimum
+              ? `Salary ${parseInt(filters.salaryMinimum, 10).toLocaleString()} or more`
+              : 'Salary'}
+          </summary>
           <div className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[calc(100vw-3rem)] rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
             <div className="flex items-end gap-2">
               <label className="min-w-0 flex-1 text-xs font-medium text-base-content/70">
@@ -281,7 +285,7 @@ export function SearchFilterBar({
             (explain/undo), so the row reads as two groups rather than one undifferentiated run. */}
         <div className="mx-1 hidden h-5 w-px self-center bg-base-300 md:block" aria-hidden="true" />
 
-        <span className="badge badge-ghost badge-sm font-normal">{salaryNote}</span>
+        <span className="text-xs text-base-content/60">{salaryNote}</span>
 
         <button className="btn btn-ghost btn-sm" type="button" onClick={onClear}>
           Clear filters
