@@ -166,6 +166,7 @@ test('the pages are drawn in the panel by the real renderer, and confirming wait
 
     await scrollToEnd(region);
     await expect(region.locator('canvas[data-drawn="true"]')).toHaveCount(pages);
+    await expect(region.getByText('Extracted text', { exact: true }), 'every page offers its text').toHaveCount(pages);
     expect(await paintedCanvases(window), 'every page has real pixels, not a blank canvas').toBe(pages);
     await expect(confirm).toBeEnabled();
     await expect(pdf.getByLabel('Pages shown')).toHaveText(`All ${pages} page(s) were shown.`);

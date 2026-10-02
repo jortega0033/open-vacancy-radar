@@ -22,13 +22,16 @@ interface ReviewPageProps {
 
 /**
  * One page, drawn only when it scrolls into view. A page counts as shown once its canvas has been
- * painted, so reaching the end of the list means the candidate scrolled past every page. A page is
- * a placeholder of the right proportions until then, so the list does not jump while it fills.
+ * painted and its text was read from the same PDF into an "Extracted text" disclosure (WCAG 1.1.1,
+ * #458), so a canvas scrolled past is not enough: a page with no readable text fails the review
+ * instead of counting. A page is a placeholder of the right proportions until then, so the list
+ * does not jump while it fills.
  */
 function ReviewPage({ review, pageNumber, onDrawn, onFailed }: ReviewPageProps) {
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [drawn, setDrawn] = useState(false);
+  const [text, setText] = useState<string>();
 
   useEffect(() => {
     const element = frame.current;
@@ -41,8 +44,13 @@ function ReviewPage({ review, pageNumber, onDrawn, onFailed }: ReviewPageProps) 
       started = true;
       review
         .renderPage(pageNumber, target, element.clientWidth)
-        .then(() => {
+        .then(() => review.extractText(pageNumber))
+        .then((extracted) => {
           if (cancelled) return;
+          if (extracted.trim() === '') {
+            throw new Error(`page ${pageNumber} has no text that a screen reader can read, so it cannot be reviewed here. Export it again`);
+          }
+          setText(extracted);
           setDrawn(true);
           onDrawn(pageNumber);
         })
@@ -81,6 +89,12 @@ function ReviewPage({ review, pageNumber, onDrawn, onFailed }: ReviewPageProps) 
       <div ref={frame} className="w-full border border-base-300 bg-white" style={drawn ? undefined : { aspectRatio: '1 / 1.414' }}>
         <canvas ref={canvas} className="block h-auto w-full" data-drawn={drawn ? 'true' : 'false'} />
       </div>
+      {text !== undefined && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-base-content/70">Extracted text</summary>
+          <pre className="mt-1 max-w-full font-sans break-words whitespace-pre-wrap">{text}</pre>
+        </details>
+      )}
     </figure>
   );
 }
@@ -89,9 +103,10 @@ function ReviewPage({ review, pageNumber, onDrawn, onFailed }: ReviewPageProps) 
  * The in-app read of a saved PDF's pages (#434). The main process returns the file's bytes only after
  * checking them against the hash recorded at export, and this draws every page in a scroll area inside
  * the panel (no horizontal scroll at the minimum window width, since each page is scaled to the panel).
- * When the last page has been painted it tells the main process how many pages were shown, which is
- * what unlocks accepting the PDF there. A file that cannot be read, drawn or has too many pages shows
- * its reason and leaves accepting locked.
+ * Each page also carries its extracted text, read from the same bytes. When the last page has been
+ * painted and its text read, this tells the main process how many pages were shown, which is
+ * what unlocks accepting the PDF there. A file that cannot be read, drawn, read as text (an
+ * image-only page) or has too many pages shows its reason and leaves accepting locked.
  */
 export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfPageReviewProps) {
   const [review, setReview] = useState<PdfReview | null>(null);
