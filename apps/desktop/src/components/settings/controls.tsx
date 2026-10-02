@@ -19,7 +19,7 @@ export function SettingsSection({ title, children, headingRef }: SettingsSection
       <h2
         ref={headingRef}
         tabIndex={headingRef ? -1 : undefined}
-        className="border-b border-base-300 pb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60"
+        className="border-b border-base-300 pb-2 ovr-eyebrow"
       >
         {title}
       </h2>
@@ -64,7 +64,7 @@ export function SettingsRow({ label, description, htmlFor, children }: SettingsR
  * caption, so the visual language for "small uppercase group label" stays consistent app-wide. */
 export function SettingsSubheading({ children }: { children: ReactNode }) {
   return (
-    <h3 className="mt-5 mb-1 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+    <h3 className="mt-5 mb-1 ovr-eyebrow">
       {children}
     </h3>
   );

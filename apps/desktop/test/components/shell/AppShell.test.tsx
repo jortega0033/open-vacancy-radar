@@ -7,6 +7,8 @@ import { WorkspaceHeader } from '../../../src/components/shell/WorkspaceHeader.j
 import { EmptyState } from '../../../src/components/shell/EmptyState.js';
 import { PageLoading } from '../../../src/components/shell/PageLoading.js';
 import { ErrorBanner } from '../../../src/components/shell/ErrorBanner.js';
+import { WarningBanner } from '../../../src/components/shell/WarningBanner.js';
+import { Eyebrow } from '../../../src/components/shell/Eyebrow.js';
 import { OpenVacancyRadarMark } from '../../../src/components/brand/OpenVacancyRadarMark.js';
 import { headerCopy, isNavPage, NAV_PAGES } from '../../../src/components/shell/nav.js';
 import type { AgentDockBridge, DaemonStatus, WorkspaceBridge } from '../../../src/window.js';
@@ -246,6 +248,36 @@ describe('PageLoading', () => {
     const status = screen.getByRole('status');
     expect(status).toHaveTextContent('Loading saved jobs…');
     expect(status.querySelector('.loading-spinner')).not.toBeNull();
+  });
+});
+
+describe('WarningBanner', () => {
+  it('renders alert alert-warning alert-soft with role="alert" by default and supports role="status"', () => {
+    render(
+      <>
+        <WarningBanner>Check this</WarningBanner>
+        <WarningBanner role="status">Heads up</WarningBanner>
+      </>,
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Check this');
+    expect(alert.className).toContain('alert-warning');
+    expect(alert.className).toContain('alert-soft');
+    expect(screen.getByRole('status')).toHaveTextContent('Heads up');
+  });
+});
+
+describe('Eyebrow', () => {
+  it('renders a span with the eyebrow class by default and the requested element via as', () => {
+    render(
+      <>
+        <Eyebrow>Plain</Eyebrow>
+        <Eyebrow as="h3">Section</Eyebrow>
+      </>,
+    );
+    expect(screen.getByText('Plain').tagName).toBe('SPAN');
+    expect(screen.getByText('Plain')).toHaveClass('ovr-eyebrow');
+    expect(screen.getByRole('heading', { level: 3, name: 'Section' })).toHaveClass('ovr-eyebrow');
   });
 });
 

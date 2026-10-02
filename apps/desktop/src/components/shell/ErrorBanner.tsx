@@ -7,6 +7,9 @@ export interface ErrorBannerProps {
   className?: string;
   /** Optional inline action rendered after the message, e.g. a "Retry" button. */
   action?: ReactNode;
+  /** Defaults to `alert`; use `status` for a polite, non-blocking notice. */
+  role?: 'alert' | 'status';
+  'aria-label'?: string;
 }
 
 /**
@@ -18,9 +21,9 @@ export interface ErrorBannerProps {
  * screen reader user gets no announcement at all from the sites missing it. This component makes
  * both of those impossible to get wrong at a call site.
  */
-export function ErrorBanner({ children, className, action }: ErrorBannerProps) {
+export function ErrorBanner({ children, className, action, role = 'alert', 'aria-label': ariaLabel }: ErrorBannerProps) {
   return (
-    <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role="alert">
+    <div className={['alert', 'alert-error', 'alert-soft', 'text-sm', className].filter(Boolean).join(' ')} role={role} aria-label={ariaLabel}>
       <span>{children}</span>
       {action}
     </div>

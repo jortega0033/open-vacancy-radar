@@ -1,3 +1,4 @@
+import { Check } from '@phosphor-icons/react';
 import type { ProviderCapabilities, ProviderStatus } from '@agent-dock/shared';
 import { CopyButton } from '../shell/index.js';
 import { detectPlatform, providerGuidance } from './provider-guidance.js';
@@ -88,7 +89,7 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving, onChec
 
         {capabilities.length > 0 && (
           <div>
-            <div className="mb-1.5 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+            <div className="mb-1.5 ovr-eyebrow">
               Capabilities
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -155,9 +156,9 @@ export function ProviderCard({ status, isDefault, onUseAsDefault, saving, onChec
           disabled={!status.installed || isDefault || saving}
           onClick={onUseAsDefault}
         >
-          {/* An uninstalled CLI never reads "Default ✓": the "Default" badge above already covers the
+          {/* An uninstalled CLI never reads "Default": the "Default" badge above already covers the
               is-this-the-configured-default case, and the install steps sit in the panel above. */}
-          {status.installed && isDefault ? 'Default ✓' : 'Use as default'}
+          {status.installed && isDefault ? <>Default <Check size={14} weight="bold" aria-hidden="true" className="inline" /></> : 'Use as default'}
         </button>
       </div>
     </div>

@@ -17,6 +17,7 @@ import { TailorCv } from './TailorCv.js';
 import { TailoringProposalsPanel } from './TailoringProposalsPanel.js';
 import type { CvDocument, VacancyLead } from './types.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 /**
  * The one thing the app shell renders: `<CvAssistant vacancy={selectedVacancy} />`.
@@ -162,11 +163,11 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
       </div>
 
       {providerUnavailable && (
-        <div className="alert alert-error text-sm" role="alert">
+        <ErrorBanner>
           {providerLabel} is not installed or not detected, so these features cannot run. Install
           and authenticate the CLI, or choose a different default in AI runtime, then reopen this
           screen.
-        </div>
+        </ErrorBanner>
       )}
 
       {vacancy && onBackToVacancy && (
@@ -179,9 +180,9 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
         <div className="card-body gap-3 p-5">
           <div className="card-title text-base font-bold">CV Library</div>
           {libraryError ? (
-            <div className="alert alert-error text-sm" role="alert">
+            <ErrorBanner>
               {libraryError}
-            </div>
+            </ErrorBanner>
           ) : usableLibraryCvs.length > 0 ? (
             <label className="block">
               <span className="mb-1 block text-sm font-medium">Use saved CV</span>
@@ -210,7 +211,7 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
             </p>
           )}
           {unusableLibraryCvs > 0 && (
-            <p className="text-xs text-base-content/50">
+            <p className="text-xs text-base-content/60">
               {unusableLibraryCvs} saved CV {unusableLibraryCvs === 1 ? 'is' : 'are'} unavailable
               because no text was extracted.
             </p>
@@ -242,9 +243,9 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
       )}
 
       {vacancy && sourceNotice && (
-        <div className="alert alert-warning text-sm" role="status">
+        <WarningBanner role="status">
           {sourceNotice}
-        </div>
+        </WarningBanner>
       )}
 
       {vacancy && (

@@ -4,6 +4,7 @@ import type { CvDocumentRecord, CvEvidenceOverlayRecord } from '../../window.js'
 import type { VacancyLead } from '../cv/index.js';
 import { formatCvDate } from './cv-profile.js';
 import { describeNextStep, describeTailoringCase, vacancyFromCase } from './tailoring-cases.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface TailoringCasesProps {
   documents: readonly CvDocumentRecord[];
@@ -92,9 +93,9 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
 
   if (error) {
     return (
-      <div className="alert alert-error mt-4 text-sm" role="alert">
+      <ErrorBanner className="mt-4">
         {error}
-      </div>
+      </ErrorBanner>
     );
   }
   if (!groups) {

@@ -105,7 +105,7 @@ export function SessionSearchPanel({ onOpenSession }: SessionSearchPanelProps) {
     <div className="rounded-box border border-base-300 bg-base-100 p-2.5">
       <button
         type="button"
-        className="w-full text-left text-xs font-semibold tracking-wide text-base-content/60 uppercase"
+        className="w-full text-left ovr-eyebrow"
         onClick={() => setExpanded((current) => !current)}
         aria-expanded={expanded}
       >
@@ -132,7 +132,7 @@ export function SessionSearchPanel({ onOpenSession }: SessionSearchPanelProps) {
               Search
             </button>
           </form>
-          <p className="mt-1.5 text-xs text-base-content/50">
+          <p className="mt-1.5 text-xs text-base-content/60">
             Finds tool names, status words, error codes, and rate-limit names only. It cannot search
             what the agent said or what a tool read or wrote.
           </p>
@@ -144,7 +144,7 @@ export function SessionSearchPanel({ onOpenSession }: SessionSearchPanelProps) {
           {loading && matches.length === 0 && <PageLoading label="Searching session history…" />}
 
           {exhausted && matches.length === 0 && (
-            <p className="mt-2 text-xs text-base-content/50">No matches for "{searchedQuery}".</p>
+            <p className="mt-2 text-xs text-base-content/60">No matches for "{searchedQuery}".</p>
           )}
 
           {matches.length > 0 && (

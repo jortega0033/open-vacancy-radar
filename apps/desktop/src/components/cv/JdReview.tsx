@@ -7,6 +7,7 @@ import { sha256Hex, sha256HexOfSource } from './content-hash.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 export interface JdReviewProps {
   /** The CV Library record the case belongs to. Without one the JD can be read but not saved. */
@@ -200,10 +201,10 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
         <div className="card-title text-base font-bold">Job description</div>
 
         {!hasText && (
-          <div className="alert alert-warning text-sm" role="status">
+          <WarningBanner role="status">
             No posting text came with this vacancy, so no requirements can be read from it. Paste the
             job description below. Nothing is fetched from the link.
-          </div>
+          </WarningBanner>
         )}
 
         {hasText && (
@@ -245,9 +246,9 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
         )}
 
         {error && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {error}
-          </div>
+          </ErrorBanner>
         )}
 
         <div className="flex flex-wrap items-center gap-2">

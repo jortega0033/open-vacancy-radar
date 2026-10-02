@@ -133,7 +133,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
 
   return (
     <section className="rounded-box border border-base-300 bg-base-200 p-3" aria-label="Source CV review">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">Source CV</h3>
+      <h3 className="ovr-eyebrow">Source CV</h3>
 
       {!source.complete && (
         <div className="alert alert-warning mt-2 text-xs" role="alert">
@@ -146,7 +146,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
 
       <div className="mt-3 grid grid-cols-2 gap-2.5">
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          <span className="mb-1.5 block ovr-eyebrow">
             Full name
           </span>
           <input
@@ -157,7 +157,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          <span className="mb-1.5 block ovr-eyebrow">
             Email
           </span>
           <input
@@ -168,7 +168,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          <span className="mb-1.5 block ovr-eyebrow">
             Phone
           </span>
           <input
@@ -179,7 +179,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          <span className="mb-1.5 block ovr-eyebrow">
             Location
           </span>
           <input
@@ -192,7 +192,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
       </div>
 
       <label className="mt-2.5 block">
-        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">Links</span>
+        <span className="mb-1.5 block ovr-eyebrow">Links</span>
         <input
           className="input input-sm w-full"
           value={linksToText(source.contact.links)}
@@ -202,7 +202,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
         />
       </label>
 
-      <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+      <h4 className="mt-4 ovr-eyebrow">
         Employment history ({source.experience.length})
       </h4>
       {source.experience.length === 0 ? (
@@ -247,7 +247,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
         </ul>
       )}
 
-      <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+      <h4 className="mt-4 ovr-eyebrow">
         Projects ({source.projects.length})
       </h4>
       <label className="mt-1.5 block">
@@ -306,7 +306,7 @@ export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewPro
         </ul>
       )}
 
-      <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+      <h4 className="mt-4 ovr-eyebrow">
         Education ({source.education.length})
       </h4>
       {source.education.length === 0 ? (

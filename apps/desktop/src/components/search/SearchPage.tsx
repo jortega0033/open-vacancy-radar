@@ -10,7 +10,7 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, useAnnounce, useEscapeToClose } from '../shell/index.js';
+import { EmptyState, ErrorBanner, WarningBanner, useAnnounce, useEscapeToClose } from '../shell/index.js';
 import {
   SCAN_FAILED_ANNOUNCEMENT,
   SCAN_STARTED_ANNOUNCEMENT,
@@ -1101,10 +1101,10 @@ export function SearchPage({
           </div>
         )}
         {scanIncomplete && (
-          <div className="alert alert-warning alert-soft mt-3 text-sm" role="status">
+          <WarningBanner className="mt-3" role="status">
             {scanBounds.completenessReason ??
               `Browse-all scan is capped at ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} rows, so this report is not exhaustive.`}
-          </div>
+          </WarningBanner>
         )}
         {loadError && (
           <ErrorBanner
@@ -1188,10 +1188,10 @@ export function SearchPage({
             </div>
           )}
           {profileScoringUnknown && (
-            <div className="alert alert-warning alert-soft mx-6 mt-3 text-sm" role="status">
+            <WarningBanner className="mx-6 mt-3" role="status">
               Cached vacancies are browseable, but the app could not check whether the current
               search profile can score this report: {searchProfileError}
-            </div>
+            </WarningBanner>
           )}
           {worldwideReport && (
             <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">

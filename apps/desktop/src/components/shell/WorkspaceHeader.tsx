@@ -22,7 +22,7 @@ export function WorkspaceHeader({ title, subtitle }: WorkspaceHeaderProps) {
     <header className="ovr-header flex flex-none items-center border-b border-base-300 px-5">
       <div className="flex min-w-0 items-baseline gap-2.5">
         <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
-        <p className="truncate text-xs text-base-content/50">{subtitle}</p>
+        <p className="truncate text-xs text-base-content/60">{subtitle}</p>
       </div>
     </header>
   );

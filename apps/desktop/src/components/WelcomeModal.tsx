@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
@@ -195,7 +196,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
         <div className="flex items-center justify-between border-b border-base-300 px-5 py-3.5">
           <h2 className="text-sm font-semibold">Welcome to Open Vacancy Radar</h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 

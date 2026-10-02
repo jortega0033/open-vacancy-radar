@@ -8,6 +8,7 @@ import type { CvArtifactRecord, CvEvidenceOverlayRecord, CvExportFormat } from '
 import { formatCvDateTime } from '../cv-library/cv-profile.js';
 import { CvPdfPageReview } from './CvPdfPageReview.js';
 import { describeError } from './useAgentRun.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface CvArtifactPanelProps {
   overlay: CvEvidenceOverlayRecord;
@@ -251,9 +252,9 @@ export function CvArtifactPanel({ overlay, onOverlayChange, sourceGaps = [] }: C
       )}
 
       {error && (
-        <div className="alert alert-error text-sm" role="alert">
+        <ErrorBanner>
           {error}
-        </div>
+        </ErrorBanner>
       )}
       {notice && (
         <div className="text-sm font-medium" role="status">

@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
@@ -101,7 +102,7 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
           </h2>
           <button type="button" aria-label="Close" className="btn btn-ghost btn-sm btn-circle" onClick={onClose}>
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
@@ -125,7 +126,7 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
 
           {attempt.canonicalUrl && (
             <div>
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+              <span className="mb-1 block ovr-eyebrow">
                 Application URL
               </span>
               <a href={attempt.canonicalUrl} target="_blank" rel="noreferrer" className="link link-hover break-all text-sm">
@@ -135,7 +136,7 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
           )}
 
           <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1 block ovr-eyebrow">
               Job description
             </span>
             {attempt.jdSnapshot ? (
@@ -153,7 +154,7 @@ export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: Applic
           </div>
 
           <div>
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <span className="mb-1 block ovr-eyebrow">
               Documents
             </span>
             {artifactsError && <p className="text-sm text-error">{artifactsError}</p>}
