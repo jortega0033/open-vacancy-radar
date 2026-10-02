@@ -72,6 +72,10 @@ export interface DaemonRespawn {
   /** Bumped once per real `spawnDaemon()` call; returns the new generation for that call's own
    * readiness loop to capture and compare later via `isCurrentGeneration`. */
   nextGeneration(): number;
+  /** A manual restart (the renderer's "Try again"): drops any respawn timer still waiting out its
+   * backoff, refills the retry budget, and bumps the generation so a readiness poll or exit handler
+   * left over from the attempt being replaced stands down. Nothing is spawned here. */
+  supersede(): void;
   /** True only for the generation `spawnDaemon()` most recently started. A readiness loop belonging
    * to an earlier, already-superseded attempt sees `false` and should stand down without touching
    * any shared state. */
@@ -81,6 +85,8 @@ export interface DaemonRespawn {
 export function createDaemonRespawn(deps: DaemonRespawnDeps): DaemonRespawn {
   let attempts = 0;
   let generation = 0;
+  // Bumped by `supersede()`: a backoff timer that captured an older value fires into nothing.
+  let epoch = 0;
 
   return {
     scheduleRespawn(reason) {
@@ -91,15 +97,21 @@ export function createDaemonRespawn(deps: DaemonRespawnDeps): DaemonRespawn {
         return;
       }
       attempts = decision.attempt;
+      const scheduledEpoch = epoch;
       deps.onScheduled(reason, decision.attempt, deps.policy.maxAttempts, decision.delayMs);
       deps.setTimeout(() => {
         // isQuitting may have flipped true while this timer was pending (the user quit mid-backoff).
-        if (deps.isQuitting()) return;
+        if (deps.isQuitting() || scheduledEpoch !== epoch) return;
         deps.spawnDaemon();
       }, decision.delayMs);
     },
     resetAttempts() {
       attempts = 0;
+    },
+    supersede() {
+      epoch += 1;
+      attempts = 0;
+      generation += 1;
     },
     nextGeneration() {
       generation += 1;

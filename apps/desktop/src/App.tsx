@@ -8,12 +8,13 @@ import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
 import { LettersPage, type SelectedVacancy } from './components/letters/index.js';
 import { RuntimePage } from './components/runtime/index.js';
-import { SettingsPage } from './components/settings/index.js';
+import { SettingsPage, type SettingsFocusSection, type SettingsTab } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import { WelcomeModal } from './components/WelcomeModal.js';
 import {
+  AI_HELPER_NOTICE_PAGES,
+  AiHelperNotice,
   AppSidebar,
-  ErrorBanner,
   LiveAnnouncerProvider,
   WorkspaceHeader,
   headerCopy,
@@ -40,6 +41,10 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  // Where Settings should open when something other than the sidebar sent the user there ("Fill
+  // search profile", the first-launch checklist). Held here, not in SettingsPage, so it survives
+  // that page remounting; a plain sidebar visit clears it in `handleNavigate`.
+  const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; focusSection?: SettingsFocusSection }>();
   const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
@@ -51,6 +56,10 @@ export function App() {
 
   const [daemonState, setDaemonState] = useState<DaemonState>('connecting');
   const [daemonError, setDaemonError] = useState<string>();
+  // "Try again" on the AI helper notice (#478). `retryFailed` outlives the restart so the notice can
+  // say the last attempt did not work; it clears as soon as the helper reports ready.
+  const [daemonRetrying, setDaemonRetrying] = useState(false);
+  const [daemonRetryFailed, setDaemonRetryFailed] = useState(false);
 
   // The provider AI features (gap analysis, letters) currently run through: a persisted setting
   // (`app_settings.default_provider`), not runtime-only state. Kept here only because the sidebar
@@ -143,6 +152,7 @@ export function App() {
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
     setLetterReturnAttemptId(null);
+    setSettingsTarget(undefined);
     if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
@@ -152,6 +162,13 @@ export function App() {
     // three of the five pages, so refreshing on every navigation is simpler than wiring one to each.
     void refreshCounts();
   }, [refreshCounts]);
+
+  // "Fill search profile": Settings on the Search tab, with the profile's first field focused.
+  // Set after `handleNavigate`, which clears any earlier target.
+  const handleOpenSearchProfile = useCallback(() => {
+    handleNavigate('settings');
+    setSettingsTarget({ tab: 'search', focusSection: 'search-profile' });
+  }, [handleNavigate]);
 
   const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
     hasNavigatedRef.current = true;
@@ -213,11 +230,12 @@ export function App() {
     const unsubscribeStatus = window.agentDock.onDaemonStatus((status) => {
       setDaemonState(status.state);
       setDaemonError(status.state === 'unavailable' ? status.error : undefined);
+      if (status.state === 'ready') setDaemonRetryFailed(false);
     });
 
     const timeout = setTimeout(() => {
       setDaemonState((current) => (current === 'connecting' ? 'unavailable' : current));
-      setDaemonError((current) => current ?? 'timed out waiting for the local daemon to start');
+      setDaemonError((current) => current ?? 'timed out waiting for the AI helper to start');
     }, DAEMON_CONNECT_TIMEOUT_MS);
 
     return () => {
@@ -225,6 +243,28 @@ export function App() {
       clearTimeout(timeout);
       unsubscribeStatus();
     };
+  }, []);
+
+  const handleRetryDaemon = useCallback(() => {
+    setDaemonRetrying(true);
+    setDaemonRetryFailed(false);
+    window.agentDock
+      .restartDaemon()
+      .then((status) => {
+        setDaemonState(status.state);
+        if (status.state === 'unavailable') {
+          setDaemonError(status.error);
+          setDaemonRetryFailed(true);
+        } else {
+          setDaemonError(undefined);
+        }
+      })
+      .catch((err: unknown) => {
+        setDaemonState('unavailable');
+        setDaemonError(err instanceof Error ? err.message : 'restart failed');
+        setDaemonRetryFailed(true);
+      })
+      .finally(() => setDaemonRetrying(false));
   }, []);
 
   // Mirrors daemonState directly while the daemon itself isn't ready (there's nothing more
@@ -277,22 +317,27 @@ export function App() {
             nav === 'search' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto px-6'
           }`}
         >
-          {/* Daemon state is app-wide, so its banner lives outside the page switch: whichever
-              destination you are on, "the CLI runtime is not running" is worth knowing. */}
+          {/* Helper state is app-wide, so its notice lives outside the page switch. The failure notice
+              only shows where AI work happens (the sidebar status covers every page, and the AI
+              Runtime page renders its own), so Applications and CV stay free of a red bar. */}
           <div className={nav === 'search' ? 'px-6' : undefined}>
-            {daemonState === 'connecting' && (
-              <div className="alert alert-info mb-5">Connecting to local daemon…</div>
+            {daemonState === 'connecting' && !daemonRetrying && (
+              <div className="alert alert-info mb-5">Starting the AI helper…</div>
             )}
-            {daemonState === 'unavailable' && (
-              <ErrorBanner className="mb-5">
-                Daemon unavailable: {daemonError ?? 'unknown error'}
-              </ErrorBanner>
+            {(daemonState === 'unavailable' || daemonRetrying) && AI_HELPER_NOTICE_PAGES.includes(nav) && (
+              <AiHelperNotice
+                className="mb-5"
+                {...(daemonError ? { error: daemonError } : {})}
+                retrying={daemonRetrying}
+                retryFailed={daemonRetryFailed}
+                onRetry={handleRetryDaemon}
+              />
             )}
           </div>
 
           {nav === 'search' && (
             <SearchPage
-              onOpenSearchProfile={() => handleNavigate('settings')}
+              onOpenSearchProfile={handleOpenSearchProfile}
               onSavedJobsChanged={refreshCounts}
               onViewApplicationAttempt={handleViewApplicationAttempt}
               session={searchSession}
@@ -325,7 +370,13 @@ export function App() {
               onOpenCvPage={() => handleNavigate('cv')}
             />
           )}
-          {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
+          {nav === 'settings' && (
+            <SettingsPage
+              onNavigateToRuntime={() => handleNavigate('runtime')}
+              {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}
+              {...(settingsTarget?.focusSection ? { focusSection: settingsTarget.focusSection } : {})}
+            />
+          )}
 
           {/* ADI-07. Mounted only while it is the active page, which is what makes the hook's
               unmount cleanup meaningful: leaving the page detaches every live relay in main rather
@@ -336,6 +387,9 @@ export function App() {
             <RuntimePage
               daemonState={daemonState}
               {...(daemonError ? { daemonError } : {})}
+              helperRetrying={daemonRetrying}
+              helperRetryFailed={daemonRetryFailed}
+              onRetryHelper={handleRetryDaemon}
               onDefaultProviderChanged={setDefaultProvider}
             />
           )}
@@ -344,7 +398,19 @@ export function App() {
 
       {/* Overlays whichever page happens to be showing, the way FillProfileFromCvDrawer overlays
           Settings: the gate above decides *whether* it appears, never which page it appears over. */}
-      {showWelcome && <WelcomeModal onClose={handleWelcomeClosed} />}
+      {showWelcome && (
+        <WelcomeModal
+          onClose={handleWelcomeClosed}
+          onOpenSettings={() => {
+            handleWelcomeClosed();
+            handleOpenSearchProfile();
+          }}
+          onOpenRuntime={() => {
+            handleWelcomeClosed();
+            handleNavigate('runtime');
+          }}
+        />
+      )}
     </div>
     </LiveAnnouncerProvider>
   );

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 /**
  * The three layout/control primitives of the settings page, matching the prototype's suggested
@@ -9,12 +9,18 @@ import type { ReactNode } from 'react';
 export interface SettingsSectionProps {
   title: string;
   children: ReactNode;
+  /** Makes the heading programmatically focusable, for "jump to this section" navigation. */
+  headingRef?: Ref<HTMLHeadingElement>;
 }
 
-export function SettingsSection({ title, children }: SettingsSectionProps) {
+export function SettingsSection({ title, children, headingRef }: SettingsSectionProps) {
   return (
     <section className="mt-8 first:mt-0">
-      <h2 className="border-b border-base-300 pb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+      <h2
+        ref={headingRef}
+        tabIndex={headingRef ? -1 : undefined}
+        className="border-b border-base-300 pb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60"
+      >
         {title}
       </h2>
       {children}
