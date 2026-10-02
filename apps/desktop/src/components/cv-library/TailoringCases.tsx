@@ -20,6 +20,9 @@ const STATE_LABEL: Record<CvEvidenceOverlayRecord['state'], string> = {
   artifact_approved: 'CV approved',
 };
 
+/** A draft a CV change put on hold (#449): it reads as a draft, but the cause is the CV. */
+const CV_CHANGED_LABEL = 'CV changed, review needed';
+
 const ARTIFACT_LABEL = {
   not_exported: 'not exported',
   awaiting_review: 'waiting for your review',
@@ -37,6 +40,8 @@ const ORIGIN_LABEL: Record<CvEvidenceOverlayRecord['origin'], string> = {
 interface CvCases {
   cv: CvDocumentRecord;
   cases: CvEvidenceOverlayRecord[];
+  /** Ids of draft cases whose CV changed after the case was started or last rebased. */
+  cvChanged: ReadonlySet<string>;
 }
 
 /**
@@ -53,7 +58,26 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
     let cancelled = false;
     setError(undefined);
     void Promise.all(
-      documents.map(async (cv) => ({ cv, cases: await window.workspace.listCvEvidenceOverlays(cv.id) })),
+      documents.map(async (cv) => {
+        const cases = await window.workspace.listCvEvidenceOverlays(cv.id);
+        // Only a draft can be one a CV change put on hold. A failed look at what changed reads as
+        // "no change" rather than hiding the case.
+        const cvChanged = new Set<string>();
+        await Promise.all(
+          cases
+            .filter((tailoringCase) => tailoringCase.state === 'draft')
+            .map(async (tailoringCase) => {
+              try {
+                if ((await window.workspace.previewCvEvidenceRebase(tailoringCase.id)).inputsChanged) {
+                  cvChanged.add(tailoringCase.id);
+                }
+              } catch {
+                // keeps the plain draft label
+              }
+            }),
+        );
+        return { cv, cases, cvChanged };
+      }),
     )
       .then((loaded) => {
         if (!cancelled) setGroups(loaded.filter((group) => group.cases.length > 0));
@@ -84,7 +108,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
         Open a case to continue where you left off. Its job description, requirements, facts, wording and files are
         kept.
       </p>
-      {groups.map(({ cv, cases }) => (
+      {groups.map(({ cv, cases, cvChanged }) => (
         <div key={cv.id} className="mt-3">
           <div className="text-sm font-medium">{cv.name}</div>
           <div className="ovr-responsive-table overflow-x-auto">
@@ -107,7 +131,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
                     <tr key={tailoringCase.id}>
                       <td>{label}</td>
                       <td>{ORIGIN_LABEL[tailoringCase.origin]}</td>
-                      <td>{STATE_LABEL[tailoringCase.state]}</td>
+                      <td>{cvChanged.has(tailoringCase.id) ? CV_CHANGED_LABEL : STATE_LABEL[tailoringCase.state]}</td>
                       <td>{ARTIFACT_LABEL[cvArtifactStatus(tailoringCase, 'pdf')]}</td>
                       <td>{ARTIFACT_LABEL[cvArtifactStatus(tailoringCase, 'docx')]}</td>
                       <td>{formatCvDate(tailoringCase.updatedAt)}</td>

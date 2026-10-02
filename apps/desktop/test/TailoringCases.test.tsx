@@ -247,3 +247,93 @@ describe('reopening tailoring cases from the CV Library', () => {
     expect(screen.queryByText('Tailoring cases')).not.toBeInTheDocument();
   });
 });
+
+describe('a CV change that puts cases on hold (#449)', () => {
+  it('labels a draft case "CV changed, review needed" only when the CV changed, and keeps "In progress" otherwise', async () => {
+    installBridges();
+    const held = makeCase({ id: 'overlay-held', vacancyKey: 'manual:held', caseTitle: 'Held Role', caseCompany: 'Held Co' });
+    const plain = makeCase({ id: 'overlay-plain', vacancyKey: 'manual:plain', caseTitle: 'Plain Role', caseCompany: 'Plain Co' });
+    const rebasePlan = (inputsChanged: boolean) => ({
+      baselineKnown: true,
+      inputsChanged,
+      changes: [],
+      keptVariantIds: [],
+      droppedVariants: [],
+      orphanedFactIds: [],
+      staleFacts: [],
+      requirementIdsToReview: [],
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([held, plain]),
+      previewCvEvidenceRebase: vi.fn().mockImplementation(async (id: string) => rebasePlan(id === 'overlay-held')),
+    });
+
+    render(<CvLibraryPage />);
+
+    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    const rows = within(table).getAllByRole('row');
+    const heldRow = rows.find((row) => within(row).queryByText('Held Role at Held Co'));
+    const plainRow = rows.find((row) => within(row).queryByText('Plain Role at Plain Co'));
+    expect(heldRow).toHaveTextContent('CV changed, review needed');
+    expect(heldRow).not.toHaveTextContent('In progress');
+    expect(plainRow).toHaveTextContent('In progress');
+    expect(plainRow).not.toHaveTextContent('CV changed');
+  });
+
+  it('does not ask what changed for a case that is not a draft', async () => {
+    installBridges();
+    const previewCvEvidenceRebase = vi.fn();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([makeCase({ state: 'needs_input' })]),
+      previewCvEvidenceRebase,
+    });
+    render(<CvLibraryPage />);
+    await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    expect(previewCvEvidenceRebase).not.toHaveBeenCalled();
+  });
+
+  it('tells the drawer how many tailoring cases use the CV before saving', async () => {
+    installBridges();
+    const cases = [makeCase(), makeCase({ id: 'overlay-2', vacancyKey: 'manual:two' })];
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue(cases),
+    });
+    render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    expect(await within(dialog).findByText(/2 tailoring cases use this CV./)).toHaveTextContent(
+      '2 tailoring cases use this CV. Saving changes puts them on hold until you review what changed. Files you already exported stay on disk.',
+    );
+  });
+
+  it('uses the singular for one case, and shows no notice when the CV has none or in the add drawer', async () => {
+    installBridges();
+    const listCvEvidenceOverlays = vi.fn().mockResolvedValue([makeCase()]);
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]), listCvEvidenceOverlays });
+    const { unmount } = render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    expect(await within(dialog).findByText(/1 tailoring case uses this CV./)).toHaveTextContent(
+      'Saving changes puts it on hold',
+    );
+    unmount();
+
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([]),
+    });
+    render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const emptyDialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    await waitFor(() => expect(within(emptyDialog).getByRole('button', { name: /save changes/i })).toBeEnabled());
+    expect(within(emptyDialog).queryByText(/tailoring cases? uses? this CV/)).not.toBeInTheDocument();
+  });
+});
