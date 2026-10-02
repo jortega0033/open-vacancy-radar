@@ -50,10 +50,22 @@ export function ApplicationAttemptsTable({ attempts, onOpen, onCancelScheduledAu
                 onClick={() => onOpen(attempt)}
                 tabIndex={0}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') onOpen(attempt);
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpen(attempt);
+                  }
                 }}
               >
-                <td className="font-semibold">{attempt.role}</td>
+                <td className="font-semibold">
+                  <button
+                    type="button"
+                    className="text-left hover:underline"
+                    onClick={() => onOpen(attempt)}
+                    aria-label={`Open ${attempt.role} at ${attempt.company}`}
+                  >
+                    {attempt.role}
+                  </button>
+                </td>
                 <td>{attempt.company}</td>
                 <td>
                   {scheduled ? (

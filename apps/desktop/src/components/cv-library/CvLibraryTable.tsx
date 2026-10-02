@@ -127,6 +127,7 @@ export function CvLibraryTable({
                       className="btn btn-ghost btn-sm px-1.5"
                       type="button"
                       disabled={exportingId === doc.id}
+                      aria-label={`Export ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                     >
                       {exportingId === doc.id && (
                         <span className="loading loading-spinner loading-xs" aria-hidden="true" />
@@ -170,6 +171,7 @@ export function CvLibraryTable({
                     className="btn btn-ghost btn-sm px-1.5"
                     type="button"
                     onClick={() => onEdit(doc)}
+                    aria-label={`Edit ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                   >
                     Edit
                   </button>
@@ -177,6 +179,7 @@ export function CvLibraryTable({
                     className="btn btn-ghost btn-sm px-1.5 text-error"
                     type="button"
                     onClick={() => onDelete(doc)}
+                    aria-label={`Delete ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                   >
                     Delete
                   </button>

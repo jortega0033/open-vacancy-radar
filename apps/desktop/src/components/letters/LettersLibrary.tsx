@@ -203,6 +203,7 @@ export function LettersLibrary({
                       type="button"
                       onClick={() => onOpen(letter)}
                       disabled={busyId === letter.id}
+                      aria-label={`Open ${letter.title}`}
                     >
                       Open
                     </button>
@@ -211,6 +212,7 @@ export function LettersLibrary({
                       type="button"
                       onClick={() => void handleDuplicate(letter)}
                       disabled={busyId === letter.id}
+                      aria-label={`Duplicate ${letter.title}`}
                     >
                       Duplicate
                     </button>
@@ -219,6 +221,7 @@ export function LettersLibrary({
                       type="button"
                       onClick={() => setDeleteTarget(letter)}
                       disabled={busyId === letter.id}
+                      aria-label={`Delete ${letter.title}`}
                     >
                       Delete
                     </button>

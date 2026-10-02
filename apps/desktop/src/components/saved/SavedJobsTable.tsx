@@ -111,7 +111,7 @@ export function SavedJobsTable({
               <td data-label="Status" className="saved-job-status-cell">
                 <select
                   className="select select-sm"
-                  aria-label={`Status for ${job.role}`}
+                  aria-label={`Status for ${job.role} at ${job.company}`}
                   value={job.status}
                   onChange={(e) => onStatusChange(job, e.target.value as SavedJobStatus)}
                 >
@@ -129,6 +129,7 @@ export function SavedJobsTable({
                     type="button"
                     disabled={preparingJobId !== null}
                     onClick={() => onPrepareApplication(job)}
+                    aria-label={`Prepare application for ${job.role} at ${job.company}`}
                   >
                     {preparingJobId === job.id ? (
                       <span className="loading loading-spinner loading-xs" />
@@ -140,6 +141,7 @@ export function SavedJobsTable({
                     className="btn btn-ghost btn-sm px-1.5"
                     type="button"
                     onClick={() => onEdit(job)}
+                    aria-label={`Edit ${job.role} at ${job.company}`}
                   >
                     Edit
                   </button>
@@ -147,6 +149,7 @@ export function SavedJobsTable({
                     className="btn btn-ghost btn-sm px-1.5 text-error"
                     type="button"
                     onClick={() => onDelete(job)}
+                    aria-label={`Delete ${job.role} at ${job.company}`}
                   >
                     Delete
                   </button>

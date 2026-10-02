@@ -136,7 +136,7 @@ describe('SavedJobsPage', () => {
     render(<SavedJobsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /edit senior frontend engineer/i }));
 
     const dialog = await screen.findByRole('dialog', { name: /edit saved job/i });
     expect(within(dialog).getByLabelText(/^role$/i)).toHaveValue('Senior Frontend Engineer');
@@ -159,7 +159,7 @@ describe('SavedJobsPage', () => {
     render(<SavedJobsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /delete senior frontend engineer/i }));
 
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
@@ -185,7 +185,7 @@ describe('SavedJobsPage', () => {
     render(<SavedJobsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /delete senior frontend engineer/i }));
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^cancel$/i }));
 
@@ -249,7 +249,7 @@ describe('SavedJobsPage', () => {
       render(<SavedJobsPage onSavedJobsChanged={onSavedJobsChanged} />);
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /edit senior frontend engineer/i }));
       const dialog = await screen.findByRole('dialog', { name: /edit saved job/i });
       fireEvent.change(within(dialog).getByLabelText(/^role$/i), { target: { value: 'Staff Frontend Engineer' } });
       fireEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
@@ -274,7 +274,7 @@ describe('SavedJobsPage', () => {
       render(<SavedJobsPage onSavedJobsChanged={onSavedJobsChanged} />);
       await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /delete senior frontend engineer/i }));
       const confirmDialog = await screen.findByRole('alertdialog');
       fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
 
@@ -321,7 +321,7 @@ describe('SavedJobsPage: preparing an application (#272)', () => {
 
     render(<SavedJobsPage />);
     await waitFor(() => expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /prepare application/i }));
+    fireEvent.click(screen.getByRole('button', { name: /prepare application for/i }));
 
     expect(await screen.findByRole('status')).toHaveTextContent('already in progress');
   });

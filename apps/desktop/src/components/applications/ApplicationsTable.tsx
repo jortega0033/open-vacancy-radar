@@ -76,7 +76,7 @@ export function ApplicationsTable({
               </td>
               <td className="ovr-responsive-table__cell" data-label="Status">
                 <select
-                  aria-label="Application status"
+                  aria-label={`Status for ${application.role} at ${application.company}`}
                   className={APPLICATION_STATUS_SELECT_CLASS[application.status]}
                   value={application.status}
                   onChange={(e) => onStatusChange(application, e.target.value as ApplicationStatus)}
@@ -106,6 +106,7 @@ export function ApplicationsTable({
                     type="button"
                     className="btn btn-ghost btn-sm px-1.5"
                     onClick={() => onPrepareInterview(application)}
+                    aria-label={`Prepare interview for ${application.role} at ${application.company}`}
                   >
                     Prepare interview
                   </button>
@@ -114,6 +115,7 @@ export function ApplicationsTable({
                   type="button"
                   className="btn btn-ghost btn-sm px-1.5"
                   onClick={() => onEdit(application)}
+                  aria-label={`Edit ${application.role} at ${application.company}`}
                 >
                   Edit
                 </button>
@@ -121,6 +123,7 @@ export function ApplicationsTable({
                   type="button"
                   className="btn btn-ghost btn-sm px-1.5"
                   onClick={() => onToggleArchive(application)}
+                  aria-label={`${application.archived ? 'Restore' : 'Archive'} ${application.role} at ${application.company}`}
                 >
                   {application.archived ? 'Restore' : 'Archive'}
                 </button>
@@ -128,6 +131,7 @@ export function ApplicationsTable({
                   type="button"
                   className="btn btn-ghost btn-sm px-1.5 text-error"
                   onClick={() => onDelete(application)}
+                  aria-label={`Delete ${application.role} at ${application.company}`}
                 >
                   Delete
                 </button>
