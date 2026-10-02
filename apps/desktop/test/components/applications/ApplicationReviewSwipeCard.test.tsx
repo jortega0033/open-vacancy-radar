@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import { ApplicationReviewSwipeCard } from '../../../src/components/applications/ApplicationReviewSwipeCard.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
@@ -433,5 +433,48 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
         ),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe('ApplicationReviewSwipeCard wide layout (#469)', () => {
+  it('puts the screenshot in its own always-visible pane with no height cap and no card stack', () => {
+    renderCard({ wide: true });
+    const pane = screen.getByTestId('review-screenshot-pane');
+    const preview = within(pane).getByRole('img', { name: /live application page preview/i });
+    expect(preview.closest('details')).toBeNull();
+    expect(preview.closest('[class*="max-h-72"]')).toBeNull();
+    expect(screen.getByTestId('review-layout')).toHaveAttribute('data-layout', 'wide');
+    expect(screen.queryAllByTestId('swipe-card-back')).toHaveLength(0);
+    // Same accessible names as the compact card.
+    expect(screen.getByRole('group', { name: /application decision card for senior engineer at acme corp/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit application' })).toBeInTheDocument();
+  });
+
+  it('keeps the compact card, with the capped screenshot behind a disclosure, by default', () => {
+    renderCard();
+    expect(screen.getByTestId('review-layout')).toHaveAttribute('data-layout', 'compact');
+    expect(screen.queryByTestId('review-screenshot-pane')).not.toBeInTheDocument();
+    const preview = screen.getByRole('img', { name: /live application page preview/i });
+    expect(preview.closest('[class*="max-h-72"]')).not.toBeNull();
+  });
+
+  it('offers View full size in both layouts', () => {
+    const { unmount } = render(
+      <ApplicationReviewSwipeCard
+        attempt={ATTEMPT}
+        snapshot={SNAPSHOT}
+        screenshotBase64="ZmFrZQ=="
+        readiness={readiness()}
+        onApprove={vi.fn()}
+        onSkip={vi.fn()}
+        onOpenLiveView={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'View full size' })).toBeInTheDocument();
+    unmount();
+    renderCard({ wide: true });
+    fireEvent.click(screen.getByRole('button', { name: 'View full size' }));
+    expect(screen.getByRole('dialog', { name: 'Form screenshot at original size' })).toBeInTheDocument();
   });
 });

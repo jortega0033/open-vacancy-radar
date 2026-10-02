@@ -13,6 +13,7 @@ import {
   unconfirmedFailure,
   type ReviewFailure,
 } from './review-outcome.js';
+import { useWideReviewLayout } from './use-wide-review-layout.js';
 
 export interface ApplicationReviewSessionProps {
   attempt: ApplicationAttemptRecord;
@@ -70,6 +71,7 @@ function openEmployerPage(url: string) {
  */
 export function ApplicationReviewSession({ attempt, position, total, onClose, onGenerateLetter, onSkipped }: ApplicationReviewSessionProps) {
   const [state, setState] = useState<SessionState>({ phase: 'resolving' });
+  const wide = useWideReviewLayout();
   /** Bumped by Try again to run the whole open sequence again against the same attempt. */
   const [retryNonce, setRetryNonce] = useState(0);
   // Loaded independently of the browser review, and always scoped to this attempt's own id (#272).
@@ -407,6 +409,10 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
   useEscapeToClose(() => onClose('dismissed'), closeDisabled);
 
+  // The two-pane layout only applies where there is a form screenshot to put beside the decision
+  // panel. Every other phase is short text and keeps the narrow dialog.
+  const twoPane = wide && (state.phase === 'ready' || state.phase === 'deciding');
+
   // While the live page is on screen, this is the only part of the window the target page cannot
   // draw in: `application-view.ts` reserves exactly this many pixels at the top for it (the height
   // comes back over the bridge, so there is one source of truth) and sizes the live view to the
@@ -438,7 +444,11 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
 
   return (
     <div className="modal modal-open" role="dialog" aria-modal="true">
-      <div className="modal-box max-h-[calc(100vh-2rem)] max-w-md overflow-y-auto p-4">
+      <div
+        className={`modal-box max-h-[calc(100vh-2rem)] overflow-y-auto p-4 ${
+          twoPane ? 'max-w-[min(1100px,calc(100vw-2rem))]' : 'max-w-md'
+        }`}
+      >
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
@@ -597,6 +607,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
             onOpenArtifact={(artifactId) => void handleOpenArtifact(artifactId)}
             onOpenLiveView={() => void handleOpenLiveView()}
             onConfirmAnswer={handleConfirmAnswer}
+            wide={wide}
           />
         )}
       </div>

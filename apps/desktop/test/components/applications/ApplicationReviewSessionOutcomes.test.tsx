@@ -1,12 +1,13 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import { ApplicationReviewSession } from '../../../src/components/applications/ApplicationReviewSession.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
 
 /**
- * #468 at the dialog level: what the error screen says about whether anything was sent and what
- * it lets a person do next. Every record here is synthetic.
+ * #468 and #469 at the dialog level: what the error screen says about whether anything was sent
+ * and what it lets a person do next, and which layout the review dialog picks for the window.
+ * Every record here is synthetic.
  */
 
 const ATTEMPT = {
@@ -66,8 +67,22 @@ async function submitFromReview() {
   fireEvent.click(await screen.findByRole('button', { name: /submit application/i }));
 }
 
+function setViewportWide(wide: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: wide,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  Reflect.deleteProperty(window, 'matchMedia');
 });
 
 describe('ApplicationReviewSession error screen (#468)', () => {
@@ -193,5 +208,68 @@ describe('ApplicationReviewSession error screen (#468)', () => {
     await submitFromReview();
     await screen.findByRole('alert');
     expect(screen.getAllByRole('button', { name: 'Close' }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('ApplicationReviewSession layout (#469)', () => {
+  it('uses the compact layout, with the screenshot behind a disclosure, when the window is narrow', async () => {
+    setViewportWide(false);
+    installBridges();
+    render(<ApplicationReviewSession attempt={ATTEMPT} onClose={vi.fn()} />);
+
+    const layout = await screen.findByTestId('review-layout');
+    expect(layout).toHaveAttribute('data-layout', 'compact');
+    expect(screen.queryByTestId('review-screenshot-pane')).not.toBeInTheDocument();
+    expect(screen.getByText('Review application form').closest('details')).not.toBeNull();
+    expect(screen.getByRole('dialog').firstElementChild?.className).toContain('max-w-md');
+  });
+
+  it('uses two panes about 1100px wide with the screenshot always visible when the window is wide', async () => {
+    setViewportWide(true);
+    installBridges();
+    render(<ApplicationReviewSession attempt={ATTEMPT} onClose={vi.fn()} />);
+
+    const layout = await screen.findByTestId('review-layout');
+    expect(layout).toHaveAttribute('data-layout', 'wide');
+    const pane = screen.getByTestId('review-screenshot-pane');
+    const preview = within(pane).getByRole('img', { name: /live application page preview for staff designer at example works/i });
+    expect(preview.closest('details')).toBeNull();
+    // The height cap from the compact layout is gone.
+    expect(preview.closest('[class*="max-h-72"]')).toBeNull();
+    expect(screen.getByRole('dialog').firstElementChild?.className).toContain('max-w-[min(1100px');
+    // The decorative card stack is dropped so the content being approved gets the room.
+    expect(screen.queryAllByTestId('swipe-card-back')).toHaveLength(0);
+    // The decision panel is still there with its accessible names.
+    expect(screen.getByRole('group', { name: /application decision card for staff designer at example works/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /submit application/i })).toBeEnabled();
+  });
+
+  it('opens the screenshot at its original size, closes on Escape without ending the review, and restores focus', async () => {
+    setViewportWide(true);
+    installBridges();
+    const onClose = vi.fn();
+    render(<ApplicationReviewSession attempt={ATTEMPT} onClose={onClose} />);
+
+    const opener = await screen.findByRole('button', { name: 'View full size' });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const full = await screen.findByRole('dialog', { name: 'Form screenshot at original size' });
+    expect(within(full).getByRole('img').className).toContain('max-w-none');
+    expect(within(full).getByRole('button', { name: 'Close full size view' })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Form screenshot at original size' })).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'View full size' })).toHaveFocus();
+    expect(screen.getByTestId('review-layout')).toBeInTheDocument();
+  });
+
+  it('keeps the compact error and manual screens at the narrow dialog width even on a wide window', async () => {
+    setViewportWide(true);
+    installBridges({ openReview: vi.fn().mockRejectedValue(new Error('offline')) });
+    render(<ApplicationReviewSession attempt={ATTEMPT} onClose={vi.fn()} />);
+    await screen.findByRole('alert');
+    expect(screen.getAllByRole('dialog')[0]?.firstElementChild?.className).toContain('max-w-md');
   });
 });
