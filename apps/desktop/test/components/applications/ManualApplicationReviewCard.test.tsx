@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManualApplicationReviewCard } from '../../../src/components/applications/ManualApplicationReviewCard.js';
 import type { ApplicationAttemptRecord } from '../../../src/window.js';
 
@@ -149,5 +149,53 @@ describe('ManualApplicationReviewCard', () => {
 
     expect(actions.onContinue).not.toHaveBeenCalled();
     expect(actions.onSkip).not.toHaveBeenCalled();
+  });
+
+  describe('reduced motion (issue #497)', () => {
+    function mockReducedMotion(reduce: boolean) {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: reduce && query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+    }
+
+    function pointer(card: HTMLElement, type: string, clientX: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, { clientX: { value: clientX }, pointerId: { value: 1 } });
+      fireEvent(card, event);
+    }
+
+    function dragRight() {
+      const card = screen.getByTestId('manual-application-swipe-card');
+      pointer(card, 'pointerdown', 100);
+      pointer(card, 'pointermove', 140);
+      return card;
+    }
+
+    afterEach(() => {
+      // @ts-expect-error jsdom does not define matchMedia, so restore that absence
+      delete window.matchMedia;
+    });
+
+    it('tilts and animates the card by default', () => {
+      mockReducedMotion(false);
+      renderCard();
+      const card = dragRight();
+      expect(card.style.transform).toContain('rotate(');
+      pointer(card, 'pointerup', 140);
+      expect(card.style.transition).toContain('transform');
+    });
+
+    it('drops the tilt and the transform transition when reduced motion is set', () => {
+      mockReducedMotion(true);
+      renderCard();
+      const card = dragRight();
+      expect(card.style.transform).toBe('translateX(40px)');
+      pointer(card, 'pointerup', 140);
+      expect(card.style.transition).toBe('none');
+      expect(card.style.transform).not.toContain('rotate(');
+    });
   });
 });

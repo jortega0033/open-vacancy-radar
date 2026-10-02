@@ -104,7 +104,7 @@ export function CvLibraryTable({
                     <span className="badge badge-primary whitespace-nowrap">Default</span>
                   ) : (
                     <button
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-ghost btn-sm px-1.5"
                       type="button"
                       onClick={() => onSetDefault(doc)}
                       title="Set as default CV"
@@ -123,7 +123,7 @@ export function CvLibraryTable({
                     </span>
                   )}
                   <Menu
-                    triggerClassName="btn btn-ghost btn-xs"
+                    triggerClassName="btn btn-ghost btn-sm px-1.5"
                     triggerAriaLabel={`Export ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                     menuClassName="w-40"
                     disabled={exportingId === doc.id}
@@ -141,7 +141,7 @@ export function CvLibraryTable({
                     ]}
                   />
                   <button
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-sm px-1.5"
                     type="button"
                     onClick={() => onEdit(doc)}
                     aria-label={`Edit ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
@@ -149,7 +149,7 @@ export function CvLibraryTable({
                     Edit
                   </button>
                   <button
-                    className="btn btn-ghost btn-xs text-error"
+                    className="btn btn-ghost btn-sm px-1.5 text-error"
                     type="button"
                     onClick={() => onDelete(doc)}
                     aria-label={`Delete ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}

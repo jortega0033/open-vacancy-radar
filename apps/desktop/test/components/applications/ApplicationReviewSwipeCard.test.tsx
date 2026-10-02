@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { FormReadiness, FormSnapshot } from '@agent-dock/application-executor';
 import { ApplicationReviewSwipeCard } from '../../../src/components/applications/ApplicationReviewSwipeCard.js';
@@ -432,6 +432,54 @@ describe('ApplicationReviewSwipeCard (#277)', () => {
           /"Email" is part of a form embedded from https:\/\/boards\.ats-vendor\.invalid, which is not this page's own address \(https:\/\/careers\.employer\.invalid\)\. This app does not type into a third-party embed, so nothing was entered here\./i,
         ),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe('reduced motion (issue #497)', () => {
+    function mockReducedMotion(reduce: boolean) {
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: reduce && query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+    }
+
+    function pointer(card: HTMLElement, type: string, clientX: number) {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperties(event, { clientX: { value: clientX }, pointerId: { value: 1 } });
+      fireEvent(card, event);
+    }
+
+    function dragRight() {
+      const card = screen.getByTestId('application-swipe-card');
+      pointer(card, 'pointerdown', 100);
+      pointer(card, 'pointermove', 140);
+      return card;
+    }
+
+    afterEach(() => {
+      // @ts-expect-error jsdom does not define matchMedia, so restore that absence
+      delete window.matchMedia;
+    });
+
+    it('tilts and animates the card by default', () => {
+      mockReducedMotion(false);
+      renderCard();
+      const card = dragRight();
+      expect(card.style.transform).toContain('rotate(');
+      pointer(card, 'pointerup', 140);
+      expect(card.style.transition).toContain('transform');
+    });
+
+    it('drops the tilt and the transform transition when reduced motion is set', () => {
+      mockReducedMotion(true);
+      renderCard();
+      const card = dragRight();
+      expect(card.style.transform).toBe('translateX(40px)');
+      pointer(card, 'pointerup', 140);
+      expect(card.style.transition).toBe('none');
+      expect(card.style.transform).not.toContain('rotate(');
     });
   });
 });

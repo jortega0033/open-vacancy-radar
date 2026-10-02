@@ -104,7 +104,7 @@ export function ApplicationsTable({
                 {onPrepareInterview && INTERVIEW_PREPARABLE_STATUSES.has(application.status) && (
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs"
+                    className="btn btn-ghost btn-sm px-1.5"
                     onClick={() => onPrepareInterview(application)}
                     aria-label={`Prepare interview for ${application.role} at ${application.company}`}
                   >
@@ -113,7 +113,7 @@ export function ApplicationsTable({
                 )}
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-ghost btn-sm px-1.5"
                   onClick={() => onEdit(application)}
                   aria-label={`Edit ${application.role} at ${application.company}`}
                 >
@@ -121,7 +121,7 @@ export function ApplicationsTable({
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs"
+                  className="btn btn-ghost btn-sm px-1.5"
                   onClick={() => onToggleArchive(application)}
                   aria-label={`${application.archived ? 'Restore' : 'Archive'} ${application.role} at ${application.company}`}
                 >
@@ -129,7 +129,7 @@ export function ApplicationsTable({
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs text-error"
+                  className="btn btn-ghost btn-sm px-1.5 text-error"
                   onClick={() => onDelete(application)}
                   aria-label={`Delete ${application.role} at ${application.company}`}
                 >

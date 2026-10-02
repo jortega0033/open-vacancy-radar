@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowLeft, ArrowRight, ArrowsLeftRight } from '@phosphor-icons/react';
 import type { ApplicationArtifactSummary, ApplicationAttemptRecord } from '../../window.js';
+import { usePrefersReducedMotion } from '../../use-prefers-reduced-motion.js';
 
 export interface ManualApplicationReviewCardProps {
   attempt: ApplicationAttemptRecord;
@@ -40,6 +41,7 @@ export function ManualApplicationReviewCard({
   onGenerateLetter,
 }: ManualApplicationReviewCardProps) {
   const [dragX, setDragX] = useState(0);
+  const reducedMotion = usePrefersReducedMotion();
   const originRef = useRef<number | null>(null);
   const dragXRef = useRef(0);
   const letterBlocked =
@@ -78,8 +80,10 @@ export function ManualApplicationReviewCard({
           title="Drag left to skip or right to continue"
           className={`relative z-10 col-start-1 row-start-1 mx-2 select-none overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-xl ${busy ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
           style={{
-            transform: `translateX(${dragX}px) rotate(${Math.max(-12, Math.min(12, dragX / 10))}deg)`,
-            transition: originRef.current === null ? 'transform 200ms ease-out' : 'none',
+            transform: reducedMotion
+              ? `translateX(${dragX}px)`
+              : `translateX(${dragX}px) rotate(${Math.max(-12, Math.min(12, dragX / 10))}deg)`,
+            transition: !reducedMotion && originRef.current === null ? 'transform 200ms ease-out' : 'none',
             touchAction: 'pan-y',
           }}
           onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
@@ -152,14 +156,14 @@ export function ManualApplicationReviewCard({
                   <div className="flex gap-1">
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-ghost btn-sm"
                       onClick={() => onOpenArtifact(document.id)}
                     >
                       Review
                     </button>
                     <button
                       type="button"
-                      className="btn btn-outline btn-xs"
+                      className="btn btn-outline btn-sm"
                       onClick={() => onSaveArtifact(document.id)}
                     >
                       Save copy
