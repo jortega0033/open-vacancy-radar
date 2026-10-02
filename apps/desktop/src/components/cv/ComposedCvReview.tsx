@@ -13,6 +13,7 @@ import { CvArtifactPanel } from './CvArtifactPanel.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner, WarningBanner } from '../shell/index.js';
 
 export interface ComposedCvReviewProps {
   cvId: string | null;
@@ -375,9 +376,9 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
         </div>
 
         {error && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {error}
-          </div>
+          </ErrorBanner>
         )}
         {approved && (
           <div className="text-sm font-medium" role="status">
@@ -386,10 +387,10 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
         )}
 
         {overlay && isApproved && needsReapproval && (
-          <div className="alert alert-warning text-sm" role="status">
+          <WarningBanner role="status">
             This CV was approved before the current document format. Your facts and wording are kept. Preview and approve
             it again to export it.
-          </div>
+          </WarningBanner>
         )}
 
         {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} sourceGaps={sourceGaps} />}

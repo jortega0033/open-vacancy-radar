@@ -301,7 +301,7 @@ export function ApplicationReviewSwipeCard({
             <span className={`badge badge-sm ${readiness.ready ? 'badge-success' : 'badge-warning badge-soft'}`}>
               {readiness.ready ? 'Ready for review' : 'Needs your input'}
             </span>
-            <span className="text-xs text-base-content/50">Final submission is always yours</span>
+            <span className="text-xs text-base-content/60">Final submission is always yours</span>
           </div>
           <h2 className="text-base font-semibold leading-snug">
             {attempt.role} <span className="text-base-content/60">at</span> {attempt.company}
@@ -362,7 +362,7 @@ export function ApplicationReviewSwipeCard({
         <div className="grid grid-cols-[1fr_auto_1fr] items-center border-t border-base-300 bg-base-100 px-4 py-2 text-xs font-semibold">
           <span className="flex items-center gap-1 text-base-content/60"><ArrowLeft size={15} weight="bold" aria-hidden="true" />Skip</span>
           <ArrowsLeftRight size={20} weight="bold" className="text-base-content/45" aria-hidden="true" />
-          <span className={`flex items-center justify-self-end gap-1 ${canSubmit ? 'text-success' : 'text-base-content/30'}`}>Submit<ArrowRight size={15} weight="bold" aria-hidden="true" /></span>
+          <span className={`flex items-center justify-self-end gap-1 ${canSubmit ? 'text-success' : 'text-base-content/60'}`}>Submit<ArrowRight size={15} weight="bold" aria-hidden="true" /></span>
         </div>
       </div>
       </div>

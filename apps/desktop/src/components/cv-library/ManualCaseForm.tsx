@@ -5,6 +5,7 @@ import { sha256Hex, sha256HexOfSource } from '../cv/content-hash.js';
 import type { VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import { mintManualCaseKey } from '../cv/vacancy-key.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface ManualCaseFormProps {
   /** The CVs the case can be started on, each shown with whether its source is ready for approval. */
@@ -144,9 +145,9 @@ export function ManualCaseForm({ documents, onSubmit, onCancel }: ManualCaseForm
         />
       </label>
       {error && (
-        <div className="alert alert-error text-sm" role="alert">
+        <ErrorBanner>
           {error}
-        </div>
+        </ErrorBanner>
       )}
       <div className="flex gap-2">
         <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>

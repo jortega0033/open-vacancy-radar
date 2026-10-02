@@ -138,7 +138,7 @@ export function ManualApplicationReviewCard({
           )}
 
           <div className="space-y-2 px-5 py-4">
-            <p className="text-xs font-semibold uppercase text-base-content/60">
+            <p className="ovr-eyebrow">
               Prepared documents
             </p>
             {documents.length === 0 ? (
@@ -185,7 +185,7 @@ export function ManualApplicationReviewCard({
             <ArrowsLeftRight
               size={20}
               weight="bold"
-              className="text-base-content/45"
+              className="text-base-content/60"
               aria-hidden="true"
             />
             <span className="flex items-center justify-self-end gap-1 text-success">

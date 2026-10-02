@@ -100,11 +100,11 @@ export function SessionDetail({ entry, onCancel, cancelling }: SessionDetailProp
       </dl>
 
       {/* The one place the boundary is stated to the user rather than merely enforced. */}
-      <p className="mt-2 text-xs text-base-content/50">
+      <p className="mt-2 text-xs text-base-content/60">
         The folder this session runs in is held by the app itself and is not shown here.
       </p>
 
-      <h4 className="mt-5 mb-2 text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
+      <h4 className="mt-5 mb-2 ovr-eyebrow">
         Activity
       </h4>
       <ActivityTimeline sessionId={view.id} entry={entry} />

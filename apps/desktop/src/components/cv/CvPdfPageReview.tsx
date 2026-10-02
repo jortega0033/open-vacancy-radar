@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CvArtifactRecord, CvEvidenceOverlayRecord } from '../../window.js';
 import { describeError } from './useAgentRun.js';
 import { openPdfForReview, type PdfReview } from './pdf-pages.js';
+import { ErrorBanner } from '../shell/index.js';
 
 /** More pages than any CV the app exports (the acceptance contract caps a CV at four). A file past
  * this is not drawn here at all, so a replaced or odd file cannot make the panel render without limit. */
@@ -208,9 +209,9 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
         </>
       )}
       {error && (
-        <div className="alert alert-error text-sm" role="alert">
+        <ErrorBanner>
           {error}
-        </div>
+        </ErrorBanner>
       )}
     </div>
   );

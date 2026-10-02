@@ -91,7 +91,7 @@ export function SavedJobsTable({
                 {job.verification ? (
                   <span className="badge badge-outline">{job.verification}</span>
                 ) : (
-                  <span className="text-base-content/50">Not verified</span>
+                  <span className="text-base-content/60">Not verified</span>
                 )}
               </td>
               <td data-label="Match" className="font-mono">

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { FileDashed, Info } from '@phosphor-icons/react';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { SectionHeading, VerificationSection } from './VerificationSection.js';
+import { ErrorBanner, Eyebrow } from '../shell/index.js';
 import {
   fitHighlights,
   formatDate,
@@ -25,9 +26,7 @@ export type PrepareState = 'idle' | 'preparing';
 function Card({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex h-full flex-col rounded-box border border-base-300 p-3.5">
-      <div className="text-xs font-semibold tracking-wide text-base-content/60 uppercase">
-        {label}
-      </div>
+      <Eyebrow as="h3">{label}</Eyebrow>
       {children}
     </div>
   );
@@ -93,7 +92,7 @@ function FitSummary({ result }: { result: SearchResult }) {
   return (
     <section aria-label="Profile fit summary" className="col-span-full rounded-box border border-base-300 p-3.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <h3 className="text-xs font-semibold tracking-wide text-base-content/60 uppercase">Profile fit</h3>
+        <h3 className="ovr-eyebrow">Profile fit</h3>
         {score === null ? (
           <span className="text-sm font-semibold">Not scored yet</span>
         ) : (
@@ -357,14 +356,14 @@ export function VacancyDetail({
         </div>
 
         {saveError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
+          <ErrorBanner className="mt-3">
             {saveError}
-          </div>
+          </ErrorBanner>
         )}
         {prepareError && (
-          <div className="alert alert-error alert-soft mt-3 text-sm" role="alert">
+          <ErrorBanner className="mt-3">
             {prepareError}
-          </div>
+          </ErrorBanner>
         )}
 
         <VerificationRow verification={result.verification} />

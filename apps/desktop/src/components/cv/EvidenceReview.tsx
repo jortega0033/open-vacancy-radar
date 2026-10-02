@@ -17,6 +17,7 @@ import { sourceAnchors } from './source-anchors.js';
 import type { VacancyLead } from './types.js';
 import { describeError } from './useAgentRun.js';
 import { caseKeyFor } from './vacancy-key.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface EvidenceReviewProps {
   cvId: string | null;
@@ -235,9 +236,9 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
         </p>
 
         {error && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {error}
-          </div>
+          </ErrorBanner>
         )}
         {notice && (
           <div className="text-sm text-base-content/70" role="status">

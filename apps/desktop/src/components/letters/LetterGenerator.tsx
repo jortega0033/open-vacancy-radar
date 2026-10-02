@@ -482,9 +482,10 @@ export function LetterGenerator({
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
       <aside className="w-full shrink-0 lg:w-72">
+        <h2 className="sr-only">Letter inputs</h2>
         <div className="flex flex-col gap-5">
           <section>
-            <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">Job</h3>
+            <h3 className="mb-2 ovr-eyebrow">Job</h3>
             <label className="block">
               <span className="sr-only">Job</span>
               <select
@@ -580,7 +581,7 @@ export function LetterGenerator({
                     placeholder="Paste the description and requirements here."
                     disabled={run.isBusy}
                   />
-                  <span className="mt-1 block text-xs text-base-content/50">
+                  <span className="mt-1 block text-xs text-base-content/60">
                     Optional, but the draft is only as specific as the posting text you give it.
                   </span>
                 </label>
@@ -589,7 +590,7 @@ export function LetterGenerator({
           </section>
 
           <section>
-            <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">CV</h3>
+            <h3 className="mb-2 ovr-eyebrow">CV</h3>
             {cvError && <ErrorBanner className="mb-2">{cvError}</ErrorBanner>}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
@@ -623,7 +624,7 @@ export function LetterGenerator({
           </section>
 
           <section>
-            <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+            <h3 className="mb-2 ovr-eyebrow">
               Document
             </h3>
             <div className="flex flex-col gap-2">
@@ -676,7 +677,7 @@ export function LetterGenerator({
           </section>
 
           <section>
-            <h3 className="mb-2 text-xs font-semibold tracking-wide text-base-content/50 uppercase">
+            <h3 className="mb-2 ovr-eyebrow">
               Personal instructions
             </h3>
             <label className="block">
@@ -692,7 +693,7 @@ export function LetterGenerator({
                 disabled={run.isBusy}
               />
             </label>
-            <p className="mt-1 text-xs text-base-content/50">
+            <p className="mt-1 text-xs text-base-content/60">
               Optional. Instructions only steer which of your confirmed facts get cited: nothing here
               can add a claim your CV does not carry.
             </p>
@@ -721,17 +722,17 @@ export function LetterGenerator({
               </div>
             )}
             {!cvDocument && cvs.length > 0 && (
-              <p className="text-xs text-base-content/50">Choose a CV to enable generation.</p>
+              <p className="text-xs text-base-content/60">Choose a CV to enable generation.</p>
             )}
             {!lead && (
-              <p className="text-xs text-base-content/50">
+              <p className="text-xs text-base-content/60">
                 Choose a job, or enter a role and a company, to enable generation.
               </p>
             )}
             {bundle && !isGrounded && (
-              <p className="text-xs text-base-content/50">{GROUNDED_LETTER_UNAVAILABLE}</p>
+              <p className="text-xs text-base-content/60">{GROUNDED_LETTER_UNAVAILABLE}</p>
             )}
-            <p className="text-xs text-base-content/50">
+            <p className="text-xs text-base-content/60">
               Generated on your own {PROVIDER_LABEL[provider]} CLI through AgentDock. Nothing is
               sent to a letter-writing service.
             </p>
@@ -866,7 +867,7 @@ export function LetterGenerator({
                 setSaveState('idle');
               }}
             />
-            <p className="mt-2 text-xs text-base-content/50">
+            <p className="mt-2 text-xs text-base-content/60">
               {GROUNDED_LETTER_DISCLOSURE} Read it before you send it: you are responsible for the
               final text.
             </p>

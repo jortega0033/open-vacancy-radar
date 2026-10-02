@@ -7,6 +7,7 @@ import { buildBundledDocumentPrompt } from '../generation/prompts.js';
 import { AiOutput } from './AiOutput.js';
 import { describeError, useAgentRun } from './useAgentRun.js';
 import type { CvDocument, VacancyLead } from './types.js';
+import { ErrorBanner } from '../shell/index.js';
 
 export interface TailorCvProps {
   cv: CvDocument | null;
@@ -128,9 +129,9 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
         </div>
 
         {copyState === 'failed' && copyError && (
-          <div className="alert alert-error text-sm" role="alert">
+          <ErrorBanner>
             {copyError}
-          </div>
+          </ErrorBanner>
         )}
         {copiedDraft && (
           <div className="alert alert-warning text-sm" role="status">

@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState } from 'react';
 import type { CandidateProfile } from '@open-vacancy-radar/vacancy-engine';
 import type { CandidateProfilePatch } from '../../../electron/vacancy-profile-validate.js';
@@ -261,7 +262,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
             onClick={onClose}
             disabled={busy}
           >
-            ✕
+            <X size={16} weight="bold" aria-hidden="true" />
           </button>
         </div>
 
@@ -289,7 +290,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
             {documents && documents.length > 0 && (
               <>
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     CV
                   </span>
                   <select
@@ -348,7 +349,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </p>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Current role
                   </span>
                   <input
@@ -361,7 +362,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
 
                 <div className="grid grid-cols-2 gap-2.5">
                   <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                    <span className="mb-1.5 block ovr-eyebrow">
                       Years of experience
                     </span>
                     <input
@@ -374,7 +375,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                    <span className="mb-1.5 block ovr-eyebrow">
                       Location
                     </span>
                     <input
@@ -387,7 +388,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </div>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Professional language
                   </span>
                   <input
@@ -399,7 +400,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Strongest skills
                   </span>
                   <textarea
@@ -413,7 +414,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Additional skills
                   </span>
                   <textarea
@@ -427,7 +428,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Target roles
                   </span>
                   <textarea
@@ -441,7 +442,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Considered roles
                   </span>
                   <textarea
@@ -455,7 +456,7 @@ export function FillProfileFromCvDrawer({ profile, onApply, onClose, autoStart }
                 </label>
 
                 <label className="block">
-                  <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-base-content/60">
+                  <span className="mb-1.5 block ovr-eyebrow">
                     Country
                   </span>
                   <input

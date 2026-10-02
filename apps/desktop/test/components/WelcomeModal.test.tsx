@@ -211,7 +211,7 @@ describe('first-launch welcome modal', () => {
     render(<App />);
     const dialog = await screen.findByRole('dialog', { name: /welcome to open vacancy radar/i });
 
-    // The header's ✕ and the backdrop share the "Close" label, exactly as the Fill-from-CV drawer
+    // The header's close icon and the backdrop share the "Close" label, exactly as the Fill-from-CV drawer
     // does; both are real dismissals, so asserting on the first is enough to prove the exit exists.
     fireEvent.click(within(dialog).getAllByLabelText('Close')[0]!);
 
