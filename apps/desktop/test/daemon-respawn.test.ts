@@ -141,6 +141,37 @@ describe('createDaemonRespawn: scheduleRespawn', () => {
   });
 });
 
+describe('createDaemonRespawn: supersede', () => {
+  it('drops a respawn timer that was still waiting out its backoff', async () => {
+    vi.useFakeTimers();
+    const { respawn, spawnDaemon } = harness();
+
+    respawn.scheduleRespawn('daemon process exited unexpectedly');
+    respawn.supersede();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(spawnDaemon).not.toHaveBeenCalled();
+  });
+
+  it('refills the retry budget and marks the running attempt as no longer current', async () => {
+    vi.useFakeTimers();
+    const { respawn, spawnDaemon, onExhausted } = harness();
+    for (let i = 0; i < 4; i += 1) {
+      respawn.scheduleRespawn(`exit ${i}`);
+      await vi.advanceTimersByTimeAsync(8_000);
+    }
+    const running = respawn.nextGeneration();
+
+    respawn.supersede();
+    expect(respawn.isCurrentGeneration(running)).toBe(false);
+
+    respawn.scheduleRespawn('after a manual restart');
+    expect(onExhausted).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(spawnDaemon).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe('createDaemonRespawn: generation guard', () => {
   it('counts generations up from a real spawn, and only the latest one reads as current', () => {
     const { respawn } = harness();
