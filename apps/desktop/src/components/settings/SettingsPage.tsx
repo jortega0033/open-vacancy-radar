@@ -386,7 +386,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <SettingsSection title="Startup">
             <SettingsRow
               label="Launch at login"
-              description="Start Open Vacancy Radar automatically when you sign in to this computer. The system entry is registered by installed builds; in development only the preference is stored."
+              description="Start Open Vacancy Radar automatically when you sign in to this computer."
             >
               <ToggleSwitch
                 label="Launch at login"
@@ -408,12 +408,16 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             </SettingsRow>
             <SettingsRow
               label="Automatically check for new vacancies while running in the background"
-              description="Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Has no effect unless Keep running in the background when closed is also on."
+              description={
+                settings.minimizeToTrayOnClose
+                  ? 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app.'
+                  : 'Turn on Keep running in the background first'
+              }
             >
               <ToggleSwitch
                 label="Automatically check for new vacancies while running in the background"
                 checked={settings.autoScanEnabled}
-                disabled={disabled}
+                disabled={!settings.minimizeToTrayOnClose || disabled}
                 onChange={(autoScanEnabled) => changeField({ autoScanEnabled })}
               />
             </SettingsRow>

@@ -118,14 +118,14 @@ export function headerCopy(
     case 'cv':
       return { title: 'CV', subtitle: 'Documents used for match analysis and letters' };
     case 'letters':
-      return { title: 'Letters', subtitle: counts === undefined ? 'Loading…' : `${counts.letters} documents` };
+      return { title: 'Letters', subtitle: counts === undefined ? 'Loading…' : `${counts.letters} ${counts.letters === 1 ? 'letter' : 'letters'}` };
     case 'agent-workspace':
       // No count: the number of sessions is not part of `WorkspaceCounts` (it lives in the daemon,
       // not the workspace database), and inventing a badge for it would mean a second source of
       // truth the shell would have to keep in step with the page's own list.
       return { title: 'AI Workspace', subtitle: 'Agent sessions running in folders you approved' };
     case 'runtime':
-      return { title: 'AI Runtime', subtitle: 'Your own Claude Code / Codex CLI, via AgentDock' };
+      return { title: 'AI Runtime', subtitle: 'Your own Claude Code or Codex, running on this computer' };
     case 'settings':
       return { title: 'Settings', subtitle: 'Saved automatically to local data' };
   }
