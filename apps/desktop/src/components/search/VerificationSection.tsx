@@ -1,4 +1,3 @@
-import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { formatDate, type SearchResult } from './results.js';
 
 function KeyValue({ items }: { items: { k: string; v: string }[] }) {
@@ -33,37 +32,18 @@ export interface VerificationSectionProps {
 }
 
 /**
- * "Employer verification & sources". The pipeline has no employer-verification step for almost
- * every row, and this panel says so plainly. The one exception is a Netherlands-located row where
- * `worldwideVerification` found a best-effort Wikidata sponsor match (see `results.ts`) -- that
- * row's own `result.verification.label`/`.note` already say so honestly (and far more tentatively
- * than a curated match would), so they are shown as-is instead of the fixed "not available" copy.
- * Where the same run happened to verify this exact URL against an official employer/ATS source,
- * that separate (vacancy-level, not employer-level) evidence is shown for what it is, regardless of
- * the sponsor-match outcome.
+ * "Sources": the official vacancy check for this exact URL. The employer-verification explanation
+ * is not repeated here -- the detail pane states it once, in its one-line row or sponsor-match card
+ * (see `VacancyDetail.tsx`'s `VerificationRow`, issue #465). Where the same run happened to verify
+ * this URL against an official employer/ATS source, that separate (vacancy-level, not
+ * employer-level) evidence is shown for what it is.
  */
 export function VerificationSection({ result }: VerificationSectionProps) {
   const official = result.official;
 
   return (
     <section className="mt-6">
-      <SectionHeading>Employer verification &amp; sources</SectionHeading>
-
-      <div className="rounded-box mt-3 border border-base-300 bg-base-200 p-4">
-        <div className="text-sm font-semibold">
-          {result.verification.level === 'possible_sponsor_match'
-            ? 'A best-effort sponsor match was found -- see the summary card above.'
-            : 'Employer verification is not available for this vacancy.'}
-        </div>
-        {/* Neither branch repeats `result.verification.note` here: the summary card above
-            (VacancyDetail.tsx's "Employer verification" Card) already shows the label and note
-            unconditionally, for every level, so doing it again here would duplicate it verbatim. */}
-        <p className="mt-1.5 text-sm leading-relaxed text-base-content/70">
-          You can still compare this vacancy against your CV, save it, generate a letter and track
-          an application. Discovery source: {discoveryProviderLabel(result.provider)}. Discovery
-          decision: {result.raw.decision.replace(/_/g, ' ')}.
-        </p>
-      </div>
+      <SectionHeading>Sources</SectionHeading>
 
       <div className="rounded-box mt-3 border border-base-300 p-4">
         <div className="text-sm font-semibold">Official vacancy check</div>
