@@ -7,5 +7,5 @@ export { CvSourceReview } from './CvSourceReview.js';
 export type { CvSourceReviewProps } from './CvSourceReview.js';
 export { CvUploadAction } from './CvUploadAction.js';
 export type { CvUploadActionProps } from './CvUploadAction.js';
-export { CV_KIND_LABEL, cvParseStatus, formatCvDate, skillsToText, textToSkills } from './cv-profile.js';
+export { CV_KIND_LABEL, cvParseStatus, formatCvDate, formatCvDateTime, skillsToText, textToSkills } from './cv-profile.js';
 export type { ParseStatus, ParseStatusTone } from './cv-profile.js';

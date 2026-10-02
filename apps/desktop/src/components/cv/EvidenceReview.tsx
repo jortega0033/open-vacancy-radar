@@ -92,23 +92,25 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
   /** Re-reads the overlay, builds a patch from that fresh copy, and saves it. The sibling panels
    * write to the same row, so a patch built from this component's own state could undo theirs. */
   const mutate = useCallback(
-    async (build: (fresh: CvEvidenceOverlayRecord) => CvEvidenceOverlayPatch | null, failure: string) => {
-      if (!cvId || !vacancyKey) return;
+    async (build: (fresh: CvEvidenceOverlayRecord) => CvEvidenceOverlayPatch | null, failure: string): Promise<boolean> => {
+      if (!cvId || !vacancyKey) return false;
       setError(undefined);
       setNotice(undefined);
       try {
         const fresh = await window.workspace.getCvEvidenceOverlay(cvId, vacancyKey);
-        if (!fresh) return;
+        if (!fresh) return false;
         const patch = build(fresh);
         if (!patch) {
           setOverlay(fresh);
-          return;
+          return false;
         }
         setOverlay(await window.workspace.updateCvEvidenceOverlay(fresh.id, patch));
+        return true;
       } catch (err) {
         setError(describeError(err, failure));
         const refreshed = await window.workspace.getCvEvidenceOverlay(cvId, vacancyKey).catch(() => null);
         if (refreshed) setOverlay(refreshed);
+        return false;
       }
     },
     [cvId, vacancyKey],
@@ -120,6 +122,33 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
         (fresh) => ({ facts: fresh.facts.map((fact) => (fact.factId === factId ? { ...fact, approval } : fact)) }),
         approval === 'approved' ? 'could not approve that fact' : 'could not reject that fact',
       ),
+    [mutate],
+  );
+
+  /** Puts a rejected fact back to "Not approved yet". The main process refuses any other way back. */
+  const restoreFact = useCallback(
+    async (factId: string) => {
+      const saved = await mutate(
+        (fresh) => ({ facts: fresh.facts.map((fact) => (fact.factId === factId && fact.approval === 'rejected' ? { ...fact, approval: 'proposed' as const } : fact)) }),
+        'could not restore that fact',
+      );
+      if (saved) setNotice('Restored. It is not approved yet.');
+    },
+    [mutate],
+  );
+
+  const restoreVariant = useCallback(
+    async (variantId: string) => {
+      const saved = await mutate(
+        (fresh) => ({
+          wordingVariants: fresh.wordingVariants.map((variant) =>
+            variant.variantId === variantId && variant.status === 'rejected' ? { ...variant, status: 'draft' as const } : variant,
+          ),
+        }),
+        'could not restore that wording',
+      );
+      if (saved) setNotice('Restored. It is a draft and not approved yet.');
+    },
     [mutate],
   );
 
@@ -165,7 +194,6 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
   }, [mutate]);
 
   if (!cvId || !vacancy || !overlay) return null;
-  if (overlay.facts.length === 0 && overlay.wordingVariants.length === 0) return null;
 
   const factById = new Map(overlay.facts.map((fact) => [fact.factId, fact]));
   const conflicts = findCvFactConflicts(overlay.facts);
@@ -230,6 +258,10 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
               </ul>
             </div>
           </div>
+        )}
+
+        {overlay.facts.length === 0 && (
+          <p className="text-sm text-base-content/60">Facts appear here after you answer a question about a requirement.</p>
         )}
 
         <ul className="flex flex-col gap-3" aria-label="Facts">
@@ -434,11 +466,21 @@ export function EvidenceReview({ cvId, vacancy, sourceCv }: EvidenceReviewProps)
               {pastFacts.map((fact) => (
                 <li key={fact.factId}>
                   Fact {fact.approval}: {fact.activity || 'Not my work'}
+                  {fact.approval === 'rejected' && (
+                    <button type="button" className="btn btn-outline btn-xs ml-2" onClick={() => void restoreFact(fact.factId)}>
+                      Restore this fact
+                    </button>
+                  )}
                 </li>
               ))}
               {pastVariants.map((variant) => (
                 <li key={variant.variantId}>
                   Wording {variant.status}: {variant.text}
+                  {variant.status === 'rejected' && (
+                    <button type="button" className="btn btn-outline btn-xs ml-2" onClick={() => void restoreVariant(variant.variantId)}>
+                      Restore this wording
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

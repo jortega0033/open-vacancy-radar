@@ -6,7 +6,8 @@ import {
   CV_REQUIREMENT_MAX_BATCHES,
   currentCvJdRevisionId,
   describeCvJdGaps,
-  describeCvRequirementGaps,
+  describeCvRequirementGapRows,
+  type CvRequirementGap,
   locateJdQuote,
 } from '../../../electron/workspace/cv-evidence-schema.js';
 import type {
@@ -119,6 +120,15 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   const [exclusionReason, setExclusionReason] = useState('');
   /** Which requirement's clarification form is open, at most one at a time. */
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null);
+  /** Hides every row that does not need the candidate, so the open ones are not lost in the list. */
+  const [showOnlyOpen, setShowOnlyOpen] = useState(false);
+  /** A row waiting to take keyboard focus once the list has rendered (a hidden row first needs the filter off). */
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  /** The row focus was last on, so "Next open item" carries on from there. */
+  const lastRowId = useRef<string | null>(null);
+  /** Which row of a reason a repeated click on it reaches next. */
+  const gapCursor = useRef(new Map<string, number>());
 
   const vacancyKey = vacancy ? caseKeyFor(vacancy) : null;
 
@@ -153,6 +163,12 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     if (lastReportedRevision.current !== undefined) onOverlayChanged?.();
     lastReportedRevision.current = caseRevision;
   }, [caseRevision, onOverlayChanged]);
+
+  useEffect(() => {
+    if (!pendingFocusId) return;
+    rowRefs.current.get(pendingFocusId)?.focus();
+    setPendingFocusId(null);
+  }, [pendingFocusId, showOnlyOpen]);
 
   const canRun = !!cvId && !!cv && !!vacancy && !run.isBusy;
 
@@ -370,7 +386,16 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   // JD completeness, stale/ungrounded approved wording -- is `describeCvEvidenceOverlayGaps`'s job
   // at the composition/approval gate (slice 3), where a *live* current-source hash is actually
   // being checked against something about to be approved, not just displayed.
-  const requirementGaps = overlay ? describeCvRequirementGaps(overlay) : [];
+  const requirementGaps: CvRequirementGap[] = overlay ? describeCvRequirementGapRows(overlay) : [];
+  const activeRequirements = overlay?.requirements.filter((requirement) => !requirement.excluded) ?? [];
+  const reviewedCount = activeRequirements.filter((requirement) => requirement.reviewed).length;
+  // A row needs the candidate while it is unreviewed, or required and still without evidence.
+  const openIds = new Set(
+    activeRequirements
+      .filter((requirement) => !requirement.reviewed || (requirement.classification === 'required' && requirement.evidenceClass === 'needs_verification'))
+      .map((requirement) => requirement.requirementId),
+  );
+  const shownRequirements = overlay ? (showOnlyOpen ? overlay.requirements.filter((requirement) => openIds.has(requirement.requirementId)) : overlay.requirements) : [];
   const currentRevisionId = overlay ? currentCvJdRevisionId(overlay) : '';
   const approvedFacts = overlay?.facts.filter((fact) => fact.approval === 'approved' && fact.verification !== 'candidate_confirmed_gap') ?? [];
   const anchors = sourceAnchors(sourceCv);
@@ -379,6 +404,30 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
   // Unlike the rest of the approval gate, the JD itself is shown here: a mapping built on an empty
   // or cut-off posting is worth nothing, and the candidate should see that before reviewing rows.
   const jdGaps = overlay ? describeCvJdGaps(overlay) : [];
+
+  function focusRow(requirementId: string) {
+    if (showOnlyOpen && !openIds.has(requirementId)) setShowOnlyOpen(false);
+    setPendingFocusId(requirementId);
+  }
+
+  function focusNextOpenRow() {
+    if (!overlay) return;
+    const order = overlay.requirements.map((requirement) => requirement.requirementId);
+    const start = lastRowId.current ? order.indexOf(lastRowId.current) : -1;
+    for (let step = 1; step <= order.length; step += 1) {
+      const id = order[(start + step) % order.length]!;
+      if (openIds.has(id)) {
+        focusRow(id);
+        return;
+      }
+    }
+  }
+
+  function focusGapRow(gap: CvRequirementGap) {
+    const index = (gapCursor.current.get(gap.reason) ?? 0) % gap.requirementIds.length;
+    gapCursor.current.set(gap.reason, index + 1);
+    focusRow(gap.requirementIds[index]!);
+  }
 
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
@@ -473,7 +522,15 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
               <div className="alert alert-warning text-sm" role="status">
                 <ul className="list-disc pl-4">
                   {requirementGaps.map((gap) => (
-                    <li key={gap}>This list cannot back an approved CV yet: {gap}.</li>
+                    <li key={gap.reason}>
+                      {gap.requirementIds.length > 0 ? (
+                        <button type="button" className="link text-left" onClick={() => focusGapRow(gap)}>
+                          This list cannot back an approved CV yet: {gap.reason}.
+                        </button>
+                      ) : (
+                        <>This list cannot back an approved CV yet: {gap.reason}.</>
+                      )}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -482,6 +539,12 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                 Every requirement on this list is reviewed against the current job description.
               </div>
             )}
+            {coverageCurrent === 'partial' && overlay.requirementCoverage.batches > 0 && (
+              <p className="text-sm text-base-content/70">
+                Read so far: {overlay.requirementCoverage.batches} {overlay.requirementCoverage.batches === 1 ? 'batch' : 'batches'} of the job
+                description. The rest has not been read yet.
+              </p>
+            )}
             {coverageCurrent !== 'complete' && (
               <button
                 type="button"
@@ -489,18 +552,52 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                 onClick={() => void confirmCoverage()}
                 disabled={!overlay.jdSnapshot.trim()}
               >
-                I read the whole job description and this list covers it
+                {coverageCurrent === 'partial'
+                  ? 'I read the rest myself and added anything missing'
+                  : 'I read the whole job description and this list covers it'}
               </button>
             )}
           </div>
         )}
 
         {overlay && overlay.requirements.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3" aria-label="Review progress">
+            <p className="text-sm font-medium">
+              {reviewedCount} of {activeRequirements.length} reviewed.{openIds.size > 0 ? ` ${openIds.size} need your answer.` : ''}
+            </p>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-xs"
+                checked={showOnlyOpen}
+                onChange={(event) => setShowOnlyOpen(event.currentTarget.checked)}
+              />
+              Show only what needs me
+            </label>
+            <button type="button" className="btn btn-outline btn-xs" onClick={focusNextOpenRow} disabled={openIds.size === 0}>
+              Next open item
+            </button>
+          </div>
+        )}
+
+        {overlay && overlay.requirements.length > 0 && showOnlyOpen && shownRequirements.length === 0 && (
+          <p className="text-sm text-base-content/60">Nothing needs you right now. Turn the filter off to see every requirement.</p>
+        )}
+
+        {overlay && shownRequirements.length > 0 && (
           <ul className="flex flex-col gap-3" aria-label="Requirement mapping">
-            {overlay.requirements.map((requirement) => (
+            {shownRequirements.map((requirement) => (
               <li
                 key={requirement.requirementId}
-                className={`rounded-box border border-base-300 p-3 text-sm ${requirement.excluded ? 'bg-base-200/50 text-base-content/60' : ''}`}
+                ref={(element) => {
+                  if (element) rowRefs.current.set(requirement.requirementId, element);
+                  else rowRefs.current.delete(requirement.requirementId);
+                }}
+                tabIndex={-1}
+                onFocus={() => {
+                  lastRowId.current = requirement.requirementId;
+                }}
+                className={`rounded-box border border-base-300 p-3 text-sm focus:outline-2 focus:outline-primary ${requirement.excluded ? 'bg-base-200/50 text-base-content/60' : ''}`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium">
@@ -696,6 +793,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                     )}
                     {openRequirementId === requirement.requirementId && (
                       <ClarificationForm
+                        requirementText={requirement.text}
                         sourceCv={sourceCv}
                         onAnswer={(answer) => void handleAnswer(requirement, answer)}
                         onCancel={() => setOpenRequirementId(null)}
@@ -708,33 +806,38 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
           </ul>
         )}
 
-        {cvId && vacancy && (
-          <div className="flex flex-col gap-2">
-            <input
-              type="text"
-              className="input input-sm"
-              placeholder="Add a requirement the extraction missed"
-              value={newRequirementText}
-              onChange={(event) => setNewRequirementText(event.currentTarget.value)}
-              aria-label="New requirement text"
-            />
-            <textarea
-              className="textarea textarea-sm"
-              rows={2}
-              placeholder="Exact quote from the job description"
-              value={newRequirementQuote}
-              onChange={(event) => setNewRequirementQuote(event.currentTarget.value)}
-              aria-label="Exact quote from the job description"
-            />
-            <button
-              type="button"
-              className="btn btn-outline btn-sm self-start"
-              onClick={() => void handleAddRequirement()}
-              disabled={newRequirementText.trim().length === 0 || newRequirementQuote.trim().length === 0}
-            >
-              Add
-            </button>
-          </div>
+        {cvId && vacancy && overlay && (overlay.requirements.length > 0 || coverageCurrent !== 'not_run') && (
+          <details className="rounded-box border border-base-300 p-3">
+            <summary className="cursor-pointer text-sm font-medium">Add a requirement the list missed</summary>
+            <div className="mt-2 flex flex-col gap-2">
+              <label className="flex flex-col gap-1 text-xs font-medium">
+                What the requirement says
+                <input
+                  type="text"
+                  className="input input-sm font-normal"
+                  value={newRequirementText}
+                  onChange={(event) => setNewRequirementText(event.currentTarget.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium">
+                Exact quote from the job description
+                <textarea
+                  className="textarea textarea-sm font-normal"
+                  rows={2}
+                  value={newRequirementQuote}
+                  onChange={(event) => setNewRequirementQuote(event.currentTarget.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm self-start"
+                onClick={() => void handleAddRequirement()}
+                disabled={newRequirementText.trim().length === 0 || newRequirementQuote.trim().length === 0}
+              >
+                Add requirement
+              </button>
+            </div>
+          </details>
         )}
       </div>
     </div>
