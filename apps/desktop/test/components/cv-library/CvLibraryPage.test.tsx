@@ -728,16 +728,16 @@ describe('CvLibraryPage', () => {
       fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
       expect(within(form).getByRole('alert')).toHaveTextContent(/role, company and the job description are all required/i);
 
-      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
-      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
       fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
       expect(within(form).getByRole('alert')).toBeInTheDocument();
     });
 
-    it('opens the workspace on a manual case without creating a Saved Job or writing a case row yet', async () => {
+    it('opens the workspace on a manual case and stores the case, but creates no Saved Job', async () => {
       const createSavedJob = vi.fn();
       const updateSavedJob = vi.fn();
-      const createCvEvidenceOverlay = vi.fn();
+      const createCvEvidenceOverlay = vi.fn().mockResolvedValue(undefined);
       const getCvEvidenceOverlay = vi.fn().mockResolvedValue(null);
       installWorkspaceBridge({
         listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
@@ -749,9 +749,9 @@ describe('CvLibraryPage', () => {
       installCvBridge();
       const form = await openForm();
 
-      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
-      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
-      fireEvent.change(within(form).getByLabelText('Job description'), {
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Job description (required)'), {
         target: { value: 'Build the freight planner. You must know TypeScript.' },
       });
       fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
@@ -761,10 +761,10 @@ describe('CvLibraryPage', () => {
       await waitFor(() => expect(getCvEvidenceOverlay).toHaveBeenCalledWith('cv-1', expect.stringMatching(/^manual:/)));
       expect(createSavedJob).not.toHaveBeenCalled();
       expect(updateSavedJob).not.toHaveBeenCalled();
-      expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
+      expect(createCvEvidenceOverlay).toHaveBeenCalledTimes(1);
     });
 
-    it('saves a manual case under a minted manual key with origin manual', async () => {
+    it('stores the manual case under a minted manual key with origin manual when the workspace opens', async () => {
       const createCvEvidenceOverlay = vi
         .fn()
         .mockImplementation(async (input) => ({ ...input, id: 'o-1', jdRevisions: [], jdIncompleteReasons: [] }));
@@ -775,18 +775,20 @@ describe('CvLibraryPage', () => {
       installCvBridge();
       const form = await openForm();
 
-      fireEvent.change(within(form).getByLabelText('Role'), { target: { value: 'Platform Engineer' } });
-      fireEvent.change(within(form).getByLabelText('Company'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
       fireEvent.change(within(form).getByLabelText(/link to the posting/i), {
         target: { value: 'https://jobs.example.invalid/9' },
       });
-      fireEvent.change(within(form).getByLabelText('Job description'), { target: { value: 'Build the freight planner.' } });
+      fireEvent.change(within(form).getByLabelText('Job description (required)'), { target: { value: 'Build the freight planner.' } });
       fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
 
-      fireEvent.click(await screen.findByRole('button', { name: /save job description/i }));
-      await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalled());
+      await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalledTimes(1));
       expect(createCvEvidenceOverlay).toHaveBeenCalledWith(
         expect.objectContaining({
+          cvId: 'cv-1',
+          caseTitle: 'Platform Engineer',
+          caseCompany: 'Northwind Freight',
           vacancyKey: expect.stringMatching(/^manual:/),
           origin: 'manual',
           jdOrigin: 'manual',
@@ -794,6 +796,121 @@ describe('CvLibraryPage', () => {
           jdSnapshot: 'Build the freight planner.',
         }),
       );
+    });
+
+    it('marks the required fields in text and leaves the link as optional', async () => {
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([makeCv()]) });
+      installCvBridge();
+      const form = await openForm();
+
+      expect(within(form).getByLabelText('Role (required)')).toBeInTheDocument();
+      expect(within(form).getByLabelText('Company (required)')).toBeInTheDocument();
+      expect(within(form).getByLabelText('Job description (required)')).toBeInTheDocument();
+      expect(within(form).getByLabelText('Link to the posting (optional)')).toBeInTheDocument();
+    });
+
+    function fillForm(form: HTMLElement) {
+      fireEvent.change(within(form).getByLabelText('Role (required)'), { target: { value: 'Platform Engineer' } });
+      fireEvent.change(within(form).getByLabelText('Company (required)'), { target: { value: 'Northwind Freight' } });
+      fireEvent.change(within(form).getByLabelText('Job description (required)'), { target: { value: 'Build the freight planner.' } });
+    }
+
+    it('offers the CV to tailor with its readiness, defaulting to the default CV', async () => {
+      const ready = makeCv({ id: 'cv-ready', name: 'Ready CV.pdf', source: makeSource() });
+      const unreviewed = makeCv({ id: 'cv-unreviewed', name: 'Jake-Ortega.pdf', source: makeSource({ reviewedAt: '' }) });
+      const bare = makeCv({ id: 'cv-bare', name: 'Bare CV.pdf', isDefault: true, source: null });
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([ready, unreviewed, bare]) });
+      installCvBridge();
+      const form = await openForm();
+
+      const select = within(form).getByLabelText('CV to tailor');
+      expect(within(select).getAllByRole('option').map((option) => option.textContent)).toEqual([
+        'Ready CV.pdf (ready)',
+        'Jake-Ortega.pdf (needs your review)',
+        'Bare CV.pdf (no source record yet)',
+      ]);
+      expect(select).toHaveValue('cv-bare');
+      expect(within(form).getByText(/cannot be approved until its source is reviewed/i)).toBeInTheDocument();
+
+      fireEvent.change(select, { target: { value: 'cv-ready' } });
+      expect(within(form).queryByText(/cannot be approved until its source is reviewed/i)).not.toBeInTheDocument();
+    });
+
+    it('stores the case on the chosen CV and opens the workspace on that CV', async () => {
+      const createCvEvidenceOverlay = vi.fn().mockResolvedValue(undefined);
+      installWorkspaceBridge({
+        listCvDocuments: vi
+          .fn()
+          .mockResolvedValue([makeCv({ id: 'cv-a', name: 'A.pdf', isDefault: true }), makeCv({ id: 'cv-b', name: 'B.pdf' })]),
+        createCvEvidenceOverlay,
+      });
+      installCvBridge();
+      const form = await openForm();
+
+      fillForm(form);
+      fireEvent.change(within(form).getByLabelText('CV to tailor'), { target: { value: 'cv-b' } });
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      await waitFor(() => expect(createCvEvidenceOverlay).toHaveBeenCalledWith(expect.objectContaining({ cvId: 'cv-b' })));
+      expect(await screen.findByRole('combobox', { name: /use saved cv/i })).toHaveValue('cv-b');
+    });
+
+    it('lists the case under Tailoring cases when the candidate leaves right after opening', async () => {
+      const stored: unknown[] = [];
+      const createCvEvidenceOverlay = vi.fn().mockImplementation(async (input: Record<string, unknown>) => {
+        stored.push({ ...input, id: 'o-1', jdRevisions: [], artifacts: [], state: 'needs_input', origin: 'manual', jdSnapshot: input.jdSnapshot });
+      });
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
+        createCvEvidenceOverlay,
+        listCvEvidenceOverlays: vi.fn().mockImplementation(async () => stored),
+      });
+      installCvBridge();
+      const form = await openForm();
+      fillForm(form);
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+      await screen.findByLabelText('Full job description text');
+
+      fireEvent.click(screen.getByRole('button', { name: /back to cv library/i }));
+
+      expect(await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV' })).toHaveTextContent('Platform Engineer at Northwind Freight');
+    });
+
+    it('keeps the form and the pasted text when storing the case fails, and retries on the next press', async () => {
+      const createCvEvidenceOverlay = vi.fn().mockRejectedValueOnce(new Error('database is locked')).mockResolvedValue(undefined);
+      installWorkspaceBridge({
+        listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
+        createCvEvidenceOverlay,
+      });
+      installCvBridge();
+      const form = await openForm();
+      fillForm(form);
+
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      expect(await within(form).findByRole('alert')).toHaveTextContent('database is locked');
+      expect(within(form).getByLabelText('Job description (required)')).toHaveValue('Build the freight planner.');
+      expect(screen.queryByLabelText('Full job description text')).not.toBeInTheDocument();
+
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+      expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('Build the freight planner.');
+      expect(createCvEvidenceOverlay).toHaveBeenCalledTimes(2);
+    });
+
+    it('opens without storing anything when the library has no CV', async () => {
+      const createCvEvidenceOverlay = vi.fn();
+      installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([]), createCvEvidenceOverlay });
+      installCvBridge();
+      render(<CvLibraryPage />);
+      fireEvent.click(await screen.findByRole('button', { name: /tailor for a job/i }));
+      const form = await screen.findByRole('form', { name: /tailor for a job/i });
+      expect(within(form).getByText(/no cv in your library yet/i)).toBeInTheDocument();
+      fillForm(form);
+
+      fireEvent.click(within(form).getByRole('button', { name: /open tailoring workspace/i }));
+
+      expect(await screen.findByLabelText('Full job description text')).toHaveTextContent('Build the freight planner.');
+      expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
     });
 
     it('goes back to the library from the workspace', async () => {
