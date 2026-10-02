@@ -14,6 +14,8 @@ export interface MenuProps {
   disabled?: boolean;
   /** Class names for the trigger button. */
   triggerClassName?: string;
+  /** Overrides the trigger's accessible name, for example to name the row an Export menu belongs to. */
+  triggerAriaLabel?: string;
   /** Class names for the popup list (width, spacing). */
   menuClassName?: string;
   /** Class names for the element that wraps the trigger and the popup. */
@@ -32,6 +34,7 @@ export function Menu({
   items,
   disabled,
   triggerClassName,
+  triggerAriaLabel,
   menuClassName = '',
   className = '',
 }: MenuProps) {
@@ -136,6 +139,7 @@ export function Menu({
         id={triggerId}
         type="button"
         className={triggerClassName}
+        aria-label={triggerAriaLabel}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}

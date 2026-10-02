@@ -57,7 +57,7 @@ test.describe('Letters', () => {
     await expect(row).toContainText('Motivation letter — Redwood Software');
     await expect(row).toContainText('Senior Frontend Engineer');
 
-    await row.getByRole('button', { name: 'Open', exact: true }).click();
+    await row.getByRole('button', { name: /^Open / }).click();
     await expect(window.getByRole('tab', { name: 'Generator' })).toHaveAttribute('aria-selected', 'true');
 
     const body = window.getByRole('textbox', { name: /letter body/i });
@@ -76,7 +76,7 @@ test.describe('Letters', () => {
     // lazily against the live DOM, so they remain valid across the tab switch and re-render.
     await window.getByRole('tab', { name: 'Library' }).click();
     await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Open', exact: true }).click();
+    await row.getByRole('button', { name: /^Open / }).click();
     await expect(body).toHaveValue(editedBody);
 
     // CI runs this suite on headless Linux under xvfb with no window manager (see

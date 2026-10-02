@@ -244,7 +244,7 @@ export function CvLibraryPage() {
 
   if (tailoring !== null) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 max-w-3xl mx-auto">
         <button type="button" className="btn btn-ghost btn-sm self-start" onClick={() => setTailoring(null)}>
           Back to CV library
         </button>

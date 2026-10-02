@@ -362,14 +362,10 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
   return (
     <div className="max-w-3xl">
-      <p className="text-sm text-base-content/60">
-        Changes are saved automatically as you make them.
-      </p>
-
       <Tabs
         label="Settings sections"
         idPrefix="settings"
-        className="tabs tabs-box mt-4 w-fit"
+        className="tabs tabs-box w-fit"
         value={activeTab}
         onChange={setActiveTab}
         tabs={SETTINGS_TABS}
@@ -381,7 +377,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <SettingsSection title="Startup">
             <SettingsRow
               label="Launch at login"
-              description="Start Open Vacancy Radar automatically when you sign in to this computer. The system entry is registered by installed builds; in development only the preference is stored."
+              description="Start Open Vacancy Radar automatically when you sign in to this computer."
             >
               <ToggleSwitch
                 label="Launch at login"
@@ -403,12 +399,16 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
             </SettingsRow>
             <SettingsRow
               label="Automatically check for new vacancies while running in the background"
-              description="Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Has no effect unless Keep running in the background when closed is also on."
+              description={
+                settings.minimizeToTrayOnClose
+                  ? 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app.'
+                  : 'Periodically re-scans while minimized to the tray, so fresh results are waiting next time you open the app. Turn on Keep running in the background first.'
+              }
             >
               <ToggleSwitch
                 label="Automatically check for new vacancies while running in the background"
                 checked={settings.autoScanEnabled}
-                disabled={disabled}
+                disabled={!settings.minimizeToTrayOnClose || disabled}
                 onChange={(autoScanEnabled) => changeField({ autoScanEnabled })}
               />
             </SettingsRow>

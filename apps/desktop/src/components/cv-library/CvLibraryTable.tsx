@@ -124,6 +124,7 @@ export function CvLibraryTable({
                   )}
                   <Menu
                     triggerClassName="btn btn-ghost btn-xs"
+                    triggerAriaLabel={`Export ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                     menuClassName="w-40"
                     disabled={exportingId === doc.id}
                     trigger={
@@ -143,6 +144,7 @@ export function CvLibraryTable({
                     className="btn btn-ghost btn-xs"
                     type="button"
                     onClick={() => onEdit(doc)}
+                    aria-label={`Edit ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                   >
                     Edit
                   </button>
@@ -150,6 +152,7 @@ export function CvLibraryTable({
                     className="btn btn-ghost btn-xs text-error"
                     type="button"
                     onClick={() => onDelete(doc)}
+                    aria-label={`Delete ${doc.targetRole ? `${doc.targetRole} at ` : ''}${doc.name}`}
                   >
                     Delete
                   </button>

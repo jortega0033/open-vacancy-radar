@@ -162,7 +162,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect(caseRow.getByRole('cell').nth(4)).toHaveText('accepted');
 
     // Changing the CV's skills changes what the case was approved against, so both files are out of date.
-    await window.getByRole('row', { name: new RegExp(SEEDED_CV_NAME) }).first().getByRole('button', { name: /^edit$/i }).click();
+    await window.getByRole('row', { name: new RegExp(SEEDED_CV_NAME) }).first().getByRole('button', { name: /^edit /i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit cv/i });
     await editDialog.getByLabel(/skills/i).fill('TypeScript, Playwright');
     await editDialog.getByRole('button', { name: /save changes/i }).click();
