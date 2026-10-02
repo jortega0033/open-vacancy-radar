@@ -858,7 +858,20 @@ describe('CvLibraryPage', () => {
     it('lists the case under Tailoring cases when the candidate leaves right after opening', async () => {
       const stored: unknown[] = [];
       const createCvEvidenceOverlay = vi.fn().mockImplementation(async (input: Record<string, unknown>) => {
-        stored.push({ ...input, id: 'o-1', jdRevisions: [], artifacts: [], state: 'needs_input', origin: 'manual', jdSnapshot: input.jdSnapshot });
+        stored.push({
+          ...input,
+          id: 'o-1',
+          jdRevisions: [],
+          artifacts: [],
+          state: 'needs_input',
+          origin: 'manual',
+          requirements: [],
+          requirementCoverage: { status: 'not_run', revisionId: '', batches: 0 },
+          facts: [],
+          legacyUnverifiedExport: false,
+          approvedResumeSnapshot: null,
+          updatedAt: '2026-10-02T09:00:00.000Z',
+        });
       });
       installWorkspaceBridge({
         listCvDocuments: vi.fn().mockResolvedValue([makeCv({ isDefault: true })]),
@@ -934,6 +947,9 @@ describe('CvLibraryPage', () => {
         state: 'draft',
         artifacts: [],
         jdRevisions: [],
+        requirements: [],
+        requirementCoverage: { status: 'not_run', revisionId: '', batches: 0 },
+        facts: [],
         legacyUnverifiedExport: false,
         approvedResumeSnapshot: null,
         jdSnapshot: '',

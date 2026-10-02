@@ -3,7 +3,7 @@ import { cvArtifactStatus } from '../../../electron/workspace/cv-artifact-status
 import type { CvDocumentRecord, CvEvidenceOverlayRecord } from '../../window.js';
 import type { VacancyLead } from '../cv/index.js';
 import { formatCvDate } from './cv-profile.js';
-import { describeTailoringCase, vacancyFromCase } from './tailoring-cases.js';
+import { describeNextStep, describeTailoringCase, vacancyFromCase } from './tailoring-cases.js';
 
 export interface TailoringCasesProps {
   documents: readonly CvDocumentRecord[];
@@ -17,7 +17,7 @@ const STATE_LABEL: Record<CvEvidenceOverlayRecord['state'], string> = {
   draft: 'In progress',
   candidate_approved: 'CV approved',
   qa_failed: 'Failed its checks',
-  artifact_approved: 'CV approved',
+  artifact_approved: 'Files accepted',
 };
 
 /** A draft a CV change put on hold (#449): it reads as a draft, but the cause is the CV. */
@@ -97,7 +97,18 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
       </div>
     );
   }
-  if (!groups || groups.length === 0) return null;
+  if (!groups) {
+    return (
+      <section className="mt-8" aria-labelledby="tailoring-cases-heading">
+        <h2 id="tailoring-cases-heading" className="text-base font-semibold">
+          Tailoring cases
+        </h2>
+        <p className="mt-1 text-sm text-base-content/60" role="status">
+          Loading your tailoring cases…
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="mt-8" aria-labelledby="tailoring-cases-heading">
@@ -108,6 +119,11 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
         Open a case to continue where you left off. Its job description, requirements, facts, wording and files are
         kept.
       </p>
+      {groups.length === 0 && (
+        <p className="mt-3 text-sm text-base-content/60">
+          Cases you start with Tailor for a job, or from a vacancy, appear here.
+        </p>
+      )}
       {groups.map(({ cv, cases, cvChanged }) => (
         <div key={cv.id} className="mt-3">
           <div className="text-sm font-medium">{cv.name}</div>
@@ -120,6 +136,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
                   <th>State</th>
                   <th>PDF</th>
                   <th>Word</th>
+                  <th>Next step</th>
                   <th>Updated</th>
                   <th className="text-right">Action</th>
                 </tr>
@@ -134,6 +151,7 @@ export function TailoringCases({ documents, onOpen }: TailoringCasesProps) {
                       <td>{cvChanged.has(tailoringCase.id) ? CV_CHANGED_LABEL : STATE_LABEL[tailoringCase.state]}</td>
                       <td>{ARTIFACT_LABEL[cvArtifactStatus(tailoringCase, 'pdf')]}</td>
                       <td>{ARTIFACT_LABEL[cvArtifactStatus(tailoringCase, 'docx')]}</td>
+                      <td>{describeNextStep(tailoringCase, cvChanged.has(tailoringCase.id))}</td>
                       <td>{formatCvDate(tailoringCase.updatedAt)}</td>
                       <td className="text-right">
                         <button
