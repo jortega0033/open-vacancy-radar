@@ -12,6 +12,7 @@ import * as schema from '../electron/workspace/schema.js';
 import { COMPLETED_ATTEMPT_CHECKPOINTS, NON_TERMINAL_ATTEMPT_CHECKPOINTS } from '../electron/workspace/types.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import { MCP_GRANT_LIMITS } from '../electron/workspace/mcp-grant-schema.js';
+import { isCvFactUsable } from '../electron/workspace/cv-evidence-schema.js';
 import { makeFact, makeRequirement, makeVariant } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
 
@@ -716,23 +717,24 @@ Node.js experience is a plus.`;
       ).toThrow(/does not exist in the reviewed source/);
     });
 
-    it('rejects a selection proposal naming an entry that does not exist', () => {
+    it('no longer has a selection kind: a stored selection row is neither listed nor accepted', () => {
       const { overlay } = caseWithRequirementAndFact();
-      expect(() =>
-        workspace.createCvTailoringProposal(db, {
-          caseId: overlay.id,
-          grantId: '',
-          payload: { kind: 'selection', data: { includedEntryIds: ['experience-1', 'missing-entry'] } },
-        }),
-      ).toThrow(/does not exist in the reviewed source/);
+      const [legacy] = db
+        .insert(schema.cvTailoringProposals)
+        .values({ caseId: overlay.id, grantId: null, kind: 'selection' as never, payload: { includedEntryIds: ['experience-1'] } as never, caseRevisionAtProposal: overlay.caseRevision })
+        .returning()
+        .all();
+      expect(workspace.listCvTailoringProposals(db, overlay.id)).toEqual([]);
+      expect(() => workspace.acceptCvTailoringProposal(db, legacy!.id)).toThrow(/no longer supported/);
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).caseRevision).toBe(overlay.caseRevision);
     });
   });
 
   describe('listCvTailoringProposals', () => {
     it('lists only this case\'s proposals, newest first', () => {
       const { overlay } = caseWithRequirementAndFact();
-      const a = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
-      const b = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const a = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you build this?' } } });
+      const b = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you build this?' } } });
       const list = workspace.listCvTailoringProposals(db, overlay.id);
       expect(list.map((p) => p.id)).toEqual([b.id, a.id]);
     });
@@ -762,7 +764,9 @@ Node.js experience is a plus.`;
         payload: { kind: 'evidence_link', data: { requirementId: 'req-1', anchorParentId: 'experience-1', evidenceClass: 'direct' } },
       });
       const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
-      expect(updated.requirements).toEqual([{ ...overlay.requirements[0], anchorParentId: 'experience-1', evidenceClass: 'direct' }]);
+      expect(overlay.requirements[0]!.reviewed).toBe(true);
+      // Re-linking changes what the candidate reviewed, so the requirement goes back to review.
+      expect(updated.requirements).toEqual([{ ...overlay.requirements[0], anchorParentId: 'experience-1', evidenceClass: 'direct', reviewed: false }]);
     });
 
     it('promotes a clarification_question proposal by flagging the requirement for review', () => {
@@ -776,7 +780,7 @@ Node.js experience is a plus.`;
       expect(updated.requirements[0]).toMatchObject({ evidenceClass: 'needs_verification', reviewed: false });
     });
 
-    it('promotes a fact proposal into a self_reported, candidate_testimony fact that still needs approval', () => {
+    it('promotes a fact proposal into an unreviewed mcp_proposal fact, and approving it makes it self-reported testimony', () => {
       const { overlay } = caseWithRequirementAndFact();
       const proposal = workspace.createCvTailoringProposal(db, {
         caseId: overlay.id,
@@ -787,10 +791,28 @@ Node.js experience is a plus.`;
       expect(updated.facts).toHaveLength(2);
       expect(updated.facts[1]).toMatchObject({
         activity: 'Shipped the thing',
-        verification: 'self_reported',
-        sourceKind: 'candidate_testimony',
+        verification: 'unreviewed',
+        sourceKind: 'mcp_proposal',
         approval: 'proposed',
       });
+
+      const factId = updated.facts[1]!.factId;
+      const approved = workspace.updateCvEvidenceOverlay(db, overlay.id, {
+        facts: updated.facts.map((fact) => (fact.factId === factId ? { ...fact, approval: 'approved' as const } : fact)),
+      });
+      expect(approved.facts[1]).toMatchObject({ approval: 'approved', verification: 'self_reported', sourceKind: 'candidate_testimony' });
+    });
+
+    it('never lets an unreviewed fact back approved wording, even if it is marked approved without going through review', () => {
+      const { overlay } = caseWithRequirementAndFact();
+      const proposal = workspace.createCvTailoringProposal(db, {
+        caseId: overlay.id,
+        grantId: '',
+        payload: { kind: 'fact', data: { parentId: 'experience-1', parentType: 'experience', client: '', activity: 'Shipped the thing', mechanism: '', result: '', ownership: 'sole', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
+      });
+      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
+      expect(workspace.getCvEvidenceOverlayById(db, overlay.id).facts[1]!.approval).toBe('proposed');
+      expect(isCvFactUsable({ ...updated.facts[1]!, approval: 'approved' }, new Set())).toBe(false);
     });
 
     it('promotes a wording proposal into a draft variant, never an approved one', () => {
@@ -805,14 +827,6 @@ Node.js experience is a plus.`;
       expect(updated.wordingVariants[0]).toMatchObject({ status: 'draft', factIds: ['fact-1'], approvedAt: '' });
     });
 
-    it('accepting a selection proposal still bumps caseRevision even though nothing on the overlay changes yet', () => {
-      const { overlay } = caseWithRequirementAndFact();
-      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: ['experience-1'] } } });
-      const { overlay: updated } = workspace.acceptCvTailoringProposal(db, proposal.id);
-      expect(updated.caseRevision).not.toBe(overlay.caseRevision);
-      expect(updated.requirements).toEqual(overlay.requirements);
-    });
-
     it('invalidates a standing candidate_approved state back to draft, the same rule updateCvEvidenceOverlay applies', () => {
       const { overlay } = caseWithRequirementAndFact();
       db.update(schema.cvEvidenceOverlays).set({ state: 'candidate_approved' }).where(eq(schema.cvEvidenceOverlays.id, overlay.id)).run();
@@ -823,7 +837,7 @@ Node.js experience is a plus.`;
 
     it('refuses to re-accept a proposal that was already decided, and applies nothing', () => {
       const { overlay } = caseWithRequirementAndFact();
-      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you build this?' } } });
       workspace.acceptCvTailoringProposal(db, proposal.id);
       expect(() => workspace.acceptCvTailoringProposal(db, proposal.id)).toThrow(/already accepted/);
     });
@@ -844,7 +858,6 @@ Node.js experience is a plus.`;
         grantId: '',
         payload: { kind: 'fact', data: { parentId: 'experience-1', parentType: 'experience', client: '', activity: 'x', mechanism: '', result: '', ownership: 'unknown', sourceReference: '', metricValue: '', metricUnit: '', metricBasis: '' } },
       });
-      const selection = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: ['experience-1'] } } });
 
       // The candidate removes the entry the proposals above anchored to, in between proposal and
       // acceptance -- the exact gap `acceptCvTailoringProposal`'s own doc comment calls out.
@@ -852,14 +865,13 @@ Node.js experience is a plus.`;
 
       expect(() => workspace.acceptCvTailoringProposal(db, requirement.id)).toThrow(/no longer exists in this case/);
       expect(() => workspace.acceptCvTailoringProposal(db, fact.id)).toThrow(/no longer exists in this case/);
-      expect(() => workspace.acceptCvTailoringProposal(db, selection.id)).toThrow(/no longer exists in this case/);
     });
   });
 
   describe('rejectCvTailoringProposal', () => {
     it('rejects a pending proposal, leaving the overlay untouched', () => {
       const { overlay } = caseWithRequirementAndFact();
-      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you build this?' } } });
       const rejected = workspace.rejectCvTailoringProposal(db, proposal.id);
       expect(rejected.status).toBe('rejected');
       expect(rejected.decidedAt).not.toBe('');
@@ -868,7 +880,7 @@ Node.js experience is a plus.`;
 
     it('refuses to re-decide an already-rejected proposal', () => {
       const { overlay } = caseWithRequirementAndFact();
-      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'selection', data: { includedEntryIds: [] } } });
+      const proposal = workspace.createCvTailoringProposal(db, { caseId: overlay.id, grantId: '', payload: { kind: 'clarification_question', data: { requirementId: 'req-1', question: 'Did you build this?' } } });
       workspace.rejectCvTailoringProposal(db, proposal.id);
       expect(() => workspace.rejectCvTailoringProposal(db, proposal.id)).toThrow(/already rejected/);
     });

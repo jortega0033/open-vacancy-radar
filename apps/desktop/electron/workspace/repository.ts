@@ -20,7 +20,7 @@ import {
   withStableExperienceIds,
   type CvSourceDocument,
 } from './cv-source-schema.js';
-import { planCvEvidenceRebase, type CvCurrentInputs, type CvRebasePlan } from './cv-case-rebase.js';
+import { buildCvFactAnchor, planCvEvidenceRebase, type CvCurrentInputs, type CvRebasePlan } from './cv-case-rebase.js';
 import { isCurrentArtifact, latestArtifactOfFormat } from './cv-artifact-status.js';
 import {
   CV_ARTIFACT_HISTORY_LIMIT,
@@ -33,6 +33,7 @@ import {
   locateJdQuote,
   reconcileCvEvidence,
   requirementDedupeKeys,
+  revokeVariantsCiting,
   upgradeStoredFacts,
   upgradeStoredRequirements,
   upgradeStoredVariants,
@@ -40,12 +41,14 @@ import {
   withJdRevision,
   CV_JD_UNWAIVABLE_REASONS,
   type CvArtifactRecord,
+  type CvApprovedWording,
+  type CvEvidenceFact,
   type CvEvidenceOverlay,
   type CvJdIncompleteReason,
   type CvProjectSelection,
   type CvSourceBaseline,
 } from './cv-evidence-schema.js';
-import type { CvProposalPayload } from './cv-proposal-schema.js';
+import { CV_PROPOSAL_KINDS, type CvProposalPayload } from './cv-proposal-schema.js';
 import { MCP_GRANT_LIMITS } from './mcp-grant-schema.js';
 import { assessJdCompleteness } from '../generation-input.js';
 import { composeApprovedTailoredResume } from '../resume-source.js';
@@ -869,9 +872,10 @@ export function updateCvEvidenceOverlay(
       { facts: values.facts ?? existing.facts, wordingVariants: values.wordingVariants ?? existing.wordingVariants },
       { sourceCvContentHash: set.sourceCvContentHash ?? existing.sourceCvContentHash, now: new Date().toISOString() },
     );
-    set.facts = reconciled.facts;
+    // Anchors are stamped here from the reviewed source, never taken from the caller (#436).
+    nextFacts = anchorCvFacts(reconciled.facts, existing.facts, reconciled.wordingVariants, getCvDocument(db, existing.cvId));
+    set.facts = nextFacts;
     set.wordingVariants = reconciled.wordingVariants;
-    nextFacts = reconciled.facts;
   }
   if (values.requirements !== undefined) {
     const verified = verifyCvRequirementQuotes(values.requirements, existing.requirements, nextJdText, currentRevisionId);
@@ -970,6 +974,44 @@ function assertCvSourceReviewed(source: CvSourceDocument): void {
   if (gaps.length > 0) {
     throw new Error(`this CV cannot be approved yet: ${gaps.join('; ')}. Review the source CV in the CV Library first`);
   }
+}
+
+function sha256Hex(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+/**
+ * Stamps each fact's source anchor (#436) from the CV as it reads now. A new fact, a fact the
+ * candidate has just approved (that is the re-review a stale fact is waiting for) and a fact moved to
+ * another role or project get a fresh anchor. Any other fact keeps the anchor it had, so a source
+ * change after its review stays visible; a fact that never had one (stored before anchors existed)
+ * stays unanchored rather than being anchored to text it was not reviewed against. Rejected and
+ * superseded facts keep whatever they had. Whatever anchor the caller sent is ignored.
+ */
+function anchorCvFacts(
+  facts: readonly CvEvidenceFact[],
+  previous: readonly CvEvidenceFact[],
+  variants: readonly CvApprovedWording[],
+  doc: CvDocumentRecord,
+): CvEvidenceFact[] {
+  const before = new Map(previous.map((fact) => [fact.factId, fact]));
+  return facts.map((incoming) => {
+    const { anchor: _ignored, ...fact } = incoming;
+    const prior = before.get(fact.factId);
+    const withAnchor = (anchor: CvEvidenceFact['anchor']): CvEvidenceFact => (anchor ? { ...fact, anchor } : fact);
+    if (fact.approval === 'rejected' || fact.approval === 'superseded') return withAnchor(prior?.anchor);
+    const backedSkills = variants
+      .filter((variant) => variant.targetField === 'skill' && variant.status !== 'rejected' && variant.status !== 'superseded' && variant.factIds.includes(fact.factId))
+      .map((variant) => variant.text);
+    const reanchor = !prior || prior.parentId !== fact.parentId || (fact.approval === 'approved' && prior.approval !== 'approved');
+    if (reanchor) return withAnchor(buildCvFactAnchor(doc.source, fact.parentId, backedSkills, doc.profile.skills, sha256Hex));
+    const anchor = prior.anchor;
+    if (!anchor) return fact;
+    // A skill wording added later extends the anchor; skills already anchored keep their stamp.
+    const added = buildCvFactAnchor(doc.source, fact.parentId, backedSkills, doc.profile.skills, sha256Hex)?.profileSkills ?? [];
+    const known = new Set(anchor.profileSkills.map((entry) => entry.digest));
+    return withAnchor({ ...anchor, profileSkills: [...anchor.profileSkills, ...added.filter((entry) => !known.has(entry.digest))] });
+  });
 }
 
 function currentCaseInputs(doc: CvDocumentRecord): CvCurrentInputs {
@@ -1260,7 +1302,7 @@ export function confirmCvArtifact(db: WorkspaceDb, id: string, artifactId: strin
 export function previewCvEvidenceRebase(db: WorkspaceDb, id: string): CvRebasePlan {
   const overlay = getCvEvidenceOverlayById(db, id);
   const doc = getCvDocument(db, overlay.cvId);
-  const plan = planCvEvidenceRebase(overlay, currentCaseInputs(doc));
+  const plan = planCvEvidenceRebase(overlay, currentCaseInputs(doc), sha256Hex);
   const inputsChanged = overlay.sourceBaseline
     ? overlay.sourceBaseline.inputsDigest !== computeCaseInputsDigest(currentCaseInputs(doc))
     : !!doc.source && overlay.sourceCvContentHash !== computeSourceCvContentHash(doc.source);
@@ -1283,10 +1325,14 @@ export function rebaseCvEvidenceOverlay(db: WorkspaceDb, id: string, expectedCas
     if (existing.caseRevision !== expectedCaseRevision) throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
     const doc = getCvDocument(tx, existing.cvId);
     if (!doc.source) throw new Error('this CV has no reviewed source yet, so a case cannot be rebased onto it');
-    const plan = planCvEvidenceRebase(existing, currentCaseInputs(doc));
+    const plan = planCvEvidenceRebase(existing, currentCaseInputs(doc), sha256Hex);
     const newHash = computeSourceCvContentHash(doc.source);
     const dropped = new Set(plan.droppedVariants.map((variant) => variant.variantId));
-    const wordingVariants = existing.wordingVariants.map((variant) => {
+    // A fact whose anchored source text changed goes back to the candidate, and the approved wording
+    // that cites it is withdrawn (#436). Facts whose anchored text did not change stay approved.
+    const staleFactIds = new Set(plan.staleFacts.map((fact) => fact.factId));
+    const facts = existing.facts.map((fact) => (staleFactIds.has(fact.factId) ? { ...fact, approval: 'proposed' as const } : fact));
+    const wordingVariants = revokeVariantsCiting(existing.wordingVariants, staleFactIds).map((variant) => {
       if (dropped.has(variant.variantId)) return { ...variant, status: 'superseded' as const };
       return variant.status === 'candidate_approved' ? { ...variant, sourceRevision: newHash } : variant;
     });
@@ -1306,6 +1352,7 @@ export function rebaseCvEvidenceOverlay(db: WorkspaceDb, id: string, expectedCas
       .update(cvEvidenceOverlays)
       .set({
         sourceCvContentHash: newHash,
+        facts,
         wordingVariants,
         requirements,
         sourceBaseline: captureSourceBaseline(doc),
@@ -1584,11 +1631,6 @@ export function createCvTailoringProposal(
       }
       break;
     }
-    case 'selection':
-      if (!payload.data.includedEntryIds.every((id) => resolvesInSource(doc.source, id))) {
-        throw new Error('this proposal references a role or project that does not exist in the reviewed source');
-      }
-      break;
   }
 
   const [row] = db
@@ -1616,6 +1658,9 @@ export function listCvTailoringProposals(db: WorkspaceDb, caseId: string): CvTai
     // secondary sort key.
     .orderBy(desc(cvTailoringProposals.createdAt), desc(sql`rowid`))
     .all()
+    // A row of a kind this build no longer has (the removed 'selection' kind, #436) is not shown: it
+    // could not be accepted into anything.
+    .filter((row) => (CV_PROPOSAL_KINDS as readonly string[]).includes(row.kind))
     .map(toCvTailoringProposal);
 }
 
@@ -1638,6 +1683,9 @@ export function acceptCvTailoringProposal(
     const proposalRow = tx.select().from(cvTailoringProposals).where(eq(cvTailoringProposals.id, id)).get();
     if (!proposalRow) throw new WorkspaceNotFoundError('CV tailoring proposal', id);
     if (proposalRow.status !== 'pending') throw new Error(`this proposal was already ${proposalRow.status}`);
+    if (!(CV_PROPOSAL_KINDS as readonly string[]).includes(proposalRow.kind)) {
+      throw new Error('this kind of proposal is no longer supported, so it cannot be accepted');
+    }
     const proposal = toCvTailoringProposal(proposalRow);
 
     const overlayRow = tx.select().from(cvEvidenceOverlays).where(eq(cvEvidenceOverlays.id, proposal.caseId)).get();
@@ -1696,7 +1744,10 @@ export function acceptCvTailoringProposal(
           throw new Error('this proposal anchors to a role or project that no longer exists in this case');
         }
         patch.requirements = overlay.requirements.map((r) =>
-          r.requirementId === data.requirementId ? { ...r, anchorParentId: data.anchorParentId, evidenceClass: data.evidenceClass } : r,
+          // Re-linking changes what the candidate reviewed, so the requirement goes back to review.
+          r.requirementId === data.requirementId
+            ? { ...r, anchorParentId: data.anchorParentId, evidenceClass: data.evidenceClass, reviewed: false }
+            : r,
         );
         break;
       }
@@ -1715,6 +1766,7 @@ export function acceptCvTailoringProposal(
         if (!resolvesInSource(doc.source, data.parentId)) {
           throw new Error('this proposal anchors to a role or project that no longer exists in this case');
         }
+        const fresh = buildCvFactAnchor(doc.source, data.parentId, [], doc.profile.skills, sha256Hex);
         patch.facts = [
           ...overlay.facts,
           {
@@ -1726,9 +1778,11 @@ export function acceptCvTailoringProposal(
             mechanism: data.mechanism,
             result: data.result,
             ownership: data.ownership,
-            sourceKind: 'candidate_testimony',
+            // Nobody has said yet that this is true: approving it in the evidence review is what makes
+            // it the candidate's testimony (`reconcileCvEvidence`).
+            sourceKind: 'mcp_proposal',
             sourceReference: data.sourceReference,
-            verification: 'self_reported',
+            verification: 'unreviewed',
             metricValue: data.metricValue,
             metricUnit: data.metricUnit,
             metricBasis: data.metricBasis,
@@ -1737,6 +1791,7 @@ export function acceptCvTailoringProposal(
             // An accepted proposal is still a fact the candidate has not reviewed field by field.
             approval: 'proposed',
             timePhase: '',
+            ...(fresh ? { anchor: fresh } : {}),
           },
         ];
         break;
@@ -1768,13 +1823,6 @@ export function acceptCvTailoringProposal(
         ];
         break;
       }
-      case 'selection':
-        if (!payload.data.includedEntryIds.every((entryId) => resolvesInSource(doc.source, entryId))) {
-          throw new Error('this proposal references a role or project that no longer exists in this case');
-        }
-        // Not yet wired into composition -- see `CvSelectionProposalPayload`'s own doc comment.
-        // Nothing to patch onto the overlay; the decision is still recorded below.
-        break;
     }
 
     const touchesInputs = patch.requirements !== undefined || patch.facts !== undefined || patch.wordingVariants !== undefined;

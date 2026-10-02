@@ -315,3 +315,117 @@ describe('a case saved before these fields existed (#419)', () => {
     expect(approved.approvedResumeSnapshot?.renderContractVersion).toBe(CV_RENDER_CONTRACT_VERSION);
   });
 });
+
+describe('fact anchors (#436)', () => {
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+  const factOf = (id: string, factId: string) => read(id).facts.find((fact) => fact.factId === factId)!;
+
+  it('stamps an anchor in the main process: role id, field, exact text and a digest of it', () => {
+    const { overlay } = readyCase();
+    expect(factOf(overlay.id, 'fact-1').anchor).toEqual({
+      parentId: 'experience-1',
+      field: 'experience_bullets',
+      text: 'Built things.',
+      digest: sha('experience_bullets\nBuilt things.'),
+      profileSkills: [],
+    });
+  });
+
+  it('stamps a project fact against the project description', () => {
+    const { overlay } = newCase();
+    update(overlay.id, { facts: [makeFact({ factId: 'fact-p', parentId: 'project-2', parentType: 'project' })] });
+    expect(factOf(overlay.id, 'fact-p').anchor).toMatchObject({ field: 'project_description', text: 'Dashboard text.' });
+  });
+
+  it('ignores an anchor the caller supplies', () => {
+    const { overlay } = newCase();
+    const forged = { parentId: 'experience-1', field: 'experience_bullets' as const, text: 'Something else.', digest: sha('x'), profileSkills: [] };
+    update(overlay.id, { facts: [makeFact({ factId: 'fact-1', anchor: forged })] });
+    expect(factOf(overlay.id, 'fact-1').anchor?.text).toBe('Built things.');
+  });
+
+  it('leaves a fact stored without an anchor unanchored, even after an unrelated write', () => {
+    const { cv, overlay } = readyCase();
+    const stored = read(overlay.id).facts.map(({ anchor: _anchor, ...fact }) => fact);
+    db.update(cvEvidenceOverlays).set({ facts: stored as never }).where(eq(cvEvidenceOverlays.id, overlay.id)).run();
+    expect(factOf(overlay.id, 'fact-1').anchor).toBeUndefined();
+
+    update(overlay.id, { listingStatus: 'open' });
+    update(overlay.id, { facts: read(overlay.id).facts });
+    expect(factOf(overlay.id, 'fact-1').anchor).toBeUndefined();
+
+    // A source change cannot make a legacy fact stale: there is nothing to compare it against.
+    workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, experience: [{ ...SOURCE.experience[0]!, bullets: ['Rewritten.'] }, SOURCE.experience[1]!] } });
+    expect(workspace.previewCvEvidenceRebase(db, overlay.id).staleFacts).toEqual([]);
+  });
+
+  it('reads a malformed stored anchor as no anchor', () => {
+    const { overlay } = readyCase();
+    const stored = read(overlay.id).facts.map((fact) => (fact.factId === 'fact-1' ? { ...fact, anchor: { text: 5 } } : fact));
+    db.update(cvEvidenceOverlays).set({ facts: stored as never }).where(eq(cvEvidenceOverlays.id, overlay.id)).run();
+    expect(factOf(overlay.id, 'fact-1').anchor).toBeUndefined();
+  });
+
+  it('a rewritten bullet marks only the facts of its own role stale, and a new bullet marks none', () => {
+    const { cv, overlay } = readyCase();
+    workspace.updateCvDocument(db, cv.id, {
+      source: {
+        ...SOURCE,
+        experience: [{ ...SOURCE.experience[0]!, bullets: ['Built things.', 'Added a bullet.'] }, { ...SOURCE.experience[1]!, bullets: ['Rewritten older things.'] }],
+      },
+    });
+    const plan = workspace.previewCvEvidenceRebase(db, overlay.id);
+    expect(plan.inputsChanged).toBe(true);
+    // fact-2 is anchored to the role whose bullets were rewritten; fact-1 is not touched.
+    expect(plan.staleFacts.map((stale) => stale.factId)).toEqual(['fact-2']);
+  });
+
+  it('an edit to an anchored bullet marks the fact stale; a rebase sends it back to review and withdraws the wording that cites it', () => {
+    const { cv, overlay } = readyCase();
+    workspace.updateCvDocument(db, cv.id, {
+      source: { ...SOURCE, experience: [{ ...SOURCE.experience[0]!, bullets: ['Built different things.'] }, SOURCE.experience[1]!] },
+    });
+    const plan = workspace.previewCvEvidenceRebase(db, overlay.id);
+    expect(plan.staleFacts).toEqual([{ factId: 'fact-1', activity: 'Built the booking screens', reason: 'a role bullet it was reviewed against changed' }]);
+
+    const rebased = rebase(overlay.id);
+    expect(rebased.facts.find((fact) => fact.factId === 'fact-1')?.approval).toBe('proposed');
+    expect(rebased.facts.find((fact) => fact.factId === 'fact-2')?.approval).toBe('approved');
+    const byId = new Map(rebased.wordingVariants.map((variant) => [variant.variantId, variant]));
+    expect(byId.get('v-1')?.status).toBe('superseded');
+    expect(byId.get('v-sum')?.status).toBe('superseded');
+    expect(byId.get('v-2')?.status).toBe('candidate_approved');
+
+    // Approving the fact again is the re-review: it is anchored to the text the candidate now sees.
+    const reapproved = update(overlay.id, { facts: rebased.facts.map((fact) => (fact.factId === 'fact-1' ? { ...fact, approval: 'approved' as const } : fact)) });
+    expect(reapproved.facts.find((fact) => fact.factId === 'fact-1')?.anchor?.text).toBe('Built different things.');
+    expect(workspace.previewCvEvidenceRebase(db, overlay.id).staleFacts).toEqual([]);
+  });
+
+  it('a changed project description marks a project fact stale', () => {
+    const { cv, overlay } = newCase();
+    update(overlay.id, { facts: [makeFact({ factId: 'fact-p', parentId: 'project-1', parentType: 'project' })] });
+    workspace.updateCvDocument(db, cv.id, {
+      source: { ...SOURCE, projects: SOURCE.projects.map((project) => (project.id === 'project-1' ? { ...project, description: 'New toolkit text.' } : project)) },
+    });
+    expect(workspace.previewCvEvidenceRebase(db, overlay.id).staleFacts.map((stale) => [stale.factId, stale.reason])).toEqual([
+      ['fact-p', 'the project description it was reviewed against changed'],
+    ]);
+  });
+
+  it('anchors a fact that backs a skill wording to that profile skill, and removing the skill marks it stale', () => {
+    const { cv, overlay } = newCase();
+    update(overlay.id, {
+      facts: [makeFact({ factId: 'fact-1', parentId: 'experience-1', activity: 'Wrote the TypeScript build tooling' })],
+    });
+    update(overlay.id, {
+      wordingVariants: [makeVariant({ variantId: 'v-skill', targetField: 'skill', parentId: '', factIds: ['fact-1'], text: 'TypeScript', approvedAt: '', sourceRevision: '' })],
+    });
+    expect(factOf(overlay.id, 'fact-1').anchor?.profileSkills).toEqual([{ skill: 'TypeScript', digest: sha('typescript') }]);
+
+    workspace.updateCvDocument(db, cv.id, { profile: { skills: [] } });
+    expect(workspace.previewCvEvidenceRebase(db, overlay.id).staleFacts.map((stale) => stale.reason)).toEqual([
+      'the profile skill "TypeScript" it backs was removed',
+    ]);
+  });
+});
