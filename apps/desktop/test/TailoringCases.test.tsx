@@ -310,7 +310,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
     render(<CvLibraryPage />);
     await screen.findByText('Frontend CV.pdf', undefined, SLOW);
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     expect(await within(dialog).findByText(/2 tailoring cases use this CV./)).toHaveTextContent(
@@ -324,7 +324,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
     installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]), listCvEvidenceOverlays });
     const { unmount } = render(<CvLibraryPage />);
     await screen.findByText('Frontend CV.pdf', undefined, SLOW);
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
     expect(await within(dialog).findByText(/1 tailoring case uses this CV./)).toHaveTextContent(
       'Saving changes puts it on hold',
@@ -337,7 +337,7 @@ describe('a CV change that puts cases on hold (#449)', () => {
     });
     render(<CvLibraryPage />);
     await screen.findByText('Frontend CV.pdf', undefined, SLOW);
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
     const emptyDialog = await screen.findByRole('dialog', { name: /edit cv/i });
     await waitFor(() => expect(within(emptyDialog).getByRole('button', { name: /save changes/i })).toBeEnabled());
     expect(within(emptyDialog).queryByText(/tailoring cases? uses? this CV/)).not.toBeInTheDocument();
