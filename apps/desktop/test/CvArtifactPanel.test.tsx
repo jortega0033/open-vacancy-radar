@@ -329,7 +329,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(row.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000Z/);
     const details = within(row).getByText('File details').closest('details')!;
     expect(details).not.toHaveAttribute('open');
-    expect(details).toHaveTextContent(/hash abcdef012345/i);
+    expect(details).toHaveTextContent(/file check abcdef012345/i);
   });
 
   it.each([['', 'a missing'], ['not a date', 'a malformed']])('shows %j as an unknown time for %s export date', (value) => {
@@ -361,7 +361,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     render(<CvArtifactPanel overlay={accepted} onOverlayChange={vi.fn()} />);
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Accepted');
     expect(within(pdfRow()).getByText(/not checked again/i)).toBeInTheDocument();
-    expect(within(pdfRow()).getByText(/hash abcdef012345/i)).toBeInTheDocument();
+    expect(within(pdfRow()).getByText(/file check abcdef012345/i)).toBeInTheDocument();
   });
 
   it('marks a file out of date once the approved version moved on, keeping its hash and offering no confirmation', () => {
@@ -369,7 +369,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     installWorkspaceBridge();
     render(<CvArtifactPanel overlay={overlayWith({ artifacts: [old] })} onOverlayChange={vi.fn()} />);
     expect(within(pdfRow()).getByRole('status')).toHaveTextContent('Out of date');
-    expect(within(pdfRow()).getByText(/hash abcdef012345/i)).toBeInTheDocument();
+    expect(within(pdfRow()).getByText(/file check abcdef012345/i)).toBeInTheDocument();
     expect(within(pdfRow()).queryByRole('button', { name: /i read every page/i })).not.toBeInTheDocument();
     expect(within(pdfRow()).getByRole('button', { name: /export pdf again/i })).toBeEnabled();
     expect(screen.getByText(/earlier files \(1\)/i)).toBeInTheDocument();

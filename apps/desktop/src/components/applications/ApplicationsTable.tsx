@@ -1,4 +1,5 @@
 import type { ApplicationRecord, ApplicationStatus } from '../../window.js';
+import { NotSet } from '../shell/NotSet.js';
 import {
   APPLICATION_STATUS_LABEL,
   APPLICATION_STATUS_ORDER,
@@ -18,8 +19,8 @@ export interface ApplicationsTableProps {
   onPrepareInterview?: (record: ApplicationRecord) => void;
 }
 
-function formatAppliedDate(iso: string | null): string {
-  if (!iso) return '—';
+function formatAppliedDate(iso: string | null): string | null {
+  if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -69,10 +70,10 @@ export function ApplicationsTable({
                 {application.company}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Location">
-                {application.location || '—'}
+                {application.location || <NotSet />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Verification">
-                {application.verification || '—'}
+                {application.verification || <NotSet label="Not checked" />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Status">
                 <select
@@ -89,13 +90,13 @@ export function ApplicationsTable({
                 </select>
               </td>
               <td className="ovr-responsive-table__cell whitespace-nowrap" data-label="Applied">
-                {formatAppliedDate(application.appliedAt)}
+                {formatAppliedDate(application.appliedAt) ?? <NotSet />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Next step">
-                {application.nextStep || '—'}
+                {application.nextStep || <NotSet label="None" />}
               </td>
               <td className="ovr-responsive-table__cell" data-label="Contact">
-                {application.contact || '—'}
+                {application.contact || <NotSet label="None" />}
               </td>
               <td
                 className="ovr-responsive-table__cell ovr-responsive-table__actions text-right whitespace-nowrap"

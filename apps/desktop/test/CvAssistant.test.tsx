@@ -56,7 +56,7 @@ describe('CvAssistant', () => {
     expect(screen.getByText(/Default Product CV\.pdf \(Default\)/)).toBeInTheDocument();
     expect(screen.getByText(/CV loaded:/)).toHaveTextContent('Default Product CV.pdf');
     expect(screen.getByRole('button', { name: /check ats fit/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /run resume audit/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /run CV audit/i })).toBeEnabled();
   });
 
   it('switches library CVs and still allows a one-off upload fallback', async () => {
@@ -236,7 +236,7 @@ describe('CvAssistant', () => {
       expect(vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].provider).toBe('codex'),
     );
     // The persisted preference itself was never rewritten to match the resolved fallback: only an
-    // explicit "Use as default" action on the AI Runtime page may do that (issue #400).
+    // explicit "Use as default" action on the AI runtime page may do that (issue #400).
     expect(window.workspace.updateSettings).not.toHaveBeenCalled();
   });
 

@@ -120,9 +120,9 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     const pdfPath = `${saveDir}/${SEEDED_CV_NAME}.pdf`;
     expect(readFileSync(pdfPath).subarray(0, 4).equals(PDF_MAGIC)).toBe(true);
     await expect(panel.getByRole('status').filter({ hasText: `Saved to ${saveDir}` })).toBeVisible();
-    // The record shows the hash of the bytes that were written.
+    // The record shows the file check of the bytes that were written.
     const pdfHash = sha256OfFile(pdfPath);
-    await expect(pdf).toContainText(`Hash ${pdfHash.slice(0, 12)}`);
+    await expect(pdf).toContainText(`File check ${pdfHash.slice(0, 12)}`);
     await expect(pdf).toContainText('1 page(s)');
     expect((await nativeRecord(electronApp)).saveRequests).toEqual([
       expect.objectContaining({ title: 'Export approved CV', defaultPath: `${SEEDED_CV_NAME}.pdf` }),
@@ -148,7 +148,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     const docxPath = `${saveDir}/${SEEDED_CV_NAME}.docx`;
     expect(readFileSync(docxPath).subarray(0, 4).equals(DOCX_MAGIC)).toBe(true);
     const docxHash = sha256OfFile(docxPath);
-    await expect(word).toContainText(`Hash ${docxHash.slice(0, 12)}`);
+    await expect(word).toContainText(`File check ${docxHash.slice(0, 12)}`);
     await word.getByRole('button', { name: 'I reviewed this in my editor' }).click();
     await expect(word.getByRole('status')).toHaveText('Accepted');
     await expect(pdf.getByRole('status').first()).toHaveText('Accepted');

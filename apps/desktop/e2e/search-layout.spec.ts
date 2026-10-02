@@ -237,7 +237,7 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByRole('heading', { name: 'CV assistant' })).toBeVisible();
       await expect(window.getByRole('heading', { name: 'CV-only tools' })).toBeVisible();
       await expect(window.getByRole('heading', { name: 'Vacancy tools' })).toBeVisible();
-      await expect(window.getByRole('tab', { name: 'Resume audit' })).toBeVisible();
+      await expect(window.getByRole('tab', { name: 'CV audit' })).toBeVisible();
       await expect(window.getByRole('tab', { name: 'Improve achievements' })).toBeVisible();
       await expect(window.getByRole('tab', { name: 'Best-fit roles' })).toBeVisible();
       await expect(window.getByRole('button', { name: 'Check ATS fit' })).toBeVisible();

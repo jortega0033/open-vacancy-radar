@@ -95,7 +95,7 @@ export function AboutSection({ currentPage, previousPage }: AboutSectionProps = 
         .then(() => window.agentDock.getDaemonStatus())
         .catch((err: unknown) => ({
           state: 'unavailable' as const,
-          error: err instanceof Error ? err.message : 'could not read daemon status',
+          error: err instanceof Error ? err.message : 'could not read background service status',
         })),
       readEngineStatus(),
       readProviderStates(),

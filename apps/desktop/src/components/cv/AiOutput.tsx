@@ -16,7 +16,7 @@ export interface AiOutputProps {
   error?: string;
   /** What the panel says before the first run, e.g. "Load a CV and pick a vacancy to start." */
   idleHint: string;
-  /** What the spinner says while waiting, e.g. "Analysing your CV against this vacancy…" */
+  /** What the spinner says while waiting, e.g. "Analyzing your CV against this vacancy…" */
   busyLabel: string;
   label: string;
   /** Display name of the CLI this run actually goes through, e.g. "Claude Code" or "Codex" (see
