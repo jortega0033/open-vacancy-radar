@@ -1,5 +1,5 @@
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import {
-  PROJECTS_UNLIMITED,
   selectSourceProjects,
   type CvEngagementType,
   type CvSourceDocument,
@@ -9,6 +9,14 @@ export interface CvSourceReviewProps {
   source: CvSourceDocument;
   disabled?: boolean;
   onChange: (next: CvSourceDocument) => void;
+}
+
+export interface CvSourceReviewHandle {
+  /**
+   * Returns an error message if the maxProjects field is invalid, or undefined if it is valid.
+   * Used by the parent form to block submission if there are unsaved validation errors.
+   */
+  getMaxProjectsError: () => string | undefined;
 }
 
 const ENGAGEMENT_LABEL: Record<CvEngagementType, string> = {
@@ -42,13 +50,56 @@ function textToLinks(text: string): string[] {
  * extraction gets wrong most often, and the one whose being wrong misstates the candidate's own
  * history. Everything else is corrected by re-extracting or by editing the CV itself.
  */
-export function CvSourceReview({ source, disabled, onChange }: CvSourceReviewProps) {
-  const selectedProjects = selectSourceProjects(source);
-  const selectedIds = new Set(selectedProjects.map((project) => project.id));
-  const pinnedCount = source.projects.filter((project) => project.pinned).length;
+export const CvSourceReview = forwardRef<CvSourceReviewHandle, CvSourceReviewProps>(
+  function CvSourceReviewComponent({ source, disabled, onChange }, ref) {
+    const [maxProjectsInput, setMaxProjectsInput] = useState<string>(String(source.maxProjects));
+    const [maxProjectsError, setMaxProjectsError] = useState<string>();
+
+    const selectedProjects = selectSourceProjects(source);
+    const selectedIds = new Set(selectedProjects.map((project) => project.id));
+
+    // Sync input value when source.maxProjects changes (e.g., from re-extraction)
+    useEffect(() => {
+      setMaxProjectsInput(String(source.maxProjects));
+      setMaxProjectsError(undefined);
+    }, [source.maxProjects]);
+
+    useImperativeHandle(ref, () => ({
+      getMaxProjectsError: () => maxProjectsError,
+    }));
 
   function patch(next: Partial<CvSourceDocument>) {
     onChange({ ...source, ...next });
+  }
+
+  function handleMaxProjectsChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.target.value.trim();
+    setMaxProjectsInput(input);
+
+    // Allow empty input temporarily while user is typing
+    if (!input) {
+      setMaxProjectsError(undefined);
+      return;
+    }
+
+    // Parse as integer
+    const parsed = Number.parseInt(input, 10);
+
+    // Check for invalid input
+    if (isNaN(parsed)) {
+      setMaxProjectsError('Enter a whole number.');
+      return;
+    }
+
+    if (parsed < 0) {
+      setMaxProjectsError('Cannot be negative.');
+      return;
+    }
+
+    // Valid input: clear error and update source
+    setMaxProjectsError(undefined);
+    setMaxProjectsInput(String(parsed));
+    patch({ maxProjects: parsed });
   }
 
   function patchContact(next: Partial<CvSourceDocument['contact']>) {
@@ -199,23 +250,30 @@ export function CvSourceReview({ source, disabled, onChange }: CvSourceReviewPro
       <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/60">
         Projects ({source.projects.length})
       </h4>
-      <label className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-base-content/60">Include at most</span>
-        <input
-          className="input input-xs w-20"
-          type="number"
-          min={0}
-          max={source.projects.length || undefined}
-          value={source.maxProjects}
-          onChange={(e) => patch({ maxProjects: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })}
-          disabled={disabled}
-          aria-label="Maximum projects to include"
-        />
-        <span className="text-base-content/60">
-          {source.maxProjects === PROJECTS_UNLIMITED
-            ? 'projects (0 means all of them)'
-            : `projects. Pinned ones are always kept: ${pinnedCount} pinned now.`}
-        </span>
+      <label className="mt-1.5 block">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-base-content/60">Include at most</span>
+          <input
+            className="input input-xs w-20"
+            type="number"
+            min={0}
+            value={maxProjectsInput}
+            onChange={handleMaxProjectsChange}
+            disabled={disabled}
+            aria-label="Maximum projects to include"
+            aria-invalid={!!maxProjectsError}
+            aria-describedby={maxProjectsError ? 'max-projects-error' : 'max-projects-hint'}
+          />
+          <span className="text-base-content/60">projects</span>
+        </div>
+        <p id="max-projects-hint" className="mt-1.5 text-xs text-base-content/60">
+          You have {source.projects.length} {source.projects.length === 1 ? 'project' : 'projects'}. Pinned projects are always kept. 0 includes every project.
+        </p>
+        {maxProjectsError && (
+          <p id="max-projects-error" className="mt-1 text-xs text-error" role="alert">
+            {maxProjectsError}
+          </p>
+        )}
       </label>
       {source.projects.length === 0 ? (
         <p className="mt-1.5 text-xs text-base-content/60">No projects read from this CV.</p>
@@ -265,4 +323,5 @@ export function CvSourceReview({ source, disabled, onChange }: CvSourceReviewPro
       )}
     </section>
   );
-}
+  },
+);
