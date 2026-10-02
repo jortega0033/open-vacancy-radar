@@ -103,7 +103,7 @@ export function CvLibraryTable({
                     <span className="badge badge-primary whitespace-nowrap">Default</span>
                   ) : (
                     <button
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-sm px-2"
                       type="button"
                       onClick={() => onSetDefault(doc)}
                       title="Set as default CV"
@@ -124,7 +124,7 @@ export function CvLibraryTable({
                   <div className="dropdown dropdown-end inline-block">
                     <button
                       tabIndex={0}
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-sm px-2"
                       type="button"
                       disabled={exportingId === doc.id}
                     >
@@ -167,14 +167,14 @@ export function CvLibraryTable({
                     </ul>
                   </div>
                   <button
-                    className="btn btn-ghost btn-sm"
+                    className="btn btn-ghost btn-sm px-2"
                     type="button"
                     onClick={() => onEdit(doc)}
                   >
                     Edit
                   </button>
                   <button
-                    className="btn btn-ghost btn-sm text-error"
+                    className="btn btn-ghost btn-sm px-2 text-error"
                     type="button"
                     onClick={() => onDelete(doc)}
                   >

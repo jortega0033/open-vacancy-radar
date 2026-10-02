@@ -199,7 +199,7 @@ export function LettersLibrary({
                     data-label="Actions"
                   >
                     <button
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-sm px-2"
                       type="button"
                       onClick={() => onOpen(letter)}
                       disabled={busyId === letter.id}
@@ -207,7 +207,7 @@ export function LettersLibrary({
                       Open
                     </button>
                     <button
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-ghost btn-sm px-2"
                       type="button"
                       onClick={() => void handleDuplicate(letter)}
                       disabled={busyId === letter.id}
@@ -215,7 +215,7 @@ export function LettersLibrary({
                       Duplicate
                     </button>
                     <button
-                      className="btn btn-ghost btn-sm text-error"
+                      className="btn btn-ghost btn-sm px-2 text-error"
                       type="button"
                       onClick={() => setDeleteTarget(letter)}
                       disabled={busyId === letter.id}
