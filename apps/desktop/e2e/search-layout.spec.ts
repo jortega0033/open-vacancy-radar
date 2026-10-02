@@ -105,8 +105,8 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
         }),
       );
       await goto(window, 'Search');
-      await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
-      await expect(window.getByText(/^Daemon unavailable:/)).toHaveCount(0);
+      await expect(window.getByText('Starting the AI helper…')).toBeHidden({ timeout: 20_000 });
+      await expect(window.getByText('AI features cannot start.')).toHaveCount(0);
       await expect(window.getByLabel('Vacancy details')).toBeVisible();
 
       let sidebarCollapsed = false;
@@ -323,7 +323,7 @@ test('a zero-vacancy Search report at narrow widths keeps both panes at a real, 
       await window.waitForLoadState('domcontentloaded');
       await dismissWelcomeModalIfShown(window);
       await goto(window, 'Search');
-      await expect(window.getByText('Connecting to local daemon…')).toBeHidden({ timeout: 20_000 });
+      await expect(window.getByText('Starting the AI helper…')).toBeHidden({ timeout: 20_000 });
 
       await electronApp.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]?.setBounds(bounds), {
         width: 800,
