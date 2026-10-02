@@ -22,6 +22,7 @@ import {
 function installAgentDock(): AgentDockBridge {
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' }),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
