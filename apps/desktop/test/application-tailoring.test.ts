@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { buildApplicationTailoringPrompt, generateApplicationTailoredResume } from '../electron/application-tailoring.js';
 import type { ApplicationAttemptRecord, CvDocumentRecord } from '../electron/workspace/types.js';
@@ -77,5 +78,67 @@ describe('application CV tailoring', () => {
     await expect(generateApplicationTailoredResume(attempt, cv, async () => ({ ok: true, text: '{}' }))).rejects.toThrow(
       /omitted required CV sections/i,
     );
+  });
+
+  // #419/#435: the unattended path stays source-only. The tailoring-case feature lets a candidate
+  // approve reworded bullets and summaries for one case, and none of that may reach an application
+  // that is prepared without the candidate in the loop.
+  describe('stays independent of tailoring-case wording', () => {
+    const approvedCaseBullet = 'Built the booking screens, using Angular';
+    const approvedCaseSummary = 'Frontend engineer focused on booking flows.';
+
+    it('keeps only the exact source bullet and source summary and drops a newly approved wording variant', async () => {
+      const generate = vi.fn().mockResolvedValue({
+        ok: true,
+        text: JSON.stringify({
+          contact: { name: 'Jamie Rivera', title: 'Engineer', location: 'Amsterdam', email: 'jamie@example.com', phone: '123', links: [] },
+          summary: approvedCaseSummary,
+          experience: [
+            { company: 'Redwood Software', title: 'Engineer', dates: '2020 - Present', engagement: 'employment', client: '', bullets: [approvedCaseBullet, 'Built interfaces.'] },
+          ],
+          projects: [],
+          skills: ['React'],
+          education: [{ institution: 'Example University', credential: 'BSc Computer Science', dates: '2012 - 2016' }],
+        }),
+      });
+
+      const result = await generateApplicationTailoredResume(attempt, cv, generate);
+
+      expect(result.resume.summary).toBe('Engineer.');
+      expect(result.resume.experience[0]?.bullets).toEqual(['Built interfaces.']);
+      expect(JSON.stringify(result.resume)).not.toContain(approvedCaseBullet);
+      expect(JSON.stringify(result.resume)).not.toContain(approvedCaseSummary);
+      expect(result.dropped.join(" ")).toMatch(/rewritten bullet for "Engineer at Redwood Software"/);
+      expect(result.dropped.join(" ")).toMatch(/summary rewrite/);
+    });
+
+    it('falls back to the source bullets when every returned bullet is an approved case variant', async () => {
+      const generate = vi.fn().mockResolvedValue({
+        ok: true,
+        text: JSON.stringify({
+          contact: { name: 'Jamie Rivera', title: '', location: '', email: '', phone: '', links: [] },
+          summary: 'Engineer.',
+          experience: [
+            { company: 'Redwood Software', title: 'Engineer', dates: '', engagement: 'employment', client: '', bullets: [approvedCaseBullet] },
+          ],
+          projects: [],
+          skills: ['React'],
+          education: [{ institution: 'Example University', credential: 'BSc Computer Science', dates: '' }],
+        }),
+      });
+
+      const result = await generateApplicationTailoredResume(attempt, cv, generate);
+
+      expect(result.resume.experience[0]?.bullets).toEqual(['Built interfaces.']);
+    });
+
+    it('does not import the case evidence or export modules, so no case wording can reach it', () => {
+      const source = readFileSync(new URL('../electron/application-tailoring.ts', import.meta.url), 'utf8');
+      const imports = source.split(/\r?\n/u).filter((line) => line.startsWith('import '));
+      expect(imports.length).toBeGreaterThan(0);
+      for (const line of imports) {
+        expect(line).not.toMatch(/cv-evidence|cv-case|cv-artifact|evidence-overlay/);
+      }
+    });
   });
 });
