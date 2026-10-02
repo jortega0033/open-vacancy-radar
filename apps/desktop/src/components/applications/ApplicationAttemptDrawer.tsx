@@ -6,6 +6,9 @@ import { ATTEMPT_CHECKPOINT_BADGE_CLASS, ATTEMPT_CHECKPOINT_LABEL } from './atte
 export interface ApplicationAttemptDrawerProps {
   attempt: ApplicationAttemptRecord;
   onClose: () => void;
+  /** Fired after a recovery action changed the attempt, so the page can refresh its list and move
+   * to wherever the attempt now lives (#468). */
+  onChanged?: (kind: 'returned' | 'retried') => void;
 }
 
 const ARTIFACT_KIND_LABEL: Record<ApplicationArtifactSummary['kind'], string> = {
@@ -33,10 +36,44 @@ function formatDateTime(iso: string): string {
  * affordance anywhere -- `ApplicationAttemptPatch` only lets the main-process pipeline advance
  * `checkpoint`, never a person from this drawer.
  */
-export function ApplicationAttemptDrawer({ attempt, onClose }: ApplicationAttemptDrawerProps) {
+export function ApplicationAttemptDrawer({ attempt, onClose, onChanged }: ApplicationAttemptDrawerProps) {
   useEscapeToClose(onClose);
   const [artifacts, setArtifacts] = useState<ApplicationArtifactSummary[] | null>(null);
   const [artifactsError, setArtifactsError] = useState<string>();
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string>();
+
+  // Both actions only reverse a step that sent nothing: a skip, or a preparation that stopped. The
+  // skipped one re-reads the attempt first, so it can never move a checkpoint that has since
+  // advanced to a submission.
+  async function returnToReview() {
+    setRecovering(true);
+    setRecoveryError(undefined);
+    try {
+      const current = await window.workspace.getApplicationAttempt(attempt.id);
+      if (current.checkpoint !== 'skipped') throw new Error('This application is no longer skipped.');
+      await window.workspace.updateApplicationAttempt(attempt.id, { checkpoint: 'ready', checkpointDetail: '' });
+      onChanged?.('returned');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'We could not return this application to review.');
+    } finally {
+      setRecovering(false);
+    }
+  }
+
+  async function tryAgain() {
+    setRecovering(true);
+    setRecoveryError(undefined);
+    try {
+      const result = await window.applicationPipeline.resume(attempt.id);
+      if (!result.ok) throw new Error(result.detail ?? 'We could not start this application again.');
+      onChanged?.('retried');
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'We could not start this application again.');
+    } finally {
+      setRecovering(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +112,12 @@ export function ApplicationAttemptDrawer({ attempt, onClose }: ApplicationAttemp
             </span>
             <span className="text-xs text-base-content/60">Updated {formatDateTime(attempt.updatedAt)}</span>
           </div>
+
+          {recoveryError && (
+            <div className="alert alert-error text-sm" role="alert">
+              {recoveryError}
+            </div>
+          )}
 
           {attempt.checkpointDetail && (
             <div className="rounded-box border border-base-300 bg-base-200 p-3 text-sm">{attempt.checkpointDetail}</div>
@@ -131,7 +174,17 @@ export function ApplicationAttemptDrawer({ attempt, onClose }: ApplicationAttemp
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-base-300 px-5 py-3.5">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-base-300 px-5 py-3.5">
+          {attempt.checkpoint === 'skipped' && (
+            <button type="button" className="btn btn-primary" disabled={recovering} onClick={() => void returnToReview()}>
+              Return to review
+            </button>
+          )}
+          {attempt.checkpoint === 'failed' && (
+            <button type="button" className="btn btn-primary" disabled={recovering} onClick={() => void tryAgain()}>
+              Try again
+            </button>
+          )}
           <button type="button" className="btn btn-outline" onClick={onClose}>
             Close
           </button>

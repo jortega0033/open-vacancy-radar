@@ -5,6 +5,14 @@ import type { SelectedVacancy } from '../letters/types.js';
 import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { ApplicationReviewSwipeCard } from './ApplicationReviewSwipeCard.js';
 import { ManualApplicationReviewCard } from './ManualApplicationReviewCard.js';
+import {
+  alreadySentFailure,
+  describeSubmitRefusal,
+  errorText,
+  notSentFailure,
+  unconfirmedFailure,
+  type ReviewFailure,
+} from './review-outcome.js';
 
 export interface ApplicationReviewSessionProps {
   attempt: ApplicationAttemptRecord;
@@ -14,6 +22,9 @@ export interface ApplicationReviewSessionProps {
    * it -- so the parent can drop back to the list and, on a real submit, refresh it. */
   onClose: (outcome?: 'dismissed' | 'resolved') => void;
   onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+  /** Called once a skip has been written, just before `onClose('resolved')`, so the parent can
+   * offer an undo (#468). Not called for a submit or a person-reported application. */
+  onSkipped?: (attempt: ApplicationAttemptRecord) => void;
 }
 
 type SessionState =
@@ -27,10 +38,23 @@ type SessionState =
    * way entirely: anything drawn over the live view would be drawn over the thing they are trying
    * to type into. */
   | { phase: 'handoff'; review: OpenApplicationReviewResult; company: string; role: string; bannerHeightPx: number }
-  | { phase: 'error'; message: string };
+  /** `failure.outcome` says whether anything reached the employer (#468). `busy` covers a skip or
+   * record in flight. `checked` is set once the person has opened the employer page, which is what
+   * unlocks Try again after an outcome the app could not confirm. */
+  | { phase: 'error'; failure: ReviewFailure; busy: boolean; checked: boolean };
+
+function errorState(failure: ReviewFailure): SessionState {
+  return { phase: 'error', failure, busy: false, checked: false };
+}
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+/** Same pattern as `handleManualContinue` and `Open vacancy`: the main window's open handler sends
+ * it to the system browser after its own safety check. */
+function openEmployerPage(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 /**
@@ -44,8 +68,10 @@ function describeError(err: unknown, fallback: string): string {
  * manual-application mode. It still presents the staged documents and explicit Continue/Skip
  * actions instead of ending in a dead-end eligibility message.
  */
-export function ApplicationReviewSession({ attempt, position, total, onClose, onGenerateLetter }: ApplicationReviewSessionProps) {
+export function ApplicationReviewSession({ attempt, position, total, onClose, onGenerateLetter, onSkipped }: ApplicationReviewSessionProps) {
   const [state, setState] = useState<SessionState>({ phase: 'resolving' });
+  /** Bumped by Try again to run the whole open sequence again against the same attempt. */
+  const [retryNonce, setRetryNonce] = useState(0);
   // Loaded independently of the browser review, and always scoped to this attempt's own id (#272).
   // A failure here must never block the review itself.
   const [documents, setDocuments] = useState<readonly ApplicationArtifactSummary[]>([]);
@@ -114,7 +140,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         openedRef.current = true;
         setState({ phase: 'ready', review });
       } catch (err) {
-        if (!cancelled) setState({ phase: 'error', message: describeError(err, 'could not open a review for this attempt') });
+        if (!cancelled) setState(errorState(notSentFailure('We could not open a review for this attempt.', errorText(err))));
       }
     }
     void start();
@@ -130,14 +156,14 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         void window.applicationExecutor.closeReview(attempt.id);
       }
     };
-  }, [attempt.id, attempt.canonicalUrl]);
+  }, [attempt.id, attempt.canonicalUrl, retryNonce]);
 
   const handleOpenLiveView = useCallback(async () => {
     if (state.phase !== 'ready') return;
     try {
       const result = await window.applicationExecutor.showHandoff(attempt.id);
       if (!result.ok) {
-        setState({ phase: 'error', message: result.detail ?? `could not open the live page: ${result.reason ?? 'unknown reason'}` });
+        setState(errorState(notSentFailure('We could not open the live page.', result.detail ?? result.reason)));
         return;
       }
       // Employer and role come back from the main process, read from this attempt's own workspace
@@ -153,7 +179,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         bannerHeightPx: result.bannerHeightPx ?? 56,
       });
     } catch (err) {
-      setState({ phase: 'error', message: describeError(err, 'could not open the live page') });
+      setState(errorState(notSentFailure('We could not open the live page.', errorText(err))));
     }
   }, [attempt.id, attempt.company, attempt.role, state]);
 
@@ -178,7 +204,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       // Falling back to what was on screen before is wrong here: it would show a readiness reading
       // taken before the person touched the page. Surfacing the failure is the honest outcome.
       void review;
-      setState({ phase: 'error', message: describeError(err, 'could not re-read the page after the live view closed') });
+      setState(errorState(notSentFailure('We could not re-read the page after the live view closed.', errorText(err))));
     }
   }, [attempt.id, attempt.canonicalUrl, state]);
 
@@ -214,22 +240,30 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     try {
       const result = await window.applicationExecutor.submitReview(attempt.id);
       if (!result.ok) {
-        setState({ phase: 'error', message: result.detail ?? `refused: ${result.reason ?? 'unknown reason'}` });
+        setState(errorState(describeSubmitRefusal(result)));
         return;
       }
       openedRef.current = false;
       await window.applicationExecutor.closeReview(attempt.id);
       onClose('resolved');
     } catch (err) {
-      setState({ phase: 'error', message: describeError(err, 'could not submit this application') });
+      // Thrown after the submit was started: the click may or may not have landed, so this is never
+      // reported as "not sent".
+      setState(errorState(unconfirmedFailure(errorText(err))));
     }
   }, [attempt.id, onClose, state]);
 
   const handleSkip = useCallback(async () => {
-    if (state.phase !== 'ready' && state.phase !== 'ineligible' && state.phase !== 'preparation_blocked') return;
+    if (state.phase !== 'ready' && state.phase !== 'ineligible' && state.phase !== 'preparation_blocked' && state.phase !== 'error') return;
     if ((state.phase === 'ineligible' || state.phase === 'preparation_blocked') && (state.busy || manualDecisionRef.current)) return;
+    // Skipping from the error screen is only offered, and only honoured, when nothing was sent. After
+    // an unconfirmed submit, writing a skipped checkpoint would bury an application that may have
+    // gone out.
+    if (state.phase === 'error' && (state.busy || state.failure.outcome !== 'not_sent')) return;
     if (state.phase === 'ready') {
       setState({ phase: 'deciding', review: state.review });
+    } else if (state.phase === 'error') {
+      setState({ ...state, busy: true });
     } else {
       manualDecisionRef.current = true;
       if (state.phase === 'ineligible') setState({ phase: 'ineligible', continued: state.continued, busy: true });
@@ -241,10 +275,43 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         await window.applicationExecutor.closeReview(attempt.id);
       }
       await window.workspace.updateApplicationAttempt(attempt.id, { checkpoint: 'skipped' });
+      onSkipped?.(attempt);
       onClose('resolved');
     } catch (err) {
       manualDecisionRef.current = false;
-      setState({ phase: 'error', message: describeError(err, 'could not skip this attempt') });
+      setState(errorState(notSentFailure('We could not skip this application.', errorText(err))));
+    }
+  }, [attempt, onClose, onSkipped, state]);
+
+  const handleErrorRetry = useCallback(() => {
+    if (state.phase !== 'error' || state.busy) return;
+    // After an unconfirmed submit the same click would risk a duplicate application, so the person
+    // has to have looked at the employer page (or recorded the outcome) first.
+    if (state.failure.outcome === 'unconfirmed' && !state.checked) return;
+    manualDecisionRef.current = false;
+    setRetryNonce((current) => current + 1);
+  }, [state]);
+
+  const handleErrorOpenEmployerPage = useCallback(() => {
+    if (state.phase !== 'error' || !attempt.canonicalUrl) return;
+    openEmployerPage(attempt.canonicalUrl);
+    setState({ ...state, checked: true });
+  }, [attempt.canonicalUrl, state]);
+
+  /** The person's own statement that they applied. Reuses the manual-review recording path, which
+   * keeps this strictly distinct from an application this app observed being received. */
+  const handleErrorRecordApplied = useCallback(async () => {
+    if (state.phase !== 'error' || state.busy) return;
+    setState({ ...state, busy: true });
+    try {
+      const result = await window.applicationExecutor.recordUserReportedSubmission(attempt.id);
+      if (result.ok) {
+        onClose('resolved');
+        return;
+      }
+      setState(errorState(result.reason === 'already_observed' ? alreadySentFailure(result.detail) : unconfirmedFailure(result.detail)));
+    } catch (err) {
+      setState(errorState(unconfirmedFailure(errorText(err))));
     }
   }, [attempt.id, onClose, state]);
 
@@ -260,11 +327,15 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     setState({ ...state, busy: true });
     try {
       const result = await window.applicationExecutor.recordUserReportedSubmission(attempt.id);
-      if (!result.ok) throw new Error(result.detail ?? 'could not record this application');
+      if (!result.ok) {
+        manualDecisionRef.current = false;
+        setState(errorState(notSentFailure('We could not record this application.', result.detail)));
+        return;
+      }
       onClose('resolved');
     } catch (err) {
       manualDecisionRef.current = false;
-      setState({ phase: 'error', message: describeError(err, 'could not record this application') });
+      setState(errorState(notSentFailure('We could not record this application.', errorText(err))));
     }
   }, [attempt.id, onClose, state]);
 
@@ -272,7 +343,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
     try {
       await window.applicationExecutor.saveArtifact(artifactId);
     } catch (err) {
-      setState({ phase: 'error', message: describeError(err, 'could not save this document') });
+      setState(errorState(notSentFailure('We could not save this document.', errorText(err))));
     }
   }, []);
 
@@ -281,7 +352,7 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
       const result = await window.applicationExecutor.openArtifact(artifactId);
       if (!result.opened) throw new Error(result.detail ?? 'could not open this document');
     } catch (err) {
-      setState({ phase: 'error', message: describeError(err, 'could not open this document') });
+      setState(errorState(notSentFailure('We could not open this document.', errorText(err))));
     }
   }, []);
 
@@ -331,7 +402,8 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
   const closeDisabled = state.phase === 'deciding'
     || (state.phase === 'tailoring_blocked' && state.busy)
     || (state.phase === 'preparation_blocked' && state.busy)
-    || (state.phase === 'ineligible' && state.busy);
+    || (state.phase === 'ineligible' && state.busy)
+    || (state.phase === 'error' && state.busy);
 
   useEscapeToClose(() => onClose('dismissed'), closeDisabled);
 
@@ -463,8 +535,52 @@ export function ApplicationReviewSession({ attempt, position, total, onClose, on
         )}
 
         {state.phase === 'error' && (
-          <div className="alert alert-error" role="alert">
-            <span>{state.message}</span>
+          <div className="space-y-4">
+            <div
+              className={`alert ${state.failure.outcome === 'unconfirmed' ? 'alert-warning' : state.failure.outcome === 'sent' ? 'alert-info' : 'alert-error'}`}
+              role="alert"
+            >
+              <div>
+                <p className="font-semibold">{state.failure.message}</p>
+                {state.failure.detail ? <p className="mt-1 text-xs">{state.failure.detail}</p> : null}
+              </div>
+            </div>
+            {state.failure.outcome === 'unconfirmed' && !state.checked ? (
+              <p className="text-xs text-base-content/70">
+                Try again unlocks after you open the employer page to check, or tell the app you applied yourself.
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-3">
+              {state.failure.outcome === 'sent' ? (
+                <button type="button" className="btn btn-primary" onClick={() => onClose('resolved')}>
+                  Done
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={state.busy || (state.failure.outcome === 'unconfirmed' && !state.checked)}
+                  onClick={handleErrorRetry}
+                >
+                  Try again
+                </button>
+              )}
+              {attempt.canonicalUrl && state.failure.outcome !== 'sent' ? (
+                <button type="button" className="btn btn-outline" disabled={state.busy} onClick={handleErrorOpenEmployerPage}>
+                  Open the live page
+                </button>
+              ) : null}
+              {state.failure.outcome === 'not_sent' ? (
+                <button type="button" className="btn btn-outline" disabled={state.busy} onClick={() => void handleSkip()}>
+                  Skip for now
+                </button>
+              ) : null}
+              {state.failure.outcome === 'unconfirmed' ? (
+                <button type="button" className="btn btn-outline" disabled={state.busy} onClick={() => void handleErrorRecordApplied()}>
+                  I already applied
+                </button>
+              ) : null}
+            </div>
           </div>
         )}
 
