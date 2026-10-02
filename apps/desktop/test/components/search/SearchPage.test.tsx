@@ -114,7 +114,7 @@ function installAllBridges(overrides: Partial<VacancyRadarBridge> = {}): Vacancy
 }
 
 function enterSearchQuery(value = 'frontend engineer') {
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
     target: { value },
   });
 }
@@ -813,7 +813,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), { target: { value: 'frontend' } });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), { target: { value: 'frontend' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalled());
@@ -915,7 +915,7 @@ describe('SearchPage', () => {
     resolveSettings({ ...DEFAULT_SETTINGS, defaultLocation: 'Germany' });
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Country' })).toHaveValue('Germany'));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Remote');
     expect(screen.getAllByText('Remote Engineer').length).toBeGreaterThan(0);
   });
 
@@ -954,7 +954,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Rescanned Role').length).toBeGreaterThan(0));
   });
 
-  it('does not start a fresh scan when Enter is pressed against an already-loaded report', async () => {
+  it('starts a fresh scan when Enter is pressed against an already-loaded report', async () => {
     const bridge = installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
       runScan: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
@@ -964,14 +964,71 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
     enterSearchQuery('Remote');
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       key: 'Enter',
       code: 'Enter',
     });
-    expect(bridge.runScan).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not start a scan when Enter is pressed with an empty keyword', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
+      key: 'Enter',
+      code: 'Enter',
+    });
+    expect(await screen.findByText(/add a role or keyword before starting a new worldwide scan/i)).toBeInTheDocument();
+    expect(bridge.runScan).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second scan when Enter is pressed again while one is running', async () => {
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
+      runScan: vi.fn().mockReturnValue(new Promise<GlobalRemoteReport>(() => {})),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+
+    enterSearchQuery('Remote');
+    const box = screen.getByRole('searchbox', { name: 'Role or keywords for next scan' });
+    fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
+    await waitFor(() => expect(box).toBeDisabled());
+    fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' });
+    expect(bridge.runScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a visible label on the keyword field and says when the draft differs from the list', async () => {
+    const next = makeWorldwideReport([makeWorldwideVacancy()]);
+    installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      runScan: vi.fn().mockResolvedValue(next),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('Frontend Engineer');
+    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
+    expect(screen.getByText('Role or keywords for next scan')).toBeVisible();
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
+
+    enterSearchQuery('Backend Developer');
+    expect(
+      screen.getByText("Press Enter or Run new scan to search for 'Backend Developer'. The list still shows 'Frontend Engineer'."),
+    ).toBeInTheDocument();
+
+    enterSearchQuery('Frontend Engineer');
+    expect(screen.queryByText(/press enter or run new scan/i)).not.toBeInTheDocument();
   });
 
   it('keeps the applied report stable while editing a draft query', async () => {
@@ -988,7 +1045,7 @@ describe('SearchPage', () => {
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       target: { value: 'Remote' },
     });
 
@@ -1034,7 +1091,7 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
       target: { value: 'backend engineer' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
@@ -1063,7 +1120,7 @@ describe('SearchPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(screen.getAllByText('Frontend Developer').length).toBeGreaterThan(0);
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
   });
 
   it('paginates the results list instead of rendering every row at once', async () => {
@@ -1161,11 +1218,82 @@ describe('SearchPage', () => {
     render(<SearchPage />);
 
     await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
-    // Collapsed by default; the detail line only appears once the toggle is opened. The provider id
-    // renders through `discoveryProviderLabel` ("Workable"), not the raw "workable_global" id.
-    expect(screen.queryByText(`Workable: ${warning}`)).not.toBeInTheDocument();
+    // Collapsed by default; the summary only appears once the toggle is opened, and the raw reason
+    // with the provider id lives in the "Scan details" disclosure rather than the default panel.
+    expect(screen.queryByText(/returned partial or no results/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
-    expect(screen.getByText(`Workable: ${warning}`)).toBeInTheDocument();
+    expect(screen.getByText('1 source returned partial or no results.')).toBeInTheDocument();
+    expect(screen.getByText('1 source stopped early.')).toBeInTheDocument();
+    expect(screen.getByText('Workable')).toBeInTheDocument();
+    expect(screen.queryByText(/Results from the other/i)).not.toBeInTheDocument();
+    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).not.toBeVisible();
+    expect(screen.getByText(/^Run ww-run-1/)).not.toBeVisible();
+    fireEvent.click(screen.getByText('Scan details'));
+    expect(screen.getByText(/^Run ww-run-1/)).toBeVisible();
+    expect(screen.getByText(`Workable (workable_global:all-customers, partial): ${warning}`)).toBeVisible();
+  });
+
+  it('groups failed, stopped and not-set-up sources and only claims the rest are complete when they are', async () => {
+    const onOpenSearchProfile = vi.fn();
+    const okSource = (provider: 'remotive' | 'jobicy' | 'dice') => ({
+      id: `${provider}:all`,
+      provider,
+      url: `https://example.test/${provider}`,
+      requests: 1,
+      listings: 2,
+      status: 'success' as const,
+      error: null,
+      networkAttempts: 1,
+      retries: 0,
+      complete: true,
+      completenessReason: null,
+      continuationCursor: null,
+    });
+    const report = makeWorldwideReport([makeWorldwideVacancy()], [
+      okSource('remotive'),
+      okSource('jobicy'),
+      { ...okSource('dice'), status: 'error' as const, error: 'HTTP 500', complete: false, completenessReason: 'HTTP 500' },
+      {
+        ...okSource('jobicy'),
+        id: 'ats_roster_lever:roster-scan',
+        provider: 'ats_roster_lever' as const,
+        requests: 0,
+        listings: 0,
+        error: 'No imported roster entries for this provider yet; run the ats-roster:import CLI command first.',
+      },
+    ]);
+    installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
+
+    render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Source coverage warning (2)' }));
+
+    expect(
+      screen.getByText('2 sources returned partial or no results. Results from the other sources are complete.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 source failed.')).toBeInTheDocument();
+    expect(screen.getByText('1 source not set up.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download company list' }));
+    expect(onOpenSearchProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the match count with the applied query and scan time, and keeps raw counts in the details', async () => {
+    const report = makeWorldwideReport([makeWorldwideVacancy()]);
+    report.statistics.rawRowsFetched = 12;
+    report.statistics.focusedMatches = 3;
+    const bridge = installAllBridges({
+      getReport: vi.fn().mockResolvedValue(null),
+      runScan: vi.fn().mockResolvedValue(report),
+    });
+
+    render(<SearchPage />);
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('Frontend Engineer');
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+
+    const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
+    expect(bridge.runScan).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).not.toBeVisible();
   });
 
   it('reports the missing verification as absent for a vacancy with no sponsor match', async () => {
@@ -1648,7 +1776,7 @@ describe('SearchPage', () => {
     });
 
     await waitFor(() => expect(screen.getAllByText('Backend Role').length).toBeGreaterThan(0));
-    expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+    expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
   });
 
   it('a scan-failure Retry button re-runs the scan and clears the error on success', async () => {
