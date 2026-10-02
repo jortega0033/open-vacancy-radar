@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FILTERS,
   buildSearchResultIndex,
+  dedupeResultsByKey,
   descriptionExcerpt,
+  duplicateResultKeys,
+  fitHighlights,
+  profileFitSpoken,
+  profileFitText,
+  toWorldwideResults,
   filterSearchResultIndex,
   filterResults,
   salaryCounts,
@@ -491,15 +497,50 @@ describe('sortResults/sortSearchResultIndex: query-match tier for scoreless rows
     expect(sortResults(results, 'frontend').map((r) => r.key)).toEqual(['newer', 'older']);
   });
 
-  it('does not let a scored row automatically outrank an unscored one -- the postedAt fallback is unchanged', () => {
+  it('always puts a scored row before an unscored one, whatever the posting dates or the query tier say (issue #464)', () => {
     const results = [
-      sortableResult({ key: 'scored', profileScore: 40, postedAt: '2026-08-01T00:00:00.000Z', title: 'No match here' }),
       sortableResult({ key: 'scoreless', profileScore: null, postedAt: '2026-08-20T00:00:00.000Z', title: 'Frontend Engineer' }),
+      sortableResult({ key: 'scored', profileScore: 40, postedAt: '2026-08-01T00:00:00.000Z', title: 'No match here' }),
     ];
 
-    // Mixed pair: the tier check never fires (it requires both rows scoreless), so this falls
-    // straight through to today's postedAt fallback, exactly as before this change.
-    expect(sortResults(results, 'frontend engineer').map((r) => r.key)).toEqual(['scoreless', 'scored']);
+    expect(sortResults(results, 'frontend engineer').map((r) => r.key)).toEqual(['scored', 'scoreless']);
+    expect(sortResults(results).map((r) => r.key)).toEqual(['scored', 'scoreless']);
+  });
+
+  it('keeps every scored row ahead of every unscored row in a mixed list, with the score-then-recency tiebreaks inside each group', () => {
+    const results = [
+      sortableResult({ key: 'u-new', profileScore: null, postedAt: '2026-09-10T00:00:00.000Z' }),
+      sortableResult({ key: 's98-old', profileScore: 98, postedAt: '2026-09-01T00:00:00.000Z' }),
+      sortableResult({ key: 'u-old', profileScore: null, postedAt: '2026-09-02T00:00:00.000Z' }),
+      sortableResult({ key: 's98-new', profileScore: 98, postedAt: '2026-09-09T00:00:00.000Z' }),
+      sortableResult({ key: 's60', profileScore: 60, postedAt: '2026-09-11T00:00:00.000Z' }),
+      sortableResult({ key: 'u-undated', profileScore: null, postedAt: null }),
+    ];
+
+    expect(sortResults(results).map((r) => r.key)).toEqual([
+      's98-new',
+      's98-old',
+      's60',
+      'u-new',
+      'u-old',
+      'u-undated',
+    ]);
+  });
+
+  it('is a total, stable order: every rotation of the input sorts identically, including exact title ties', () => {
+    const base = [
+      sortableResult({ key: 'k-b', profileScore: null, title: 'Frontend Engineer', postedAt: '2026-09-09T00:00:00.000Z' }),
+      sortableResult({ key: 'k-a', profileScore: null, title: 'Frontend Engineer', postedAt: '2026-09-09T00:00:00.000Z' }),
+      sortableResult({ key: 'k-c', profileScore: 98, title: 'Frontend Engineer', postedAt: '2026-09-09T00:00:00.000Z' }),
+      sortableResult({ key: 'k-d', profileScore: 98, title: 'Frontend Engineer', postedAt: '2026-09-09T00:00:00.000Z' }),
+    ];
+    const expected = sortResults(base).map((r) => r.key);
+
+    expect(expected).toEqual(['k-c', 'k-d', 'k-a', 'k-b']);
+    for (let shift = 1; shift < base.length; shift += 1) {
+      const rotated = [...base.slice(shift), ...base.slice(0, shift)];
+      expect(sortResults(rotated).map((r) => r.key)).toEqual(expected);
+    }
   });
 
   it('keeps profileScore authoritative for a both-scored pair, even when the lower score would win the query tier', () => {
@@ -705,5 +746,169 @@ describe('descriptionExcerpt', () => {
 
   it('trims leading and trailing whitespace', () => {
     expect(descriptionExcerpt('  Build accessible interfaces.  ')).toBe('Build accessible interfaces.');
+  });
+});
+
+/** A minimal provisional row for tests that only care about identity. */
+function keyedRow(overrides: { key: string; title?: string }): SearchResult {
+  return toPartialResults([discoveryVacancy({ key: overrides.key, ...(overrides.title ? { title: overrides.title } : {}) })])[0]!;
+}
+
+describe('duplicate vacancy keys (issue #464)', () => {
+  it('reports a key carried by more than one row, and nothing for distinct keys', () => {
+    const rows = [
+      keyedRow({ key: 'a' }),
+      keyedRow({ key: 'b' }),
+      keyedRow({ key: 'a' }),
+    ];
+
+    expect(duplicateResultKeys(rows)).toEqual(['a']);
+    expect(duplicateResultKeys([rows[0]!, rows[1]!])).toEqual([]);
+  });
+
+  it('never merges distinct vacancies that only share a title, company and date', () => {
+    const rows = toPartialResults([
+      discoveryVacancy({ key: 'bjak-1', title: 'Frontend Engineer', company: 'Bjak', location: 'Germany', postedAt: '2026-09-10T00:00:00.000Z' }),
+      discoveryVacancy({ key: 'bjak-2', title: 'Frontend Engineer', company: 'Bjak', location: 'Germany', postedAt: '2026-09-10T00:00:00.000Z' }),
+    ]);
+
+    expect(duplicateResultKeys(rows)).toEqual([]);
+    expect(dedupeResultsByKey(rows).map((r) => r.key)).toEqual(['bjak-1', 'bjak-2']);
+  });
+
+  it('keeps the first row of a repeated key and drops only the repeats', () => {
+    const rows = [
+      keyedRow({ key: 'a', title: 'First' }),
+      keyedRow({ key: 'b', title: 'Other' }),
+      keyedRow({ key: 'a', title: 'Repeat' }),
+    ];
+
+    expect(dedupeResultsByKey(rows).map((r) => r.title)).toEqual(['First', 'Other']);
+  });
+
+  it('returns the same array when there is nothing to drop', () => {
+    const rows = [keyedRow({ key: 'a' }), keyedRow({ key: 'b' })];
+    expect(dedupeResultsByKey(rows)).toBe(rows);
+  });
+
+  it('turns a repeated key inside one final report into one row per key, so a provisional-to-final swap cannot render the vacancy twice', () => {
+    const vacancy = discoveryVacancy({ key: 'dup-1', title: 'Frontend Engineer', profileScore: 98 });
+    const report = { discoveryAudit: [vacancy, { ...vacancy }], officialAudit: [] } as never;
+
+    const finalRows = toWorldwideResults(report);
+
+    expect(finalRows.every((row) => row.provisional === false)).toBe(true);
+    expect(dedupeResultsByKey(finalRows)).toHaveLength(1);
+  });
+});
+
+describe('profile fit helpers (issue #452)', () => {
+  it('writes the score with its scale, visibly and for a screen reader', () => {
+    expect(profileFitText(98)).toBe('Profile fit 98/100');
+    expect(profileFitSpoken(98)).toBe('Profile fit 98 out of 100');
+  });
+
+  it('takes at most three matching signals and two gaps, in the scorer order', () => {
+    const match = {
+      technicalFit: 90,
+      roleFit: 80,
+      seniorityFit: 70,
+      primaryFit: 'Frontend Engineer',
+      matchingSkills: ['A', 'B', 'C', 'D', 'E'],
+      gaps: ['g1', 'g2', 'g3'],
+      reasons: [],
+      unmetMandatoryLanguages: [],
+    } as never;
+
+    expect(fitHighlights(match)).toEqual({ signals: ['A', 'B', 'C'], gaps: ['g1', 'g2'] });
+  });
+
+  it('never manufactures signals or gaps: fewer in, fewer out, and nothing without a breakdown', () => {
+    const match = { matchingSkills: ['Only one'], gaps: [] } as never;
+
+    expect(fitHighlights(match)).toEqual({ signals: ['Only one'], gaps: [] });
+    expect(fitHighlights(null)).toEqual({ signals: [], gaps: [] });
+    expect(fitHighlights(undefined)).toEqual({ signals: [], gaps: [] });
+  });
+});
+
+describe('descriptionExcerpt boilerplate stripping (issue #463)', () => {
+  it('skips a flattened "Type of Requisition" metadata run and starts at the first real sentence', () => {
+    const text =
+      'Type of Requisition: Pipeline Clearance Level Must Currently Possess: None Clearance Level Must Be Able to Obtain: None Public Trust/Other Required: None Job Family: Software Engineering. Build and ship user-facing features for our planning product.';
+
+    expect(descriptionExcerpt(text)).toBe('Build and ship user-facing features for our planning product.');
+  });
+
+  it('skips key: value metadata lines at the top of a multi-line description', () => {
+    const text = 'Type of Requisition: Pipeline\nClearance Level Must Currently Possess: None\nLocation: Remote\nBuild accessible interfaces for dispatchers.';
+
+    expect(descriptionExcerpt(text)).toBe('Build accessible interfaces for dispatchers.');
+  });
+
+  it('skips a "Who we are" introduction block and resumes at the next section', () => {
+    const text = 'Who We Are\nAcme builds freight software for carriers.\nThe Role\nYou will build planning tools for dispatchers.';
+
+    expect(descriptionExcerpt(text)).toBe('You will build planning tools for dispatchers.');
+  });
+
+  it('handles the same introduction when the text is flattened onto one line', () => {
+    const text = "Who We Are Hi, we're Acme, a freight software company. The Role: You will build planning tools for dispatchers.";
+
+    expect(descriptionExcerpt(text)).toBe('You will build planning tools for dispatchers.');
+  });
+
+  it('shows nothing for a description that is only an employer introduction', () => {
+    expect(descriptionExcerpt('Who We Are\nHi, we are Acme, a freight software company.')).toBeNull();
+    expect(descriptionExcerpt("Who We Are Hi, we're Acme, a freight software company.")).toBeNull();
+    expect(descriptionExcerpt('About Acme\nAcme builds freight software for carriers.')).toBeNull();
+  });
+
+  it('drops an "About <Company>" heading and its paragraph, and keeps the content after it', () => {
+    const text = 'About Acme Corp\nAcme builds freight software for carriers.\nWe are hiring a frontend engineer to own the planner.';
+
+    expect(descriptionExcerpt(text)).toBe('We are hiring a frontend engineer to own the planner.');
+  });
+
+  it('treats "About the role" as a section heading and keeps the role text', () => {
+    expect(descriptionExcerpt('About the role\nYou will own the checkout flow.')).toBe('You will own the checkout flow.');
+  });
+
+  it('keeps running text that merely starts with the word "About"', () => {
+    const text = 'About half of our team works remotely across Europe.';
+
+    expect(descriptionExcerpt(text)).toBe(text);
+  });
+
+  it('keeps a "Responsibilities:" line, which is content and not metadata', () => {
+    const text = 'Responsibilities: Design and build checkout flows for our shop.';
+
+    expect(descriptionExcerpt(text)).toBe(text);
+  });
+
+  it('shows nothing when only metadata or a too-short fragment survives', () => {
+    expect(descriptionExcerpt('Location: Remote\nSalary: $90k\nEmployment Type: Full time')).toBeNull();
+    expect(descriptionExcerpt('Apply now.')).toBeNull();
+    expect(descriptionExcerpt('Who We Are')).toBeNull();
+  });
+
+  it('passes Dutch and German descriptions through, and strips their own introduction headings', () => {
+    expect(descriptionExcerpt('Wij zoeken een frontend developer voor ons planningsteam.')).toBe(
+      'Wij zoeken een frontend developer voor ons planningsteam.',
+    );
+    expect(descriptionExcerpt('Over ons\nWij zijn een logistiek bedrijf.\nDe functie\nJe bouwt planningstools voor planners.')).toBe(
+      'Je bouwt planningstools voor planners.',
+    );
+    expect(
+      descriptionExcerpt('\u00dcber uns\nWir bauen Software.\nDeine Aufgaben:\nDu entwickelst Oberfl\u00e4chen f\u00fcr Disponenten.'),
+    ).toBe('Du entwickelst Oberfl\u00e4chen f\u00fcr Disponenten.');
+  });
+
+  it('is a preview only: the full description stays on the row untouched', () => {
+    const description = 'Who We Are\nAcme builds freight software.\nThe Role\nYou will build planning tools.';
+    const [row] = toPartialResults([discoveryVacancy({ description })]);
+
+    expect(row?.description).toBe(description);
+    expect(row?.lead.description).toBe(description);
   });
 });

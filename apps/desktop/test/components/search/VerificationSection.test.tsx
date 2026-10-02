@@ -53,14 +53,19 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
 }
 
 describe('VerificationSection', () => {
-  it('does not repeat the "not available" note here -- it is already shown once in the summary card above', () => {
+  it('does not explain employer verification at all -- the detail pane states it once, above', () => {
     render(<VerificationSection result={worldwideResult()} />);
 
     expect(screen.queryByText(/Nothing was verified: that is an absent check/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Employer verification is not available for this vacancy.')).toBeInTheDocument();
+    expect(screen.queryByText(/employer verification is not available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not available for this vacancy/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/you can still compare this vacancy/i)).not.toBeInTheDocument();
+    // What it does own: the vacancy-level official source check.
+    expect(screen.getByRole('heading', { name: 'Sources' })).toBeInTheDocument();
+    expect(screen.getByText('Official vacancy check')).toBeInTheDocument();
   });
 
-  it('points to the summary card for a sponsor match, without repeating its label or note here', () => {
+  it('stays silent about a sponsor match too, leaving the label and note to the summary card', () => {
     const result = worldwideResult({
       verification: {
         level: 'possible_sponsor_match',
@@ -72,9 +77,7 @@ describe('VerificationSection', () => {
 
     render(<VerificationSection result={result} />);
 
-    expect(screen.getByText(/best-effort sponsor match was found/i)).toBeInTheDocument();
-    // The summary card (VacancyDetail.tsx, not rendered here) already shows the label and note
-    // unconditionally -- this section must not repeat either.
+    expect(screen.queryByText(/best-effort sponsor match was found/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Possible sponsor match (best effort)')).not.toBeInTheDocument();
     expect(screen.queryByText(/Acme Nederland B.V. \(KVK 12345678\)/)).not.toBeInTheDocument();
   });

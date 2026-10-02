@@ -25,6 +25,8 @@ import {
   DEFAULT_FILTERS,
   browseAllViewFilters,
   buildSearchResultIndex,
+  dedupeResultsByKey,
+  duplicateResultKeys,
   employmentOptions,
   filterSearchResultIndex,
   isWebUrl,
@@ -580,16 +582,28 @@ export function SearchPage({
   //    moment the first one arrives too, rather than staying hidden behind a "N have arrived" count
   //    for the whole scan -- `viewingSaved` is the explicit, user-driven way back to the saved
   //    report without waiting for the rescan to finish.
-  const showLiveResults = hasLiveRows && (!hasReport || (scanning && !viewingSaved));
+  //
+  // Never without a running scan (issue #464): a late progress event can land in `partialVacancies`
+  // after the scan finished, and those rows would otherwise sit on screen as a "Live" list that
+  // nothing is updating.
+  const showLiveResults = hasLiveRows && scanning && (!hasReport || !viewingSaved);
 
   // While no live rows are being shown, fall back to the saved report if one exists, or to nothing.
   // This never merges partial rows into a loaded report: the final displayed list, once a real
   // `GlobalRemoteReport` is in view, is exactly what a non-streaming scan would have shown,
   // byte-for-byte.
   const results = useMemo<SearchResult[]>(() => {
-    if (showLiveResults) return toPartialResults(partialVacancies);
-    if (worldwideReport) return toWorldwideResults(worldwideReport);
-    return [];
+    const rows = showLiveResults
+      ? toPartialResults(partialVacancies)
+      : worldwideReport
+        ? toWorldwideResults(worldwideReport)
+        : [];
+    // `key` is the row's React key, its selection identity and its saved-job key. Two rows with one
+    // key would render twice and select together, so keep the first and say so (issue #464).
+    const duplicates = duplicateResultKeys(rows);
+    if (duplicates.length === 0) return rows;
+    console.warn(`Search results carried repeated vacancy keys; keeping the first row for each: ${duplicates.join(', ')}`);
+    return dedupeResultsByKey(rows);
   }, [showLiveResults, worldwideReport, partialVacancies]);
 
   // Spoken scan signals (issue #456): start, throttled progress, then finish or failure. The text
@@ -644,6 +658,8 @@ export function SearchPage({
     () => visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
     [visible, page],
   );
+
+  const unscoredCount = useMemo(() => visible.filter((result) => result.profileScore == null).length, [visible]);
 
   const sources = useMemo(() => sourceOptions(results), [results]);
   const employmentTypes = useMemo(() => employmentOptions(results), [results]);
@@ -1198,6 +1214,8 @@ export function SearchPage({
               onSelect={handleSelect}
               savedKeys={savedKeys}
               summary={summary}
+              scanActive={scanning}
+              unscoredCount={unscoredCount}
               page={page}
               pageCount={pageCount}
               onPageChange={(nextPage) => {
