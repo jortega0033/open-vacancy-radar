@@ -171,6 +171,34 @@ describe('App', () => {
     expect(main).not.toHaveClass('overflow-hidden');
   });
 
+  describe('Fill search profile (issue #480)', () => {
+    async function openSearchProfileFromSearch() {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
+      });
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Fill search profile' }));
+    }
+
+    it('lands on Settings > Search with the first profile field focused', async () => {
+      await openSearchProfileFromSearch();
+
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
+      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+    });
+
+    it('a plain visit to Settings afterwards starts on General again', async () => {
+      await openSearchProfileFromSearch();
+      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search' })); // leave Settings
+      fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true'));
+    });
+  });
+
   describe('AI helper unavailable (issue #478)', () => {
     const RAW_ERROR =
       'process exited before starting (code 1, signal null): Error at C:\\Users\\someone\\app\\daemon.js token=abc123secret http://127.0.0.1:54321';

@@ -8,7 +8,7 @@ import { ApplicationsPage } from './components/applications/index.js';
 import { CvLibraryPage } from './components/cv-library/index.js';
 import { LettersPage, type SelectedVacancy } from './components/letters/index.js';
 import { RuntimePage } from './components/runtime/index.js';
-import { SettingsPage } from './components/settings/index.js';
+import { SettingsPage, type SettingsFocusSection, type SettingsTab } from './components/settings/index.js';
 import { AgentWorkspacePage } from './components/agent-workspace/index.js';
 import { WelcomeModal } from './components/WelcomeModal.js';
 import {
@@ -40,6 +40,10 @@ export function App() {
   // ordinary sidebar navigation (see `handleNavigate`) -- so a later, unrelated visit to Letters
   // never replays a stale handoff.
   const [pendingVacancy, setPendingVacancy] = useState<SelectedVacancy | null>(null);
+  // Where Settings should open when something other than the sidebar sent the user there ("Fill
+  // search profile", the first-launch checklist). Held here, not in SettingsPage, so it survives
+  // that page remounting; a plain sidebar visit clears it in `handleNavigate`.
+  const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; focusSection?: SettingsFocusSection }>();
   const [searchSession, setSearchSession] = useState(createSearchSessionState);
   const [applicationAttemptToOpen, setApplicationAttemptToOpen] = useState<string | null>(null);
   const [letterReturnAttemptId, setLetterReturnAttemptId] = useState<string | null>(null);
@@ -147,6 +151,7 @@ export function App() {
     // 'letters') is what keeps a later, unrelated visit from replaying a stale handed-off vacancy.
     setPendingVacancy(null);
     setLetterReturnAttemptId(null);
+    setSettingsTarget(undefined);
     if (page !== 'applications') setApplicationAttemptToOpen(null);
     // Fire and forget: remembering the page is a convenience, and a write failure must not block
     // (or fail) the navigation the user just asked for.
@@ -156,6 +161,13 @@ export function App() {
     // three of the five pages, so refreshing on every navigation is simpler than wiring one to each.
     void refreshCounts();
   }, [refreshCounts]);
+
+  // "Fill search profile": Settings on the Search tab, with the profile's first field focused.
+  // Set after `handleNavigate`, which clears any earlier target.
+  const handleOpenSearchProfile = useCallback(() => {
+    handleNavigate('settings');
+    setSettingsTarget({ tab: 'search', focusSection: 'search-profile' });
+  }, [handleNavigate]);
 
   // The Search page's "Generate Letter" action: distinct from `handleNavigate` because it needs to
   // set `pendingVacancy` *and* navigate in the same step, without that navigation's own
@@ -337,7 +349,7 @@ export function App() {
           {nav === 'search' && (
             <SearchPage
               onGenerateLetter={handleGenerateLetter}
-              onOpenSearchProfile={() => handleNavigate('settings')}
+              onOpenSearchProfile={handleOpenSearchProfile}
               onSavedJobsChanged={refreshCounts}
               onViewApplicationAttempt={handleViewApplicationAttempt}
               session={searchSession}
@@ -368,7 +380,13 @@ export function App() {
               onBackToVacancy={handleBackToVacancy}
             />
           )}
-          {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
+          {nav === 'settings' && (
+            <SettingsPage
+              onNavigateToRuntime={() => handleNavigate('runtime')}
+              {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}
+              {...(settingsTarget?.focusSection ? { focusSection: settingsTarget.focusSection } : {})}
+            />
+          )}
 
           {/* ADI-07. Mounted only while it is the active page, which is what makes the hook's
               unmount cleanup meaningful: leaving the page detaches every live relay in main rather
