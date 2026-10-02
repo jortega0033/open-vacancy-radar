@@ -1170,7 +1170,7 @@ export function SearchPage({
           )}
           {worldwideReport && (
             <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
-              {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+              {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} listings fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} unique vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} shown after your filters.
             </p>
           )}
           <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0">
@@ -1283,7 +1283,7 @@ export function SearchPage({
                 aria-expanded={sourceWarningsOpen}
               >
                 <Info size={14} aria-hidden="true" />
-                Source coverage warning ({sourceWarnings.length})
+                Some sources could not be checked ({sourceWarnings.length})
               </button>
               {sourceWarningsOpen && (
                 <div className="alert alert-warning alert-soft mt-1.5 text-sm" role="status">
@@ -1300,11 +1300,17 @@ export function SearchPage({
           )}
           {worldwideReport && (
             <p className="pb-1.5 text-xs text-base-content/60">
-              Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
+              Generated {new Date(worldwideReport.generatedAt).toLocaleString()}
               {scanBounds?.mode === 'browse_all'
                 ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
                 : ''}
             </p>
+          )}
+          {worldwideReport && (
+            <details className="pb-1.5 text-xs text-base-content/60">
+              <summary className="cursor-pointer">Scan details</summary>
+              <p>Run ID: {worldwideReport.runId}</p>
+            </details>
           )}
         </div>
       )}

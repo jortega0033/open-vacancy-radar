@@ -153,3 +153,35 @@ describe('copy rules: dashes', () => {
     expect(hits.map((h) => h.line)).toEqual([1, 2, 3]);
   });
 });
+
+// Terms that belong to the pipeline, not to a person reading the screen. Applied to rendered copy: JSX text
+// plus label and message strings in plain modules (LLM prompt files are skipped). Add an entry to JARGON_ALLOWLIST (with a reason) when a term is truly user facing.
+const BANNED_JARGON: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'daemon', pattern: /\bdaemon\b/i },
+  { label: 'rebase', pattern: /\brebas(?:e|ed|es|ing)\b/i },
+  { label: 'digest', pattern: /\bdigest\b/i },
+  { label: 'deduplicated', pattern: /\bdeduplicated\b/i },
+  { label: 'raw rows', pattern: /\braw rows?\b/i },
+  { label: 'snapshot', pattern: /\bsnapshots?\b/i },
+];
+
+/** Pieces that may keep a banned term. Every entry needs a reason. */
+const JARGON_ALLOWLIST: AllowEntry[] = [
+  // The app-wide runtime banner and its startup error are being rewritten in a separate change.
+  // Remove these three entries when that lands.
+  { file: 'src/App.tsx', includes: 'Connecting to local daemon', why: 'Banner owned by the runtime banner rewrite' },
+  { file: 'src/App.tsx', includes: 'Daemon unavailable', why: 'Banner owned by the runtime banner rewrite' },
+  { file: 'src/App.tsx', includes: 'waiting for the local daemon', why: 'Startup error owned by the runtime banner rewrite' },
+];
+
+describe('copy rules: pipeline jargon', () => {
+  it('keeps banned pipeline terms out of rendered copy', () => {
+    const hits: Piece[] = [];
+    for (const p of allPieces) {
+      if (!isAppCopy(p)) continue;
+      const banned = BANNED_JARGON.find((b) => b.pattern.test(p.text));
+      if (banned && !allowed(JARGON_ALLOWLIST, p)) hits.push({ ...p, text: `[${banned.label}] ${p.text}` });
+    }
+    expectNone('Replace the jargon with plain wording from the glossary', hits);
+  });
+});

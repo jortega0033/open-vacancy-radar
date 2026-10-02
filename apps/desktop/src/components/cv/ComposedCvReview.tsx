@@ -180,7 +180,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     setRebasing(true);
     setApproved(false);
     try {
-      await runCaseAction((record) => window.workspace.rebaseCvEvidenceOverlay(record.id, record.caseRevision), 'could not rebase this case onto your current CV');
+      await runCaseAction((record) => window.workspace.rebaseCvEvidenceOverlay(record.id, record.caseRevision), 'could not move this tailoring onto your current CV');
     } finally {
       setRebasing(false);
     }

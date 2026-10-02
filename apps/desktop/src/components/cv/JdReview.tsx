@@ -226,7 +226,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
 
         {savedMatchesText && latest && (
           <p className="text-xs text-base-content/60">
-            Saved as revision {revisions.length} on {formatCapturedAt(latest.capturedAt)}. Digest{' '}
+            Saved as revision {revisions.length} on {formatCapturedAt(latest.capturedAt)}. Text check{' '}
             {latest.textHash.slice(0, 12)}.
           </p>
         )}

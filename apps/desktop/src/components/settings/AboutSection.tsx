@@ -69,7 +69,7 @@ export function AboutSection() {
     // AI Runtime page's own banner shows the same text, but isn't copyable as structured text.
     const daemonStatus = await window.agentDock.getDaemonStatus().catch((err: unknown) => ({
       state: 'unavailable' as const,
-      error: err instanceof Error ? err.message : 'could not read daemon status',
+      error: err instanceof Error ? err.message : 'could not read background service status',
     }));
     const diagnostics = sanitizeForDiagnostics({
       application: 'Open Vacancy Radar',
@@ -102,7 +102,7 @@ export function AboutSection() {
             generatedAt: new Date().toISOString(),
             platform: navigator.userAgent,
             route: window.location.hash || window.location.pathname || 'unknown',
-            daemonStatus: 'Click Copy diagnostics first for live daemon status.',
+            daemonStatus: 'Click Copy diagnostics first for live background service status.',
           },
           null,
           2,

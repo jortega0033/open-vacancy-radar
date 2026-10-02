@@ -137,7 +137,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         Authentication remains managed by the installed CLI.
       </p>
 
-      {daemonState === 'connecting' && <PageLoading label="Connecting to local daemon…" />}
+      {daemonState === 'connecting' && <PageLoading label="Connecting to the background service…" />}
       {providersError && <ErrorBanner className="mt-4">{providersError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 

@@ -735,7 +735,7 @@ describe('SearchPage', () => {
     installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
 
     render(<SearchPage />);
-    expect(await screen.findByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
+    expect(await screen.findByText(/12 listings fetched, 1 unique vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
   });
 
   it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
@@ -1160,11 +1160,11 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
 
-    await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
     // Collapsed by default; the detail line only appears once the toggle is opened. The provider id
     // renders through `discoveryProviderLabel` ("Workable"), not the raw "workable_global" id.
     expect(screen.queryByText(`Workable: ${warning}`)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
+    fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
     expect(screen.getByText(`Workable: ${warning}`)).toBeInTheDocument();
   });
 

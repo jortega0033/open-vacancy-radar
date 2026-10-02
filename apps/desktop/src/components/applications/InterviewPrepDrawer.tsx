@@ -94,7 +94,7 @@ export function InterviewPrepDrawer({
         if (!cancelled) {
           setAttempts([]);
           setAttemptsError(
-            describeError(err, 'could not load the job description snapshot for this application'),
+            describeError(err, 'could not load the saved job description for this application'),
           );
         }
       });
