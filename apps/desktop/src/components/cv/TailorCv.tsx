@@ -37,6 +37,8 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
   const run = useAgentRun();
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [copyError, setCopyError] = useState<string>();
+  /** Stays set once the draft was copied, until a new draft replaces it, so the warning does not fade with "Copied". */
+  const [copiedDraft, setCopiedDraft] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(
@@ -53,6 +55,7 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
     if (!cv || !vacancy) return;
     setCopyState('idle');
     setCopyError(undefined);
+    setCopiedDraft(false);
     // #281: one bundle in, one prompt out. The reviewed source, the corrected profile, the
     // requirement lines read out of the whole posting and the completeness ledger all reach the
     // prompt through `buildGenerationInputBundle` rather than being gathered here.
@@ -75,6 +78,7 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
       await navigator.clipboard.writeText(run.text);
       setCopyState('copied');
       setCopyError(undefined);
+      setCopiedDraft(true);
     } catch (err) {
       // Clipboard access can be denied; say so rather than silently pretending it worked.
       setCopyState('failed');
@@ -84,16 +88,16 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
   }, [run.text]);
 
   return (
-    <div className="card card-border rounded-box border-base-300 bg-base-100">
-      <div className="card-body gap-3 p-5">
-        <div className="card-title flex flex-wrap items-center gap-2 text-base font-bold">
-          Tailored CV
-          <span className="badge badge-warning badge-sm">Draft</span>
-        </div>
+    <details className="card card-border rounded-box border-base-300 bg-base-100">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 p-5 text-base font-bold">
+        Quick draft to read
+        <span className="badge badge-warning badge-sm">Unchecked</span>
+      </summary>
+      <div className="card-body gap-3 p-5 pt-0">
         <p className="text-sm text-base-content/60">
           Your CV content, reordered and re-emphasized for this vacancy. It is a draft to read and
           never replaces the CV on file. It is never approved, and copying it
-          does not approve it. Only the Approved CV panel builds a CV you can approve.
+          does not approve it. Only the tailored CV card above builds a CV you can approve.
         </p>
 
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}
@@ -102,7 +106,7 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn btn-primary" type="button" onClick={handleRun} disabled={!canRun}>
+          <button className="btn btn-outline" type="button" onClick={handleRun} disabled={!canRun}>
             {hasDraft && !run.isBusy ? 'Regenerate' : 'Draft tailored CV'}
           </button>
           <button className="btn btn-outline" type="button" onClick={() => void run.cancel()} disabled={!run.isBusy}>
@@ -128,6 +132,11 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
             {copyError}
           </div>
         )}
+        {copiedDraft && (
+          <div className="alert alert-warning text-sm" role="status">
+            This draft is unchecked. Read every line against your own record before you use any of it.
+          </div>
+        )}
 
         <AiOutput
           status={run.status}
@@ -139,6 +148,6 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
           providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
       </div>
-    </div>
+    </details>
   );
 }

@@ -248,8 +248,14 @@ export function CvLibraryPage() {
         <button type="button" className="btn btn-ghost btn-sm self-start" onClick={() => setTailoring(null)}>
           Back to CV library
         </button>
-        {tailoring === 'form' ? (
-          <ManualCaseForm onSubmit={(vacancy) => setTailoring({ vacancy })} onCancel={() => setTailoring(null)} />
+        {tailoring === 'form' && documents === null ? (
+          <PageLoading label="Loading your CV library…" />
+        ) : tailoring === 'form' ? (
+          <ManualCaseForm
+            documents={documents ?? []}
+            onSubmit={(vacancy, cvId) => setTailoring({ vacancy, ...(cvId ? { cvId } : {}) })}
+            onCancel={() => setTailoring(null)}
+          />
         ) : (
           <CvAssistant vacancy={tailoring.vacancy} {...(tailoring.cvId ? { initialCvId: tailoring.cvId } : {})} />
         )}

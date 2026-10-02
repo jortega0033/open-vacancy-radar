@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { composeApprovedTailoredResume } from '../../../electron/resume-source.js';
-import { snapshotNeedsReapproval } from '../../../electron/workspace/cv-artifact-status.js';
+import { cvArtifactStatus, snapshotNeedsReapproval } from '../../../electron/workspace/cv-artifact-status.js';
 import { describeCvSourceGaps, selectSourceProjects } from '../../../electron/workspace/cv-source-schema.js';
 import type {
   CvEvidenceOverlayRecord,
@@ -25,8 +25,9 @@ export interface ComposedCvReviewProps {
  * The candidate-approved composition path (#419, steps 8-9): previews and approves the CV
  * `composeApprovedTailoredResume` builds from unchanged reviewed source text and active,
  * candidate-approved wording only -- never from `TailorCv`'s free-form advisory draft, which this
- * component neither reads nor affects. That draft carries a "Draft" label and has no route into this
- * panel, so copying it cannot give it approved status.
+ * component neither reads nor affects. That draft is labelled unchecked and has no route into this
+ * panel, so copying it cannot give it approved status. The card's title never says "Approved" on its
+ * own: a badge names the real state of the stored case.
  *
  * Three steps sit in front of approving the whole CV, in order:
  *  1. If the source CV, profile text or skills changed after the case was started, the candidate
@@ -207,6 +208,11 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
   // exported until the case is approved again, which builds it under the current format.
   const needsReapproval = !!overlay && snapshotNeedsReapproval(overlay);
   const isApproved = approved || overlay?.state === 'candidate_approved';
+  // Files exported before the last approval, or under an older document format, no longer match it.
+  const filesOutOfDate =
+    !!overlay &&
+    isApproved &&
+    (needsReapproval || (['pdf', 'docx'] as const).some((format) => cvArtifactStatus(overlay, format) === 'stale'));
 
   if (!cvId || !vacancy) return null;
 
@@ -215,10 +221,19 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
   return (
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
-        <div className="card-title text-base font-bold">Approved CV</div>
+        <div className="card-title flex flex-wrap items-center gap-2 text-base font-bold">
+          Your tailored CV
+          {!isApproved ? (
+            <span className="badge badge-warning badge-sm">Not approved yet</span>
+          ) : filesOutOfDate ? (
+            <span className="badge badge-warning badge-sm">Approved with files out of date</span>
+          ) : (
+            <span className="badge badge-success badge-sm">Approved</span>
+          )}
+        </div>
         <p className="text-sm text-base-content/60">
           Built only from your unchanged reviewed CV and wording you approved one by one in the facts
-          and wording review. The Tailored CV panel is a separate Draft that is never approved.
+          and wording review. The quick draft below is separate text that is never approved.
         </p>
 
         {!overlay && (
