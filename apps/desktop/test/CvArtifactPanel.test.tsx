@@ -85,8 +85,18 @@ function overlayWith(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
 const pdfPages = vi.hoisted(() => ({ openPdfForReview: vi.fn() }));
 vi.mock('../src/components/cv/pdf-pages.js', () => pdfPages);
 
-function fakeReview(pageCount: number, renderPage?: PdfReview['renderPage']): PdfReview {
-  return { pageCount, renderPage: renderPage ?? vi.fn().mockResolvedValue(undefined), destroy: vi.fn().mockResolvedValue(undefined) };
+function fakeReview(
+  pageCount: number,
+  renderPage?: PdfReview['renderPage'],
+  extractText?: PdfReview['extractText'],
+): PdfReview {
+  return {
+    pageCount,
+    renderPage: renderPage ?? vi.fn().mockResolvedValue(undefined),
+    extractText: extractText ?? vi.fn((pageNumber: number) => Promise.resolve(`Line one of page ${pageNumber}
+Line two`)),
+    destroy: vi.fn().mockResolvedValue(undefined),
+  };
 }
 
 afterEach(() => {
@@ -217,6 +227,44 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     finishSecond();
     await waitFor(() => expect(workspace.markCvArtifactPagesViewed).toHaveBeenCalledTimes(1));
     expect(workspace.markCvArtifactPagesViewed).toHaveBeenCalledWith('overlay-1', 'artifact-1', 2);
+  });
+
+  it('puts the extracted text of each page inside its figure, read from the same PDF', async () => {
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2));
+    installWorkspaceBridge({
+      readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])),
+      markCvArtifactPagesViewed: vi.fn().mockResolvedValue(overlayWith({ artifacts: [artifact()] })),
+    });
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact()] })} onOverlayChange={vi.fn()} />);
+
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    const first = await screen.findByRole('figure', { name: 'Page 1 of 2' });
+    await waitFor(() => expect(first).toHaveTextContent('Line one of page 1'));
+    expect(within(first).getByText('Extracted text')).toBeInTheDocument();
+    expect(screen.getByRole('figure', { name: 'Page 2 of 2' })).toHaveTextContent('Line one of page 2');
+  });
+
+  it('does not count a page whose text cannot be read, and shows a way to try again', async () => {
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2, undefined, vi.fn().mockResolvedValue('')));
+    const workspace = installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact()] })} onOverlayChange={vi.fn()} />);
+
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    expect(await within(pdfRow()).findByRole('alert')).toHaveTextContent(/page \d has no text that a screen reader can read/);
+    expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
+    expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
+    expect(within(pdfRow()).getByRole('button', { name: /try showing the pages again/i })).toBeEnabled();
+  });
+
+  it('does not count a page when extracting its text fails', async () => {
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(2, undefined, vi.fn().mockRejectedValue(new Error('text layer unreadable'))));
+    const workspace = installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact()] })} onOverlayChange={vi.fn()} />);
+
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    expect(await within(pdfRow()).findByRole('alert')).toHaveTextContent(/text layer unreadable/);
+    expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
+    expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
   });
 
   it.each([

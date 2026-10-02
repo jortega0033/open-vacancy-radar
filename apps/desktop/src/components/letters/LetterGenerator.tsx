@@ -15,7 +15,7 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { AiOutput } from '../cv/AiOutput.js';
 import type { CvDocument } from '../cv/types.js';
 import { describeError, useAgentRun } from '../cv/useAgentRun.js';
-import { EmptyState, ErrorBanner } from '../shell/index.js';
+import { EmptyState, ErrorBanner, Menu } from '../shell/index.js';
 import { buildGenerationInputBundle } from '../../../electron/generation-input.js';
 import { buildBundledDocumentPrompt } from '../generation/prompts.js';
 import { exportDocx, exportMarkdown, exportPdf } from './export.js';
@@ -787,29 +787,22 @@ export function LetterGenerator({
           >
             Copy
           </button>
-          <div className="dropdown dropdown-end">
-            <button tabIndex={0} className="btn btn-outline" type="button" disabled={!hasBody || exportState === 'exporting'}>
-              {exportState === 'exporting' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
-              Export
-            </button>
-            <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 w-44 border border-base-300 p-2 shadow">
-              <li>
-                <button type="button" onClick={() => void handleExport('md')}>
-                  Markdown (.md)
-                </button>
-              </li>
-              <li>
-                <button type="button" onClick={() => void handleExport('docx')}>
-                  Word (.docx)
-                </button>
-              </li>
-              <li>
-                <button type="button" onClick={() => void handleExport('pdf')}>
-                  PDF (.pdf)
-                </button>
-              </li>
-            </ul>
-          </div>
+          <Menu
+            triggerClassName="btn btn-outline"
+            menuClassName="w-44"
+            disabled={!hasBody || exportState === 'exporting'}
+            trigger={
+              <>
+                {exportState === 'exporting' && <span className="loading loading-spinner loading-xs text-base-content" aria-hidden="true" />}
+                Export
+              </>
+            }
+            items={[
+              { key: 'md', label: 'Markdown (.md)', onSelect: () => handleExport('md') },
+              { key: 'docx', label: 'Word (.docx)', onSelect: () => handleExport('docx') },
+              { key: 'pdf', label: 'PDF (.pdf)', onSelect: () => handleExport('pdf') },
+            ]}
+          />
           {onClose && (
             <button className="btn btn-ghost" type="button" onClick={onClose}>
               Back to library
