@@ -1163,11 +1163,11 @@ export function SearchPage({
             <div className="alert alert-warning alert-soft mx-6 mt-3 flex items-center justify-between gap-3 text-sm" role="status">
               <span>
                 {results.length.toLocaleString()} vacancies were found, but were not scored against
-                your Search Profile because no target roles or strongest skills are configured.
+                your search profile because no target roles or strongest skills are configured.
                 {effectiveFilters.query.trim()
                   ? ' Results are ordered by the submitted query match and posting date.'
                   : ' Results are ordered by posting date.'}{' '}
-                Fill your Search Profile to enable profile-based ranking on future scans.
+                Fill your search profile to enable profile-based ranking on future scans.
               </span>
               {onOpenSearchProfile && (
                 <button type="button" className="btn btn-warning btn-sm" onClick={onOpenSearchProfile}>
@@ -1309,7 +1309,7 @@ export function SearchPage({
                 aria-expanded={sourceWarningsOpen}
               >
                 <Info size={14} aria-hidden="true" />
-                Source coverage warning ({sourceWarnings.length})
+                Some sources could not be checked ({sourceWarnings.length})
               </button>
               {sourceWarningsOpen && sourceCoverage && (
                 <div className="alert alert-warning alert-soft mt-1.5 block text-sm" role="status">
@@ -1352,7 +1352,7 @@ export function SearchPage({
                   : ''}
               </p>
               <p className="mt-1">
-                {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+                {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} listings fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} unique vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
               </p>
               {sourceWarnings.length > 0 && (
                 <ul className="mt-1">

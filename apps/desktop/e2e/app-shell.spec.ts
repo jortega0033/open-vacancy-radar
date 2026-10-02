@@ -13,10 +13,10 @@ test.describe('app shell', () => {
     // without needing to know which pages happen to duplicate their title and which (Search) don't.
     const headerTitle = (name: string) =>
       window.getByRole('heading', { level: 1, name, exact: true });
-    await expect(headerTitle('Search Jobs')).toBeVisible();
+    await expect(headerTitle('Search jobs')).toBeVisible();
 
     const destinations: Array<[label: string, heading: string]> = [
-      ['Saved Jobs', 'Saved Jobs'],
+      ['Saved jobs', 'Saved jobs'],
       ['Applications', 'Applications'],
       ['CV', 'CV'],
       ['Letters', 'Letters'],
@@ -26,9 +26,9 @@ test.describe('app shell', () => {
       // sidebar's reachable destinations. Its own behavior remains covered where it always was --
       // test/components/agent-workspace/, where the daemon can be stubbed -- and
       // `test/App.test.tsx` covers the sidebar no longer listing it.
-      ['AI Runtime', 'AI Runtime'],
+      ['AI runtime', 'AI runtime'],
       ['Settings', 'Settings'],
-      ['Search', 'Search Jobs'],
+      ['Search', 'Search jobs'],
     ];
     for (const [label, heading] of destinations) {
       await goto(window, label);
@@ -41,7 +41,7 @@ test.describe('app shell', () => {
     // it must never be literal initials with no real data behind them. The footer itself is the
     // AI runtime status, not an account/profile (this app has no login or online profile concept).
     await expect(window.getByText('JO', { exact: true })).toHaveCount(0);
-    await expect(window.getByText('AI runtime', { exact: true })).toBeVisible();
+    await expect(window.getByText('AI runtime', { exact: true }).first()).toBeVisible();
   });
 
   test('Search and Settings page visual baselines', async ({ window }) => {
@@ -85,7 +85,7 @@ test.describe('app shell', () => {
   });
 
   test('enforces the minimum supported window size', async ({ electronApp, window }) => {
-    await expect(window.getByRole('heading', { name: 'Search Jobs' })).toBeVisible();
+    await expect(window.getByRole('heading', { name: 'Search jobs' })).toBeVisible();
     const state = await electronApp.evaluate(({ BrowserWindow }) => {
       const mainWindow = BrowserWindow.getAllWindows()[0];
       if (!mainWindow) throw new Error('Main window was not created');

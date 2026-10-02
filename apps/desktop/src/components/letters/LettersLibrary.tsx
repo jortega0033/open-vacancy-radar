@@ -3,6 +3,7 @@ import type { LetterInput, LetterRecord } from '../../window.js';
 import emptyLettersIllustration from '../../../assets/illustrations/empty-letters.svg?no-inline';
 import { describeError } from '../cv/useAgentRun.js';
 import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
+import { NotSet } from '../shell/NotSet.js';
 import {
   formatUpdatedAt,
   labelFor,
@@ -212,10 +213,10 @@ export function LettersLibrary({
                     className="ovr-responsive-table__cell text-base-content/80"
                     data-label="Company"
                   >
-                    {letter.company || '—'}
+                    {letter.company || <NotSet />}
                   </td>
                   <td className="ovr-responsive-table__cell text-base-content/80" data-label="Role">
-                    {letter.role || '—'}
+                    {letter.role || <NotSet />}
                   </td>
                   <td
                     className="ovr-responsive-table__cell whitespace-nowrap text-base-content/70"

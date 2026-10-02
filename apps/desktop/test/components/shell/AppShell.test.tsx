@@ -83,7 +83,7 @@ describe('AppSidebar', () => {
     // that reads the nav table and compares it to itself could not fail, and this is the record of
     // what the shell actually offers.
     render(<AppSidebar {...BASE} />);
-    for (const label of ['Search', 'Saved Jobs', 'Applications', 'CV', 'Letters', 'AI Runtime', 'Settings']) {
+    for (const label of ['Search', 'Saved jobs', 'Applications', 'CV', 'Letters', 'AI runtime', 'Settings']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
   });
@@ -93,9 +93,9 @@ describe('AppSidebar', () => {
     expect(screen.queryByRole('button', { name: 'AI Workspace' })).not.toBeInTheDocument();
   });
 
-  it('shows badge counts next to Saved Jobs, Applications and Letters, and only those', () => {
+  it('shows badge counts next to Saved jobs, Applications and Letters, and only those', () => {
     render(<AppSidebar {...BASE} />);
-    expect(screen.getByRole('button', { name: 'Saved Jobs' })).toHaveTextContent('3');
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).toHaveTextContent('3');
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveTextContent('2');
     expect(screen.getByRole('button', { name: 'Letters' })).toHaveTextContent('5');
     expect(screen.getByRole('button', { name: 'CV' })).toHaveTextContent(/^CV$/);
@@ -112,11 +112,11 @@ describe('AppSidebar', () => {
     render(<AppSidebar {...BASE} collapsed />);
     // The accessible name survives via aria-label, so a collapsed rail is not a screen-reader
     // dead end, but the text (and the badge) is genuinely gone, not just visually hidden.
-    expect(screen.getByRole('button', { name: 'Saved Jobs' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Saved Jobs' })).not.toHaveTextContent('3');
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).not.toHaveTextContent('3');
     expect(screen.queryByText('Open Vacancy Radar')).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Open Vacancy Radar' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Saved Jobs' })).toHaveClass('ovr-nav-icon');
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).toHaveClass('ovr-nav-icon');
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toHaveClass('ovr-nav-icon');
   });
 
@@ -169,8 +169,8 @@ describe('OpenVacancyRadarMark', () => {
 
 describe('WorkspaceHeader', () => {
   it('shows the page title and contextual subtitle', () => {
-    render(<WorkspaceHeader title="Saved Jobs" subtitle="3 saved" />);
-    expect(screen.getByRole('heading', { name: 'Saved Jobs' })).toBeInTheDocument();
+    render(<WorkspaceHeader title="Saved jobs" subtitle="3 saved" />);
+    expect(screen.getByRole('heading', { name: 'Saved jobs' })).toBeInTheDocument();
     expect(screen.getByText('3 saved')).toBeInTheDocument();
   });
 
@@ -304,14 +304,14 @@ describe('ErrorBanner', () => {
 describe('App shell routing', () => {
   it('opens on Search by default and shows the matching header', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search jobs' })).toBeInTheDocument());
     // The sidebar nav button, not SearchFilterBar's own "Search" button (same accessible name).
     expect(screen.getByRole('button', { name: 'Search', current: 'page' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('switches page and header when a nav item is clicked', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search jobs' })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
 
@@ -327,7 +327,7 @@ describe('App shell routing', () => {
   it('persists the page it navigated to, so a restart can restore it', async () => {
     const bridge = installWorkspaceBridge();
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search jobs' })).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
 
@@ -353,7 +353,7 @@ describe('App shell routing', () => {
     });
 
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Saved Jobs' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Saved jobs' })).toBeInTheDocument());
   });
 
   it('still opens on a usable page when the workspace database is unavailable', async () => {
@@ -365,8 +365,8 @@ describe('App shell routing', () => {
     });
 
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Saved Jobs' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search jobs' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Saved jobs' })).toBeInTheDocument();
   });
 
   it('shows live badge counts from the workspace database', async () => {
@@ -375,7 +375,7 @@ describe('App shell routing', () => {
     });
 
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Saved Jobs' })).toHaveTextContent('12'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Saved jobs' })).toHaveTextContent('12'));
     expect(screen.getByRole('button', { name: 'Applications' })).toHaveTextContent('4');
     expect(screen.getByRole('button', { name: 'Letters' })).toHaveTextContent('9');
   });
@@ -425,7 +425,7 @@ describe('App shell theme and density', () => {
   it('leaves the attribute off for "system", so prefers-color-scheme decides', async () => {
     installWorkspaceBridge({ getSettings: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, theme: 'system' }) });
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search Jobs' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Search jobs' })).toBeInTheDocument());
     expect(document.documentElement).not.toHaveAttribute('data-theme');
   });
 

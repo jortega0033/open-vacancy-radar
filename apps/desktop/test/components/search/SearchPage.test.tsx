@@ -736,7 +736,7 @@ describe('SearchPage', () => {
     installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
 
     render(<SearchPage />);
-    expect(await screen.findByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
+    expect(await screen.findByText(/12 listings fetched, 1 unique vacancies, 3 matching the focused scan/i)).toBeInTheDocument();
   });
 
   it('does not re-fetch a large report when the window returns visible and no new report exists', async () => {
@@ -1218,11 +1218,11 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
 
-    await waitFor(() => expect(screen.getByText(/source coverage warning/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/some sources could not be checked/i)).toBeInTheDocument());
     // Collapsed by default; the summary only appears once the toggle is opened, and the raw reason
     // with the provider id lives in the "Scan details" disclosure rather than the default panel.
     expect(screen.queryByText(/returned partial or no results/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /source coverage warning/i }));
+    fireEvent.click(screen.getByRole('button', { name: /some sources could not be checked/i }));
     expect(screen.getByText('1 source returned partial or no results.')).toBeInTheDocument();
     expect(screen.getByText('1 source stopped early.')).toBeInTheDocument();
     expect(screen.getByText('Workable')).toBeInTheDocument();
@@ -1266,7 +1266,7 @@ describe('SearchPage', () => {
     installAllBridges({ getReport: vi.fn().mockResolvedValue(report) });
 
     render(<SearchPage onOpenSearchProfile={onOpenSearchProfile} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Source coverage warning (2)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Some sources could not be checked (2)' }));
 
     expect(
       screen.getByText('2 sources returned partial or no results. Results from the other sources are complete.'),
@@ -1294,7 +1294,7 @@ describe('SearchPage', () => {
     const time = new Date(report.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     expect(await screen.findByText(`1 vacancy match 'Frontend Engineer' · scanned ${time}`)).toBeInTheDocument();
     expect(bridge.runScan).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/12 raw rows fetched, 1 deduplicated vacancies, 3 matching the focused scan/i)).not.toBeVisible();
+    expect(screen.getByText(/12 listings fetched, 1 unique vacancies, 3 matching the focused scan/i)).not.toBeVisible();
   });
 
   it('reports the missing verification as absent for a vacancy with no sponsor match', async () => {
@@ -1306,9 +1306,9 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText('Employer verification: none for this vacancy')).toBeInTheDocument());
     // One line above the fold; the explanation sits behind the info toggle and appears once.
-    expect(screen.queryByText(/absent check, not a negative result/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no check ran, so this says nothing against the employer/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'About employer verification' }));
-    expect(screen.getAllByText(/absent check, not a negative result/i)).toHaveLength(1);
+    expect(screen.getAllByText(/no check ran, so this says nothing against the employer/i)).toHaveLength(1);
     expect(screen.queryByText(/employer verification is not available/i)).not.toBeInTheDocument();
 
     expect(screen.queryByText(/recognised sponsor/i)).not.toBeInTheDocument();

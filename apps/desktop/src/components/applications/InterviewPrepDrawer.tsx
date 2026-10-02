@@ -96,7 +96,7 @@ export function InterviewPrepDrawer({
         if (!cancelled) {
           setAttempts([]);
           setAttemptsError(
-            describeError(err, 'could not load the job description snapshot for this application'),
+            describeError(err, 'could not load the saved job description for this application'),
           );
         }
       });
@@ -206,7 +206,7 @@ export function InterviewPrepDrawer({
               {providerUnavailable && (
                 <ErrorBanner>
                   {providerLabel} is not installed or not detected, so this cannot run. Install and
-                  authenticate the CLI, or choose a different default in AI Runtime, then reopen
+                  authenticate the CLI, or choose a different default in AI runtime, then reopen
                   this drawer.
                 </ErrorBanner>
               )}

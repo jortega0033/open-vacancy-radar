@@ -50,7 +50,7 @@ function FileDetails({ artifact }: { artifact: CvArtifactRecord }) {
   return (
     <details className="mt-1">
       <summary className="cursor-pointer">File details</summary>
-      <p>Hash {shortHash(artifact.contentHash)}</p>
+      <p>File check {shortHash(artifact.contentHash)}</p>
     </details>
   );
 }

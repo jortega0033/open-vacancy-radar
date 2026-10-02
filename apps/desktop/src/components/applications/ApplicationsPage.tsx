@@ -484,7 +484,7 @@ export function ApplicationsPage({
                 !showEmptyAction ? undefined : canPrepareFromSavedJobs ? (
                   <div className="flex flex-wrap items-center justify-center gap-2">
                     <button type="button" className="btn btn-primary btn-sm" onClick={onGoToSavedJobs}>
-                      Go to Saved Jobs
+                      Go to Saved jobs
                     </button>
                     <button type="button" className="btn btn-outline btn-sm" onClick={openCreateDrawer}>
                       Add manually

@@ -51,7 +51,7 @@ export function VerificationSection({ result }: VerificationSectionProps) {
           <>
             <p className="mt-1.5 text-sm text-base-content/70">
               This exact URL was also fetched from an official employer/ATS source in this run: a
-              check on the <em>vacancy</em>, not on the employer.
+              check on the <em>vacancy</em> only.
             </p>
             <KeyValue
               items={[

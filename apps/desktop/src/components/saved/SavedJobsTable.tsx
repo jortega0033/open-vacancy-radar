@@ -1,5 +1,6 @@
 import type { SavedJobRecord, SavedJobStatus } from '../../window.js';
 import { SAVED_JOB_STATUSES, SAVED_JOB_STATUS_LABEL } from './saved-job-status.js';
+import { NotSet } from '../shell/NotSet.js';
 
 export interface SavedJobsTableProps {
   jobs: SavedJobRecord[];
@@ -78,13 +79,13 @@ export function SavedJobsTable({
                 {job.company}
               </td>
               <td data-label="Location" className="text-base-content/70">
-                {job.location || '—'}
+                {job.location || <NotSet />}
               </td>
               <td data-label="Salary" className="text-base-content/70">
-                {job.salary ?? '—'}
+                {job.salary ?? <NotSet label="Not listed" />}
               </td>
               <td data-label="Arrangement" className="text-base-content/70">
-                {job.arrangement ?? '—'}
+                {job.arrangement ?? <NotSet label="Not listed" />}
               </td>
               <td data-label="Verification">
                 {job.verification ? (
@@ -94,7 +95,7 @@ export function SavedJobsTable({
                 )}
               </td>
               <td data-label="Match" className="font-mono">
-                {job.matchPercent != null ? `${job.matchPercent}%` : '—'}
+                {job.matchPercent != null ? `${job.matchPercent}%` : <NotSet label="Not scored" />}
               </td>
               <td data-label="Saved" className="text-base-content/60">
                 {formatSavedAt(job.savedAt)}
@@ -105,7 +106,7 @@ export function SavedJobsTable({
                     Notes
                   </span>
                 ) : (
-                  <span className="text-base-content/60">—</span>
+                  <NotSet label="None" />
                 )}
               </td>
               <td data-label="Status" className="saved-job-status-cell">

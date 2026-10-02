@@ -16,7 +16,7 @@ export interface WelcomeModalProps {
   onClose: () => void;
   /** The profile-load failure's "Open Settings": the caller closes the modal and opens Settings on the search profile. */
   onOpenSettings: () => void;
-  /** The AI runtime item's "Open AI Runtime": the caller closes the modal and opens that page. */
+  /** The AI runtime item's "Open AI runtime": the caller closes the modal and opens that page. */
   onOpenRuntime: () => void;
 }
 
@@ -268,7 +268,7 @@ export function WelcomeModal({ onClose, onOpenSettings, onOpenRuntime }: Welcome
                     Check again
                   </button>
                   <button type="button" className="btn btn-sm btn-ghost" onClick={onOpenRuntime}>
-                    Open AI Runtime
+                    Open AI runtime
                   </button>
                 </>
               )}

@@ -443,18 +443,18 @@ describe('first-launch checklist: AI runtime item', () => {
     expect(agentDock.listProviders).toHaveBeenCalledTimes(callsBefore);
   });
 
-  it('Open AI Runtime closes the modal, persists the flag and opens that page', async () => {
+  it('Open AI runtime closes the modal, persists the flag and opens that page', async () => {
     const agentDock = installDrivableAgentDockBridge().agentDock;
     agentDock.listProviders = vi.fn().mockResolvedValue([claudeStatus({ installed: false })]);
 
     const { workspace, dialog } = await openWelcome();
     await waitFor(() => expect(within(dialog).getByText(/not installed on this computer/)).toBeInTheDocument());
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Open AI Runtime' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open AI runtime' }));
 
     await waitFor(() => expect(welcomeDialog()).not.toBeInTheDocument());
     expect(workspace.updateSettings).toHaveBeenCalledWith({ welcomeSeen: true });
-    expect(await screen.findByRole('heading', { level: 1, name: 'AI Runtime' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'AI runtime' })).toBeInTheDocument();
   });
 });
 

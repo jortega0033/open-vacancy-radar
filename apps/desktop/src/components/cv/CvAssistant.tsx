@@ -165,7 +165,7 @@ export function CvAssistant({ vacancy: selectedVacancy, model: pinnedModel, onBa
       {providerUnavailable && (
         <ErrorBanner>
           {providerLabel} is not installed or not detected, so these features cannot run. Install
-          and authenticate the CLI, or choose a different default in AI Runtime, then reopen this
+          and authenticate the CLI, or choose a different default in AI runtime, then reopen this
           screen.
         </ErrorBanner>
       )}
