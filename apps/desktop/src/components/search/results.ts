@@ -205,6 +205,79 @@ export function decisionLabel(decision: DiscoveryVacancyAudit['decision']): stri
   return decision.replace(/_/g, ' ');
 }
 
+const SECTION_HEADING_SOURCE = String.raw`(?:the role|about the (?:role|job|position)|job (?:description|summary)|position summary|role overview|what you(?:'|\u2019)ll (?:do|be doing)|what you will do|responsibilities|key responsibilities|your role|requirements|qualifications|what we(?:'|\u2019)re looking for|de functie|functieomschrijving|wat ga je doen|deine aufgaben|ihre aufgaben)`;
+const INTRO_PHRASE_SOURCE = String.raw`(?:who we are|about us|about the (?:company|team)|company overview|over ons|wie wij zijn|\u00fcber uns|wer wir sind|qui sommes-nous|qui\u00e9nes somos|chi siamo)`;
+const SECTION_HEADING_LINE = new RegExp(`^${SECTION_HEADING_SOURCE}$`, 'iu');
+/** An employer-introduction heading that is a whole line: the fixed phrases, or "About <Name>". */
+const INTRO_HEADING_LINE = new RegExp(
+  String.raw`^(?:${INTRO_PHRASE_SOURCE}|about (?!the (?:role|job|position)\b|you\b|this\b)[\p{L}\p{N}&.'-]+(?: [\p{L}\p{N}&.'-]+){0,3})$`,
+  'iu',
+);
+/** The fixed introduction phrases, also recognised as a prefix of running text. */
+const INTRO_PHRASE_PREFIX = new RegExp(String.raw`^${INTRO_PHRASE_SOURCE}\b[\s:\u2013\u2014-]*`, 'iu');
+/** A section heading that ends an introduction block, at the start of text or of a sentence or line. */
+const SECTION_HEADING_INLINE = new RegExp(
+  String.raw`(?:^|[\n.!?]\s*)${SECTION_HEADING_SOURCE}\s*(?::|\n|-)\s*`,
+  'iu',
+);
+const CONTENT_KEY = /^(?:responsibilities|requirements|qualifications|summary|description|overview|role|about the role)$/iu;
+const LABEL_TOKEN = /(?:^|\s)\p{Lu}[\p{L}/&'() -]{1,40}:\s/gu;
+
+function stripTrailingColon(line: string): string {
+  return line.replace(/\s*:\s*$/u, '');
+}
+
+/** `Key: short value`, as ATS-exported requisition metadata reads. A key such as "Responsibilities" is content. */
+function isMetadataLine(line: string): boolean {
+  const match = /^([^:\n]{2,50}):\s*(.*)$/u.exec(line);
+  if (!match) return false;
+  const key = match[1] ?? '';
+  const value = match[2] ?? '';
+  if (key.trim().split(/\s+/u).length > 6 || CONTENT_KEY.test(key.trim())) return false;
+  return value.length <= 60 && !/[.!?]$/u.test(value);
+}
+
+/** What follows an employer-introduction heading, minus the introduction block itself. */
+function skipIntroBlock(afterHeading: string): string {
+  const heading = SECTION_HEADING_INLINE.exec(afterHeading);
+  if (heading) return afterHeading.slice(heading.index + heading[0].length);
+  // No later section heading to resume from: drop the introduction's first paragraph only.
+  const newline = afterHeading.indexOf('\n');
+  return newline === -1 ? '' : afterHeading.slice(newline + 1);
+}
+
+/**
+ * Removes the leading boilerplate a vacancy description opens with, for the results-row preview
+ * only: bare section headings, `Key: value` requisition metadata, and employer-introduction
+ * blocks ("Who we are", "About <Company>"). Stops at the first line that is genuine content.
+ */
+function stripLeadingBoilerplate(description: string): string {
+  let text = description.replace(/\r\n?/gu, '\n').trim();
+  for (let guard = 0; guard < 40 && text.length > 0; guard += 1) {
+    const newline = text.indexOf('\n');
+    const line = (newline === -1 ? text : text.slice(0, newline)).trim();
+    const afterLine = newline === -1 ? '' : text.slice(newline + 1).trimStart();
+
+    if (line === '' || SECTION_HEADING_LINE.test(stripTrailingColon(line))) {
+      text = afterLine;
+    } else if (INTRO_HEADING_LINE.test(stripTrailingColon(line))) {
+      text = skipIntroBlock(afterLine).trimStart();
+    } else if (INTRO_PHRASE_PREFIX.test(line)) {
+      text = skipIntroBlock(text.replace(INTRO_PHRASE_PREFIX, '')).trimStart();
+    } else if (isMetadataLine(line)) {
+      text = afterLine;
+    } else if ((line.match(LABEL_TOKEN) ?? []).length >= 2) {
+      // A flattened metadata run ("Type of Requisition: X Clearance Level: Y ..."): drop up to the
+      // end of its first sentence, or all of it when no sentence ends.
+      const end = /[.!?]\s/u.exec(text);
+      text = end ? text.slice(end.index + end[0].length) : '';
+    } else {
+      break;
+    }
+  }
+  return text;
+}
+
 /**
  * Single-line preview of `description` for the results-list card (issue: cards showed zero
  * role-content, so scanning 25 results meant opening each one individually to judge fit). The
@@ -212,13 +285,14 @@ export function decisionLabel(decision: DiscoveryVacancyAudit['decision']): stri
  * block-tag boundary -- see `packages/vacancy-engine/src/global-remote/feed-discovery.ts`'s
  * `decodedText`), which the detail pane renders with `whitespace-pre-wrap`; collapsing them to
  * spaces here is purely a card-preview concern; it never mutates or re-derives the text the detail
- * pane shows. Returns null for a blank/whitespace-only description so the card never renders an
- * empty line.
+ * pane shows. Leading boilerplate (`stripLeadingBoilerplate`, issue #463) is skipped, and what is
+ * left must still read as a sentence (three words or more). Otherwise this returns null, so the
+ * card never renders an empty line or a made-up summary.
  */
 export function descriptionExcerpt(description: string | null): string | null {
   if (!description) return null;
-  const collapsed = description.replace(/\s+/gu, ' ').trim();
-  return collapsed.length > 0 ? collapsed : null;
+  const collapsed = stripLeadingBoilerplate(description).replace(/\s+/gu, ' ').trim();
+  return collapsed.split(' ').length >= 3 ? collapsed : null;
 }
 
 /** Renderer-side scheme guard, mirroring `electron/external-url.ts`. A feed controls this string. */
@@ -505,16 +579,15 @@ function queryMatchTier(entry: SearchResultIndexEntry, normalizedQuery: string):
 }
 
 /**
- * Highest profile score first. Among rows that both lack a score -- the Search Profile has no
- * target roles or strongest skills configured, so there is no score to lean on -- and only when a
- * `query` was actually submitted, a query-match tier (`queryMatchTier`) orders them by how well
- * they match what was searched for, before falling back to recency (issue #395: previously these
- * rows had zero relevance ordering among themselves and fell straight to the postedAt tiebreak).
- * A pair with exactly one scored row is untouched by this tier -- it falls through to postedAt
- * exactly as before, since a score is never allowed to be manufactured for the unscored side just
- * to make the comparison symmetric. Most recently posted first among ties (or scoreless rows with
- * an empty query, or an equal tier), then title. A row with no known posting date sorts after every
- * row that has one, never assumed recent.
+ * Scored rows always come before unscored rows (issue #464). Mixing the two through a posting-date
+ * fallback made the order non-transitive: a scored and an unscored row compared by date, while two
+ * scored rows compared by score, so a recent unscored row could land above 98-score rows. Within
+ * the scored group: highest profile score first. Within the unscored group -- the Search Profile
+ * has no target roles or strongest skills configured, or the rows are still streaming in -- and
+ * only when a `query` was actually submitted, a query-match tier (`queryMatchTier`) orders rows by
+ * how well they match what was searched for (issue #395). Remaining ties: most recently posted
+ * first, a row with no known posting date after every row that has one (never assumed recent),
+ * then title, then key so the order is total and stable.
  */
 export function sortResults(results: SearchResult[], query = ''): SearchResult[] {
   return sortSearchResultIndex(buildSearchResultIndex(results), query);
@@ -525,14 +598,11 @@ export function sortSearchResultIndex(index: SearchResultIndexEntry[], query = '
   return [...index].sort((left, right) => {
     const leftResult = left.result;
     const rightResult = right.result;
-    if (
-      leftResult.profileScore != null &&
-      rightResult.profileScore != null &&
-      leftResult.profileScore !== rightResult.profileScore
-    ) {
-      return rightResult.profileScore - leftResult.profileScore;
-    }
-    if (leftResult.profileScore == null && rightResult.profileScore == null && normalizedQuery) {
+    const leftScore = leftResult.profileScore;
+    const rightScore = rightResult.profileScore;
+    if ((leftScore == null) !== (rightScore == null)) return leftScore == null ? 1 : -1;
+    if (leftScore != null && rightScore != null && leftScore !== rightScore) return rightScore - leftScore;
+    if (leftScore == null && rightScore == null && normalizedQuery) {
       const tierDiff = queryMatchTier(right, normalizedQuery) - queryMatchTier(left, normalizedQuery);
       if (tierDiff !== 0) return tierDiff;
     }
@@ -544,8 +614,35 @@ export function sortSearchResultIndex(index: SearchResultIndexEntry[], query = '
     if ((leftPosted === null) !== (rightPosted === null)) {
       return leftPosted === null ? 1 : -1;
     }
-    return leftResult.title.localeCompare(rightResult.title);
+    return leftResult.title.localeCompare(rightResult.title) || leftResult.key.localeCompare(rightResult.key);
   }).map((entry) => entry.result);
+}
+
+/**
+ * Keys that more than one row in `results` carries. `SearchResult.key` is the identity for React
+ * rendering, selection and `savedJobs.vacancyKey`, so a repeated key means two rows fight over one
+ * slot (issue #464). Rows that merely share a title and company are distinct vacancies and never
+ * count here.
+ */
+export function duplicateResultKeys(results: readonly SearchResult[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const result of results) {
+    if (seen.has(result.key)) duplicates.add(result.key);
+    seen.add(result.key);
+  }
+  return [...duplicates];
+}
+
+/** Keeps the first row for each `key` and drops later repeats of the same key only. */
+export function dedupeResultsByKey(results: SearchResult[]): SearchResult[] {
+  if (duplicateResultKeys(results).length === 0) return results;
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    if (seen.has(result.key)) return false;
+    seen.add(result.key);
+    return true;
+  });
 }
 
 export function formatDate(value: string | null): string {
@@ -566,4 +663,22 @@ export function isStalePosting(postedAt: string | null, now: Date = new Date()):
   const posted = new Date(postedAt);
   if (Number.isNaN(posted.valueOf())) return false;
   return now.getTime() - posted.getTime() > STALE_POSTING_THRESHOLD_DAYS * MILLISECONDS_PER_DAY;
+}
+
+/** The score always carries its scale: a bare number reads as a CV match or a percentage. */
+export function profileFitText(score: number): string {
+  return `Profile fit ${score}/100`;
+}
+
+/** The same label as `profileFitText`, spelled out for screen readers. */
+export function profileFitSpoken(score: number): string {
+  return `Profile fit ${score} out of 100`;
+}
+
+/** At most three matching signals and two gaps, exactly as the scorer returned them (issue #452). */
+export function fitHighlights(match: ProfileMatchBreakdown | null | undefined): {
+  signals: string[];
+  gaps: string[];
+} {
+  return { signals: match?.matchingSkills.slice(0, 3) ?? [], gaps: match?.gaps.slice(0, 2) ?? [] };
 }
