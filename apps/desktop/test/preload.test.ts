@@ -59,6 +59,7 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
     expect(Object.keys(api).sort()).toEqual(
       [
         'getDaemonStatus',
+        'restartDaemon',
         'onDaemonStatus',
         'listProviders',
         'createSession',
@@ -121,6 +122,15 @@ describe('electron/preload.ts: real bridge (AD-07)', () => {
     await (api.getDaemonStatus as () => Promise<unknown>)();
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('daemon:get-status');
+  });
+
+  it('restartDaemon invokes only daemon:restart with no arguments and returns a sanitized status', async () => {
+    invoke.mockResolvedValue({ state: 'unavailable', error: 'still down', token: 'leaked-token' });
+    const api = await loadPreload();
+    const status = await (api.restartDaemon as () => Promise<unknown>)();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('daemon:restart');
+    expect(status).toEqual({ state: 'unavailable', error: 'still down' });
   });
 
   it('createSession invokes only daemon:create-session with exactly the given input', async () => {
@@ -672,6 +682,8 @@ describe('electron/preload.ts: system bridge', () => {
 const PRE_ADI_06_NAMESPACES: Record<string, string[]> = {
   agentDock: [
     'getDaemonStatus',
+    // Added by issue #478: the AI helper banner's "Try again". One fixed channel, no arguments.
+    'restartDaemon',
     'onDaemonStatus',
     'listProviders',
     'createSession',
