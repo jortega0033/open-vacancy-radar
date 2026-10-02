@@ -162,7 +162,7 @@ export function CvPdfPageReview({ overlayId, artifact, onOverlayChange }: CvPdfP
       const opened = await openPdfForReview(bytes);
       if (opened.pageCount > MAX_REVIEW_PAGES) {
         await opened.destroy().catch(() => undefined);
-        throw new Error(`this PDF has ${opened.pageCount} pages, which is more than can be read here. Export it again`);
+        throw new Error(`this PDF has ${opened.pageCount} pages. Pages can be shown here for CVs up to ${MAX_REVIEW_PAGES} pages. Lower the project limit in your CV review, approve again, then export`);
       }
       if (artifact.validation.pageCount !== undefined && opened.pageCount !== artifact.validation.pageCount) {
         await opened.destroy().catch(() => undefined);

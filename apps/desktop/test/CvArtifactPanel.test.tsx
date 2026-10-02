@@ -291,7 +291,7 @@ describe('CvArtifactPanel (#419 step 9)', () => {
         pdfPages.openPdfForReview.mockResolvedValue(fakeReview(50));
         return installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
       },
-      /50 pages/,
+      /50 pages. Pages can be shown here for CVs up to 12 pages. Lower the project limit in your CV review, approve again, then export/,
     ],
     [
       'its pages do not match the count recorded at export',
@@ -309,6 +309,34 @@ describe('CvArtifactPanel (#419 step 9)', () => {
     expect(workspace.markCvArtifactPagesViewed).not.toHaveBeenCalled();
     expect(within(pdfRow()).getByRole('button', { name: /i read every page/i })).toBeDisabled();
     expect(within(pdfRow()).getByRole('button', { name: /try showing the pages again/i })).toBeEnabled();
+  });
+
+  it('names an action that can work when the PDF is longer than the viewer reads, without telling the candidate to export again', async () => {
+    pdfPages.openPdfForReview.mockResolvedValue(fakeReview(14));
+    installWorkspaceBridge({ readCvArtifactBytes: vi.fn().mockResolvedValue(new Uint8Array([1])) });
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact({ validation: { ok: true, reasons: [], pageCount: 14 } })] })} onOverlayChange={vi.fn()} />);
+    fireEvent.click(within(pdfRow()).getByRole('button', { name: /show the pages here/i }));
+    const alert = await within(pdfRow()).findByRole('alert');
+    expect(alert).toHaveTextContent(/lower the project limit/i);
+    expect(alert).not.toHaveTextContent(/export it again/i);
+  });
+
+  it('shows the export time in local time without any machine timestamp, and keeps the hash under File details', () => {
+    installWorkspaceBridge();
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact({ reviewOpenedAt: 'x', pagesViewedAt: 'x' })] })} onOverlayChange={vi.fn()} />);
+    const row = pdfRow();
+    expect(row).toHaveTextContent(/Exported .*2026/);
+    expect(row.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000Z/);
+    const details = within(row).getByText('File details').closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    expect(details).toHaveTextContent(/hash abcdef012345/i);
+  });
+
+  it.each([['', 'a missing'], ['not a date', 'a malformed']])('shows %j as an unknown time for %s export date', (value) => {
+    installWorkspaceBridge();
+    render(<CvArtifactPanel overlay={overlayWith({ artifacts: [artifact({ exportedAt: value })] })} onOverlayChange={vi.fn()} />);
+    expect(pdfRow()).toHaveTextContent('Exported an unknown time');
+    if (value) expect(pdfRow().textContent).not.toContain(value);
   });
 
   it('a Word file gets its own confirmation, worded as a review in the candidate editor, with no page fit claim', async () => {
