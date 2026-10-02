@@ -388,4 +388,24 @@ describe('LetterGenerator', () => {
 
     expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
   });
+
+  it('reports the unsaved kind: none for a loaded letter, edited after typing, none again after saving', async () => {
+    setup({
+      updateLetter: vi
+        .fn()
+        .mockImplementation(async (_id: string, input: { body: string }) => ({ ...makeLetter(), body: input.body })),
+    });
+    const onUnsavedChange = vi.fn();
+    render(<LetterGenerator letter={makeLetter()} onUnsavedChange={onUnsavedChange} />);
+
+    const body = await screen.findByRole('textbox', { name: /letter body/i });
+    expect(onUnsavedChange).toHaveBeenLastCalledWith(null);
+
+    fireEvent.change(body, { target: { value: 'Something new.' } });
+    expect(onUnsavedChange).toHaveBeenLastCalledWith('edited');
+    expect(screen.getByText('Unsaved changes.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(null));
+  });
 });
