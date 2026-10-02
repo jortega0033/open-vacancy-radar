@@ -121,7 +121,7 @@ describe('JdReview (#419, step 4)', () => {
       }),
     );
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(await screen.findByText(/Saved as revision 1/)).toHaveTextContent('Digest cccccccccccc');
+    expect(await screen.findByText(/Saved as revision 1/)).toHaveTextContent('Text check cccccccccccc');
   });
 
   it('pasting a replacement hands the new text up and saves it as a new pasted revision', async () => {
