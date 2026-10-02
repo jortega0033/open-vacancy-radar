@@ -398,7 +398,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
                 disabled={submitting}
-                placeholder="e.g. Frontend CV: Netherlands"
+                placeholder="e.g. Tech CV, Sales CV"
               />
             </label>
 
@@ -411,7 +411,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 value={form.targetRole}
                 onChange={(e) => set('targetRole', e.target.value)}
                 disabled={submitting}
-                placeholder="e.g. Senior Frontend Engineer"
+                placeholder="e.g. Nurse, Data analyst"
               />
             </label>
 
