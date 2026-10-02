@@ -116,6 +116,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   /** The fields the last click filled in from the source CV instead of from an AI run, in the
    * user's wording. `null` means that has not happened for this drawer. */
   const [derivedFields, setDerivedFields] = useState<string[] | null>(null);
+  /** How many tailoring cases use the CV being edited, so the save button can say what it affects (#449). */
+  const [caseCount, setCaseCount] = useState(0);
 
   const isEdit = mode === 'edit';
   const canParseWithAi = isEdit && record?.kind === 'uploaded' && record.text.trim().length > 0;
@@ -151,6 +153,22 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
   // through (issue #400): the effective provider, not the raw persisted preference, so this still
   // runs on a machine where the preferred CLI isn't installed but exactly one alternative is.
   const { provider } = useEffectiveProvider();
+
+  const recordId = record?.id;
+  useEffect(() => {
+    if (!recordId) return;
+    let cancelled = false;
+    // A listing failure leaves the notice out rather than blocking the edit.
+    void window.workspace
+      .listCvEvidenceOverlays(recordId)
+      .then((cases) => {
+        if (!cancelled) setCaseCount(cases.length);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [recordId]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -527,6 +545,14 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
               </p>
             )}
           </div>
+
+          {isEdit && caseCount > 0 && (
+            <p className="border-t border-base-300 px-5 py-3 text-sm text-base-content/70" role="status">
+              {caseCount === 1 ? '1 tailoring case uses this CV.' : `${caseCount} tailoring cases use this CV.`} Saving
+              changes puts {caseCount === 1 ? 'it' : 'them'} on hold until you review what changed. Files you already
+              exported stay on disk.
+            </p>
+          )}
 
           <div className="flex justify-end gap-2 border-t border-base-300 px-5 py-3.5">
             <button type="button" className="btn btn-outline" onClick={onCancel} disabled={submitting}>

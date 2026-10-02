@@ -97,6 +97,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect(caseRow.getByRole('cell').nth(2)).toHaveText('CV approved');
     await expect(caseRow.getByRole('cell').nth(3)).toHaveText('not exported');
     await expect(caseRow.getByRole('cell').nth(4)).toHaveText('not exported');
+    await expect(caseRow.getByRole('cell').nth(5)).toHaveText('Export your files');
 
     const panel = await openSeededCase(window);
     const pdf = panel.getByLabel('PDF file', { exact: true });
@@ -160,16 +161,20 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await window.getByRole('button', { name: 'Back to CV library' }).click();
     await expect(caseRow.getByRole('cell').nth(3)).toHaveText('accepted');
     await expect(caseRow.getByRole('cell').nth(4)).toHaveText('accepted');
+    await expect(caseRow.getByRole('cell').nth(5)).toHaveText('Done');
 
     // Changing the CV's skills changes what the case was approved against, so both files are out of date.
     await window.getByRole('row', { name: new RegExp(SEEDED_CV_NAME) }).first().getByRole('button', { name: /^edit /i }).click();
     const editDialog = window.getByRole('dialog', { name: /edit cv/i });
     await editDialog.getByLabel(/skills/i).fill('TypeScript, Playwright');
+    // The drawer says what the save affects before it is pressed.
+    await expect(editDialog.getByText(/Saving changes puts (it|them) on hold until you review what changed/)).toBeVisible();
     await editDialog.getByRole('button', { name: /save changes/i }).click();
     await expect(editDialog).toBeHidden();
-    await expect(caseRow.getByRole('cell').nth(2)).toHaveText('In progress');
+    await expect(caseRow.getByRole('cell').nth(2)).toHaveText('CV changed, review needed');
     await expect(caseRow.getByRole('cell').nth(3)).toHaveText('out of date');
     await expect(caseRow.getByRole('cell').nth(4)).toHaveText('out of date');
+    await expect(caseRow.getByRole('cell').nth(5)).toHaveText('Review what changed in your CV');
     // The files stay on disk, byte for byte what was exported and accepted.
     expect(sha256OfFile(pdfPath)).toBe(pdfHash);
     expect(sha256OfFile(docxPath)).toBe(docxHash);
