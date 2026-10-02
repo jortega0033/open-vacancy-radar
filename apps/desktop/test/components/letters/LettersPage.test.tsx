@@ -164,4 +164,90 @@ describe('LettersPage', () => {
 
     expect(await screen.findByRole('table')).toBeInTheDocument();
   });
+
+  describe('leaving an editor with unsaved text', () => {
+    /** Opens a saved letter and types into its body, which is the "edited" kind of unsaved. */
+    async function openAndEdit() {
+      const letter = makeLetter({ id: 'l-1', title: 'Cover letter, Synthetic Co', body: 'Saved body text.' });
+      const bridges = setup({ listLetters: vi.fn().mockResolvedValue([letter]) });
+      render(<LettersPage />);
+      await waitFor(() => expect(screen.getByText(letter.title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^open /i }));
+      const body = await screen.findByRole('textbox', { name: /letter body/i });
+      fireEvent.change(body, { target: { value: 'Saved body text, edited.' } });
+      return bridges;
+    }
+
+    it('asks before the Library tab drops edits, and Keep editing returns to the exact text', async () => {
+      await openAndEdit();
+
+      fireEvent.click(screen.getByRole('tab', { name: /library/i }));
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('Discard your changes?')).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: /^keep editing$/i }));
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue('Saved body text, edited.');
+      expect(screen.getByRole('textbox', { name: /letter title/i })).toHaveValue('Cover letter, Synthetic Co');
+    });
+
+    it('Back to library and New letter ask first too, and Discard leaves', async () => {
+      await openAndEdit();
+
+      fireEvent.click(screen.getByRole('button', { name: /^new letter$/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^keep editing$/i }));
+      expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue('Saved body text, edited.');
+
+      fireEvent.click(screen.getByRole('button', { name: /back to library/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^discard$/i }));
+
+      expect(await screen.findByRole('table')).toBeInTheDocument();
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('asks about a new generated draft that was never saved, and labels it as not saved yet', async () => {
+      const bridges = setup();
+      render(<LettersPage vacancy={LETTER_VACANCY} openOnGenerator />);
+
+      const generate = await screen.findByRole('button', { name: /^generate$/i });
+      await waitFor(() => expect(generate).toBeEnabled());
+      fireEvent.click(generate);
+      await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+      bridges.emit('sess-cv-1', { type: 'assistant.message', text: FACT_SELECTION });
+      bridges.emit('sess-cv-1', { type: 'session.completed' });
+
+      expect(await screen.findByText('Not saved yet.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /back to library/i }));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('Discard this letter?')).toBeInTheDocument();
+      expect(within(dialog).getByText('It has not been saved.')).toBeInTheDocument();
+
+      // The draft, its job and the letter type are still there behind the dialog.
+      fireEvent.click(within(dialog).getByRole('button', { name: /^keep editing$/i }));
+      expect(screen.getByRole('textbox', { name: /letter body/i })).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: 'Job' })).toHaveValue('live');
+      expect(screen.getByLabelText(/^type$/i)).toHaveValue('motivation_letter');
+
+      fireEvent.click(screen.getByRole('button', { name: /back to library/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /^discard$/i }));
+      expect(await screen.findByText(/no letters yet/i)).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('does not ask when there is nothing unsaved', async () => {
+      setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+      render(<LettersPage />);
+      await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /^open /i }));
+      await screen.findByRole('textbox', { name: /letter body/i });
+
+      fireEvent.click(screen.getByRole('button', { name: /back to library/i }));
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(await screen.findByRole('table')).toBeInTheDocument();
+    });
+  });
 });

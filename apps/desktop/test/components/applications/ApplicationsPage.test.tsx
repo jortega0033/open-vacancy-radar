@@ -164,7 +164,7 @@ describe('ApplicationsPage', () => {
     render(<ApplicationsPage />);
     await waitFor(() => expect(screen.getByText('No applications yet')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^add your first application$/i }));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/new application/i)).toBeInTheDocument();
@@ -260,6 +260,67 @@ describe('ApplicationsPage', () => {
     expect(screen.getByText('Senior Frontend Engineer')).toBeInTheDocument();
   });
 
+  describe('empty state', () => {
+    const savedJob = { id: 'saved-1', role: 'Data Analyst', company: 'Synthetic Co' };
+
+    it('points to Saved Jobs as the one primary action when saved jobs exist', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listSavedJobs: vi.fn().mockResolvedValue([savedJob]),
+      });
+      const onGoToSavedJobs = vi.fn();
+
+      render(<ApplicationsPage onGoToSavedJobs={onGoToSavedJobs} />);
+
+      const primary = await screen.findByRole('button', { name: /^go to saved jobs$/i });
+      expect(
+        screen.getByText('Prepare one from a saved job, or add one you sent outside the app.'),
+      ).toBeInTheDocument();
+      // The toolbar's primary button steps aside while the list is empty, and the manual path
+      // stays available as a secondary button.
+      expect(screen.queryByRole('button', { name: /^add application$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^add your first application$/i })).not.toBeInTheDocument();
+      expect(document.querySelectorAll('.btn-primary')).toHaveLength(1);
+
+      fireEvent.click(primary);
+      expect(onGoToSavedJobs).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: /^add manually$/i }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('offers the manual form as the only action when there are no saved jobs', async () => {
+      installWorkspaceBridge({
+        listApplications: vi.fn().mockResolvedValue([]),
+        listSavedJobs: vi.fn().mockResolvedValue([]),
+      });
+
+      render(<ApplicationsPage onGoToSavedJobs={vi.fn()} />);
+
+      await screen.findByRole('button', { name: /^add your first application$/i });
+      expect(screen.queryByRole('button', { name: /go to saved jobs/i })).not.toBeInTheDocument();
+      expect(document.querySelectorAll('.btn-primary')).toHaveLength(1);
+    });
+
+    it('shows no empty-state action while the list is still loading', () => {
+      installWorkspaceBridge({ listApplications: vi.fn(() => new Promise<ApplicationRecord[]>(() => {})) });
+
+      render(<ApplicationsPage onGoToSavedJobs={vi.fn()} />);
+
+      expect(screen.queryByText('No applications yet')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /go to saved jobs|add your first application/i })).not.toBeInTheDocument();
+    });
+
+    it('does not show an empty-state action when the list fails to load', async () => {
+      installWorkspaceBridge({ listApplications: vi.fn().mockRejectedValue(new Error('workspace unreachable')) });
+
+      render(<ApplicationsPage onGoToSavedJobs={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText(/workspace unreachable/i)).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /go to saved jobs|add your first application/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe('onApplicationsChanged (stale sidebar/header counts after mutating without navigating away)', () => {
     it('fires after creating an application, so the caller can refresh counts without navigating away', async () => {
       const createApplication = vi
@@ -271,7 +332,7 @@ describe('ApplicationsPage', () => {
       render(<ApplicationsPage onApplicationsChanged={onApplicationsChanged} />);
       await waitFor(() => expect(screen.getByText('No applications yet')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^add application$/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /^add your first application$/i }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.change(within(dialog).getByLabelText('Role *'), { target: { value: 'New Role' } });
       fireEvent.change(within(dialog).getByLabelText('Company *'), { target: { value: 'New Co' } });
