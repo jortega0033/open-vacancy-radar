@@ -26,11 +26,6 @@ const rules: Rule[] = [
     message: 'Use a type scale class (text-xs, text-sm, ...) instead of an arbitrary px font size.',
   },
   {
-    id: 'low-contrast-text',
-    pattern: /(?<![\w-])text-base-content\/(?:30|35|40|45|50)(?![\d])/g,
-    message: 'text-base-content below /60 fails WCAG AA on the card and page backgrounds.',
-  },
-  {
     id: 'raw-alert',
     pattern: /(?<![\w-])alert-(?:error|warning)(?![\w-])/g,
     message: 'Use the shared shell alert component instead of a raw alert-error / alert-warning.',

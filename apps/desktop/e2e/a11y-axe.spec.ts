@@ -21,7 +21,7 @@ import { expect, goto, test } from './fixtures.js';
  * interaction (drawers, dialogs): this audits each page's resting state with an empty workspace.
  */
 
-const PAGES = ['Search', 'Saved Jobs', 'Applications', 'CV', 'Letters', 'AI Runtime', 'Settings'] as const;
+const PAGES = ['Search', 'Saved jobs', 'Applications', 'CV', 'Letters', 'AI runtime', 'Settings'] as const;
 type PageName = (typeof PAGES)[number];
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
@@ -33,43 +33,21 @@ const CONFIGS = [
   { name: 'dark 760x600 (minimum)', theme: 'openvacancyradar-dark', width: 760, height: 600 },
 ] as const;
 
-/** Known violations per page, one comment per rule id. Only ever remove entries. */
+/**
+ * Known violations. Every page shows the same single one: AppSidebar's size-7 avatar circle carries an
+ * aria attribute its role does not allow. Only ever remove it, and when it is fixed delete the whole
+ * entry. The light theme color-contrast findings that were here are fixed (#455), so a new one fails.
+ */
+const SHELL_AVATAR = 'aria-prohibited-attr';
+
 const BASELINE: Record<PageName, string[]> = {
-  Search: [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: text-base-content/50 sidebar footer line and the page title subtitle.
-    'color-contrast',
-  ],
-  'Saved Jobs': [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer line and the page title subtitle.
-    'color-contrast',
-  ],
-  Applications: [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer, subtitle, inactive tabs and the Review queue button.
-    'color-contrast',
-  ],
-  CV: [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer line and the page title subtitle.
-    'color-contrast',
-  ],
-  Letters: [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer, subtitle and an inactive tab.
-    'color-contrast',
-  ],
-  'AI Runtime': [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer, subtitle and the intro paragraphs.
-    'color-contrast',
-  ],
-  Settings: [    // AppSidebar's size-7 avatar circle carries an aria attribute its role does not allow (shell, every page).
-    'aria-prohibited-attr',
-    // Light theme only: sidebar footer, a paragraph and the inactive tabs.
-    'color-contrast',
-  ],
+  Search: [SHELL_AVATAR],
+  'Saved jobs': [SHELL_AVATAR],
+  Applications: [SHELL_AVATAR],
+  CV: [SHELL_AVATAR],
+  Letters: [SHELL_AVATAR],
+  'AI runtime': [SHELL_AVATAR],
+  Settings: [SHELL_AVATAR],
 };
 
 const observed: Record<string, Set<string>> = Object.fromEntries(PAGES.map((p) => [p, new Set<string>()]));
