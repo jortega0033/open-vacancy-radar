@@ -436,3 +436,81 @@ describe('ComposedCvReview (#419, step 5-6)', () => {
     });
   });
 });
+
+describe('ComposedCvReview names its real state (#472)', () => {
+  function staleArtifact() {
+    return {
+      artifactId: 'artifact-old',
+      format: 'pdf' as const,
+      contentHash: 'e'.repeat(64),
+      exportedAt: '2026-09-30T08:00:00.000Z',
+      snapshotDigest: 'f'.repeat(64),
+      snapshotApprovedAt: '2026-09-30T07:00:00.000Z',
+      renderContractVersion: CV_RENDER_CONTRACT_VERSION,
+      validation: { ok: true, reasons: [], pageCount: 1 },
+      savedPath: 'C:\\fake\\old.pdf',
+      reviewOpenedAt: '',
+      pagesViewedAt: '',
+      confirmedAt: '',
+    };
+  }
+
+  it('titles the card "Your tailored CV" and says "Not approved yet" before approval, with no heading saying Approved', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    const title = await screen.findByText('Your tailored CV');
+    expect(title).toHaveTextContent('Not approved yet');
+    expect(title).not.toHaveTextContent(/Approved CV/);
+    expect(screen.queryByText('Approved CV')).not.toBeInTheDocument();
+    expect(screen.queryByText('Approved', { selector: '.badge' })).not.toBeInTheDocument();
+  });
+
+  it('shows "Approved" for a case approved on the current format with current files', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved', approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION) }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    expect(await screen.findByText('Approved', { selector: '.badge' })).toBeInTheDocument();
+    expect(screen.queryByText('Not approved yet')).not.toBeInTheDocument();
+  });
+
+  it('shows "Approved with files out of date" when an exported file no longer matches the approval', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(
+      baseOverlay({
+        sourceCvContentHash: hash,
+        state: 'candidate_approved',
+        approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION),
+        artifacts: [staleArtifact()],
+      }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    expect(await screen.findByText('Approved with files out of date', { selector: '.badge' })).toBeInTheDocument();
+  });
+
+  it('also reads as files out of date when the approval was made under an older document format', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(
+      baseOverlay({ sourceCvContentHash: hash, state: 'candidate_approved', approvedResumeSnapshot: snapshotAt(CV_RENDER_CONTRACT_VERSION - 1) }),
+    );
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+
+    expect(await screen.findByText('Approved with files out of date', { selector: '.badge' })).toBeInTheDocument();
+  });
+
+  it('moves to "Approved" once the candidate approves the case', async () => {
+    const hash = await hashOf(SOURCE);
+    installOverlayBridge(baseOverlay({ sourceCvContentHash: hash }));
+    render(<ComposedCvReview cvId="cv-1" vacancy={VACANCY} sourceCv={SOURCE} />);
+    await clickPreview();
+    fireEvent.click(await screen.findByRole('button', { name: /^approve cv$/i }));
+
+    expect(await screen.findByText('Approved', { selector: '.badge' })).toBeInTheDocument();
+    expect(screen.queryByText('Not approved yet')).not.toBeInTheDocument();
+  });
+});

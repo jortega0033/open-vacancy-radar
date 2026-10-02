@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CvLibraryPage } from '../src/components/cv-library/CvLibraryPage.js';
-import { describeTailoringCase, vacancyFromCase } from '../src/components/cv-library/tailoring-cases.js';
+import { describeNextStep, describeTailoringCase, vacancyFromCase } from '../src/components/cv-library/tailoring-cases.js';
 import { CV_RENDER_CONTRACT_VERSION } from '../electron/workspace/cv-evidence-schema.js';
 import type { CvArtifactRecord, CvDocumentRecord, CvEvidenceOverlayRecord } from '../src/window.js';
 import { installBridges } from './cv-bridges.js';
+import { FIXTURE_REVISION_ID, makeFact, makeRequirement } from './fixtures/cv-evidence.js';
 import { FULL_JD } from './fixtures/job-description.js';
 import { installWorkspaceBridge } from './workspace-bridge.js';
 
@@ -169,9 +170,11 @@ describe('reopening tailoring cases from the CV Library', () => {
     expect(manualRow).toHaveTextContent('Job you entered');
     expect(manualRow).toHaveTextContent('In progress');
     expect(manualRow).toHaveTextContent('not exported');
+    expect(manualRow).toHaveTextContent('Map the requirements');
     expect(foundRow).toHaveTextContent('Found vacancy');
     expect(foundRow).toHaveTextContent('CV approved');
     expect(foundRow).toHaveTextContent('waiting for your review');
+    expect(foundRow).toHaveTextContent('Review PDF');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Platform Engineer at Northwind Freight' }));
 
@@ -237,7 +240,7 @@ describe('reopening tailoring cases from the CV Library', () => {
     expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
   });
 
-  it('shows no list when there are no cases', async () => {
+  it('says where cases come from when there are none, instead of rendering nothing', async () => {
     installBridges();
     installWorkspaceBridge({
       listCvDocuments: vi.fn().mockResolvedValue([CV]),
@@ -245,6 +248,258 @@ describe('reopening tailoring cases from the CV Library', () => {
     });
     render(<CvLibraryPage />);
     await screen.findByText('Frontend CV.pdf');
-    expect(screen.queryByText('Tailoring cases')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tailoring cases' }, SLOW)).toBeInTheDocument();
+    expect(await screen.findByText('Cases you start with Tailor for a job, or from a vacancy, appear here.', undefined, SLOW)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /tailoring cases for/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('a CV change that puts cases on hold (#449)', () => {
+  it('labels a draft case "CV changed, review needed" only when the CV changed, and keeps "In progress" otherwise', async () => {
+    installBridges();
+    const held = makeCase({ id: 'overlay-held', vacancyKey: 'manual:held', caseTitle: 'Held Role', caseCompany: 'Held Co' });
+    const plain = makeCase({ id: 'overlay-plain', vacancyKey: 'manual:plain', caseTitle: 'Plain Role', caseCompany: 'Plain Co' });
+    const rebasePlan = (inputsChanged: boolean) => ({
+      baselineKnown: true,
+      inputsChanged,
+      changes: [],
+      keptVariantIds: [],
+      droppedVariants: [],
+      orphanedFactIds: [],
+      staleFacts: [],
+      requirementIdsToReview: [],
+    });
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([held, plain]),
+      previewCvEvidenceRebase: vi.fn().mockImplementation(async (id: string) => rebasePlan(id === 'overlay-held')),
+    });
+
+    render(<CvLibraryPage />);
+
+    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    const rows = within(table).getAllByRole('row');
+    const heldRow = rows.find((row) => within(row).queryByText('Held Role at Held Co'));
+    const plainRow = rows.find((row) => within(row).queryByText('Plain Role at Plain Co'));
+    expect(heldRow).toHaveTextContent('CV changed, review needed');
+    expect(heldRow).not.toHaveTextContent('In progress');
+    expect(plainRow).toHaveTextContent('In progress');
+    expect(plainRow).not.toHaveTextContent('CV changed');
+  });
+
+  it('does not ask what changed for a case that is not a draft', async () => {
+    installBridges();
+    const previewCvEvidenceRebase = vi.fn();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([makeCase({ state: 'needs_input' })]),
+      previewCvEvidenceRebase,
+    });
+    render(<CvLibraryPage />);
+    await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    expect(previewCvEvidenceRebase).not.toHaveBeenCalled();
+  });
+
+  it('tells the drawer how many tailoring cases use the CV before saving', async () => {
+    installBridges();
+    const cases = [makeCase(), makeCase({ id: 'overlay-2', vacancyKey: 'manual:two' })];
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue(cases),
+    });
+    render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+
+    expect(await within(dialog).findByText(/2 tailoring cases use this CV./)).toHaveTextContent(
+      '2 tailoring cases use this CV. Saving changes puts them on hold until you review what changed. Files you already exported stay on disk.',
+    );
+  });
+
+  it('uses the singular for one case, and shows no notice when the CV has none or in the add drawer', async () => {
+    installBridges();
+    const listCvEvidenceOverlays = vi.fn().mockResolvedValue([makeCase()]);
+    installWorkspaceBridge({ listCvDocuments: vi.fn().mockResolvedValue([CV]), listCvEvidenceOverlays });
+    const { unmount } = render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    expect(await within(dialog).findByText(/1 tailoring case uses this CV./)).toHaveTextContent(
+      'Saving changes puts it on hold',
+    );
+    unmount();
+
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue([]),
+    });
+    render(<CvLibraryPage />);
+    await screen.findByText('Frontend CV.pdf', undefined, SLOW);
+    fireEvent.click(screen.getByRole('button', { name: /^edit /i }));
+    const emptyDialog = await screen.findByRole('dialog', { name: /edit cv/i });
+    await waitFor(() => expect(within(emptyDialog).getByRole('button', { name: /save changes/i })).toBeEnabled());
+    expect(within(emptyDialog).queryByText(/tailoring cases? uses? this CV/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the Tailoring cases list shows state and next step (#499)', () => {
+  const revisionId = FIXTURE_REVISION_ID;
+  const complete = { status: 'complete' as const, revisionId, batches: 1 };
+  const snapshotFor = (digest: string, approvedAt: string) => ({
+    renderContractVersion: CV_RENDER_CONTRACT_VERSION,
+    resume: {
+      contact: { name: 'Sam Doe', title: '', location: '', email: '', phone: '', links: [] },
+      summary: '',
+      experience: [],
+      projects: [],
+      skills: [],
+      education: [],
+    },
+    digest,
+    approvedAt,
+    caseRevision: '5',
+  });
+  const approvedAt = '2026-10-01T10:00:00.000Z';
+  const approved = (partial: Partial<CvEvidenceOverlayRecord> = {}) =>
+    makeCase({ state: 'candidate_approved', approvedResumeSnapshot: snapshotFor('d'.repeat(64), approvedAt), ...partial });
+  const withFile = (confirmedAt: string, reviewOpenedAt = '') => [
+    { ...pdfArtifact('d'.repeat(64), approvedAt), confirmedAt, reviewOpenedAt },
+  ];
+
+  it('derives the first action the candidate can take, in the order the workspace asks for it', () => {
+    expect(describeNextStep(makeCase({ jdSnapshot: '' }), false)).toBe('Add the job description');
+    expect(describeNextStep(makeCase(), false)).toBe('Map the requirements');
+    expect(describeNextStep(makeCase({ requirementCoverage: { ...complete, status: 'partial' } }), false)).toBe(
+      'Map the rest of the requirements',
+    );
+    expect(
+      describeNextStep(
+        makeCase({
+          requirementCoverage: complete,
+          requirements: [makeRequirement({ requirementId: 'r-1', reviewed: false }), makeRequirement({ requirementId: 'r-2', reviewed: false })],
+        }),
+        false,
+      ),
+    ).toBe('Review 2 requirements');
+    expect(
+      describeNextStep(
+        makeCase({ requirementCoverage: complete, requirements: [makeRequirement({ reviewed: false })] }),
+        false,
+      ),
+    ).toBe('Review 1 requirement');
+    expect(
+      describeNextStep(
+        makeCase({
+          requirementCoverage: complete,
+          requirements: [
+            makeRequirement({ requirementId: 'r-1', evidenceClass: 'needs_verification' }),
+            makeRequirement({ requirementId: 'r-2', evidenceClass: 'needs_verification' }),
+            makeRequirement({ requirementId: 'r-3', evidenceClass: 'direct' }),
+          ],
+        }),
+        false,
+      ),
+    ).toBe('Answer 2 questions');
+    expect(
+      describeNextStep(
+        makeCase({ requirementCoverage: complete, requirements: [makeRequirement()], facts: [makeFact({ approval: 'proposed' })] }),
+        false,
+      ),
+    ).toBe('Review 1 fact');
+    expect(describeNextStep(makeCase({ requirementCoverage: complete, requirements: [makeRequirement()], facts: [makeFact()] }), false)).toBe(
+      'Approve the CV',
+    );
+    expect(describeNextStep(makeCase({ state: 'conflict' }), false)).toBe('Resolve conflicting facts');
+    expect(describeNextStep(makeCase({ state: 'qa_failed' }), false)).toBe('Fix the failed checks');
+  });
+
+  it('puts a changed CV first, ahead of every other step', () => {
+    expect(describeNextStep(makeCase(), true)).toBe('Review what changed in your CV');
+  });
+
+  it('reads the file states of an approved case', () => {
+    expect(describeNextStep(approved(), false)).toBe('Export your files');
+    expect(describeNextStep(approved({ artifacts: withFile('') }), false)).toBe('Review PDF');
+    expect(describeNextStep(approved({ artifacts: withFile('2026-10-02T09:00:00.000Z', '2026-10-02T08:30:00.000Z') }), false)).toBe('Done');
+    expect(
+      describeNextStep(approved({ artifacts: [{ ...pdfArtifact('d'.repeat(64), approvedAt), validation: { ok: false, reasons: ['too long'], pageCount: 3 } }] }), false),
+    ).toBe('Export again');
+    expect(
+      describeNextStep(approved({ artifacts: [pdfArtifact('0'.repeat(64), '2026-09-01T10:00:00.000Z')] }), false),
+    ).toBe('Export your files again');
+    expect(
+      describeNextStep(
+        approved({ approvedResumeSnapshot: { ...snapshotFor('d'.repeat(64), approvedAt), renderContractVersion: CV_RENDER_CONTRACT_VERSION - 1 } }),
+        false,
+      ),
+    ).toBe('Approve the CV again');
+  });
+
+  it('shows every row a next step and tells the two approved states apart', async () => {
+    installBridges();
+    const rows = [
+      makeCase({ id: 'c-1', vacancyKey: 'manual:1', caseTitle: 'Role One', caseCompany: 'Co One', state: 'needs_input' }),
+      approved({ id: 'c-2', vacancyKey: 'manual:2', caseTitle: 'Role Two', caseCompany: 'Co Two', artifacts: withFile('') }),
+      makeCase({ id: 'c-3', vacancyKey: 'manual:3', caseTitle: 'Role Three', caseCompany: 'Co Three', state: 'artifact_approved' }),
+      approved({
+        id: 'c-4',
+        vacancyKey: 'manual:4',
+        caseTitle: 'Role Four',
+        caseCompany: 'Co Four',
+        artifacts: withFile('2026-10-02T09:00:00.000Z', '2026-10-02T08:30:00.000Z'),
+      }),
+    ];
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockResolvedValue(rows),
+    });
+    render(<CvLibraryPage />);
+
+    const table = await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW);
+    expect(within(table).getByRole('columnheader', { name: 'Next step' })).toBeInTheDocument();
+    const bodyRows = within(table).getAllByRole('row').slice(1);
+    expect(bodyRows).toHaveLength(4);
+    for (const row of bodyRows) {
+      const cells = within(row).getAllByRole('cell');
+      expect(cells[5]?.textContent?.trim().length).toBeGreaterThan(0);
+    }
+    const byLabel = (label: string) => bodyRows.find((row) => within(row).queryByText(label)) as HTMLElement;
+    expect(within(byLabel('Role One at Co One')).getAllByRole('cell')[2]).toHaveTextContent('Needs your input');
+    expect(within(byLabel('Role Two at Co Two')).getAllByRole('cell')[2]).toHaveTextContent('CV approved');
+    expect(within(byLabel('Role Two at Co Two')).getAllByRole('cell')[5]).toHaveTextContent('Review PDF');
+    expect(within(byLabel('Role Three at Co Three')).getAllByRole('cell')[2]).toHaveTextContent('Files accepted');
+    expect(within(byLabel('Role Four at Co Four')).getAllByRole('cell')[5]).toHaveTextContent('Done');
+  });
+
+  it('shows a loading line, not an empty or finished list, while the cases load', async () => {
+    installBridges();
+    let release: (cases: CvEvidenceOverlayRecord[]) => void = () => undefined;
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockImplementation(() => new Promise<CvEvidenceOverlayRecord[]>((resolve) => (release = resolve))),
+    });
+    render(<CvLibraryPage />);
+
+    expect(await screen.findByText('Loading your tailoring cases…', undefined, SLOW)).toBeInTheDocument();
+    expect(screen.queryByText(/appear here/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+
+    release([makeCase()]);
+    expect(await screen.findByRole('table', { name: 'Tailoring cases for Frontend CV.pdf' }, SLOW)).toBeInTheDocument();
+    expect(screen.queryByText('Loading your tailoring cases…')).not.toBeInTheDocument();
+  });
+
+  it('shows the error rather than an empty list when the cases cannot be loaded', async () => {
+    installBridges();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([CV]),
+      listCvEvidenceOverlays: vi.fn().mockRejectedValue(new Error('cases database unreachable')),
+    });
+    render(<CvLibraryPage />);
+
+    expect(await screen.findByText('cases database unreachable', undefined, SLOW)).toBeInTheDocument();
+    expect(screen.queryByText(/appear here/)).not.toBeInTheDocument();
   });
 });

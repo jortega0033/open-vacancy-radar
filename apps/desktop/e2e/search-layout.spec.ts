@@ -241,6 +241,9 @@ test('populated Search owns its desktop edges and keeps narrow gutters', async (
       await expect(window.getByRole('tab', { name: 'Improve achievements' })).toBeVisible();
       await expect(window.getByRole('tab', { name: 'Best-fit roles' })).toBeVisible();
       await expect(window.getByRole('button', { name: 'Check ATS fit' })).toBeVisible();
+      // The unchecked draft sits in a collapsed section until it is opened.
+      await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeHidden();
+      await window.getByText('Quick draft to read').click();
       await expect(window.getByRole('button', { name: 'Draft tailored CV' })).toBeVisible();
 
       for (const viewport of [
