@@ -162,13 +162,6 @@ function SearchLoadingSkeleton() {
  * refinements such as source and posted date filter the loaded report immediately.
  */
 export interface SearchPageProps {
-  /**
-   * Fired when the user clicks "Generate Letter" on the vacancy detail view, with the selected
-   * vacancy already converted to what the Letters page expects. `App.tsx` wires this to the
-   * Search -> Letters handoff; the page works standalone (the button becomes a no-op) with nothing
-   * supplied.
-   */
-  onGenerateLetter?: (vacancy: SelectedVacancy) => void;
   onOpenSearchProfile?: () => void;
   onSavedJobsChanged?: () => void;
   onViewApplicationAttempt?: (attemptId: string) => void;
@@ -178,7 +171,6 @@ export interface SearchPageProps {
 }
 
 export function SearchPage({
-  onGenerateLetter,
   onOpenSearchProfile,
   onSavedJobsChanged,
   onViewApplicationAttempt,
@@ -919,11 +911,6 @@ export function SearchPage({
     }
   }, [onSavedJobsChanged, selected]);
 
-  const handleGenerateLetter = useCallback(() => {
-    if (!selected) return;
-    onGenerateLetter?.(selectedVacancyFor(selected));
-  }, [selected, onGenerateLetter]);
-
   const handlePrepare = useCallback(async () => {
     // Gated on the selected row's own `provisional` flag, not the page-level scanning state
     // (issue #363): a provisional row must never start application preparation, whether it's
@@ -1205,7 +1192,6 @@ export function SearchPage({
                 {...(prepareError ? { prepareError } : {})}
                 onSave={() => void handleSave()}
                 onPrepare={() => void handlePrepare()}
-                onGenerateLetter={handleGenerateLetter}
                 assistantOpen={assistantForKey === selected.key}
                 onToggleAssistant={() =>
                   setAssistantForKey((current) => (current === selected.key ? null : selected.key))
