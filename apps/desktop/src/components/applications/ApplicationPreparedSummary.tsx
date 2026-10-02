@@ -145,7 +145,7 @@ function AwaitingAnswerRow({ field, fieldIndex, fieldRef, savedAnswer, onConfirm
       <li className="flex items-start justify-between gap-3 text-xs">
         <span className="min-w-0">
           <span className="font-medium">{field.label || 'Unlabelled field'}</span>
-          <span className="text-base-content/40">: </span>
+          <span className="text-base-content/60">: </span>
           <span className="text-base-content/60">{field.detail}</span>
         </span>
         <span className={`${STATUS_BADGE[field.status]} whitespace-nowrap`}>{STATUS_LABEL[field.status]}</span>
@@ -203,7 +203,7 @@ function AwaitingAnswerRow({ field, fieldIndex, fieldRef, savedAnswer, onConfirm
 
       {savedAnswer ? (
         <div className="rounded-box border border-base-300 bg-base-200 p-2">
-          <p className="text-base-content/50">
+          <p className="text-base-content/60">
             Saved answer, used at {savedAnswer.originCompany || 'a previous application'}
           </p>
           <p className="mt-0.5 whitespace-pre-wrap break-words text-base-content/80">{savedAnswer.answer}</p>
@@ -291,12 +291,12 @@ export function ApplicationPreparedSummary({
     <div className="flex flex-col gap-3 border-b border-base-300 px-5 py-3.5">
       {attempt.checkpointDetail && (
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">Tailoring and preparation</h3>
+          <h3 className="ovr-eyebrow">Tailoring and preparation</h3>
           <p className="mt-1 text-xs text-base-content/70">{attempt.checkpointDetail}</p>
         </div>
       )}
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">Documents for this application</h3>
+        <h3 className="ovr-eyebrow">Documents for this application</h3>
         {documents.length === 0 ? (
           <p className="mt-1 text-xs text-base-content/60">No documents were prepared for this attempt.</p>
         ) : (
@@ -319,7 +319,7 @@ export function ApplicationPreparedSummary({
       </div>
 
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+        <h3 className="ovr-eyebrow">
           Answers filled for {attempt.role} at {attempt.company}
         </h3>
         {!matchesThisAttempt ? (
@@ -351,15 +351,15 @@ export function ApplicationPreparedSummary({
                     <span className="font-medium">{field.label || 'Unlabelled field'}</span>
                     {field.status === 'committed' && field.value !== undefined ? (
                       <>
-                        <span className="text-base-content/40">: </span>
+                        <span className="text-base-content/60">: </span>
                         <span className="break-words text-base-content/80">{field.value}</span>
                         {field.provenance ? (
-                          <span className="text-base-content/50"> ({PROVENANCE_LABEL[field.provenance]})</span>
+                          <span className="text-base-content/60"> ({PROVENANCE_LABEL[field.provenance]})</span>
                         ) : null}
                       </>
                     ) : field.detail ? (
                       <>
-                        <span className="text-base-content/40">: </span>
+                        <span className="text-base-content/60">: </span>
                         <span className="text-base-content/60">{field.detail}</span>
                       </>
                     ) : null}

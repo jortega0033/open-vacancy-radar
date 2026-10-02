@@ -106,12 +106,12 @@ export const SearchResultRow = memo(function SearchResultRow({
         )}
 
         <div className="mt-1.5 flex items-center justify-between gap-2">
-          <span className={`flex-none text-xs ${stale ? 'text-warning' : 'text-base-content/50'}`}>
+          <span className={`flex-none text-xs ${stale ? 'text-warning' : 'text-base-content/60'}`}>
             {saved ? 'Saved · ' : ''}
             {result.postedAt ? formatDate(result.postedAt) : 'Date unknown'}
             {stale ? ' (over a month old)' : ''}
           </span>
-          <span className="flex-none text-xs text-base-content/50">{discoveryProviderLabel(result.provider)}</span>
+          <span className="flex-none text-xs text-base-content/60">{discoveryProviderLabel(result.provider)}</span>
         </div>
       </div>
     </button>

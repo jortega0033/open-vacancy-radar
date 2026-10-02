@@ -101,7 +101,7 @@ export function AppSidebar({
         {!collapsed && (
           <div className="min-w-0">
             <div className="truncate text-xs font-medium">AI runtime</div>
-            <div className="truncate text-xs text-base-content/50">
+            <div className="truncate text-xs text-base-content/60">
               {runtimeLabel} {RUNTIME_TEXT[runtimeState]}
             </div>
           </div>
@@ -149,7 +149,7 @@ function NavGroup({ items, active, onNavigate, collapsed, counts }: NavGroupProp
               <>
                 <span className="truncate">{item.label}</span>
                 {count !== undefined && (
-                  <span className="ml-auto text-xs font-normal text-base-content/50">{count}</span>
+                  <span className="ml-auto text-xs font-normal text-base-content/60">{count}</span>
                 )}
               </>
             )}

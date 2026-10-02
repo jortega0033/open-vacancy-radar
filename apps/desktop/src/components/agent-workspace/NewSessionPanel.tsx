@@ -164,7 +164,7 @@ export function NewSessionPanel({
           <button type="submit" className="btn btn-sm btn-primary" disabled={trimmed.length === 0}>
             Choose folder and start
           </button>
-          <span className="text-xs text-base-content/50">
+          <span className="text-xs text-base-content/60">
             You can start another session while one is already running.
           </span>
         </div>
