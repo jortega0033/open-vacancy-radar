@@ -9,7 +9,7 @@ import { useEscapeToClose } from '../shell/useEscapeToClose.js';
 import { parseCvAiResponse } from './cv-ai-parse.js';
 import { skillsToText, textToSkills } from './cv-profile.js';
 import { coversCvProfileCore, deriveCvProfileFromSource } from './cv-profile-from-source.js';
-import { CvSourceReview } from './CvSourceReview.js';
+import { CvSourceReview, type CvSourceReviewHandle } from './CvSourceReview.js';
 
 /**
  * Everything the drawer can change (deliberately not `CvDocumentInput`/`CvDocumentPatch`
@@ -134,6 +134,8 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
 
   // `chunkSeparator: ''`: the parsed response must be byte-exact JSON, not prose, so chunks are
   // concatenated raw rather than joined with the "\n\n" every other AI feature here wants.
+  const sourceReviewRef = useRef<CvSourceReviewHandle>(null);
+
   const parseRun = useAgentRun({ chunkSeparator: '' });
   const parseAppliedRef = useRef(false);
   const parseSucceeded = parseRun.status === 'completed' && !parseError;
@@ -247,6 +249,15 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
       return;
     }
     setValidationError(undefined);
+
+    // Check for unsaved validation errors in the source CV review
+    if (source && sourceReviewRef.current) {
+      const maxProjectsError = sourceReviewRef.current.getMaxProjectsError();
+      if (maxProjectsError) {
+        setError(`Fix the project count: ${maxProjectsError}`);
+        return;
+      }
+    }
 
     const payload: CvDrawerSubmitPayload = {
       name,
@@ -382,7 +393,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
                 </div>
               </div>
             )}
-            {source && <CvSourceReview source={source} disabled={submitting} onChange={setSource} />}
+            {source && <CvSourceReview ref={sourceReviewRef} source={source} disabled={submitting} onChange={setSource} />}
             {source && sourceGaps.length > 0 && (
               <p className="text-xs text-warning" role="status">
                 Saved, this CV still cannot be exported: {sourceGaps.join('; ')}.
