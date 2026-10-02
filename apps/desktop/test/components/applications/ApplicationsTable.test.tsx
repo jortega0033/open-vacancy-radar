@@ -43,7 +43,7 @@ describe('ApplicationsTable', () => {
           onPrepareInterview={vi.fn()}
         />,
       );
-      expect(screen.getByRole('button', { name: 'Prepare interview' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Prepare interview for/ })).toBeInTheDocument();
       unmount();
     }
 
@@ -55,14 +55,14 @@ describe('ApplicationsTable', () => {
           onPrepareInterview={vi.fn()}
         />,
       );
-      expect(screen.queryByRole('button', { name: 'Prepare interview' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Prepare interview for/ })).not.toBeInTheDocument();
       unmount();
     }
   });
 
   it('never shows the action when the caller does not wire up onPrepareInterview', () => {
     render(<ApplicationsTable applications={[makeApplication({ status: 'interview' })]} {...NOOP_PROPS} />);
-    expect(screen.queryByRole('button', { name: 'Prepare interview' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Prepare interview for/ })).not.toBeInTheDocument();
   });
 
   it('keeps Edit, Archive and Delete present and clickable alongside the new action, not replaced by it', () => {
@@ -74,12 +74,12 @@ describe('ApplicationsTable', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Prepare interview' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Prepare interview for/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Edit Senior Frontend Engineer/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Archive Senior Frontend Engineer/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete Senior Frontend Engineer/ })).toBeInTheDocument();
 
-    screen.getByRole('button', { name: 'Edit' }).click();
+    screen.getByRole('button', { name: /Edit Senior Frontend Engineer/ }).click();
     expect(NOOP_PROPS.onEdit).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }));
   });
 
@@ -92,7 +92,29 @@ describe('ApplicationsTable', () => {
         onPrepareInterview={onPrepareInterview}
       />,
     );
-    screen.getByRole('button', { name: 'Prepare interview' }).click();
+    screen.getByRole('button', { name: /Prepare interview for/ }).click();
     expect(onPrepareInterview).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }));
+  });
+
+  it('provides unique accessible names for delete buttons across multiple rows', () => {
+    const applications = [
+      makeApplication({ id: 'app-1', role: 'Frontend Engineer', company: 'Acme Corp' }),
+      makeApplication({ id: 'app-2', role: 'Backend Engineer', company: 'Tech Inc' }),
+      makeApplication({ id: 'app-3', role: 'DevOps Engineer', company: 'Cloud Co' }),
+    ];
+    render(<ApplicationsTable applications={applications} {...NOOP_PROPS} />);
+
+    const deleteButtons = screen.getAllByRole('button', { name: /^Delete/ });
+    expect(deleteButtons).toHaveLength(3);
+
+    const deleteNames = deleteButtons.map((btn) => btn.getAttribute('aria-label'));
+    expect(deleteNames).toEqual([
+      'Delete Frontend Engineer at Acme Corp',
+      'Delete Backend Engineer at Tech Inc',
+      'Delete DevOps Engineer at Cloud Co',
+    ]);
+
+    const uniqueNames = new Set(deleteNames);
+    expect(uniqueNames.size).toBe(deleteNames.length);
   });
 });

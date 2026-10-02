@@ -210,7 +210,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Existing CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     expect(within(dialog).getByLabelText(/^name/i)).toHaveValue('Existing CV');
@@ -239,7 +239,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -289,7 +289,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -320,7 +320,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -358,7 +358,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -387,7 +387,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -407,7 +407,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -431,7 +431,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Uploaded CV')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^edit senior frontend/i }));
     const dialog = await screen.findByRole('dialog', { name: /edit cv/i });
 
     fireEvent.click(within(dialog).getByRole('button', { name: /parse with ai/i }));
@@ -606,7 +606,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('To Delete')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
     const confirmDialog = await screen.findByRole('alertdialog');
     expect(confirmDialog).toHaveTextContent(/cannot be undone/i);
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
@@ -638,7 +638,7 @@ describe('CvLibraryPage', () => {
     const rows = screen.getAllByRole('row');
     const rowA = rows.find((row) => within(row).queryByText('CV A'));
     if (!rowA) throw new Error('expected a row for CV A');
-    fireEvent.click(within(rowA).getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(within(rowA).getByRole('button', { name: /^delete/i }));
 
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^delete$/i }));
@@ -658,7 +658,7 @@ describe('CvLibraryPage', () => {
     render(<CvLibraryPage />);
     await waitFor(() => expect(screen.getByText('Keep Me')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
     const confirmDialog = await screen.findByRole('alertdialog');
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /^cancel$/i }));
 
@@ -838,7 +838,7 @@ describe('CvLibraryPage', () => {
       render(<CvLibraryPage />);
       await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
       const dialog = await screen.findByRole('alertdialog');
 
       expect(listCvEvidenceOverlays).toHaveBeenCalledWith('cv-1');
@@ -858,7 +858,7 @@ describe('CvLibraryPage', () => {
       render(<CvLibraryPage />);
       await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
       const dialog = await screen.findByRole('alertdialog');
       expect(within(dialog).queryByRole('list')).not.toBeInTheDocument();
       expect(dialog).toHaveTextContent(/outside the app are not deleted/);
@@ -873,7 +873,7 @@ describe('CvLibraryPage', () => {
       render(<CvLibraryPage />);
       await waitFor(() => expect(screen.getByText('Frontend CV')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^delete/i }));
       expect(await screen.findByRole('alertdialog')).toHaveTextContent(/could not be listed/);
     });
   });

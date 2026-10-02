@@ -190,7 +190,7 @@ describe('headerCopy', () => {
     const counts = { savedJobs: 7, activeApplications: 4, letters: 2, cvDocuments: 0 };
     expect(headerCopy('saved', counts).subtitle).toBe('7 saved');
     expect(headerCopy('applications', counts).subtitle).toBe('4 active');
-    expect(headerCopy('letters', counts).subtitle).toBe('2 documents');
+    expect(headerCopy('letters', counts).subtitle).toBe('2 letters');
   });
 
   it('never names a market the app cannot actually search', () => {
