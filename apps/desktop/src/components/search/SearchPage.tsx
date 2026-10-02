@@ -10,7 +10,13 @@ import { useEffectiveProvider } from '../../use-effective-provider.js';
 import { CvAssistant, type VacancyLead } from '../cv/index.js';
 import { describeError } from '../cv/useAgentRun.js';
 import type { SelectedVacancy } from '../letters/index.js';
-import { EmptyState, ErrorBanner, useEscapeToClose } from '../shell/index.js';
+import { EmptyState, ErrorBanner, useAnnounce, useEscapeToClose } from '../shell/index.js';
+import {
+  SCAN_FAILED_ANNOUNCEMENT,
+  SCAN_STARTED_ANNOUNCEMENT,
+  progressAnnouncement,
+  scanFinishedAnnouncement,
+} from './scan-announcements.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
@@ -586,6 +592,31 @@ export function SearchPage({
     return [];
   }, [showLiveResults, worldwideReport, partialVacancies]);
 
+  // Spoken scan signals (issue #456): start, throttled progress, then finish or failure. The text
+  // goes through the always-mounted app-level announcer; the visible banner stays for sighted users.
+  const announce = useAnnounce();
+  const wasScanningRef = useRef(false);
+  const lastAnnouncedCountRef = useRef(0);
+  const latestRef = useRef({ resultCount: 0, failed: false });
+  latestRef.current = { resultCount: results.length, failed: scanError !== undefined };
+  useEffect(() => {
+    if (scanning === wasScanningRef.current) return;
+    wasScanningRef.current = scanning;
+    if (scanning) {
+      lastAnnouncedCountRef.current = 0;
+      announce(SCAN_STARTED_ANNOUNCEMENT);
+    } else {
+      announce(latestRef.current.failed ? SCAN_FAILED_ANNOUNCEMENT : scanFinishedAnnouncement(latestRef.current.resultCount));
+    }
+  }, [scanning, announce]);
+  useEffect(() => {
+    if (!scanning) return;
+    const text = progressAnnouncement(liveProgressCount, lastAnnouncedCountRef.current);
+    if (text === undefined) return;
+    lastAnnouncedCountRef.current = liveProgressCount;
+    announce(text);
+  }, [scanning, liveProgressCount, announce]);
+
   // The saved report's own rows, independent of whichever view is currently on screen -- drives
   // report-level messaging (e.g. "this report has no scores yet") that must stay about the saved
   // report even while the live view is what's actually rendered.
@@ -1002,7 +1033,9 @@ export function SearchPage({
           </ErrorBanner>
         )}
         {scanning && (
-          <div className="alert alert-info mt-3 flex items-center gap-3 text-sm">
+          // A named group, not role="status": a status region mounted together with its text is
+          // often not spoken, and the always-mounted app announcer already speaks start/progress/finish.
+          <div className="alert alert-info mt-3 flex items-center gap-3 text-sm" role="group" aria-label="Scan progress">
             <span className="loading loading-spinner loading-xs flex-none" aria-hidden="true" />
             <span className="flex-1">
               {showLiveResults
@@ -1157,7 +1190,7 @@ export function SearchPage({
               {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
             </p>
           )}
-          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0">
+          <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0" aria-busy={scanning}>
             <SearchResultList
               results={pageItems}
               totalCount={results.length}

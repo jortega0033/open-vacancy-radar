@@ -2,6 +2,7 @@ import { StrictMode, useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveryVacancyAudit, GlobalRemoteReport, ScanProgressEvent } from '@open-vacancy-radar/vacancy-engine';
+import { LiveAnnouncerProvider } from '../../../src/components/shell/index.js';
 import {
   SearchPage,
   createSearchSessionState,
@@ -1772,5 +1773,62 @@ describe('SearchPage', () => {
     // It receives the row the user picked, not the first one in the report.
     expect(screen.getByText(/freeday, worldwide/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /hide ai assistant/i })).toBeInTheDocument();
+  });
+});
+
+describe('SearchPage live announcements (issue #456)', () => {
+  const announcer = () => screen.getByTestId('live-announcer');
+  const arrivals = (count: number, prefix: string) =>
+    Array.from({ length: count }, (_, index) =>
+      makeWorldwideVacancy({ key: `${prefix}-${index}`, title: `Frontend ${prefix} ${index}`, profileScore: null }),
+    );
+
+  function renderAnnounced() {
+    return render(
+      <LiveAnnouncerProvider>
+        <SearchPage />
+      </LiveAnnouncerProvider>,
+    );
+  }
+
+  it('announces the start, throttled progress and the final count, and marks the results busy meanwhile', async () => {
+    let resolveScan: (report: GlobalRemoteReport) => void = () => {};
+    const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+      resolveScan = resolve;
+    });
+    const { emit } = installProgressCapturingBridge({ runScan: vi.fn().mockReturnValue(scanPromise) });
+
+    renderAnnounced();
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    expect(announcer()).toHaveTextContent('');
+
+    enterSearchQuery('frontend');
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+    await waitFor(() => expect(announcer()).toHaveTextContent('Scan started'));
+
+    // Under the step nothing new is spoken, so a trickle of arrivals does not flood the reader.
+    emit({ sourceId: 'himalayas', vacancies: arrivals(10, 'a') });
+    await waitFor(() => expect(screen.getAllByText('Frontend a 0').length).toBeGreaterThan(0));
+    expect(announcer()).toHaveTextContent('Scan started');
+    expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+
+    emit({ sourceId: 'jobicy', vacancies: arrivals(30, 'b') });
+    await waitFor(() => expect(announcer()).toHaveTextContent('40 live vacancies so far'));
+
+    resolveScan(makeWorldwideReport(arrivals(3, 'final')));
+    await waitFor(() => expect(announcer()).toHaveTextContent('Scan finished, 3 vacancies'));
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it('announces a failed scan instead of a finish', async () => {
+    installProgressCapturingBridge({ runScan: vi.fn().mockRejectedValue(new Error('scan failed: source timed out')) });
+
+    renderAnnounced();
+    await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+    enterSearchQuery('frontend');
+    fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+
+    await waitFor(() => expect(announcer()).toHaveTextContent('The scan stopped with an error'));
+    expect(announcer()).not.toHaveTextContent(/finished/i);
   });
 });

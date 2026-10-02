@@ -14,6 +14,7 @@ import { WelcomeModal } from './components/WelcomeModal.js';
 import {
   AppSidebar,
   ErrorBanner,
+  LiveAnnouncerProvider,
   WorkspaceHeader,
   headerCopy,
   isNavPage,
@@ -269,6 +270,7 @@ export function App() {
   const { title, subtitle } = headerCopy(nav, counts);
 
   return (
+    <LiveAnnouncerProvider>
     <div className="flex h-screen overflow-hidden font-sans text-base text-base-content">
       <AppSidebar
         active={nav}
@@ -356,5 +358,6 @@ export function App() {
           Settings: the gate above decides *whether* it appears, never which page it appears over. */}
       {showWelcome && <WelcomeModal onClose={handleWelcomeClosed} />}
     </div>
+    </LiveAnnouncerProvider>
   );
 }
