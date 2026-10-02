@@ -696,6 +696,7 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
                     )}
                     {openRequirementId === requirement.requirementId && (
                       <ClarificationForm
+                        requirementText={requirement.text}
                         sourceCv={sourceCv}
                         onAnswer={(answer) => void handleAnswer(requirement, answer)}
                         onCancel={() => setOpenRequirementId(null)}

@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { metricBasisProblem, type ClarificationAnswer } from './clarification-answer.js';
 import { sourceAnchors } from './source-anchors.js';
 import type { CvSourceDocument } from '../../window.js';
 
 export interface ClarificationFormProps {
+  /** The requirement being asked about, shown at the top so the questions have a subject. */
+  requirementText?: string;
   sourceCv: CvSourceDocument | null | undefined;
   onAnswer(answer: ClarificationAnswer): void;
   onCancel(): void;
@@ -22,7 +24,7 @@ const STEP_COUNT = 3;
  * unstated with "Don't know this part", so an unknown mechanism or result stays unstated rather than
  * being guessed.
  */
-export function ClarificationForm({ sourceCv, onAnswer, onCancel }: ClarificationFormProps) {
+export function ClarificationForm({ requirementText, sourceCv, onAnswer, onCancel }: ClarificationFormProps) {
   const options = sourceAnchors(sourceCv);
   const [step, setStep] = useState<Step>(1);
   const [anchor, setAnchor] = useState('');
@@ -33,6 +35,21 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
   const [metricValue, setMetricValue] = useState('');
   const [metricUnit, setMetricUnit] = useState('');
   const [metricBasis, setMetricBasis] = useState('');
+  // An exit action waiting for the candidate to confirm that typed text will be discarded.
+  const [pendingExit, setPendingExit] = useState<{ message: string; confirmLabel: string; run: () => void } | null>(null);
+  const firstField = useRef<HTMLSelectElement & HTMLTextAreaElement>(null);
+  const keepButton = useRef<HTMLButtonElement>(null);
+  const mounted = useRef(false);
+
+  // Each step replaces the last one, so the button that was pressed unmounts and focus would fall
+  // to the page. Put it on the new step's first field instead.
+  useEffect(() => {
+    if (mounted.current) firstField.current?.focus();
+    mounted.current = true;
+  }, [step]);
+  useEffect(() => {
+    if (pendingExit) keepButton.current?.focus();
+  }, [pendingExit]);
 
   const selected = options.find((option) => `${option.type}:${option.id}` === anchor);
   const hasMetric = metricValue.trim().length > 0;
@@ -55,16 +72,27 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
     });
   }
 
+  const anyText = [activity, timePhase, mechanism, result, metricValue, metricUnit, metricBasis].some((value) => value.trim().length > 0);
+
+  /** Runs `run` now, or asks first when there is typed text that it would throw away. */
+  function exitWith(hasText: boolean, message: string, confirmLabel: string, run: () => void) {
+    if (hasText) setPendingExit({ message, confirmLabel, run });
+    else run();
+  }
+
   function next() {
+    setPendingExit(null);
     if (step < STEP_COUNT) setStep((step + 1) as Step);
   }
 
   function back() {
+    setPendingExit(null);
     if (step > 1) setStep((step - 1) as Step);
   }
 
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-box border border-base-300 bg-base-200/40 p-3 text-sm">
+      {requirementText && <p className="text-xs font-medium">About: {requirementText}</p>}
       <div className="text-xs text-base-content/60" aria-live="polite">
         Question {step} of {STEP_COUNT}
       </div>
@@ -74,6 +102,7 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium">Which role or project is this about?</span>
             <select
+              ref={firstField}
               className="select select-sm"
               value={anchor}
               onChange={(event) => setAnchor(event.currentTarget.value)}
@@ -113,6 +142,7 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium">How did you do it, including the actual tools and scope?</span>
           <textarea
+            ref={firstField}
             className="textarea textarea-sm"
             rows={3}
             value={mechanism}
@@ -126,6 +156,7 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium">What was the result, or what was it for, if you know?</span>
             <textarea
+              ref={firstField}
               className="textarea textarea-sm"
               rows={2}
               value={result}
@@ -182,10 +213,12 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
           <button
             type="button"
             className="btn btn-outline btn-sm"
-            onClick={() => {
-              setMechanism('');
-              next();
-            }}
+            onClick={() =>
+              exitWith(mechanism.trim().length > 0, 'Clear what you typed here and leave this part unstated?', 'Clear it', () => {
+                setMechanism('');
+                next();
+              })
+            }
           >
             Don&rsquo;t know this part
           </button>
@@ -203,12 +236,19 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
             <button
               type="button"
               className="btn btn-outline btn-sm"
-              onClick={() => {
-                setResult('');
-                setMetricValue('');
-                setMetricUnit('');
-                setMetricBasis('');
-              }}
+              onClick={() =>
+                exitWith(
+                  [result, metricValue, metricUnit, metricBasis].some((value) => value.trim().length > 0),
+                  'Clear what you typed here and leave this part unstated?',
+                  'Clear it',
+                  () => {
+                    setResult('');
+                    setMetricValue('');
+                    setMetricUnit('');
+                    setMetricBasis('');
+                  },
+                )
+              }
             >
               Don&rsquo;t know this part
             </button>
@@ -216,16 +256,45 @@ export function ClarificationForm({ sourceCv, onAnswer, onCancel }: Clarificatio
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-base-300 pt-2">
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => onAnswer({ kind: 'unknown' })}>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => exitWith(anyText, 'Discard your answer and record “I don’t know”?', 'Discard and record', () => onAnswer({ kind: 'unknown' }))}
+        >
           I don&rsquo;t know
         </button>
-        <button type="button" className="btn btn-outline btn-sm" onClick={() => onAnswer({ kind: 'not_my_work' })}>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => exitWith(anyText, 'Discard your answer and record “Not my work”?', 'Discard and record', () => onAnswer({ kind: 'not_my_work' }))}
+        >
           Not my work
         </button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
           Skip for now
         </button>
       </div>
+      {pendingExit && (
+        <div className="alert alert-warning flex-wrap text-sm" role="alert">
+          <span>{pendingExit.message}</span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                const { run } = pendingExit;
+                setPendingExit(null);
+                run();
+              }}
+            >
+              {pendingExit.confirmLabel}
+            </button>
+            <button ref={keepButton} type="button" className="btn btn-ghost btn-sm" onClick={() => setPendingExit(null)}>
+              Keep my answer
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

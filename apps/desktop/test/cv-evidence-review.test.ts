@@ -312,6 +312,28 @@ describe('reconcileCvEvidence', () => {
     ).toThrow(/cannot be reused/);
   });
 
+  it('lets a rejected fact or wording return only to not approved yet, never straight to approved', () => {
+    const rejectedFact = makeFact({ approval: 'rejected' });
+    const restoredFact = reconcileCvEvidence({ facts: [rejectedFact], wordingVariants: [] }, { facts: [{ ...rejectedFact, approval: 'proposed' }], wordingVariants: [] }, CONTEXT);
+    expect(restoredFact.facts[0]).toEqual({ ...rejectedFact, approval: 'proposed' });
+    expect(() =>
+      reconcileCvEvidence({ facts: [rejectedFact], wordingVariants: [] }, { facts: [{ ...rejectedFact, approval: 'approved' }], wordingVariants: [] }, CONTEXT),
+    ).toThrow(/cannot be reused/);
+
+    const rejected = makeVariant({ status: 'rejected', approvedAt: '', rejectedAt: NOW });
+    const restored = reconcileCvEvidence({ facts: [fact], wordingVariants: [rejected] }, { facts: [fact], wordingVariants: [{ ...rejected, status: 'draft' }] }, CONTEXT);
+    expect(restored.wordingVariants[0]).toMatchObject({ status: 'draft', approvedAt: '', rejectedAt: '', text: rejected.text, factIds: rejected.factIds });
+
+    const superseded = makeVariant({ status: 'superseded' });
+    expect(() =>
+      reconcileCvEvidence({ facts: [fact], wordingVariants: [superseded] }, { facts: [fact], wordingVariants: [{ ...superseded, status: 'draft' }] }, CONTEXT),
+    ).toThrow(/cannot be reused/);
+    const supersededFact = makeFact({ approval: 'superseded' });
+    expect(() =>
+      reconcileCvEvidence({ facts: [supersededFact], wordingVariants: [] }, { facts: [{ ...supersededFact, approval: 'proposed' }], wordingVariants: [] }, CONTEXT),
+    ).toThrow(/cannot be reused/);
+  });
+
   it('refuses to edit an approved wording in place', () => {
     const approved = makeVariant();
     expect(() =>

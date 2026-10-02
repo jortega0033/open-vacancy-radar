@@ -1067,7 +1067,8 @@ export function unbackedNumbers(text: string, facts: readonly CvEvidenceFact[]):
 /**
  * The invariants the evidence lists must keep across any write, enforced in the main process so a
  * renderer bug (or a model-influenced renderer) cannot bypass them:
- *  - a rejected or superseded fact or wording never comes back to life;
+ *  - a superseded fact or wording never comes back to life, and a rejected one only returns to
+ *    "not approved yet" (a proposed fact, a draft wording), never straight to approved;
  *  - changing an approved fact's content drops it to `proposed`, and wording built on it is revoked;
  *  - a variant can only be newly approved when every fact it cites exists, is approved and is not
  *    in a contradiction, and its numbers come from those facts;
@@ -1093,7 +1094,9 @@ export function reconcileCvEvidence(
         ? { ...incoming, verification: 'self_reported' as const, sourceKind: incoming.sourceKind === 'mcp_proposal' ? ('candidate_testimony' as const) : incoming.sourceKind }
         : incoming;
     if (!before) return fact;
-    if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval) {
+    // A rejected fact may be restored to "not approved yet" (#474), never straight to approved.
+    const restored = before.approval === 'rejected' && fact.approval === 'proposed';
+    if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval && !restored) {
       throw new Error('a rejected or replaced fact cannot be reused: add a corrected fact instead');
     }
     if (before.approval === 'approved' && fact.approval === 'approved' && factSignature(before) !== factSignature(fact)) {
@@ -1110,7 +1113,9 @@ export function reconcileCvEvidence(
 
   const wordingVariants = next.wordingVariants.map((variant) => {
     const before = previousVariants.get(variant.variantId);
-    if (before && (before.status === 'rejected' || before.status === 'superseded') && variant.status !== before.status) {
+    // A rejected wording may be restored to a draft (#474), never straight to approved.
+    const restored = before?.status === 'rejected' && variant.status === 'draft';
+    if (before && (before.status === 'rejected' || before.status === 'superseded') && variant.status !== before.status && !restored) {
       throw new Error('a rejected or replaced wording cannot be reused: edit it into a new variant instead');
     }
     let status = variant.status;
@@ -1148,6 +1153,7 @@ export function reconcileCvEvidence(
       }
     }
     if (status === 'rejected' && !rejectedAt) rejectedAt = context.now;
+    if (restored) rejectedAt = '';
     if (status !== 'candidate_approved') approvedAt = status === 'superseded' ? approvedAt : '';
     return { ...variant, status, approvedAt, rejectedAt, sourceRevision };
   });
