@@ -533,7 +533,7 @@ export function LetterGenerator({
                     type="text"
                     value={manualRole}
                     onChange={(event) => setManualRole(event.target.value)}
-                    placeholder="Senior Frontend Engineer"
+                    placeholder="e.g. Product Manager, Solutions Architect"
                     disabled={run.isBusy}
                   />
                 </label>
@@ -544,7 +544,7 @@ export function LetterGenerator({
                     type="text"
                     value={manualCompany}
                     onChange={(event) => setManualCompany(event.target.value)}
-                    placeholder="Redwood Software"
+                    placeholder="e.g. Company name"
                     disabled={run.isBusy}
                   />
                 </label>
@@ -555,7 +555,7 @@ export function LetterGenerator({
                     type="text"
                     value={manualLocation}
                     onChange={(event) => setManualLocation(event.target.value)}
-                    placeholder="Amsterdam, Netherlands"
+                    placeholder="e.g. Lisbon, Remote"
                     disabled={run.isBusy}
                   />
                 </label>

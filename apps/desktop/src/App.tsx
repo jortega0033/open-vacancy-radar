@@ -152,19 +152,6 @@ export function App() {
     void refreshCounts();
   }, [refreshCounts]);
 
-  // The Search page's "Generate Letter" action: distinct from `handleNavigate` because it needs to
-  // set `pendingVacancy` *and* navigate in the same step, without that navigation's own
-  // stale-handoff guard immediately wiping out the vacancy it just set.
-  const handleGenerateLetter = useCallback((vacancy: SelectedVacancy) => {
-    hasNavigatedRef.current = true;
-    setPendingVacancy(vacancy);
-    setLetterReturnAttemptId(null);
-    setSearchSession((current) => ({ ...current, selectedKey: vacancy.key ?? current.selectedKey }));
-    setNav('letters');
-    void window.workspace?.updateSettings({ lastOpenedPage: 'letters' }).catch(() => {});
-    void refreshCounts();
-  }, [refreshCounts]);
-
   const handleGenerateApplicationLetter = useCallback((vacancy: SelectedVacancy, attemptId: string) => {
     hasNavigatedRef.current = true;
     setPendingVacancy(vacancy);
@@ -303,7 +290,6 @@ export function App() {
 
           {nav === 'search' && (
             <SearchPage
-              onGenerateLetter={handleGenerateLetter}
               onOpenSearchProfile={() => handleNavigate('settings')}
               onSavedJobsChanged={refreshCounts}
               onViewApplicationAttempt={handleViewApplicationAttempt}
