@@ -77,6 +77,8 @@ export interface CreateSessionInput {
 
 export interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
+  /** Restarts the local AI helper (the daemon sidecar) and resolves with how the restart ended. */
+  restartDaemon(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
   listMcpProviders(): Promise<McpConnectionStatus[]>;
@@ -226,6 +228,9 @@ function toDaemonStatus(value: unknown): DaemonStatus {
 const api: AgentDockBridge = {
   async getDaemonStatus() {
     return toDaemonStatus(await ipcRenderer.invoke('daemon:get-status'));
+  },
+  async restartDaemon() {
+    return toDaemonStatus(await ipcRenderer.invoke('daemon:restart'));
   },
   onDaemonStatus(callback) {
     const listener = (_event: Electron.IpcRendererEvent, status: unknown) => {

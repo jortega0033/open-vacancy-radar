@@ -37,6 +37,7 @@ const CLAUDE_INSTALLED: ProviderStatus = {
 function installAgentDock(overrides: Partial<AgentDockBridge> = {}): AgentDockBridge {
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' } satisfies DaemonStatus),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED]),
     createSession: vi.fn(),

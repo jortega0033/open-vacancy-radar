@@ -118,6 +118,7 @@ import { createScanGuard, isExpectedScanBusyError } from './scan-guard.js';
 import { shouldRunScheduledScan } from './scheduled-scan.js';
 import { createTick } from './tick.js';
 import { createDaemonRespawn } from './daemon-respawn.js';
+import { createDaemonRestart } from './daemon-restart.js';
 import { tryAttachToWinningDaemon, type DiscoveredDaemon } from './daemon-lock-attach.js';
 import { waitWithOneRetry } from './daemon-ready-retry.js';
 import { confirmCvTranscription, confirmWorkspaceGrant } from './workspace-confirm.js';
@@ -498,9 +499,44 @@ function discoveryFilePath(): string {
   return join(tmpdir(), 'agent-dock', `${APP_ID}.json`);
 }
 
+/** Callers of `nextSettledDaemonStatus`, resolved by the next `ready` or `unavailable` status. */
+let settledStatusWaiters: Array<(status: DaemonStatus) => void> = [];
+
 function sendStatus(status: DaemonStatus): void {
   latestDaemonStatus = status;
   sendToRenderer(mainWindow, 'daemon:status', status);
+  if (status.state === 'connecting') return;
+  const waiters = settledStatusWaiters;
+  settledStatusWaiters = [];
+  for (const resolve of waiters) resolve(status);
+}
+
+// Longer than a start can legitimately take (`waitForDaemonReady` plus its one retry window), so a
+// "Try again" always ends with a result even if no status event ever arrives.
+const DAEMON_RESTART_SETTLE_TIMEOUT_MS = 45_000;
+
+function nextSettledDaemonStatus(): Promise<DaemonStatus> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      settledStatusWaiters = settledStatusWaiters.filter((waiter) => waiter !== done);
+      resolve({ state: 'unavailable', error: 'timed out waiting for the local daemon to start' });
+    }, DAEMON_RESTART_SETTLE_TIMEOUT_MS);
+    const done = (status: DaemonStatus): void => {
+      clearTimeout(timer);
+      resolve(status);
+    };
+    settledStatusWaiters.push(done);
+  });
+}
+
+/** Kills the previous daemon child and waits (briefly) for it to exit, so the replacement does not
+ * find its discovery-file lock still held. */
+async function stopDaemonChild(): Promise<void> {
+  const child = daemonChild;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  child.kill();
+  await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 3_000))]);
 }
 
 // Bounded respawn-with-backoff for an unexpected daemon exit (draft-daemon-auto-respawn). Capped
@@ -534,6 +570,20 @@ const daemonRespawn = createDaemonRespawn({
     console.warn(`[daemon] respawn budget exhausted after ${maxAttempts} attempts, giving up: ${reason}`),
   onScheduled: (reason, attempt, maxAttempts, delayMs) =>
     console.warn(`[daemon] respawning after unexpected exit (attempt ${attempt}/${maxAttempts}, retrying in ${delayMs}ms): ${reason}`),
+});
+
+// "Try again" from the renderer. Reuses `spawnDaemon` and the respawn bookkeeping above; the
+// one-restart-at-a-time rule is in daemon-restart.ts.
+const daemonRestart = createDaemonRestart({
+  isQuitting: () => isQuitting,
+  currentStatus: () => latestDaemonStatus,
+  supersede: () => daemonRespawn.supersede(),
+  stopChild: stopDaemonChild,
+  nextSettledStatus: nextSettledDaemonStatus,
+  spawn: () => {
+    sendStatus({ state: 'connecting' });
+    spawnDaemon();
+  },
 });
 
 /**
@@ -624,6 +674,8 @@ function spawnDaemon(): void {
       rejectOnEarlyExit(new Error(earlyExitMessage(code, signal)));
       return;
     }
+    // A child that a manual restart already replaced exits into a newer generation: not a crash.
+    if (!daemonRespawn.isCurrentGeneration(generation)) return;
     client = undefined;
     scheduleDaemonRespawn(`daemon process exited unexpectedly (code ${code ?? 'null'}, signal ${signal ?? 'null'})`);
   });
@@ -635,6 +687,7 @@ function spawnDaemon(): void {
     () => daemonRespawn.isCurrentGeneration(generation),
   );
   Promise.race([readyWithRetry, earlyExit]).catch((err: Error) => {
+    if (!daemonRespawn.isCurrentGeneration(generation)) return;
     scheduleDaemonRespawn(`daemon failed to start: ${err.message}`);
   });
 }
@@ -1327,6 +1380,8 @@ const guardedIpc = createGuardedIpc(ipcMain, {
 const applicationDataResetGate = new ApplicationDataResetGate();
 
 guardedIpc.handle('daemon:get-status', (): DaemonStatus => latestDaemonStatus);
+
+guardedIpc.handle('daemon:restart', (): Promise<DaemonStatus> => daemonRestart.restart());
 
 guardedIpc.handle('daemon:list-providers', async () => {
   if (!client) throw new Error('daemon is not ready yet');
