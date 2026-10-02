@@ -70,10 +70,65 @@ afterEach(() => {
 });
 
 describe('EvidenceReview (#419, step 7)', () => {
-  it('renders nothing until the case has a fact or wording to review', async () => {
+  it('shows the facts card with its empty text before any fact exists', async () => {
     install(overlay());
+    renderReview();
+    expect(await screen.findByText('Facts and wording')).toBeInTheDocument();
+    expect(screen.getByText('Facts appear here after you answer a question about a requirement.')).toBeInTheDocument();
+    expect(screen.queryByText(/^history/i)).not.toBeInTheDocument();
+  });
+
+  it('shows nothing when there is no case to review', async () => {
+    const workspace = install(overlay());
+    vi.mocked(workspace.getCvEvidenceOverlay).mockResolvedValue(null);
     const { container } = renderReview();
-    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    await waitFor(() => expect(workspace.getCvEvidenceOverlay).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('restores a rejected fact to not approved yet, with the same details and never as approved', async () => {
+    const rejected = makeFact({ approval: 'rejected', mechanism: 'Angular and RxJS' });
+    const workspace = install(overlay({ facts: [rejected] }));
+    renderReview();
+    fireEvent.click(await screen.findByText(/history \(1\)/i));
+    expect(screen.queryByRole('button', { name: /^approve this fact$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /restore this fact/i }));
+    await waitFor(() => expect(lastPatch(workspace)?.facts?.[0]).toEqual({ ...rejected, approval: 'proposed' }));
+    const facts = await screen.findByRole('list', { name: 'Facts' });
+    expect(within(facts).getByText(/not approved yet/i)).toBeInTheDocument();
+    expect(within(facts).getByText('Angular and RxJS')).toBeInTheDocument();
+    expect(screen.getByText(/restored\. it is not approved yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^history/i)).not.toBeInTheDocument();
+  });
+
+  it('restores a rejected wording as a draft and leaves replaced ones without a restore button', async () => {
+    const workspace = install(
+      overlay({
+        facts: [makeFact({ approval: 'approved' })],
+        wordingVariants: [
+          makeVariant({ variantId: 'v-rejected', status: 'rejected', rejectedAt: '2026-10-01T00:00:00.000Z', text: 'Rejected sentence.' }),
+          makeVariant({ variantId: 'v-old', status: 'superseded', text: 'Old sentence.' }),
+        ],
+      }),
+    );
+    renderReview();
+    fireEvent.click(await screen.findByText(/history \(2\)/i));
+    expect(screen.getAllByRole('button', { name: /restore this wording/i })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: /restore this wording/i }));
+    await waitFor(() => expect(lastPatch(workspace)?.wordingVariants?.find((variant) => variant.variantId === 'v-rejected')?.status).toBe('draft'));
+    const wording = await screen.findByRole('list', { name: 'Wording' });
+    expect(within(wording).getByText('Rejected sentence.')).toBeInTheDocument();
+    expect(within(wording).getByText(/draft, not approved/i)).toBeInTheDocument();
+  });
+
+  it('shows the refusal and no restored notice when a restore fails', async () => {
+    const workspace = install(overlay({ facts: [makeFact({ approval: 'rejected' })] }));
+    renderReview();
+    fireEvent.click(await screen.findByText(/history \(1\)/i));
+    vi.mocked(workspace.updateCvEvidenceOverlay).mockRejectedValueOnce(new Error('could not be saved'));
+    fireEvent.click(screen.getByRole('button', { name: /restore this fact/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be saved/i);
+    expect(screen.queryByText(/restored\./i)).not.toBeInTheDocument();
   });
 
   it('shows every field the candidate approves a fact on, and labels self-report as such', async () => {
