@@ -327,10 +327,10 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
 
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: 'Back to Frontend Role 29' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
       expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
@@ -499,58 +499,14 @@ describe('App', () => {
    * ADI-06 wired the shell itself; these cover the Search -> Letters live-vacancy handoff (the one
    * piece of cross-page state App.tsx now carries -- see `pendingVacancy`).
    */
-  describe('Search -> Letters vacancy handoff', () => {
-    it('clicking "Generate Letter" on the vacancy detail navigates to Letters with that vacancy pre-selected, no manual retyping', async () => {
-      installVacancyRadarBridge({
-        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
-        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
-      });
-
-      render(<App />);
-      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
-
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
-      expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
-      // "Live" job source, pre-selected on the handed-off vacancy -- LetterGenerator received it.
-      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('live');
-      expect(screen.getByText('Remote Frontend Engineer')).toBeInTheDocument();
-    });
-
-    it('a manual visit to Letters through the sidebar shows no vacancy pre-selected', async () => {
+  describe('Letters page', () => {
+    it('a visit to Letters through the sidebar opens on the Library', async () => {
       render(<App />);
       await waitFor(() => expect(screen.getByText(/find relevant roles/i)).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
       // Opens on the Library, exactly as an ordinary visit always has.
-      expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
-
-      fireEvent.click(screen.getByRole('tab', { name: /generator/i }));
-
-      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('manual');
-    });
-
-    it('the handoff does not persist: leaving Letters and returning through the sidebar no longer replays the handed-off vacancy', async () => {
-      installVacancyRadarBridge({
-        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
-        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
-      });
-
-      render(<App />);
-      await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
-      expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('live');
-
-      // Leave Letters for an unrelated page, then come back through the sidebar -- an ordinary,
-      // non-handoff visit.
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
-
-      fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
       expect(screen.getByRole('tab', { name: /library/i })).toHaveAttribute('aria-selected', 'true');
 
       fireEvent.click(screen.getByRole('tab', { name: /generator/i }));

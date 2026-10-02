@@ -201,8 +201,6 @@ export interface VacancyDetailProps {
   prepareError?: string;
   onSave: () => void;
   onPrepare: () => void;
-  /** Builds a `SelectedVacancy` from this vacancy and hands it off to the Letters page. */
-  onGenerateLetter: () => void;
   assistantOpen: boolean;
   onToggleAssistant: () => void;
   scrollTop?: number;
@@ -231,7 +229,6 @@ export function VacancyDetail({
   prepareError,
   onSave,
   onPrepare,
-  onGenerateLetter,
   assistantOpen,
   onToggleAssistant,
   scrollTop = 0,
@@ -302,22 +299,25 @@ export function VacancyDetail({
           </div>
 
           <div className="flex max-w-full flex-none flex-wrap gap-2">
-            <button
-              className="btn btn-primary btn-sm whitespace-normal"
-              type="button"
-              onClick={onPrepare}
-              disabled={prepareState === 'preparing' || !prepareAvailable}
-              title={prepareAvailable ? undefined : 'Available when this scan finishes'}
-            >
-              {prepareState === 'preparing' && (
-                <span className="loading loading-spinner loading-xs" aria-hidden="true" />
-              )}
-              {prepareState === 'preparing'
-                ? 'Preparing…'
-                : prepareAvailable
-                  ? 'Prepare application'
-                  : 'Finishing scan…'}
-            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                className="btn btn-primary btn-sm whitespace-normal"
+                type="button"
+                onClick={onPrepare}
+                disabled={prepareState === 'preparing' || !prepareAvailable}
+                title={prepareAvailable ? undefined : 'Available when this scan finishes'}
+              >
+                {prepareState === 'preparing' && (
+                  <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                )}
+                {prepareState === 'preparing'
+                  ? 'Starting…'
+                  : prepareAvailable
+                    ? 'Start application'
+                    : 'Finishing scan…'}
+              </button>
+              <div className="text-xs text-base-content/60">Builds a draft for you to review. Nothing is sent.</div>
+            </div>
             <button
               className="btn btn-outline btn-sm whitespace-normal"
               type="button"
@@ -335,14 +335,7 @@ export function VacancyDetail({
             <button
               className="btn btn-outline btn-sm whitespace-normal"
               type="button"
-              onClick={onGenerateLetter}
-            >
-              Generate Letter
-            </button>
-            <button
               ref={openerRef}
-              className="btn btn-outline btn-sm whitespace-normal"
-              type="button"
               aria-expanded={assistantOpen}
               onClick={handleToggleAssistant}
             >
@@ -355,7 +348,7 @@ export function VacancyDetail({
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Open job
+                Open posting
               </a>
             ) : (
               <span className="badge badge-outline badge-sm">Link withheld: unsafe URL</span>
