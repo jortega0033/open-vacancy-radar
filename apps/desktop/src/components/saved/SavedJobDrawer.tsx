@@ -141,7 +141,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               type="text"
               value={form.location}
               onChange={(e) => set('location', e.target.value)}
-              placeholder="e.g. Amsterdam, Remote"
+              placeholder="e.g. Lisbon, Remote"
             />
           </label>
 
@@ -152,7 +152,7 @@ export function SavedJobDrawer({ job, onSave, onClose, saving, error }: SavedJob
               type="text"
               value={form.salary}
               onChange={(e) => set('salary', e.target.value)}
-              placeholder="e.g. EUR 6,500/month"
+              placeholder="e.g. 45,000 per year"
             />
           </label>
 
