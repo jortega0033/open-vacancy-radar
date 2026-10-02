@@ -49,7 +49,7 @@ function worldwideResult(overrides: Partial<SearchResult> = {}): SearchResult {
 
 function renderDetail(
   result: SearchResult,
-  overrides: { onGenerateLetter?: () => void; providerLabel?: string; prepareAvailable?: boolean } = {},
+  overrides: { providerLabel?: string; prepareAvailable?: boolean } = {},
 ) {
   render(
     <VacancyDetail
@@ -61,7 +61,6 @@ function renderDetail(
       prepareAvailable={overrides.prepareAvailable ?? true}
       onSave={vi.fn()}
       onPrepare={vi.fn()}
-      onGenerateLetter={overrides.onGenerateLetter ?? vi.fn()}
       assistantOpen={false}
       onToggleAssistant={vi.fn()}
       assistant={null}
@@ -92,15 +91,12 @@ describe('VacancyDetail', () => {
     expect(screen.getByText(/DevITjobs UK did not include description text/i)).toBeInTheDocument();
   });
 
-  it('offers application preparation, letter generation and saving from the vacancy', () => {
-    const onGenerateLetter = vi.fn();
-    renderDetail(worldwideResult(), { onGenerateLetter });
+  it('offers application preparation and saving from the vacancy', () => {
+    renderDetail(worldwideResult());
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
-
-    expect(onGenerateLetter).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Start application' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeInTheDocument();
   });
 
   it('holds preparation until a streamed vacancy belongs to the final report', () => {
