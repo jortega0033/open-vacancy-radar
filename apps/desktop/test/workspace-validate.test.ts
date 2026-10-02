@@ -6,6 +6,7 @@ import { CV_EVIDENCE_LIMITS } from '../electron/workspace/cv-evidence-schema.js'
 import {
   LIMITS,
   parseCvSource,
+  parseCvArtifactPagesViewedInput,
   parseApplicationArtifactInput,
   parseApplicationAttemptInput,
   parseApplicationAttemptPatch,
@@ -820,5 +821,19 @@ describe('workspace cv evidence overlays (#419)', () => {
     expect(() => parseCvEvidenceOverlayExportInput({ overlayId: 'overlay-1', format: 'markdown' })).toThrow(
       /"format" must be one of/,
     );
+  });
+});
+
+describe('parseCvArtifactPagesViewedInput (#434)', () => {
+  it('takes the case id, the artifact id and a whole page count, and no path', () => {
+    expect(parseCvArtifactPagesViewedInput({ overlayId: 'overlay-1', artifactId: 'artifact-1', pageCount: 2, path: '/tmp/x.pdf' })).toEqual({
+      overlayId: 'overlay-1',
+      artifactId: 'artifact-1',
+      pageCount: 2,
+    });
+  });
+
+  it.each([0, -1, 1.5, 1001, '2', null, undefined])('rejects a page count of %s', (pageCount) => {
+    expect(() => parseCvArtifactPagesViewedInput({ overlayId: 'overlay-1', artifactId: 'artifact-1', pageCount })).toThrow(/pageCount/);
   });
 });

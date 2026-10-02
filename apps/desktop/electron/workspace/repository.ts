@@ -620,6 +620,7 @@ function upgradeStoredArtifacts(stored: CvArtifactRecord[]): CvArtifactRecord[] 
       },
       savedPath: artifact.savedPath ?? '',
       reviewOpenedAt: artifact.reviewOpenedAt ?? '',
+      pagesViewedAt: artifact.pagesViewedAt ?? '',
       confirmedAt: artifact.confirmedAt ?? '',
     }));
 }
@@ -1252,6 +1253,7 @@ export function recordCvArtifact(
       validation: input.validation,
       savedPath: input.savedPath,
       reviewOpenedAt: '',
+      pagesViewedAt: '',
       confirmedAt: '',
     };
     return writeCvArtifacts(tx, id, [...existing.artifacts, record].slice(-CV_ARTIFACT_HISTORY_LIMIT));
@@ -1277,9 +1279,31 @@ export function markCvArtifactReviewOpened(db: WorkspaceDb, id: string, artifact
 }
 
 /**
+ * Every page of the saved PDF was shown to the candidate in the app (#434). The renderer reports how
+ * many pages it displayed, and this refuses unless that is exactly the page count recorded at export,
+ * so a partial view cannot unlock acceptance. Only a PDF that was saved and is still current can be
+ * marked. The caller has just checked the file's bytes against the recorded hash.
+ */
+export function markCvArtifactPagesViewed(db: WorkspaceDb, id: string, artifactId: string, pagesShown: number): CvEvidenceOverlayRecord {
+  return db.transaction((tx) => {
+    const overlay = getCvEvidenceOverlayById(tx, id);
+    const artifact = findArtifact(overlay, artifactId);
+    if (artifact.format !== 'pdf') throw new Error('only a PDF is read page by page in the app');
+    if (!artifact.savedPath) throw new Error('this file was never saved, so there are no pages to read');
+    if (!isCurrentArtifact(overlay, artifact)) throw new Error('this file belongs to an earlier version of the CV, so export it again before reviewing it');
+    const expected = artifact.validation.pageCount;
+    if (expected === undefined || pagesShown !== expected) {
+      throw new Error(`the PDF has ${expected ?? 'an unknown number of'} page(s) and ${pagesShown} were shown, so it cannot be marked as read`);
+    }
+    const now = new Date().toISOString();
+    return writeCvArtifacts(tx, id, overlay.artifacts.map((entry) => (entry.artifactId === artifactId ? { ...entry, pagesViewedAt: now } : entry)));
+  });
+}
+
+/**
  * The candidate's explicit visual confirmation of one saved file. Refused for a file that failed its
  * checks, was never saved, is not the newest of its format, or belongs to an earlier approval or
- * render contract. A PDF additionally needs to have been opened for review first. Confirmation
+ * render contract. A PDF additionally needs every page to have been shown in the app first (#434). Confirmation
  * attests to the bytes recorded at export; the file is not re-read here.
  */
 export function confirmCvArtifact(db: WorkspaceDb, id: string, artifactId: string): CvEvidenceOverlayRecord {
@@ -1290,7 +1314,7 @@ export function confirmCvArtifact(db: WorkspaceDb, id: string, artifactId: strin
     if (!artifact.savedPath) throw new Error('this file was never saved, so there is nothing to accept');
     if (!isCurrentArtifact(overlay, artifact)) throw new Error('this file belongs to an earlier version of the CV, so export it again before accepting it');
     if (latestArtifactOfFormat(overlay, artifact.format)?.artifactId !== artifactId) throw new Error('a newer export of this format exists, so review that one');
-    if (artifact.format === 'pdf' && !artifact.reviewOpenedAt) throw new Error('open the PDF and read every page before accepting it');
+    if (artifact.format === 'pdf' && !artifact.pagesViewedAt) throw new Error('read every page of the PDF in the app before accepting it');
     if (artifact.confirmedAt) return overlay;
     const now = new Date().toISOString();
     return writeCvArtifacts(tx, id, overlay.artifacts.map((entry) => (entry.artifactId === artifactId ? { ...entry, confirmedAt: now } : entry)));

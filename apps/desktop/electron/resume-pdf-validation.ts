@@ -42,7 +42,7 @@ export async function validateRenderedResumePdf(
   // `Buffer`") even though `Buffer` is itself a `Uint8Array` subclass -- the same reason
   // `cv-text.ts`'s own `readCvFile` already wraps its PDF bytes the same way. Without this, every
   // call here with a real `Buffer` failed this exact validation, always, for any caller (#156).
-  const acceptance = await acceptRenderedDocument(Uint8Array.from(pdfBytes), resumeAcceptanceContract(resume, options));
+  const acceptance = await acceptRenderedDocument(Uint8Array.from(pdfBytes), resumeAcceptanceContract(resume, { checkClaims: true, ...options }));
   return {
     ok: acceptance.ok,
     reasons: acceptance.findings.map((finding) => (finding.page === undefined ? finding.detail : `page ${finding.page}: ${finding.detail}`)),

@@ -278,6 +278,13 @@ describe('fact approval and correction (#419, step 7)', () => {
     update(overlay.id, { facts: [makeFact({ approval: 'rejected' })] });
     expect(() => update(overlay.id, { facts: [makeFact({ approval: 'approved' })] })).toThrow(/cannot be reused/);
   });
+
+  it('lets a rejected fact be restored to not approved yet with its record intact', () => {
+    const { overlay } = newCase();
+    const before = update(overlay.id, { facts: [makeFact({ approval: 'rejected' })] });
+    const restored = update(overlay.id, { facts: [{ ...before.facts[0]!, approval: 'proposed' }] });
+    expect(restored.facts[0]).toEqual({ ...before.facts[0]!, approval: 'proposed' });
+  });
 });
 
 describe('contradictions block use (#419, step 7)', () => {

@@ -88,7 +88,7 @@ function preparedCase(source: CvSourceDocument = SOURCE, options: { approve: boo
   return { cv, overlay: approved };
 }
 
-function saveArtifact(id: string, format: CvArtifactFormat, overrides: { ok?: boolean; savedPath?: string } = {}) {
+function saveArtifact(id: string, format: CvArtifactFormat, overrides: { ok?: boolean; savedPath?: string; pageCount?: number } = {}) {
   const snapshot = read(id).approvedResumeSnapshot!;
   return workspace.recordCvArtifact(db, id, {
     format,
@@ -96,7 +96,7 @@ function saveArtifact(id: string, format: CvArtifactFormat, overrides: { ok?: bo
     snapshotDigest: snapshot.digest,
     snapshotApprovedAt: snapshot.approvedAt,
     renderContractVersion: snapshot.renderContractVersion,
-    validation: { ok: overrides.ok ?? true, reasons: overrides.ok === false ? ['page 1: text is clipped'] : [], ...(format === 'pdf' ? { pageCount: 1 } : {}) },
+    validation: { ok: overrides.ok ?? true, reasons: overrides.ok === false ? ['page 1: text is clipped'] : [], ...(format === 'pdf' ? { pageCount: overrides.pageCount ?? 1 } : {}) },
     savedPath: overrides.savedPath ?? (overrides.ok === false ? '' : `C:\\fake\\cv.${format}`),
   });
 }
@@ -188,6 +188,7 @@ describe('artifact records', () => {
       validation: { ok: true, reasons: [], pageCount: 1 },
       savedPath: 'C:\\fake\\cv.pdf',
       reviewOpenedAt: '',
+      pagesViewedAt: '',
       confirmedAt: '',
     });
     expect(artifact?.contentHash).toMatch(/^[0-9a-f]{64}$/);
@@ -221,17 +222,42 @@ describe('artifact records', () => {
     expect(() => workspace.confirmCvArtifact(db, overlay.id, failed.artifactId)).toThrow(/failed its checks/);
   });
 
-  it('a PDF needs to have been opened before it can be accepted, a Word file does not', () => {
+  it('a PDF needs every page shown in the app before it can be accepted, a Word file does not', () => {
     const { overlay } = approvedCase();
     const pdf = saveArtifact(overlay.id, 'pdf').artifacts[0]!;
     expect(() => workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId)).toThrow(/read every page/);
+    // Opening it in the system viewer only proves the app launched it (#434).
     workspace.markCvArtifactReviewOpened(db, overlay.id, pdf.artifactId);
+    expect(() => workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId)).toThrow(/read every page/);
+    const viewed = workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 1);
+    expect(viewed.artifacts[0]?.pagesViewedAt).not.toBe('');
     expect(cvArtifactStatus(workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId), 'pdf')).toBe('accepted');
 
     const docx = saveArtifact(overlay.id, 'docx').artifacts.at(-1)!;
     const accepted = workspace.confirmCvArtifact(db, overlay.id, docx.artifactId);
     expect(cvArtifactStatus(accepted, 'docx')).toBe('accepted');
     expect(accepted.artifacts.find((artifact) => artifact.artifactId === docx.artifactId)?.confirmedAt).not.toBe('');
+  });
+
+  it('refuses to mark a PDF as read when the renderer shows fewer pages than the file has', () => {
+    const { overlay } = approvedCase();
+    const pdf = saveArtifact(overlay.id, 'pdf', { pageCount: 3 }).artifacts[0]!;
+    expect(() => workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 2)).toThrow(/3 page\(s\) and 2 were shown/);
+    expect(() => workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 4)).toThrow(/were shown/);
+    expect(() => workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId)).toThrow(/read every page/);
+    workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 3);
+    expect(cvArtifactStatus(workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId), 'pdf')).toBe('accepted');
+  });
+
+  it('only a saved, current PDF can be marked as read in the app', () => {
+    const { cv, overlay } = approvedCase();
+    const docx = saveArtifact(overlay.id, 'docx').artifacts[0]!;
+    expect(() => workspace.markCvArtifactPagesViewed(db, overlay.id, docx.artifactId, 1)).toThrow(/only a PDF/);
+    const failed = saveArtifact(overlay.id, 'pdf', { ok: false }).artifacts.at(-1)!;
+    expect(() => workspace.markCvArtifactPagesViewed(db, overlay.id, failed.artifactId, 1)).toThrow(/never saved/);
+    const pdf = saveArtifact(overlay.id, 'pdf').artifacts.at(-1)!;
+    workspace.updateCvDocument(db, cv.id, { source: { ...SOURCE, summary: 'A different summary.' } });
+    expect(() => workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 1)).toThrow(/earlier version/);
   });
 
   it('only the newest file of a format can be accepted', () => {
@@ -258,7 +284,7 @@ describe('invalidation', () => {
   function acceptedBoth() {
     const { cv, overlay } = approvedCase();
     const pdf = saveArtifact(overlay.id, 'pdf').artifacts[0]!;
-    workspace.markCvArtifactReviewOpened(db, overlay.id, pdf.artifactId);
+    workspace.markCvArtifactPagesViewed(db, overlay.id, pdf.artifactId, 1);
     workspace.confirmCvArtifact(db, overlay.id, pdf.artifactId);
     const docx = saveArtifact(overlay.id, 'docx').artifacts.at(-1)!;
     const accepted = workspace.confirmCvArtifact(db, overlay.id, docx.artifactId);
