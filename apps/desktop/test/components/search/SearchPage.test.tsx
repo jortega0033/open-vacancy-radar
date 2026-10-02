@@ -850,7 +850,7 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(bridge.runScan).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText(/generated before it could be scored/i)).not.toBeInTheDocument());
-    expect(screen.getAllByText('82').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Profile fit 82/100').length).toBeGreaterThan(0);
   });
 
   it('keeps unscored-report guidance when the current search profile cannot be loaded', async () => {
@@ -1175,8 +1175,12 @@ describe('SearchPage', () => {
 
     render(<SearchPage />);
 
-    await waitFor(() => expect(screen.getAllByText('Not available for this vacancy').length).toBeGreaterThan(0));
-    expect(screen.getByText(/employer verification is not available for this vacancy/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Employer verification: none for this vacancy')).toBeInTheDocument());
+    // One line above the fold; the explanation sits behind the info toggle and appears once.
+    expect(screen.queryByText(/absent check, not a negative result/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'About employer verification' }));
+    expect(screen.getAllByText(/absent check, not a negative result/i)).toHaveLength(1);
+    expect(screen.queryByText(/employer verification is not available/i)).not.toBeInTheDocument();
 
     expect(screen.queryByText(/recognised sponsor/i)).not.toBeInTheDocument();
   });
@@ -1456,6 +1460,93 @@ describe('SearchPage', () => {
     });
   });
 
+  describe('live rows, ordering and duplicate keys (issue #464)', () => {
+    it('never shows a late progress event as a live row when no scan is running', async () => {
+      const { emit } = installProgressCapturingBridge({ getReport: vi.fn().mockResolvedValue(null) });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+
+      // A straggler from a scan that already ended: nothing is scanning, so nothing is "live".
+      emit({
+        sourceId: 'himalayas',
+        vacancies: [makeWorldwideVacancy({ key: 'late-1', title: 'Late Streamed Role', profileScore: null })],
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.queryByText('Late Streamed Role')).not.toBeInTheDocument();
+      expect(screen.queryByText(/live · not yet scored/i)).not.toBeInTheDocument();
+    });
+
+    it('shows the live badge only while the scan runs, and drops it with the final report', async () => {
+      let resolveScan!: (report: GlobalRemoteReport) => void;
+      const scanPromise = new Promise<GlobalRemoteReport>((resolve) => {
+        resolveScan = resolve;
+      });
+      const { emit } = installProgressCapturingBridge({
+        getReport: vi.fn().mockResolvedValue(null),
+        runScan: vi.fn().mockReturnValue(scanPromise),
+      });
+
+      render(<SearchPage />);
+      await waitFor(() => expect(screen.getByText(/no search yet/i)).toBeInTheDocument());
+      enterSearchQuery('frontend');
+      fireEvent.click(screen.getByRole('button', { name: 'Run the first scan' }));
+      await waitFor(() => expect(screen.getByText(/scanning live sources/i)).toBeInTheDocument());
+
+      const streamed = makeWorldwideVacancy({ key: 'bjak-1', title: 'Frontend Engineer', company: 'Bjak', profileScore: null });
+      emit({ sourceId: 'himalayas', vacancies: [streamed, { ...streamed }] });
+      await waitFor(() => expect(screen.getAllByText(/live · not yet scored/i)).toHaveLength(1));
+
+      resolveScan(makeWorldwideReport([{ ...streamed, profileScore: 98 }]));
+
+      await waitFor(() => expect(screen.getByText('Profile fit 98/100')).toBeInTheDocument());
+      expect(screen.queryByText(/live · not yet scored/i)).not.toBeInTheDocument();
+      expect(screen.getAllByText('Frontend Engineer').length).toBeGreaterThan(0);
+    });
+
+    it('lists scored rows first and the unscored rows under a "Not scored yet (N)" divider', async () => {
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          makeWorldwideReport([
+            makeWorldwideVacancy({ key: 'u-1', title: 'Unscored Newer', profileScore: null, postedAt: '2026-09-10T00:00:00.000Z' }),
+            makeWorldwideVacancy({ key: 's-1', title: 'Scored Older', profileScore: 98, postedAt: '2026-08-01T00:00:00.000Z' }),
+            makeWorldwideVacancy({ key: 'u-2', title: 'Unscored Older', profileScore: null, postedAt: '2026-08-02T00:00:00.000Z' }),
+          ]),
+        ),
+      });
+
+      render(<SearchPage />);
+
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Not scored yet (2)' })).toBeInTheDocument());
+      const rows = screen.getAllByRole('button', { name: /^(Scored|Unscored)/ }).map((row) => row.textContent ?? '');
+      expect(rows[0]).toContain('Scored Older');
+      expect(rows[1]).toContain('Unscored Newer');
+      expect(rows[2]).toContain('Unscored Older');
+    });
+
+    it('renders one row, and warns, when a report repeats a vacancy key, while two distinct vacancies with the same title both stay', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      installAllBridges({
+        getReport: vi.fn().mockResolvedValue(
+          makeWorldwideReport([
+            makeWorldwideVacancy({ key: 'dup-1', title: 'Repeated Role', company: 'Bjak' }),
+            makeWorldwideVacancy({ key: 'dup-1', title: 'Repeated Role', company: 'Bjak' }),
+            makeWorldwideVacancy({ key: 'twin-1', title: 'Twin Role', company: 'Bjak' }),
+            makeWorldwideVacancy({ key: 'twin-2', title: 'Twin Role', company: 'Bjak' }),
+          ]),
+        ),
+      });
+
+      render(<SearchPage />);
+
+      await waitFor(() => expect(screen.getAllByText('Twin Role').length).toBeGreaterThanOrEqual(2));
+      expect(screen.getAllByRole('button', { name: /^Repeated Role/ })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /^Twin Role/ })).toHaveLength(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('dup-1'));
+    });
+  });
+
   describe('scan mode interaction state (issue #363)', () => {
     it('never dims the results/detail pane while scanning, and keeps a saved-report row\'s safe actions active', async () => {
       const scanPromise = new Promise<GlobalRemoteReport>(() => {}); // never resolves in this test
@@ -1724,13 +1815,13 @@ describe('SearchPage', () => {
     });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /analyse against my cv/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /compare with my cv/i })).toBeInTheDocument());
 
     // The assistant is an affordance, not something mounted for every row up front.
     expect(screen.queryByText('CV assistant')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Frontend Developer'));
-    fireEvent.click(screen.getByRole('button', { name: /analyse against my cv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /compare with my cv/i }));
 
     await waitFor(() => expect(screen.getByText('CV assistant')).toBeInTheDocument());
     // It receives the row the user picked, not the first one in the report.
