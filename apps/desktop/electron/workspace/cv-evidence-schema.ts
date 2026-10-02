@@ -681,42 +681,57 @@ export function describeCvEvidenceOverlayGaps(
 export function describeCvRequirementGaps(
   overlay: Pick<CvEvidenceOverlay, 'requirements' | 'requirementCoverage' | 'jdRevisions' | 'facts'>,
 ): string[] {
-  const reasons: string[] = [];
+  return describeCvRequirementGapRows(overlay).map((gap) => gap.reason);
+}
+
+/** One reason a requirement list cannot back an approved CV, with the requirements it is about
+ * (none for a reason about the list as a whole). The review screen links each reason to its rows. */
+export interface CvRequirementGap {
+  reason: string;
+  requirementIds: string[];
+}
+
+/** The reasons behind `describeCvRequirementGaps`, each with the requirement ids it counts. */
+export function describeCvRequirementGapRows(
+  overlay: Pick<CvEvidenceOverlay, 'requirements' | 'requirementCoverage' | 'jdRevisions' | 'facts'>,
+): CvRequirementGap[] {
+  const reasons: CvRequirementGap[] = [];
+  const ids = (rows: readonly CvRequirementMapping[]) => rows.map((requirement) => requirement.requirementId);
   const currentRevisionId = currentCvJdRevisionId(overlay);
   const coverage = overlay.requirementCoverage;
   if (coverage.revisionId !== currentRevisionId || coverage.status === 'not_run') {
-    reasons.push('the requirements of the current job description have not been extracted and confirmed as a full list');
+    reasons.push({ reason: 'the requirements of the current job description have not been extracted and confirmed as a full list', requirementIds: [] });
   } else if (coverage.status === 'partial') {
-    reasons.push('the requirement list is partial: more of the job description has not been read yet');
+    reasons.push({ reason: 'the requirement list is partial: more of the job description has not been read yet', requirementIds: [] });
   }
   const active = overlay.requirements.filter((requirement) => !requirement.excluded);
   const stale = active.filter((requirement) => requirement.jdRevisionId !== currentRevisionId);
   if (stale.length > 0) {
-    reasons.push(`${stale.length} requirement(s) were reviewed against an older job description and need review again`);
+    reasons.push({ reason: `${stale.length} requirement(s) were reviewed against an older job description and need review again`, requirementIds: ids(stale) });
   }
   const unquoted = active.filter((requirement) => requirement.quoteStart < 0);
   if (unquoted.length > 0) {
-    reasons.push(`${unquoted.length} requirement(s) have no exact quote from the job description`);
+    reasons.push({ reason: `${unquoted.length} requirement(s) have no exact quote from the job description`, requirementIds: ids(unquoted) });
   }
   const unreviewed = active.filter((requirement) => !requirement.reviewed);
   if (unreviewed.length > 0) {
-    reasons.push(`${unreviewed.length} requirement(s) have not been reviewed`);
+    reasons.push({ reason: `${unreviewed.length} requirement(s) have not been reviewed`, requirementIds: ids(unreviewed) });
   }
   const unresolvedRequired = active.filter(
     (requirement) =>
       requirement.classification === 'required' && requirement.reviewed && requirement.evidenceClass === 'needs_verification',
   );
   if (unresolvedRequired.length > 0) {
-    reasons.push(`${unresolvedRequired.length} required item(s) still need verification`);
+    reasons.push({ reason: `${unresolvedRequired.length} required item(s) still need verification`, requirementIds: ids(unresolvedRequired) });
   }
   const approvedFactIds = new Set(overlay.facts.filter((fact) => fact.approval === 'approved').map((fact) => fact.factId));
   const badLinks = active.filter((requirement) => requirement.factIds.some((factId) => !approvedFactIds.has(factId)));
   if (badLinks.length > 0) {
-    reasons.push(`${badLinks.length} requirement(s) link to a fact that is not approved`);
+    reasons.push({ reason: `${badLinks.length} requirement(s) link to a fact that is not approved`, requirementIds: ids(badLinks) });
   }
   const contradictory = active.filter((requirement) => requirement.evidenceClass === 'candidate_confirmed_gap' && requirement.factIds.length > 0);
   if (contradictory.length > 0) {
-    reasons.push(`${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`);
+    reasons.push({ reason: `${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`, requirementIds: ids(contradictory) });
   }
   return reasons;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeCvEvidenceOverlayGaps,
   describeCvRequirementGaps,
+  describeCvRequirementGapRows,
   editCvWordingVariant,
   findCvFactConflicts,
   locateJdQuote,
@@ -116,6 +117,24 @@ describe('describeCvRequirementGaps (#419, steps 5 and 6)', () => {
   it('treats coverage recorded for an older JD revision as not run', () => {
     expect(gaps({ requirementCoverage: { status: 'complete', revisionId: 'older', batches: 1 } })).toEqual([
       expect.stringContaining('not been extracted and confirmed'),
+    ]);
+  });
+
+  it('names the requirements behind each reason so the review screen can link to them', () => {
+    const rows = describeCvRequirementGapRows(
+      makeOverlay({
+        requirements: [
+          makeRequirement({ requirementId: 'open-1', reviewed: false }),
+          makeRequirement({ requirementId: 'open-2', reviewed: false }),
+          makeRequirement({ requirementId: 'fine' }),
+          makeRequirement({ requirementId: 'excluded', reviewed: false, excluded: true, exclusionReason: 'Not part of the posting' }),
+        ],
+        requirementCoverage: { status: 'partial', revisionId: FIXTURE_REVISION_ID, batches: 1 },
+      }),
+    );
+    expect(rows).toEqual([
+      { reason: expect.stringContaining('requirement list is partial'), requirementIds: [] },
+      { reason: expect.stringContaining('2 requirement(s) have not been reviewed'), requirementIds: ['open-1', 'open-2'] },
     ]);
   });
 
