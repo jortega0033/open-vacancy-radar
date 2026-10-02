@@ -11,6 +11,17 @@ afterEach(() => {
 });
 
 describe('ResumeToolkit', () => {
+  it('switches mode with the arrow keys and links the panel to the active mode', () => {
+    installBridges();
+    render(<ResumeToolkit cv={CV} />);
+
+    expect(screen.getByRole('tabpanel', { name: 'Resume audit' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Resume audit' }), { key: 'ArrowRight' });
+
+    expect(screen.getByRole('tab', { name: 'Improve achievements' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Improve achievements' })).toBeInTheDocument();
+  });
+
   it('offers all CV-only modes without requiring a vacancy', () => {
     installBridges();
     render(<ResumeToolkit cv={CV} />);
