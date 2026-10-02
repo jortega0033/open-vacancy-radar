@@ -461,8 +461,13 @@ export interface CvArtifactRecord {
   validation: { ok: boolean; reasons: string[]; pageCount?: number };
   /** Where the candidate saved it. `''` when the file failed its checks and was never offered for saving. */
   savedPath: string;
-  /** ISO-8601 or `''`: the candidate opened the saved file to read it (PDF review needs this). */
+  /** ISO-8601 or `''`: the candidate opened the saved file in the system viewer. Recorded as a
+   * secondary way to look at the file; it no longer unlocks accepting a PDF (#434). */
   reviewOpenedAt: string;
+  /** ISO-8601 or `''`: every page of the saved PDF was displayed to the candidate inside the app,
+   * after the file's bytes were checked against `contentHash`. A PDF can be accepted only after this
+   * (#434). Always `''` for a Word file, which has no in-app view. */
+  pagesViewedAt: string;
   /** ISO-8601 or `''`: the candidate's explicit visual confirmation of this file. */
   confirmedAt: string;
 }
@@ -676,42 +681,57 @@ export function describeCvEvidenceOverlayGaps(
 export function describeCvRequirementGaps(
   overlay: Pick<CvEvidenceOverlay, 'requirements' | 'requirementCoverage' | 'jdRevisions' | 'facts'>,
 ): string[] {
-  const reasons: string[] = [];
+  return describeCvRequirementGapRows(overlay).map((gap) => gap.reason);
+}
+
+/** One reason a requirement list cannot back an approved CV, with the requirements it is about
+ * (none for a reason about the list as a whole). The review screen links each reason to its rows. */
+export interface CvRequirementGap {
+  reason: string;
+  requirementIds: string[];
+}
+
+/** The reasons behind `describeCvRequirementGaps`, each with the requirement ids it counts. */
+export function describeCvRequirementGapRows(
+  overlay: Pick<CvEvidenceOverlay, 'requirements' | 'requirementCoverage' | 'jdRevisions' | 'facts'>,
+): CvRequirementGap[] {
+  const reasons: CvRequirementGap[] = [];
+  const ids = (rows: readonly CvRequirementMapping[]) => rows.map((requirement) => requirement.requirementId);
   const currentRevisionId = currentCvJdRevisionId(overlay);
   const coverage = overlay.requirementCoverage;
   if (coverage.revisionId !== currentRevisionId || coverage.status === 'not_run') {
-    reasons.push('the requirements of the current job description have not been extracted and confirmed as a full list');
+    reasons.push({ reason: 'the requirements of the current job description have not been extracted and confirmed as a full list', requirementIds: [] });
   } else if (coverage.status === 'partial') {
-    reasons.push('the requirement list is partial: more of the job description has not been read yet');
+    reasons.push({ reason: 'the requirement list is partial: more of the job description has not been read yet', requirementIds: [] });
   }
   const active = overlay.requirements.filter((requirement) => !requirement.excluded);
   const stale = active.filter((requirement) => requirement.jdRevisionId !== currentRevisionId);
   if (stale.length > 0) {
-    reasons.push(`${stale.length} requirement(s) were reviewed against an older job description and need review again`);
+    reasons.push({ reason: `${stale.length} requirement(s) were reviewed against an older job description and need review again`, requirementIds: ids(stale) });
   }
   const unquoted = active.filter((requirement) => requirement.quoteStart < 0);
   if (unquoted.length > 0) {
-    reasons.push(`${unquoted.length} requirement(s) have no exact quote from the job description`);
+    reasons.push({ reason: `${unquoted.length} requirement(s) have no exact quote from the job description`, requirementIds: ids(unquoted) });
   }
   const unreviewed = active.filter((requirement) => !requirement.reviewed);
   if (unreviewed.length > 0) {
-    reasons.push(`${unreviewed.length} requirement(s) have not been reviewed`);
+    reasons.push({ reason: `${unreviewed.length} requirement(s) have not been reviewed`, requirementIds: ids(unreviewed) });
   }
   const unresolvedRequired = active.filter(
     (requirement) =>
       requirement.classification === 'required' && requirement.reviewed && requirement.evidenceClass === 'needs_verification',
   );
   if (unresolvedRequired.length > 0) {
-    reasons.push(`${unresolvedRequired.length} required item(s) still need verification`);
+    reasons.push({ reason: `${unresolvedRequired.length} required item(s) still need verification`, requirementIds: ids(unresolvedRequired) });
   }
   const approvedFactIds = new Set(overlay.facts.filter((fact) => fact.approval === 'approved').map((fact) => fact.factId));
   const badLinks = active.filter((requirement) => requirement.factIds.some((factId) => !approvedFactIds.has(factId)));
   if (badLinks.length > 0) {
-    reasons.push(`${badLinks.length} requirement(s) link to a fact that is not approved`);
+    reasons.push({ reason: `${badLinks.length} requirement(s) link to a fact that is not approved`, requirementIds: ids(badLinks) });
   }
   const contradictory = active.filter((requirement) => requirement.evidenceClass === 'candidate_confirmed_gap' && requirement.factIds.length > 0);
   if (contradictory.length > 0) {
-    reasons.push(`${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`);
+    reasons.push({ reason: `${contradictory.length} requirement(s) are marked as a gap you confirmed but also link a fact`, requirementIds: ids(contradictory) });
   }
   return reasons;
 }
@@ -1062,7 +1082,8 @@ export function unbackedNumbers(text: string, facts: readonly CvEvidenceFact[]):
 /**
  * The invariants the evidence lists must keep across any write, enforced in the main process so a
  * renderer bug (or a model-influenced renderer) cannot bypass them:
- *  - a rejected or superseded fact or wording never comes back to life;
+ *  - a superseded fact or wording never comes back to life, and a rejected one only returns to
+ *    "not approved yet" (a proposed fact, a draft wording), never straight to approved;
  *  - changing an approved fact's content drops it to `proposed`, and wording built on it is revoked;
  *  - a variant can only be newly approved when every fact it cites exists, is approved and is not
  *    in a contradiction, and its numbers come from those facts;
@@ -1088,7 +1109,9 @@ export function reconcileCvEvidence(
         ? { ...incoming, verification: 'self_reported' as const, sourceKind: incoming.sourceKind === 'mcp_proposal' ? ('candidate_testimony' as const) : incoming.sourceKind }
         : incoming;
     if (!before) return fact;
-    if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval) {
+    // A rejected fact may be restored to "not approved yet" (#474), never straight to approved.
+    const restored = before.approval === 'rejected' && fact.approval === 'proposed';
+    if ((before.approval === 'rejected' || before.approval === 'superseded') && fact.approval !== before.approval && !restored) {
       throw new Error('a rejected or replaced fact cannot be reused: add a corrected fact instead');
     }
     if (before.approval === 'approved' && fact.approval === 'approved' && factSignature(before) !== factSignature(fact)) {
@@ -1105,7 +1128,9 @@ export function reconcileCvEvidence(
 
   const wordingVariants = next.wordingVariants.map((variant) => {
     const before = previousVariants.get(variant.variantId);
-    if (before && (before.status === 'rejected' || before.status === 'superseded') && variant.status !== before.status) {
+    // A rejected wording may be restored to a draft (#474), never straight to approved.
+    const restored = before?.status === 'rejected' && variant.status === 'draft';
+    if (before && (before.status === 'rejected' || before.status === 'superseded') && variant.status !== before.status && !restored) {
       throw new Error('a rejected or replaced wording cannot be reused: edit it into a new variant instead');
     }
     let status = variant.status;
@@ -1143,6 +1168,7 @@ export function reconcileCvEvidence(
       }
     }
     if (status === 'rejected' && !rejectedAt) rejectedAt = context.now;
+    if (restored) rejectedAt = '';
     if (status !== 'candidate_approved') approvedAt = status === 'superseded' ? approvedAt : '';
     return { ...variant, status, approvedAt, rejectedAt, sourceRevision };
   });

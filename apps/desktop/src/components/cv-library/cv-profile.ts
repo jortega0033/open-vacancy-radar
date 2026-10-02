@@ -45,3 +45,11 @@ export function formatCvDate(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
 }
+
+/** A date with the local time, such as "1 Oct 2026, 13:00", in the user's locale and time zone. A
+ * missing or malformed value gives `fallback` so a raw machine timestamp is never shown. */
+export function formatCvDateTime(iso: string, fallback = 'an unknown time'): string {
+  const date = new Date(iso);
+  if (!iso || Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}

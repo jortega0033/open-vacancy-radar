@@ -432,6 +432,12 @@ const workspaceApi: WorkspaceBridge = {
   openCvArtifact(overlayId, artifactId) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:open-artifact', { overlayId, artifactId });
   },
+  readCvArtifactBytes(overlayId, artifactId) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:read-artifact-bytes', { overlayId, artifactId });
+  },
+  markCvArtifactPagesViewed(overlayId, artifactId, pageCount) {
+    return ipcRenderer.invoke('workspace:cv-evidence-overlays:mark-artifact-pages-viewed', { overlayId, artifactId, pageCount });
+  },
   confirmCvArtifact(overlayId, artifactId) {
     return ipcRenderer.invoke('workspace:cv-evidence-overlays:confirm-artifact', { overlayId, artifactId });
   },

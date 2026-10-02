@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { describe, expect, it } from 'vitest';
 import type { TailoredResume } from '../electron/resume-schema.js';
+import { squashForMatch } from '../electron/document-acceptance.js';
 import { validateRenderedResumePdf } from '../electron/resume-pdf-validation.js';
 
 /**
@@ -88,5 +89,121 @@ describe('validateRenderedResumePdf', () => {
     expect(buffer).toBeInstanceOf(Buffer);
     const result = await validateRenderedResumePdf(buffer, RESUME);
     expect(result).toEqual({ ok: true, reasons: [], contentHash: expect.stringMatching(/^[0-9a-f]{64}$/), pageCount: 1 });
+  });
+});
+
+/**
+ * #434: the PDF is held to the same claim list as the Word file. The PDFs here are built by `jsPDF`
+ * from the claim list in the order the template lays it out. Chromium's own `printToPDF` output for
+ * the same data is checked in `e2e/document-acceptance.spec.ts`, which needs a real Electron process.
+ */
+const FULL: TailoredResume = {
+  contact: {
+    name: 'Jamie Rivera',
+    title: 'Frontend engineer',
+    location: 'Utrecht, Netherlands',
+    email: 'jamie.rivera@example.invalid',
+    phone: '+31 6 0000 0000',
+    links: ['example.invalid/jamie'],
+  },
+  summary: 'Frontend engineer who builds booking and reporting screens.',
+  experience: [
+    {
+      company: 'Redwood Software',
+      title: 'Senior Frontend Engineer',
+      dates: '2021 - Present',
+      engagement: 'employment',
+      client: '',
+      bullets: ['Built the booking screens, using Angular', 'Kept the reporting screens fast'],
+    },
+  ],
+  projects: [
+    {
+      name: 'Toolkit',
+      role: 'Maintainer',
+      dates: '2023',
+      organization: 'Open source',
+      description: 'A component toolkit.',
+      technologies: ['TypeScript', 'React'],
+      links: ['example.invalid/toolkit'],
+    },
+  ],
+  skills: ['TypeScript', 'Angular', 'RxJS'],
+  education: [{ institution: 'Utrecht University', credential: 'BSc Computer Science', dates: '2014 - 2018' }],
+};
+
+const FULL_LINES = [
+  'Jamie Rivera',
+  'Frontend engineer',
+  'Utrecht, Netherlands  jamie.rivera@example.invalid',
+  '+31 6 0000 0000  example.invalid/jamie',
+  'Frontend engineer who builds booking and reporting screens.',
+  'EXPERIENCE',
+  'Senior Frontend Engineer, Redwood Software   2021 - Present',
+  'Built the booking screens, using Angular',
+  'Kept the reporting screens fast',
+  'PROJECTS',
+  'Toolkit   2023',
+  'Maintainer, Open source',
+  'A component toolkit.',
+  'TypeScript, React  example.invalid/toolkit',
+  'SKILLS',
+  'TypeScript, Angular, RxJS',
+  'EDUCATION',
+  'BSc Computer Science, Utrecht University   2014 - 2018',
+];
+
+describe('validateRenderedResumePdf claim parity (#434)', () => {
+  it('passes a faithful render of every claim, with the headings in capitals', async () => {
+    const result = await validateRenderedResumePdf(realPdfContaining(FULL_LINES), FULL);
+    expect(result.reasons).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ['bullet', 'Kept the reporting screens fast', /bullet "Kept the reporting screens fast" is missing/],
+    ['summary', 'Frontend engineer who builds booking and reporting screens.', /summary "Frontend engineer who builds booking and reporting screens\." is missing/],
+    ['skill', 'TypeScript, Angular, RxJS', /skill "Angular" is missing/],
+    ['project description', 'A component toolkit.', /project description "A component toolkit\." is missing/],
+    ['education date', 'BSc Computer Science, Utrecht University   2014 - 2018', /credential "BSc Computer Science" is missing/],
+  ])('fails when the %s was dropped from the render', async (_label, droppedLine, expected) => {
+    const lines = FULL_LINES.filter((line) => line !== droppedLine);
+    const result = await validateRenderedResumePdf(realPdfContaining(lines), FULL);
+    expect(result.ok).toBe(false);
+    expect(result.reasons.join(' | ')).toMatch(expected);
+  });
+
+  it('needs one occurrence per claim, so a bullet repeated in the approved CV cannot be satisfied by one', async () => {
+    const twice: TailoredResume = {
+      ...FULL,
+      experience: [{ ...FULL.experience[0]!, bullets: ['Kept the reporting screens fast', 'Kept the reporting screens fast'] }],
+    };
+    const result = await validateRenderedResumePdf(realPdfContaining(FULL_LINES), twice);
+    expect(result.ok).toBe(false);
+    expect(result.reasons.join(' ')).toMatch(/bullet "Kept the reporting screens fast" is missing/);
+  });
+
+  it('does not fail a correct render because of line wraps, hyphenation, spacing or case in the extraction', async () => {
+    const lines = FULL_LINES.flatMap((line) => {
+      if (line === 'Built the booking screens, using Angular') return ['Built the booking', 'screens, us-', 'ing   Angular'];
+      if (line === 'Frontend engineer who builds booking and reporting screens.') return ['FRONTEND ENGINEER WHO BUILDS', 'booking and reporting', 'screens.'];
+      return [line];
+    });
+    const result = await validateRenderedResumePdf(realPdfContaining(lines), FULL);
+    expect(result.reasons).toEqual([]);
+  });
+
+  it('does not report the same missing role or employer twice', async () => {
+    const result = await validateRenderedResumePdf(realPdfContaining(['Jamie Rivera']), FULL);
+    const employer = result.reasons.filter((reason) => reason.includes('"Redwood Software"'));
+    expect(employer).toHaveLength(1);
+  });
+});
+
+describe('squashForMatch (#434)', () => {
+  it('folds ligatures, soft hyphens, quotes, dashes and whitespace the way extraction mangles them', () => {
+    expect(squashForMatch('eﬃcient work­ flow')).toBe(squashForMatch('efficient  workflow'));
+    expect(squashForMatch('Don’t “ship” it')).toBe(squashForMatch('Don\'t "ship" it'));
+    expect(squashForMatch('co-\nordinated')).toBe(squashForMatch('coordinated'));
   });
 });
