@@ -114,11 +114,65 @@ describe('CvSourceReview (#274)', () => {
     const onChange = vi.fn();
     render(<CvSourceReview source={SOURCE} onChange={onChange} />);
 
-    const limit = screen.getByLabelText('Maximum projects to include');
-    expect(limit).toHaveValue(0);
+    const limit = screen.getByLabelText('Maximum projects to include') as HTMLInputElement;
+    expect(limit.value).toBe('0');
 
     fireEvent.change(limit, { target: { value: '1' } });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ maxProjects: 1 }));
+  });
+
+  it('accepts a value larger than the project count', () => {
+    const onChange = vi.fn();
+    render(<CvSourceReview source={SOURCE} onChange={onChange} />);
+
+    const limit = screen.getByLabelText('Maximum projects to include');
+    fireEvent.change(limit, { target: { value: '5' } });
+
+    // Should accept the value and update the source
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ maxProjects: 5 }));
+    // Should not show an error
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows helper text for every value including 0', () => {
+    render(<CvSourceReview source={SOURCE} onChange={vi.fn()} />);
+
+    const hint = screen.getByText(/You have 2 projects/);
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveTextContent('Pinned projects are always kept');
+    expect(hint).toHaveTextContent('0 includes every project');
+  });
+
+  it('shows an inline error for negative values', () => {
+    const onChange = vi.fn();
+    render(<CvSourceReview source={SOURCE} onChange={onChange} />);
+
+    const limit = screen.getByLabelText('Maximum projects to include');
+    fireEvent.change(limit, { target: { value: '-1' } });
+
+    // Should show an error
+    const error = screen.getByText('Cannot be negative.');
+    expect(error).toBeInTheDocument();
+    expect(error).toHaveAttribute('role', 'alert');
+
+    // Should NOT update the source
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('clears the error when a valid value is entered after an error', () => {
+    const onChange = vi.fn();
+    render(<CvSourceReview source={SOURCE} onChange={onChange} />);
+
+    const limit = screen.getByLabelText('Maximum projects to include');
+
+    // First enter an invalid value
+    fireEvent.change(limit, { target: { value: '-5' } });
+    expect(screen.getByText('Cannot be negative.')).toBeInTheDocument();
+
+    // Then enter a valid value
+    fireEvent.change(limit, { target: { value: '3' } });
+    expect(screen.queryByText('Cannot be negative.')).not.toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ maxProjects: 3 }));
   });
 
   it('says which project the count leaves out, instead of dropping it quietly', () => {
