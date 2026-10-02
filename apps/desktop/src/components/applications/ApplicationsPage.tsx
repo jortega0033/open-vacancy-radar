@@ -43,6 +43,16 @@ interface PendingUndo {
   input: ApplicationInput;
 }
 
+interface PendingSkipUndo {
+  message: string;
+  /** The attempt as it was when it was skipped, so undo restores exactly that checkpoint and detail. */
+  attempt: ApplicationAttemptRecord;
+}
+
+/** How long the "Skipped" undo stays up. Longer than the delete undo: a skip can happen right
+ * before the next review opens over the page. */
+export const SKIP_UNDO_MS = 10_000;
+
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
@@ -104,6 +114,7 @@ export function ApplicationsPage({
   const [actionError, setActionError] = useState<string>();
 
   const [pendingUndo, setPendingUndo] = useState<PendingUndo | null>(null);
+  const [pendingSkipUndo, setPendingSkipUndo] = useState<PendingSkipUndo | null>(null);
   const dismissedReviewAttempt = useRef<string | null>(null);
 
   const refreshAttempts = useCallback(async () => {
@@ -264,6 +275,22 @@ export function ApplicationsPage({
     if (next) dismissedReviewAttempt.current = null;
   }, [reviewAttempts, reviewingAttempt?.id]);
 
+  // A skipped attempt returned to review opens in the review dialog; a failed one that was queued
+  // again moves to Preparing. Either way the drawer that started it closes.
+  const handleAttemptRecovered = useCallback((kind: 'returned' | 'retried') => {
+    const recovered = openAttempt;
+    setOpenAttempt(null);
+    if (kind === 'returned' && recovered) {
+      dismissedReviewAttempt.current = null;
+      setAttemptView('review');
+      setFocusedAttemptId(recovered.id);
+    } else {
+      setFocusedAttemptId(null);
+      setAttemptView('preparing');
+    }
+    void refreshAttempts();
+  }, [openAttempt, refreshAttempts]);
+
   const cancelScheduledAutomaticSubmission = useCallback(async (attempt: ApplicationAttemptRecord) => {
     try {
       await window.applicationExecutor.cancelScheduledAutomaticSubmission(attempt.id);
@@ -361,6 +388,34 @@ export function ApplicationsPage({
   }, [deleteTarget, onApplicationsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
+
+  const handleSkipped = useCallback((attempt: ApplicationAttemptRecord) => {
+    setPendingSkipUndo({ message: `Skipped ${attempt.role} at ${attempt.company}.`, attempt });
+  }, []);
+  const dismissSkipUndo = useCallback(() => setPendingSkipUndo(null), []);
+
+  // Reverses only the skip. The attempt is re-read first: if it has moved on from `skipped`, the
+  // undo does nothing rather than overwrite a later checkpoint such as a submission.
+  const handleUndoSkip = useCallback(async () => {
+    const undo = pendingSkipUndo;
+    if (!undo) return;
+    try {
+      const current = await window.workspace.getApplicationAttempt(undo.attempt.id);
+      if (current.checkpoint === 'skipped') {
+        await window.workspace.updateApplicationAttempt(undo.attempt.id, {
+          checkpoint: undo.attempt.checkpoint,
+          checkpointDetail: undo.attempt.checkpointDetail,
+        });
+      }
+      dismissedReviewAttempt.current = null;
+      setActiveTab('in_progress');
+      setAttemptView('review');
+      setFocusedAttemptId(undo.attempt.id);
+      await refreshAttempts();
+    } catch (err) {
+      setAttemptsError(describeError(err, 'could not undo the skip'));
+    }
+  }, [pendingSkipUndo, refreshAttempts]);
 
   const handleUndo = useCallback(async () => {
     const undo = pendingUndo;
@@ -498,7 +553,9 @@ export function ApplicationsPage({
 
       </TabPanel>
 
-      {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
+      {openAttempt && (
+        <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} onChanged={handleAttemptRecovered} />
+      )}
 
       {interviewPrepTarget && (
         <InterviewPrepDrawer
@@ -517,6 +574,7 @@ export function ApplicationsPage({
           total={reviewAttempts.length}
           onClose={closeReviewSession}
           onGenerateLetter={onGenerateLetter}
+          onSkipped={handleSkipped}
         />
       )}
 
@@ -542,8 +600,16 @@ export function ApplicationsPage({
         />
       )}
 
-      {pendingUndo && (
-        <UndoToast message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
+      {pendingSkipUndo ? (
+        <UndoToast
+          message={pendingSkipUndo.message}
+          onUndo={() => void handleUndoSkip()}
+          onDismiss={dismissSkipUndo}
+          durationMs={SKIP_UNDO_MS}
+          layerClassName="z-[1000]"
+        />
+      ) : (
+        pendingUndo && <UndoToast message={pendingUndo.message} onUndo={handleUndo} onDismiss={dismissUndo} />
       )}
     </div>
   );

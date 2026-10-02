@@ -1064,6 +1064,56 @@ describe('acceptance 4: an unsupported destination gets a handoff, not the fixtu
     expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'failed' });
   });
 
+  it('queues a failed preparation again from the history drawer (#468)', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-failed-retry', description: null, descriptionComplete: false },
+    });
+    await pipeline.runNextApplicationAttempt(deps);
+    const unavailableDeps: ApplicationPipelineDeps = {
+      ...deps,
+      queue: {
+        ...queue.port,
+        enqueue: async () => {
+          throw new Error('queue unavailable');
+        },
+        entryState: async () => null,
+      },
+    };
+    await expect(pipeline.resumeApplicationAttempt(unavailableDeps, started.attemptId!)).rejects.toThrow('queue unavailable');
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'failed' });
+
+    const retried = await pipeline.resumeApplicationAttempt(deps, started.attemptId!);
+
+    expect(retried.ok).toBe(true);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'queued' });
+    expect(await queue.port.entryState(started.attemptId!)).toBe('queued');
+  });
+
+  it('never requeues a failed attempt that carries a submission timestamp (#468)', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-failed-submitted', description: null, descriptionComplete: false },
+    });
+    workspace.updateApplicationAttempt(db, started.attemptId!, {
+      checkpoint: 'failed',
+      checkpointDetail: 'synthetic failure after a send',
+      submittedAt: '2026-08-20T10:00:00.000Z',
+    });
+
+    const result = await pipeline.resumeApplicationAttempt(deps, started.attemptId!);
+
+    expect(result.ok).toBe(false);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'failed' });
+  });
+
+  it('refuses to resume an attempt that was skipped or submitted (#468)', async () => {
+    const started = await pipeline.startApplicationAttempt(deps, {
+      vacancy: { ...VACANCY, vacancyKey: 'vac-skipped-resume', description: null, descriptionComplete: false },
+    });
+    workspace.updateApplicationAttempt(db, started.attemptId!, { checkpoint: 'skipped' });
+    expect((await pipeline.resumeApplicationAttempt(deps, started.attemptId!)).ok).toBe(false);
+    expect(workspace.getApplicationAttempt(db, started.attemptId!)).toMatchObject({ checkpoint: 'skipped' });
+  });
+
   it('uses the original reviewed CV only after an explicit recovery choice', async () => {
     generateTailoredResume.mockResolvedValueOnce({ ok: false, text: '', error: 'invalid response' });
     const started = await pipeline.startApplicationAttempt(deps, { vacancy: VACANCY });
