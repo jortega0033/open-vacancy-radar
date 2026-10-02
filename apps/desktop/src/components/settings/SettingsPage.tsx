@@ -8,6 +8,7 @@ import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
 import { ConfirmDialog, ErrorBanner, PageLoading } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
+import type { NavPage } from '../shell/nav.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
 import { DataManagement } from './DataManagement.js';
@@ -159,6 +160,9 @@ export interface SettingsPageProps {
   initialTab?: SettingsTab;
   /** A section to scroll to and focus once its tab is showing. Only the search profile today. */
   focusSection?: SettingsFocusSection;
+  /** The shell's active and previous pages, passed on to the About diagnostics report. */
+  currentPage?: NavPage;
+  previousPage?: NavPage;
 }
 
 export type SettingsTab = 'general' | 'search' | 'workspace' | 'advanced';
@@ -171,7 +175,13 @@ const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: s
   { id: 'advanced', label: 'Advanced' },
 ];
 
-export function SettingsPage({ onNavigateToRuntime, initialTab, focusSection }: SettingsPageProps = {}) {
+export function SettingsPage({
+  onNavigateToRuntime,
+  initialTab,
+  focusSection,
+  currentPage,
+  previousPage,
+}: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<AppSettingsRecord | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
@@ -625,7 +635,10 @@ export function SettingsPage({ onNavigateToRuntime, initialTab, focusSection }: 
             onRequestResetData={() => setConfirmTarget('data')}
           />
 
-          <AboutSection />
+          <AboutSection
+            {...(currentPage ? { currentPage } : {})}
+            {...(previousPage ? { previousPage } : {})}
+          />
         </>
       )}
 

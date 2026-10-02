@@ -29,6 +29,13 @@ const DAEMON_CONNECT_TIMEOUT_MS = 20_000;
 
 export function App() {
   const [nav, setNav] = useState<NavPage>('search');
+  const [previousNav, setPreviousNav] = useState<NavPage>();
+  const lastNavRef = useRef<NavPage>(nav);
+  useEffect(() => {
+    if (lastNavRef.current === nav) return;
+    setPreviousNav(lastNavRef.current);
+    lastNavRef.current = nav;
+  }, [nav]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // `undefined` until the first successful fetch (issue #178): rendering a zeroed WorkspaceCounts
   // here made "not loaded yet" and "genuinely zero" the same badge/subtitle, indistinguishably.
@@ -371,6 +378,8 @@ export function App() {
           {nav === 'settings' && (
             <SettingsPage
               onNavigateToRuntime={() => handleNavigate('runtime')}
+              currentPage={nav}
+              {...(previousNav ? { previousPage: previousNav } : {})}
               {...(settingsTarget ? { initialTab: settingsTarget.tab } : {})}
               {...(settingsTarget?.focusSection ? { focusSection: settingsTarget.focusSection } : {})}
             />
