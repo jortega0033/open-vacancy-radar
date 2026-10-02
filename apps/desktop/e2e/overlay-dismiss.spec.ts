@@ -209,7 +209,7 @@ base.describe('Escape dismissal for seeded-workspace overlays', () => {
           await window.waitForLoadState('domcontentloaded');
           await ensureLightTheme(window);
           await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Search', exact: true }).click();
-          await window.getByRole('button', { name: 'Prepare application' }).click();
+          await window.getByRole('button', { name: 'Start application' }).click();
 
           const dialog = window.getByRole('dialog');
           await expect(dialog.getByTestId('manual-application-swipe-card')).toBeVisible();
