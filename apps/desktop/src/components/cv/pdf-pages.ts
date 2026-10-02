@@ -16,6 +16,8 @@ export interface PdfReview {
   pageCount: number;
   /** Draws one page (1-based) onto `canvas`, sized to `cssWidth` CSS pixels at the device pixel ratio. */
   renderPage(pageNumber: number, canvas: HTMLCanvasElement, cssWidth: number): Promise<void>;
+  /** The text pdf.js reads from one page (1-based), lines separated by newlines. Empty for an image-only page. */
+  extractText(pageNumber: number): Promise<string>;
   destroy(): Promise<void>;
 }
 
@@ -46,6 +48,15 @@ export async function openPdfForReview(bytes: Uint8Array): Promise<PdfReview> {
       canvas.height = Math.floor(viewport.height);
       await page.render({ canvas, viewport }).promise;
       page.cleanup();
+    },
+    async extractText(pageNumber) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      page.cleanup();
+      return content.items
+        .map((item) => ('str' in item ? item.str + (item.hasEOL ? '\n' : '') : ''))
+        .join('')
+        .trim();
     },
     async destroy() {
       await task.destroy();

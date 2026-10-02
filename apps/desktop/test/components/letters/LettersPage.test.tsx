@@ -37,6 +37,18 @@ describe('LettersPage', () => {
     expect(await screen.findByRole('table')).toBeInTheDocument();
   });
 
+  it('links the panel to the active tab and moves between tabs with the arrow keys', async () => {
+    setup({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+    render(<LettersPage />);
+
+    expect(await screen.findByRole('tabpanel', { name: /library/i })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('tab', { name: /library/i }), { key: 'ArrowLeft' });
+
+    expect(await screen.findByRole('textbox', { name: /letter title/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /generator/i })).toHaveFocus();
+    expect(screen.getByRole('tabpanel', { name: /generator/i })).toBeInTheDocument();
+  });
+
   it('opening a letter from the library loads it into the generator in edit mode', async () => {
     const letter = makeLetter({ title: 'Motivation letter — Redwood', body: 'Saved body text.' });
     setup({ listLetters: vi.fn().mockResolvedValue([letter]) });

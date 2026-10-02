@@ -8,6 +8,11 @@ export { PageLoading } from './PageLoading.js';
 export type { PageLoadingProps } from './PageLoading.js';
 export { ErrorBanner } from './ErrorBanner.js';
 export type { ErrorBannerProps } from './ErrorBanner.js';
+export { AiHelperNotice, AI_HELPER_NOTICE_PAGES } from './AiHelperNotice.js';
+export type { AiHelperNoticeProps } from './AiHelperNotice.js';
+export { CopyButton } from './CopyButton.js';
+export type { CopyButtonProps } from './CopyButton.js';
+export { redactDiagnosticsText } from './redact-diagnostics.js';
 export { ConfirmDialog } from './ConfirmDialog.js';
 export type { ConfirmDialogProps } from './ConfirmDialog.js';
 export { UndoToast } from './UndoToast.js';
@@ -25,3 +30,7 @@ export {
   isNavPage,
 } from './nav.js';
 export type { NavBadge, NavItem, NavPage } from './nav.js';
+export { Tabs, TabPanel, tabId, tabPanelId } from './Tabs.js';
+export type { TabsProps, TabPanelProps, TabItem } from './Tabs.js';
+export { Menu } from './Menu.js';
+export type { MenuProps, MenuItem } from './Menu.js';

@@ -114,6 +114,7 @@ const CLAUDE_INSTALLED: ProviderStatus = {
 function installBridge(overrides: Partial<AgentDockBridge> = {}): AgentDockBridge {
   const bridge: AgentDockBridge = {
     getDaemonStatus: vi.fn().mockResolvedValue({ state: 'ready' } satisfies DaemonStatus),
+    restartDaemon: vi.fn().mockResolvedValue({ state: 'ready' }),
     onDaemonStatus: vi.fn().mockReturnValue(() => {}),
     listProviders: vi.fn().mockResolvedValue([CLAUDE_INSTALLED]),
     createSession: vi.fn(),
@@ -170,23 +171,139 @@ describe('App', () => {
     expect(main).not.toHaveClass('overflow-hidden');
   });
 
-  it('shows the daemon-unavailable banner when the daemon reports an error', async () => {
-    let statusCallback: ((status: DaemonStatus) => void) | undefined;
-    installBridge({
-      getDaemonStatus: vi.fn().mockResolvedValue({ state: 'connecting' } satisfies DaemonStatus),
-      onDaemonStatus: vi.fn((cb) => {
-        statusCallback = cb;
-        return () => {};
-      }),
+  describe('Fill search profile (issue #480)', () => {
+    async function openSearchProfileFromSearch() {
+      installVacancyRadarBridge({
+        getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
+        getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy({ profileScore: null })])),
+      });
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Fill search profile' }));
+    }
+
+    it('lands on Settings > Search with the first profile field focused', async () => {
+      await openSearchProfileFromSearch();
+
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
+      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
     });
 
-    render(<App />);
-    expect(screen.getByText(/connecting to local daemon/i)).toBeInTheDocument();
+    it('a plain visit to Settings afterwards starts on General again', async () => {
+      await openSearchProfileFromSearch();
+      await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
 
-    statusCallback?.({ state: 'unavailable', error: 'daemon process exited unexpectedly (code 1, signal null)' });
+      fireEvent.click(screen.getByRole('button', { name: 'Search' })); // leave Settings
+      fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
 
-    await waitFor(() => expect(screen.getByText(/daemon unavailable/i)).toBeInTheDocument());
-    expect(screen.getByText(/exited unexpectedly/)).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true'));
+    });
+  });
+
+  describe('AI helper unavailable (issue #478)', () => {
+    const RAW_ERROR =
+      'process exited before starting (code 1, signal null): Error at C:\\Users\\someone\\app\\daemon.js token=abc123secret http://127.0.0.1:54321';
+
+    function installUnavailableBridge(restartDaemon?: AgentDockBridge['restartDaemon']) {
+      let statusCallback: ((status: DaemonStatus) => void) | undefined;
+      const bridge = installBridge({
+        getDaemonStatus: vi.fn().mockResolvedValue({ state: 'connecting' } satisfies DaemonStatus),
+        onDaemonStatus: vi.fn((cb) => {
+          statusCallback = cb;
+          return () => {};
+        }),
+        ...(restartDaemon ? { restartDaemon } : {}),
+      });
+      return { bridge, emit: (status: DaemonStatus) => statusCallback?.(status) };
+    }
+
+    it('says AI features cannot start in plain language and hides the raw error behind Details', async () => {
+      const { emit } = installUnavailableBridge();
+
+      render(<App />);
+      expect(screen.getByText('Starting the AI helper…')).toBeInTheDocument();
+
+      emit({ state: 'unavailable', error: RAW_ERROR });
+
+      await waitFor(() => expect(screen.getByText('AI features cannot start.')).toBeInTheDocument());
+      expect(screen.getByText(/The local helper that runs Claude Code or Codex did not respond\. Your saved data is fine\./)).toBeInTheDocument();
+      expect(screen.queryByText(/daemon/i)).not.toBeInTheDocument();
+
+      // The raw text sits inside a closed <details>, so it is not visible, and it is redacted.
+      const raw = screen.getByText(/process exited before starting/);
+      expect(raw).not.toBeVisible();
+      expect(raw.textContent).not.toMatch(/Users|token=abc123|127\.0\.0\.1/);
+      fireEvent.click(screen.getByText('Details'));
+      expect(raw).toBeVisible();
+    });
+
+    it('copies redacted diagnostics', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true });
+      const { emit } = installUnavailableBridge();
+
+      render(<App />);
+      emit({ state: 'unavailable', error: RAW_ERROR });
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy diagnostics' }));
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      const copied = writeText.mock.calls[0]![0] as string;
+      expect(copied).toContain('process exited before starting');
+      expect(copied).not.toMatch(/Users|token=abc123|127\.0\.0\.1/);
+    });
+
+    it('does not show the red notice on Applications or CV, and the sidebar still reports the problem', async () => {
+      const { emit } = installUnavailableBridge();
+
+      render(<App />);
+      emit({ state: 'unavailable', error: RAW_ERROR });
+      await screen.findByText('AI features cannot start.');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument());
+      expect(screen.queryByText('AI features cannot start.')).not.toBeInTheDocument();
+      expect(screen.getByText(/claude code unavailable/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'CV' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'CV' })).toBeInTheDocument());
+      expect(screen.queryByText('AI features cannot start.')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
+      expect(await screen.findByText('AI features cannot start.')).toBeInTheDocument();
+    });
+
+    it('Try again restarts the helper, shows the pending state, and clears the notice on success', async () => {
+      let finishRestart!: (status: DaemonStatus) => void;
+      const restartDaemon = vi.fn(() => new Promise<DaemonStatus>((resolve) => (finishRestart = resolve)));
+      const { emit } = installUnavailableBridge(restartDaemon);
+
+      render(<App />);
+      emit({ state: 'unavailable', error: RAW_ERROR });
+      fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+      expect(restartDaemon).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Trying again…' })).toBeDisabled();
+      // A second click while pending cannot reach the bridge: the button is disabled.
+      fireEvent.click(screen.getByRole('button', { name: 'Trying again…' }));
+      expect(restartDaemon).toHaveBeenCalledTimes(1);
+
+      finishRestart({ state: 'ready' });
+      await waitFor(() => expect(screen.queryByText('AI features cannot start.')).not.toBeInTheDocument());
+    });
+
+    it('a failed Try again stays actionable and says so', async () => {
+      const restartDaemon = vi
+        .fn<AgentDockBridge['restartDaemon']>()
+        .mockResolvedValue({ state: 'unavailable', error: 'still broken' });
+      const { emit } = installUnavailableBridge(restartDaemon);
+
+      render(<App />);
+      emit({ state: 'unavailable', error: RAW_ERROR });
+      fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+      expect(await screen.findByTestId('ai-helper-retry-failed')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+      expect(screen.getByText('still broken')).toBeInTheDocument();
+    });
   });
 
   it('renders the real AI Runtime screen: provider cards, not the old session-runner form', async () => {
@@ -272,7 +389,7 @@ describe('App', () => {
       render(<App />);
       await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
 
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Frontend' },
       });
       fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
@@ -299,7 +416,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Frontend');
       expect(screen.getByRole('combobox', { name: 'Job source' })).toHaveValue('remotive');
       expect(screen.getByRole('combobox', { name: 'Employment type' })).toHaveValue('full_time');
       expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
@@ -345,15 +462,15 @@ describe('App', () => {
 
       const first = render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Remote' },
       });
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Remote');
       first.unmount();
 
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
       expect(getReport).toHaveBeenCalledTimes(2);
     });
 
@@ -377,7 +494,7 @@ describe('App', () => {
 
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Previous Role').length).toBeGreaterThan(0));
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Role' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));

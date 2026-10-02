@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { AtsRosterImportResult, AtsRosterStatus } from '@open-vacancy-radar/vacancy-engine';
+import type { AtsRosterImportResult } from '@open-vacancy-radar/vacancy-engine';
 import { SettingsRow, SettingsSection } from './controls.js';
-
-function describeError(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
-}
+import { useAtsRoster } from './useAtsRoster.js';
 
 function formatImportedAt(importedAt: string): string {
   const parsed = new Date(importedAt);
@@ -33,46 +29,7 @@ export interface AtsRosterSectionProps {
  * instead of a new always-on timer.
  */
 export function AtsRosterSection({ disabled, onRefreshed, onRefreshError }: AtsRosterSectionProps) {
-  const [status, setStatus] = useState<AtsRosterStatus>(null);
-  const [loadError, setLoadError] = useState<string>();
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const loaded = await window.vacancyRadar.getAtsRosterStatus();
-        if (!cancelled) setStatus(loaded);
-      } catch (err) {
-        if (!cancelled) setLoadError(describeError(err, 'could not load the company roster status'));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const refresh = useCallback(() => {
-    setRefreshing(true);
-    setLoadError(undefined);
-    void (async () => {
-      try {
-        const result = await window.vacancyRadar.refreshAtsRoster();
-        setStatus({
-          importedAt: result.importedAt,
-          totalEntries: result.totalEntries,
-          sourceCounts: Object.fromEntries(
-            result.providers.map((provider) => [provider.provider, provider.importedCount]),
-          ),
-        });
-        onRefreshed(result);
-      } catch (err) {
-        onRefreshError(describeError(err, 'could not refresh the company roster'));
-      } finally {
-        setRefreshing(false);
-      }
-    })();
-  }, [onRefreshed, onRefreshError]);
+  const { status, loadError, refreshing, refresh } = useAtsRoster({ onRefreshed, onRefreshError });
 
   const description = loadError
     ? loadError

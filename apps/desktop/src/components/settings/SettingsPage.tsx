@@ -6,7 +6,7 @@ import type {
 } from '../../window.js';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
 import { applyDensity, applyTheme } from '../../theme.js';
-import { ConfirmDialog, ErrorBanner, PageLoading } from '../shell/index.js';
+import { ConfirmDialog, ErrorBanner, PageLoading, TabPanel, Tabs } from '../shell/index.js';
 import { AboutSection } from './AboutSection.js';
 import { AtsRosterSection } from './AtsRosterSection.js';
 import { SegmentedControl, SettingsRow, SettingsSection, ToggleSwitch } from './controls.js';
@@ -155,9 +155,14 @@ export interface SettingsPageProps {
   /** Rendered as the "AI runtime" section's "Manage in AI Runtime" button. Optional so the page
    * still works standalone (e.g. in isolation tests) without a real router behind it. */
   onNavigateToRuntime?: () => void;
+  /** The tab to open on. The shell keeps this in its own state, so it survives the page remounting. */
+  initialTab?: SettingsTab;
+  /** A section to scroll to and focus once its tab is showing. Only the search profile today. */
+  focusSection?: SettingsFocusSection;
 }
 
-type SettingsTab = 'general' | 'search' | 'workspace' | 'advanced';
+export type SettingsTab = 'general' | 'search' | 'workspace' | 'advanced';
+export type SettingsFocusSection = 'search-profile';
 
 const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: string }> = [
   { id: 'general', label: 'General' },
@@ -166,13 +171,13 @@ const SETTINGS_TABS: ReadonlyArray<{ readonly id: SettingsTab; readonly label: s
   { id: 'advanced', label: 'Advanced' },
 ];
 
-export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
+export function SettingsPage({ onNavigateToRuntime, initialTab, focusSection }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<AppSettingsRecord | null>(null);
   const [loadError, setLoadError] = useState<string>();
 
   // Plain local state, not persisted: like LettersPage's own tabs, nothing here needs to survive a
-  // restart, and always landing on General keeps "open Settings" a predictable, single behavior.
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  // restart. A plain "open Settings" lands on General; a caller that wants somewhere specific says so.
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general');
 
   const [cvDocuments, setCvDocuments] = useState<CvDocumentRecord[]>([]);
   const [cvListError, setCvListError] = useState<string>();
@@ -362,21 +367,16 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
   return (
     <div className="max-w-3xl">
-      <div role="tablist" className="tabs tabs-box w-fit" aria-label="Settings sections">
-        {SETTINGS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            type="button"
-            className={`tab ${activeTab === tab.id ? 'tab-active' : ''}`}
-            aria-selected={activeTab === tab.id}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        label="Settings sections"
+        idPrefix="settings"
+        className="tabs tabs-box w-fit"
+        value={activeTab}
+        onChange={setActiveTab}
+        tabs={SETTINGS_TABS}
+      />
 
+      <TabPanel idPrefix="settings" id={activeTab}>
       {activeTab === 'general' && (
         <>
           <SettingsSection title="Startup">
@@ -484,6 +484,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
 
           <SearchProfileSection
             disabled={disabled}
+            focusOnOpen={focusSection === 'search-profile'}
             onSaved={() => flash({ kind: 'saved', message: 'Saved' })}
             onSaveError={(message) => flash({ kind: 'error', message })}
           />
@@ -622,6 +623,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
           <AboutSection />
         </>
       )}
+      </TabPanel>
 
       {confirmTarget === 'settings' && (
         <ConfirmDialog

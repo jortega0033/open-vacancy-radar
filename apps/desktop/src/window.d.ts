@@ -29,6 +29,8 @@ export interface CreateSessionInput {
 
 export interface AgentDockBridge {
   getDaemonStatus(): Promise<DaemonStatus>;
+  /** Restarts the local AI helper (the daemon sidecar) and resolves with how the restart ended. */
+  restartDaemon(): Promise<DaemonStatus>;
   onDaemonStatus(callback: (status: DaemonStatus) => void): () => void;
   listProviders(): Promise<ProviderStatus[]>;
   createSession(input: CreateSessionInput): Promise<AgentSession>;

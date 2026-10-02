@@ -58,6 +58,41 @@ afterEach(() => {
 });
 
 describe('SettingsPage', () => {
+  it('opens on the General tab unless a tab is asked for', async () => {
+    setup();
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('opens on the Search tab and focuses the first search-profile field when asked (issue #480)', async () => {
+    setup();
+    render(<SettingsPage initialTab="search" focusSection="search-profile" />);
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true'));
+    expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument(); // not the General tab's startup toggles
+    expect(screen.getByRole('heading', { name: 'Search profile' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveFocus());
+  });
+
+  it('opens the Search tab without stealing focus when no section is asked for', async () => {
+    setup();
+    render(<SettingsPage initialTab="search" />);
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeInTheDocument());
+    expect(screen.getByLabelText('Name')).not.toHaveFocus();
+  });
+
+  it('focuses the search-profile heading and shows the reason when the profile cannot be loaded (issue #480)', async () => {
+    setup();
+    installVacancyRadarBridge({ getSearchProfile: vi.fn().mockRejectedValue(new Error('profile file unreadable')) });
+    render(<SettingsPage initialTab="search" focusSection="search-profile" />);
+
+    const heading = await screen.findByRole('heading', { name: 'Search profile' });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.getByText('profile file unreadable')).toBeInTheDocument();
+  });
+
   it('loads settings on mount and populates the form without saving anything', async () => {
     const { bridge } = setup({
       getSettings: vi.fn().mockResolvedValue({
@@ -80,6 +115,19 @@ describe('SettingsPage', () => {
 
     // Load must never autosave.
     expect(bridge.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('links the settings panel to the active tab and switches with the arrow keys', async () => {
+    setup();
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByLabelText('Start page')).toBeInTheDocument());
+
+    expect(screen.getByRole('tabpanel', { name: 'General' })).toContainElement(screen.getByLabelText('Start page'));
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'General' }), { key: 'ArrowRight' });
+
+    expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Search' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Start page')).not.toBeInTheDocument();
   });
 
   it('renders exactly these sections across its four tabs, no fake per-source discovery toggles', async () => {
