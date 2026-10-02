@@ -27,3 +27,5 @@ export {
 export type { NavBadge, NavItem, NavPage } from './nav.js';
 export { Tabs, TabPanel, tabId, tabPanelId } from './Tabs.js';
 export type { TabsProps, TabPanelProps, TabItem } from './Tabs.js';
+export { Menu } from './Menu.js';
+export type { MenuProps, MenuItem } from './Menu.js';

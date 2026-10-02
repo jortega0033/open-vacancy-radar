@@ -323,7 +323,7 @@ describe('LetterGenerator', () => {
     render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /markdown \(\.md\)/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /markdown \(\.md\)/i }));
 
     await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
     const call = vi.mocked(system.saveFile).mock.calls[0]?.[0];
@@ -339,7 +339,7 @@ describe('LetterGenerator', () => {
     render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /word \(\.docx\)/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /word \(\.docx\)/i }));
 
     await waitFor(() => expect(system.saveFile).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/^exported\.$/i)).not.toBeInTheDocument();
@@ -352,7 +352,7 @@ describe('LetterGenerator', () => {
     render(<LetterGenerator letter={makeLetter()} vacancy={null} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /^export$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /pdf \(\.pdf\)/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /pdf \(\.pdf\)/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('disk is full');
     expect(screen.getByRole('textbox', { name: /letter body/i })).toHaveValue(makeLetter().body);

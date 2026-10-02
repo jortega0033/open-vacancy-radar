@@ -182,13 +182,10 @@ test.describe('CV library', () => {
         dialog.showSaveDialog = async () => ({ canceled: false, filePath });
       }, pdfPath);
 
-      // The Export menu is a daisyUI CSS-`:focus`-driven dropdown (`CvLibraryTable.tsx`'s
-      // `dropdown dropdown-end`), the same kind `letters.spec.ts` already drives: the menu item is
-      // waited on explicitly rather than clicked immediately after the toggle, since a click
-      // dispatched before the dropdown's focus state has settled would otherwise be a flaky
-      // "not visible" timeout instead of a deterministic pass.
+      // The Export menu is the shared `Menu` (role menu, items are role menuitem), opened by the
+      // trigger button.
       await row.getByRole('button', { name: /^export$/i }).click();
-      const pdfOption = row.getByRole('button', { name: /pdf \(\.pdf\)/i });
+      const pdfOption = row.getByRole('menuitem', { name: /pdf \(\.pdf\)/i });
       await expect(pdfOption).toBeVisible();
       await pdfOption.click();
       await expect(row.getByText('Exported', { exact: true })).toBeVisible();
@@ -210,7 +207,7 @@ test.describe('CV library', () => {
       }, docxPath);
 
       await row.getByRole('button', { name: /^export$/i }).click();
-      const docxOption = row.getByRole('button', { name: /word \(\.docx\)/i });
+      const docxOption = row.getByRole('menuitem', { name: /word \(\.docx\)/i });
       await expect(docxOption).toBeVisible();
       await docxOption.click();
       await expect(row.getByText('Exported', { exact: true })).toBeVisible();

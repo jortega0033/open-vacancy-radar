@@ -1,4 +1,5 @@
 import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
+import { Menu } from '../shell/index.js';
 import { CV_KIND_LABEL, cvParseStatus, formatCvDate, type ParseStatusTone } from './cv-profile.js';
 
 export interface CvLibraryTableProps {
@@ -7,7 +8,7 @@ export interface CvLibraryTableProps {
   onSetDefault: (doc: CvDocumentRecord) => void;
   onDelete: (doc: CvDocumentRecord) => void;
   /** #156. */
-  onExport: (doc: CvDocumentRecord, format: CvExportFormat) => void;
+  onExport: (doc: CvDocumentRecord, format: CvExportFormat) => void | Promise<unknown>;
   /** The CV currently being exported, if any: disables that row's Export control and shows a
    * spinner in its place, the same "one export in flight at a time, per row" affordance
    * `LetterGenerator`'s own export dropdown uses. */
@@ -121,51 +122,23 @@ export function CvLibraryTable({
                       Exported
                     </span>
                   )}
-                  <div className="dropdown dropdown-end inline-block">
-                    <button
-                      tabIndex={0}
-                      className="btn btn-ghost btn-xs"
-                      type="button"
-                      disabled={exportingId === doc.id}
-                    >
-                      {exportingId === doc.id && (
-                        <span className="loading loading-spinner loading-xs" aria-hidden="true" />
-                      )}
-                      Export
-                    </button>
-                    <ul
-                      tabIndex={0}
-                      className="dropdown-content menu bg-base-100 rounded-box z-10 w-40 border border-base-300 p-2 shadow"
-                    >
-                      <li>
-                        {/* `blur()` on click: a daisyUI CSS-`:focus-within` dropdown otherwise stays
-                            open indefinitely once a descendant (this button) holds focus, since
-                            focus never leaves the wrapping `.dropdown` div on its own. Without this,
-                            a second Export click on the same row is silently swallowed by the
-                            still-open dropdown intercepting the click. */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.currentTarget.blur();
-                            onExport(doc, 'pdf');
-                          }}
-                        >
-                          PDF (.pdf)
-                        </button>
-                      </li>
-                      <li>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.currentTarget.blur();
-                            onExport(doc, 'docx');
-                          }}
-                        >
-                          Word (.docx)
-                        </button>
-                      </li>
-                    </ul>
-                  </div>
+                  <Menu
+                    triggerClassName="btn btn-ghost btn-xs"
+                    menuClassName="w-40"
+                    disabled={exportingId === doc.id}
+                    trigger={
+                      <>
+                        {exportingId === doc.id && (
+                          <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                        )}
+                        Export
+                      </>
+                    }
+                    items={[
+                      { key: 'pdf', label: 'PDF (.pdf)', onSelect: () => onExport(doc, 'pdf') },
+                      { key: 'docx', label: 'Word (.docx)', onSelect: () => onExport(doc, 'docx') },
+                    ]}
+                  />
                   <button
                     className="btn btn-ghost btn-xs"
                     type="button"
