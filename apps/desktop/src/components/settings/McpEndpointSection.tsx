@@ -121,7 +121,7 @@ export function McpEndpointSection({ settings, cvDocuments, disabled, onToggled 
     <SettingsSection title="Local AI assistant access (MCP)">
       <SettingsRow
         label="Allow local AI clients to help tailor CVs"
-        description="Opens a local endpoint (127.0.0.1 only, never your network) that a client you explicitly authorize below can use to propose CV tailoring for a vacancy. Every proposal still needs your review and approval in this app before it becomes part of an exported CV -- a connected client can never approve or export anything by itself."
+        description="Opens a local endpoint (127.0.0.1 only, never your network) that a client you explicitly authorize below can use to propose CV tailoring for a vacancy. Every proposal still needs your review and approval in this app before it becomes part of an exported CV. A connected client can never approve or export anything by itself."
       >
         <ToggleSwitch
           label="Allow local AI clients to help tailor CVs"
