@@ -14,11 +14,6 @@
       "count": 9
     }
   },
-  "apps/desktop/src/components/cv-library/CvLibraryTable.tsx": {
-    "jsx-a11y/no-noninteractive-tabindex": {
-      "count": 1
-    }
-  },
   "apps/desktop/src/components/cv-library/CvSourceReview.tsx": {
     "jsx-a11y/control-has-associated-label": {
       "count": 5
@@ -65,9 +60,6 @@
   "apps/desktop/src/components/letters/LetterGenerator.tsx": {
     "jsx-a11y/control-has-associated-label": {
       "count": 5
-    },
-    "jsx-a11y/no-noninteractive-tabindex": {
-      "count": 1
     }
   },
   "apps/desktop/src/components/saved/SavedJobDrawer.tsx": {

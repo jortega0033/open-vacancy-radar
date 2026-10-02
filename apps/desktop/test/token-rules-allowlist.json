@@ -20,7 +20,7 @@
     "components/cv/JdReview.tsx": 3,
     "components/cv/RequirementMapping.tsx": 6,
     "components/cv/ResumeToolkit.tsx": 1,
-    "components/cv/TailorCv.tsx": 1,
+    "components/cv/TailorCv.tsx": 2,
     "components/cv/TailoringProposalsPanel.tsx": 1,
     "components/search/SearchPage.tsx": 6,
     "components/search/VacancyDetail.tsx": 2,
