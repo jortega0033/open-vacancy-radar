@@ -389,7 +389,7 @@ describe('App', () => {
       render(<App />);
       await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
 
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Frontend' },
       });
       fireEvent.change(screen.getByRole('combobox', { name: 'Job source' }), {
@@ -416,7 +416,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Frontend');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Frontend');
       expect(screen.getByRole('combobox', { name: 'Job source' })).toHaveValue('remotive');
       expect(screen.getByRole('combobox', { name: 'Employment type' })).toHaveValue('full_time');
       expect(screen.getByRole('heading', { level: 2, name: 'Frontend Role 29' })).toBeInTheDocument();
@@ -462,15 +462,15 @@ describe('App', () => {
 
       const first = render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Remote' },
       });
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('Remote');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('Remote');
       first.unmount();
 
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      expect(screen.getByRole('searchbox', { name: 'Role or keywords' })).toHaveValue('');
+      expect(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' })).toHaveValue('');
       expect(getReport).toHaveBeenCalledTimes(2);
     });
 
@@ -494,7 +494,7 @@ describe('App', () => {
 
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Previous Role').length).toBeGreaterThan(0));
-      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords' }), {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Role or keywords for next scan' }), {
         target: { value: 'Role' },
       });
       fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
