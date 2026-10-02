@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ProviderId, ProviderStatus } from '@agent-dock/shared';
-import runtimeUnavailableIllustration from '../../../assets/illustrations/runtime-unavailable.svg?no-inline';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
-import { EmptyState, ErrorBanner, PageLoading } from '../shell/index.js';
-import { ProviderCard } from './ProviderCard.js';
+import { AiHelperNotice, ErrorBanner, PageLoading } from '../shell/index.js';
+import { ProviderCard, type ProviderCheckState } from './ProviderCard.js';
+import { detectPlatform, providerGuidance } from './provider-guidance.js';
 
 type VerifyResult =
   | { kind: 'ok'; executablePath: string; version: string }
@@ -18,6 +18,10 @@ export interface RuntimePageProps {
    * own `getDaemonStatus`/`onDaemonStatus` subscription for the same one piece of state. */
   daemonState: 'connecting' | 'ready' | 'unavailable';
   daemonError?: string;
+  /** The AI helper's "Try again" (#478): same state and handler the shell's notice uses. */
+  onRetryHelper?: () => void;
+  helperRetrying?: boolean;
+  helperRetryFailed?: boolean;
   /** Fired after "Use as default" persists, so the sidebar/header label updates immediately
    * without this page needing to know how those are rendered. */
   onDefaultProviderChanged?: (provider: ProviderId) => void;
@@ -31,7 +35,14 @@ export interface RuntimePageProps {
  * uses, and nothing in the CV/letter/gap-analysis code paths went through it (they use
  * `useAgentRun` directly).
  */
-export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged }: RuntimePageProps) {
+export function RuntimePage({
+  daemonState,
+  daemonError,
+  onRetryHelper,
+  helperRetrying = false,
+  helperRetryFailed = false,
+  onDefaultProviderChanged,
+}: RuntimePageProps) {
   const [providers, setProviders] = useState<ProviderStatus[]>();
   const [providersError, setProvidersError] = useState<string>();
   const [defaultProvider, setDefaultProvider] = useState<ProviderId>('claude');
@@ -39,6 +50,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
   const [actionError, setActionError] = useState<string>();
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult>();
+  const [checkStates, setCheckStates] = useState<Partial<Record<ProviderId, ProviderCheckState>>>({});
 
   const loadProviders = useCallback(async () => {
     try {
@@ -88,6 +100,23 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
     [onDefaultProviderChanged],
   );
 
+  // "Check again" on one provider's card: re-reads every provider's status (one call) and reports
+  // pending, ready or still-blocked for the card that asked.
+  const checkAgain = useCallback(async (provider: ProviderId) => {
+    setCheckStates((current) => ({ ...current, [provider]: 'checking' }));
+    try {
+      const list = await window.agentDock.listProviders();
+      setProviders(list);
+      setProvidersError(undefined);
+      const status = list.find((p) => p.id === provider);
+      const ready = status?.installed === true && status.authenticated === 'authenticated';
+      setCheckStates((current) => ({ ...current, [provider]: ready ? 'ready' : 'blocked' }));
+    } catch (err) {
+      setProvidersError(describeError(err, 'could not reach the local runtime'));
+      setCheckStates((current) => ({ ...current, [provider]: 'blocked' }));
+    }
+  }, []);
+
   const verify = useCallback(async () => {
     setVerifying(true);
     setVerifyResult(undefined);
@@ -100,7 +129,9 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
       } else if (status.authenticated !== 'authenticated') {
         setVerifyResult({
           kind: 'failed',
-          reason: `${PROVIDER_LABEL[defaultProvider]} is installed but not authenticated. Run its login command, then verify again.`,
+          reason: `${PROVIDER_LABEL[defaultProvider]} is installed but not authenticated. Open a terminal and run ${
+            providerGuidance(defaultProvider, detectPlatform(navigator.userAgent)).loginCommand
+          }, then sign in and verify again.`,
         });
       } else {
         setVerifyResult({
@@ -116,13 +147,16 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
     }
   }, [defaultProvider]);
 
-  if (daemonState === 'unavailable') {
+  if (daemonState === 'unavailable' || helperRetrying) {
     return (
-      <EmptyState
-        illustration={runtimeUnavailableIllustration}
-        title="AI runtime unavailable"
-        description={`The local runtime is not available. AI-assisted actions remain disabled until it starts.${daemonError ? ` (${daemonError})` : ''}`}
-      />
+      <div className="max-w-3xl">
+        <AiHelperNotice
+          {...(daemonError ? { error: daemonError } : {})}
+          retrying={helperRetrying}
+          retryFailed={helperRetryFailed}
+          onRetry={() => onRetryHelper?.()}
+        />
+      </div>
     );
   }
 
@@ -137,7 +171,7 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
         Authentication remains managed by the installed CLI.
       </p>
 
-      {daemonState === 'connecting' && <PageLoading label="Connecting to local daemon…" />}
+      {daemonState === 'connecting' && <PageLoading label="Starting the AI helper…" />}
       {providersError && <ErrorBanner className="mt-4">{providersError}</ErrorBanner>}
       {actionError && <ErrorBanner className="mt-4">{actionError}</ErrorBanner>}
 
@@ -150,6 +184,8 @@ export function RuntimePage({ daemonState, daemonError, onDefaultProviderChanged
               isDefault={status.id === defaultProvider}
               saving={savingDefault}
               onUseAsDefault={() => void useAsDefault(status.id)}
+              onCheckAgain={() => void checkAgain(status.id)}
+              {...(checkStates[status.id] ? { checkState: checkStates[status.id] } : {})}
             />
           ))}
         </div>
