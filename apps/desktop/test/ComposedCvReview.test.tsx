@@ -64,6 +64,7 @@ function installOverlayBridge(overlay: CvEvidenceOverlayRecord) {
         validation: { ok: true, reasons: [], pageCount: 1 },
         savedPath: 'C:\\fake\\approved-cv.pdf',
         reviewOpenedAt: '',
+        pagesViewedAt: '',
         confirmedAt: '',
       };
       current = { ...current, artifacts: [artifact] };

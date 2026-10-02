@@ -461,8 +461,13 @@ export interface CvArtifactRecord {
   validation: { ok: boolean; reasons: string[]; pageCount?: number };
   /** Where the candidate saved it. `''` when the file failed its checks and was never offered for saving. */
   savedPath: string;
-  /** ISO-8601 or `''`: the candidate opened the saved file to read it (PDF review needs this). */
+  /** ISO-8601 or `''`: the candidate opened the saved file in the system viewer. Recorded as a
+   * secondary way to look at the file; it no longer unlocks accepting a PDF (#434). */
   reviewOpenedAt: string;
+  /** ISO-8601 or `''`: every page of the saved PDF was displayed to the candidate inside the app,
+   * after the file's bytes were checked against `contentHash`. A PDF can be accepted only after this
+   * (#434). Always `''` for a Word file, which has no in-app view. */
+  pagesViewedAt: string;
   /** ISO-8601 or `''`: the candidate's explicit visual confirmation of this file. */
   confirmedAt: string;
 }

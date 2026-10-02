@@ -102,7 +102,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     const panel = await openSeededCase(window);
     const pdf = panel.getByLabel('PDF file', { exact: true });
     const word = panel.getByLabel('Word file', { exact: true });
-    await expect(pdf.getByRole('status')).toHaveText('Not exported');
+    await expect(pdf.getByRole('status').first()).toHaveText('Not exported');
     await expect(word.getByRole('status')).toHaveText('Not exported');
 
     // A cancelled save dialog leaves the case exactly as it was and writes nothing.
@@ -110,13 +110,13 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await pdf.getByRole('button', { name: 'Export as PDF' }).click();
     await expect.poll(async () => (await nativeRecord(electronApp)).saveRequests.length).toBe(1);
     await expect(pdf.getByRole('button', { name: 'Export as PDF' })).toBeEnabled();
-    await expect(pdf.getByRole('status')).toHaveText('Not exported');
+    await expect(pdf.getByRole('status').first()).toHaveText('Not exported');
     expect(existsSync(join(saveDir, `${SEEDED_CV_NAME}.pdf`))).toBe(false);
 
     // The PDF is rendered, checked and saved; it then waits for the candidate's own review.
     await stubNativeSurfaces(electronApp, saveDir, 'save');
     await pdf.getByRole('button', { name: 'Export as PDF' }).click();
-    await expect(pdf.getByRole('status')).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
+    await expect(pdf.getByRole('status').first()).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
     const pdfPath = `${saveDir}/${SEEDED_CV_NAME}.pdf`;
     expect(readFileSync(pdfPath).subarray(0, 4).equals(PDF_MAGIC)).toBe(true);
     await expect(panel.getByRole('status').filter({ hasText: `Saved to ${saveDir}` })).toBeVisible();
@@ -128,14 +128,18 @@ test('opens an approved case, exports both formats, reviews each file, and marks
       expect.objectContaining({ title: 'Export approved CV', defaultPath: `${SEEDED_CV_NAME}.pdf` }),
     ]);
 
-    // A PDF cannot be accepted before it has been opened.
+    // A PDF cannot be accepted before its pages were shown in the app. Opening the system viewer
+    // is a second way to look and does not unlock confirming.
     const confirmPdf = pdf.getByRole('button', { name: 'I read every page and it looks right' });
     await expect(confirmPdf).toBeDisabled();
-    await pdf.getByRole('button', { name: 'Open the PDF to read every page' }).click();
+    await pdf.getByRole('button', { name: 'Open in my PDF viewer' }).click();
+    await expect.poll(async () => (await nativeRecord(electronApp)).opened).toEqual([pdfPath]);
+    await expect(confirmPdf).toBeDisabled();
+    await pdf.getByRole('button', { name: 'Show the pages here' }).click();
+    await expect(pdf.getByRole('region', { name: 'PDF pages' })).toBeVisible();
     await expect(confirmPdf).toBeEnabled();
-    expect((await nativeRecord(electronApp)).opened).toEqual([pdfPath]);
     await confirmPdf.click();
-    await expect(pdf.getByRole('status')).toHaveText('Accepted');
+    await expect(pdf.getByRole('status').first()).toHaveText('Accepted');
 
     // The Word file is a separate format with its own status and its own review.
     await expect(word.getByRole('status')).toHaveText('Not exported');
@@ -147,7 +151,7 @@ test('opens an approved case, exports both formats, reviews each file, and marks
     await expect(word).toContainText(`Hash ${docxHash.slice(0, 12)}`);
     await word.getByRole('button', { name: 'I reviewed this in my editor' }).click();
     await expect(word.getByRole('status')).toHaveText('Accepted');
-    await expect(pdf.getByRole('status')).toHaveText('Accepted');
+    await expect(pdf.getByRole('status').first()).toHaveText('Accepted');
 
     // The approved wording, not the source wording, is what was exported and recorded.
     await window.getByRole('button', { name: 'Preview approved CV' }).click();
@@ -184,7 +188,7 @@ test('the review and file panels stay fully usable at the minimum window size', 
     const panel = await openSeededCase(window);
     // Every button the panel can show, in its widest wording: files waiting for review, in both formats.
     await panel.getByLabel('PDF file', { exact: true }).getByRole('button', { name: 'Export as PDF' }).click();
-    await expect(panel.getByLabel('PDF file', { exact: true }).getByRole('status')).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
+    await expect(panel.getByLabel('PDF file', { exact: true }).getByRole('status').first()).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
     await panel.getByLabel('Word file', { exact: true }).getByRole('button', { name: 'Export as Word' }).click();
     await expect(panel.getByLabel('Word file', { exact: true }).getByRole('status')).toHaveText('Exported, waiting for your review', EXPORT_TIMEOUT);
     await window.getByRole('button', { name: 'Preview approved CV' }).click();
