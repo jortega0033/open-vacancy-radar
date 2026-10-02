@@ -306,7 +306,7 @@ export function CvDrawer({ mode, record, onCancel, onSubmit }: CvDrawerProps) {
           </button>
         </div>
 
-        <form className="flex flex-1 flex-col overflow-y-auto" onSubmit={handleSubmit}>
+        <form className="flex flex-1 flex-col overflow-y-auto" noValidate onSubmit={handleSubmit}>
           <div className="flex-1 space-y-3 px-5 py-4">
             {canParseWithAi && (
               <div className="rounded-box border border-base-300 bg-base-200 p-3">
