@@ -13,6 +13,7 @@ import type { SelectedVacancy } from '../letters/index.js';
 import { EmptyState, ErrorBanner, WarningBanner, useEscapeToClose } from '../shell/index.js';
 import { SearchFilterBar } from './SearchFilterBar.js';
 import { SearchResultList } from './SearchResultList.js';
+import { summarizeSourceCoverage } from './source-coverage.js';
 import { createSearchSessionState, type SearchSessionState } from './search-session.js';
 import { VacancyDetail, type PrepareState, type SaveState } from './VacancyDetail.js';
 import {
@@ -672,8 +673,11 @@ export function SearchPage({
   const profileNotConfigured = reportHasOnlyUnscoredRows && searchProfile !== null && !currentProfileConfigured;
   const reportNeedsRescore = reportHasOnlyUnscoredRows && currentProfileConfigured;
   const profileScoringUnknown = reportHasOnlyUnscoredRows && searchProfileError;
-  const sourceWarnings =
-    worldwideReport?.discoverySources.filter((source) => source.status !== 'success' || source.complete === false) ?? [];
+  const sourceCoverage = useMemo(
+    () => (worldwideReport ? summarizeSourceCoverage(worldwideReport.discoverySources) : null),
+    [worldwideReport],
+  );
+  const sourceWarnings = sourceCoverage?.warnings ?? [];
   const scanBounds = worldwideReport?.scanBounds;
   const scanIncomplete = scanBounds?.complete === false;
   // Whether the rows currently on screen are provisional/live rather than the saved report -- drives
@@ -978,6 +982,7 @@ export function SearchPage({
           busy={busy}
           salaryNote={salaryNote}
           hasReport={hasReport}
+          appliedQuery={appliedFilters.query}
           aiWebDiscovery={aiWebDiscovery}
           onAiWebDiscoveryChange={setAiWebDiscovery}
           aiWebDiscoveryAvailable={currentProfileConfigured}
@@ -1157,7 +1162,9 @@ export function SearchPage({
           )}
           {worldwideReport && (
             <p className="mx-6 mt-3 text-xs text-base-content/60" role="status">
-              {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+              {visible.length.toLocaleString()} {visible.length === 1 ? 'vacancy' : 'vacancies'}
+              {appliedFilters.query.trim() ? ` match '${appliedFilters.query.trim()}'` : ''} · scanned{' '}
+              {new Date(worldwideReport.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </p>
           )}
           <div className="mt-3 flex min-h-0 flex-1 flex-col px-6 lg:flex-row lg:px-0">
@@ -1271,26 +1278,59 @@ export function SearchPage({
                 <Info size={14} aria-hidden="true" />
                 Source coverage warning ({sourceWarnings.length})
               </button>
-              {sourceWarningsOpen && (
-                <div className="alert alert-warning alert-soft mt-1.5 text-sm" role="status">
-                  <div>
-                    {sourceWarnings.map((source) => (
-                      <span key={source.id} className="block">
-                        {discoveryProviderLabel(source.provider)}: {source.completenessReason ?? source.error ?? source.status}
-                      </span>
+              {sourceWarningsOpen && sourceCoverage && (
+                <div className="alert alert-warning alert-soft mt-1.5 block text-sm" role="status">
+                  <p>{sourceCoverage.summary}</p>
+                  <ul className="mt-2 space-y-1.5">
+                    {sourceCoverage.groups.map((group) => (
+                      <li key={group.kind}>
+                        <span className="font-medium">{group.title}.</span> {group.description}
+                        <span className="block text-xs text-base-content/70">{group.providers.join(', ')}</span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
+                  {(sourceCoverage.rosterMissing && onOpenSearchProfile) || sourceCoverage.groups.some((group) => group.kind !== 'not_set_up') ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {sourceCoverage.rosterMissing && onOpenSearchProfile && (
+                        // Opens Settings, where the company list is downloaded. Reuses the
+                        // existing Settings navigation; it does not scroll to the section.
+                        <button type="button" className="btn btn-warning btn-xs" onClick={onOpenSearchProfile}>
+                          Download company list
+                        </button>
+                      )}
+                      {sourceCoverage.groups.some((group) => group.kind !== 'not_set_up') && (
+                        <button type="button" className="btn btn-outline btn-xs" onClick={handleSearch} disabled={busy || !filters.query.trim()}>
+                          Retry with a new scan
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               )}
             </>
           )}
           {worldwideReport && (
-            <p className="pb-1.5 text-xs text-base-content/60">
-              Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
-              {scanBounds?.mode === 'browse_all'
-                ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
-                : ''}
-            </p>
+            <details className="pb-1.5 text-xs text-base-content/60">
+              <summary className="cursor-pointer">Scan details</summary>
+              <p className="mt-1">
+                Run {worldwideReport.runId} · generated {new Date(worldwideReport.generatedAt).toLocaleString()}
+                {scanBounds?.mode === 'browse_all'
+                  ? ` · browse-all cap ${scanBounds.resultCap?.toLocaleString() ?? BROWSE_ALL_RESULT_CAP.toLocaleString()} · ${scanBounds.complete ? 'complete' : 'incomplete'}`
+                  : ''}
+              </p>
+              <p className="mt-1">
+                {worldwideReport.statistics.rawRowsFetched?.toLocaleString() ?? worldwideReport.statistics.discoveryListings.toLocaleString()} raw rows fetched, {worldwideReport.statistics.discoveryUniqueListings.toLocaleString()} deduplicated vacancies{scanBounds?.mode === 'browse_all' || worldwideReport.statistics.focusedMatches === undefined ? '' : `, ${worldwideReport.statistics.focusedMatches.toLocaleString()} matching the focused scan`}, and {visible.length.toLocaleString()} visible after local refinements.
+              </p>
+              {sourceWarnings.length > 0 && (
+                <ul className="mt-1">
+                  {sourceWarnings.map((source) => (
+                    <li key={source.id}>
+                      {discoveryProviderLabel(source.provider)} ({source.id}, {source.status}): {source.completenessReason ?? source.error ?? source.status}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
           )}
         </div>
       )}

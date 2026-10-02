@@ -10,7 +10,7 @@ import type {
   SavedJobRecord,
 } from '../../window.js';
 import emptyApplicationsIllustration from '../../../assets/illustrations/empty-applications.svg?no-inline';
-import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, UndoToast } from '../shell/index.js';
+import { ConfirmDialog, EmptyState, ErrorBanner, PageLoading, TabPanel, Tabs, UndoToast } from '../shell/index.js';
 import { ApplicationAttemptDrawer } from './ApplicationAttemptDrawer.js';
 import { ApplicationAttemptsTable } from './ApplicationAttemptsTable.js';
 import { ApplicationReviewSession } from './ApplicationReviewSession.js';
@@ -393,31 +393,22 @@ export function ApplicationsPage({
         </div>
       )}
 
-      <div role="tablist" className="tabs tabs-box mt-4">
-        {APPLICATIONS_FILTER_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab.key}
-            className={`tab ${activeTab === tab.key ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-        <button
-          type="button"
-          role="tab"
-          aria-label="Review queue"
-          aria-selected={isInProgressTab}
-          className={`tab ${isInProgressTab ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('in_progress')}
-        >
-          Review queue{attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}
-        </button>
-      </div>
+      <Tabs
+        label="Applications views"
+        idPrefix="applications"
+        className="tabs tabs-box mt-4"
+        value={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          ...APPLICATIONS_FILTER_TABS.map((tab) => ({ id: tab.key as PageTab, label: tab.label })),
+          {
+            id: 'in_progress' as const,
+            label: `Review queue${attempts ? ` (${reviewAttempts.length + preparingAttempts.length})` : ''}`,
+          },
+        ]}
+      />
 
+      <TabPanel idPrefix="applications" id={activeTab}>
       {!isInProgressTab && (
         <>
           {loadError && <ErrorBanner className="mt-4">{loadError}</ErrorBanner>}
@@ -504,6 +495,8 @@ export function ApplicationsPage({
           )}
         </>
       )}
+
+      </TabPanel>
 
       {openAttempt && <ApplicationAttemptDrawer attempt={openAttempt} onClose={() => setOpenAttempt(null)} />}
 

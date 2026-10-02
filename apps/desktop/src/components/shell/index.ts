@@ -34,3 +34,7 @@ export { Eyebrow } from './Eyebrow.js';
 export type { EyebrowProps } from './Eyebrow.js';
 export { WarningBanner } from './WarningBanner.js';
 export type { WarningBannerProps } from './WarningBanner.js';
+export { Tabs, TabPanel, tabId, tabPanelId } from './Tabs.js';
+export type { TabsProps, TabPanelProps, TabItem } from './Tabs.js';
+export { Menu } from './Menu.js';
+export type { MenuProps, MenuItem } from './Menu.js';

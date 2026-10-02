@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ProviderId } from '@agent-dock/shared';
 import { PROVIDER_LABEL } from '../../provider-labels.js';
+import { TabPanel, Tabs } from '../shell/index.js';
 import { AiOutput } from './AiOutput.js';
 import {
   buildAchievementRewritePrompt,
@@ -166,26 +167,23 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
     <div className="card card-border rounded-box border-base-300 bg-base-100">
       <div className="card-body gap-3 p-5">
         <div className="card-title text-base font-bold">Improve this CV</div>
-        <div
+        <Tabs
+          label="CV review mode"
+          idPrefix="resume-toolkit"
           className="join join-vertical w-full sm:join-horizontal"
-          role="tablist"
-          aria-label="CV review mode"
-        >
-          {(Object.keys(MODE_DETAILS) as ResumeToolMode[]).map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              role="tab"
-              aria-selected={mode === candidate}
-              className={`btn join-item h-auto min-h-10 w-full min-w-0 whitespace-normal sm:flex-1 ${mode === candidate ? 'btn-active' : 'btn-outline'}`}
-              disabled={run.isBusy}
-              onClick={() => selectMode(candidate)}
-            >
-              {MODE_DETAILS[candidate].label}
-            </button>
-          ))}
-        </div>
+          value={mode}
+          onChange={selectMode}
+          tabs={(Object.keys(MODE_DETAILS) as ResumeToolMode[]).map((candidate) => ({
+            id: candidate,
+            label: MODE_DETAILS[candidate].label,
+            disabled: run.isBusy,
+          }))}
+          tabClassName={(selected) =>
+            `btn join-item h-auto min-h-10 w-full min-w-0 whitespace-normal sm:flex-1 ${selected ? 'btn-active' : 'btn-outline'}`
+          }
+        />
 
+        <TabPanel idPrefix="resume-toolkit" id={mode} className="flex flex-col gap-3">
         <p className="text-sm text-base-content/60">{detail.description}</p>
         {!cv && <div className="text-sm text-base-content/60">Load a CV above to enable this.</div>}
 
@@ -272,6 +270,7 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
           busyLabel={detail.busy}
           providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />
+        </TabPanel>
       </div>
     </div>
   );
