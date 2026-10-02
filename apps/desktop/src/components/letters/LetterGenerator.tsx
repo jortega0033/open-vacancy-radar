@@ -69,6 +69,8 @@ export interface LetterGeneratorProps {
   onUnsavedChange?: (kind: UnsavedKind) => void;
   /** Return to the vacancy that opened this generator. */
   onBackToVacancy?: () => void;
+  /** Opens the CV page, so the empty CV hint can link there. */
+  onOpenCvPage?: () => void;
 }
 
 /**
@@ -112,6 +114,7 @@ export function LetterGenerator({
   onClose,
   onUnsavedChange,
   onBackToVacancy,
+  onOpenCvPage,
 }: LetterGeneratorProps) {
   const run = useAgentRun({ chunkSeparator: '' });
 
@@ -590,8 +593,14 @@ export function LetterGenerator({
             {cvError && <ErrorBanner className="mb-2">{cvError}</ErrorBanner>}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
-                No CVs saved yet. Upload one on the Search page and choose “Save to CV library”, then
-                come back here.
+                No CVs yet.{' '}
+                {onOpenCvPage ? (
+                  <button type="button" className="link" onClick={onOpenCvPage}>
+                    Add one on the CV page.
+                  </button>
+                ) : (
+                  'Add one on the CV page.'
+                )}
               </p>
             ) : (
               <label className="block">

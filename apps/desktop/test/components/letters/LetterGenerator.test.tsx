@@ -272,7 +272,7 @@ describe('LetterGenerator', () => {
     setup({ listCvDocuments: vi.fn().mockResolvedValue([]) });
     render(<LetterGenerator vacancy={LETTER_VACANCY} />);
 
-    await waitFor(() => expect(screen.getByText(/no cvs saved yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no cvs yet/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /^generate$/i })).toBeDisabled();
   });
 
@@ -387,6 +387,17 @@ describe('LetterGenerator', () => {
     expect(await screen.findByText(/^Starting Codex…$/)).toBeInTheDocument();
 
     expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('links the empty CV hint to the CV page when it can navigate there', async () => {
+    setup({ listCvDocuments: vi.fn().mockResolvedValue([]) });
+    const onOpenCvPage = vi.fn();
+    render(<LetterGenerator vacancy={LETTER_VACANCY} onOpenCvPage={onOpenCvPage} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /add one on the cv page/i }));
+
+    expect(onOpenCvPage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/search page/i)).not.toBeInTheDocument();
   });
 
   it('reports the unsaved kind: none for a loaded letter, edited after typing, none again after saving', async () => {

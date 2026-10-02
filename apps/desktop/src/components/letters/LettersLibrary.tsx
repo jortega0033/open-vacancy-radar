@@ -157,7 +157,8 @@ export function LettersLibrary({
         <p className="min-w-0 flex-1 text-sm text-base-content/60">
           Generated and saved application documents. Open a letter to edit or regenerate it.
         </p>
-        {onNew && (
+        {/* The empty state carries its own New letter button, so the toolbar one waits for rows. */}
+        {onNew && rows.length > 0 && (
           <button className="btn btn-primary btn-sm" type="button" onClick={onNew}>
             New letter
           </button>

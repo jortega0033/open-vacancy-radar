@@ -41,6 +41,8 @@ export interface LettersPageProps {
    */
   onVacancyConsumed?: () => void;
   onBackToVacancy?: (vacancy: SelectedVacancy) => void;
+  /** Opens the CV page, for the generator's "No CVs yet" link. */
+  onOpenCvPage?: () => void;
 }
 
 /**
@@ -69,6 +71,7 @@ export function LettersPage({
   openOnGenerator = false,
   onVacancyConsumed,
   onBackToVacancy,
+  onOpenCvPage,
 }: LettersPageProps) {
   // Captured once at mount, not read reactively: `onVacancyConsumed` below tells the caller to
   // clear its own copy of `vacancy` right after this page starts, which must not yank the job out
@@ -194,6 +197,7 @@ export function LettersPage({
             onSaved={handleSaved}
             onClose={() => leaveEditor(openLibrary)}
             onUnsavedChange={setUnsaved}
+            {...(onOpenCvPage ? { onOpenCvPage } : {})}
             {...(handoffVacancy && onBackToVacancy
               ? { onBackToVacancy: () => leaveEditor(() => onBackToVacancy(handoffVacancy)) }
               : {})}

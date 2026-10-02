@@ -55,10 +55,10 @@ describe('LettersLibrary', () => {
     await waitFor(() => expect(screen.getByText(/no letters yet/i)).toBeInTheDocument());
     expect(screen.getByTestId('empty-state-illustration').getAttribute('style')).toContain('empty-letters');
 
-    // One in the toolbar, one under the empty-state copy: the prototype offers both.
+    // Exactly one "New letter" while the list is empty: the empty state's own button.
     const newButtons = screen.getAllByRole('button', { name: /new letter/i });
-    expect(newButtons).toHaveLength(2);
-    fireEvent.click(newButtons[1] as HTMLElement);
+    expect(newButtons).toHaveLength(1);
+    fireEvent.click(newButtons[0] as HTMLElement);
     expect(onNew).toHaveBeenCalledTimes(1);
   });
 
@@ -169,6 +169,15 @@ describe('LettersLibrary', () => {
 
     expect(await screen.findByText('Second letter')).toBeInTheDocument();
     expect(listLetters).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a single "New letter" button on screen, in the toolbar once there are rows', async () => {
+    installWorkspaceBridge({ listLetters: vi.fn().mockResolvedValue([makeLetter()]) });
+
+    render(<LettersLibrary onOpen={vi.fn()} onNew={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(makeLetter().title)).toBeInTheDocument());
+
+    expect(screen.getAllByRole('button', { name: /new letter/i })).toHaveLength(1);
   });
 
   describe('delete with undo', () => {
