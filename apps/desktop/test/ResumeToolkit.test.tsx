@@ -15,13 +15,13 @@ describe('ResumeToolkit', () => {
     installBridges();
     render(<ResumeToolkit cv={CV} />);
 
-    expect(screen.getByRole('tab', { name: 'Resume audit' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: 'CV audit' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
     expect(screen.getByRole('tab', { name: 'Improve achievements' })).toBeEnabled();
     expect(screen.getByRole('tab', { name: 'Best-fit roles' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Run resume audit' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run CV audit' })).toBeEnabled();
   });
 
   it('runs only the selected grounded prompt and keeps the result review-only', async () => {
@@ -53,7 +53,7 @@ describe('ResumeToolkit', () => {
     const bridges = installBridges();
     render(<ResumeToolkit cv={CV} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run CV audit' }));
     await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
     bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'Audit result.' });
     bridges.emit('sess-cv-1', { type: 'session.completed' });
@@ -64,12 +64,12 @@ describe('ResumeToolkit', () => {
     expect(screen.getByText('No best-fit roles yet.')).toBeInTheDocument();
   });
 
-  describe('target-role resume audit focus (issue #362)', () => {
+  describe('target-role CV audit focus (issue #362)', () => {
     it('runs the general audit when the target-role field is left blank', async () => {
       const bridges = installBridges();
       render(<ResumeToolkit cv={CV} />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run CV audit' }));
 
       await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
       const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].prompt ?? '';
@@ -85,7 +85,7 @@ describe('ResumeToolkit', () => {
       });
       expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run CV audit' }));
       await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
       const prompt = vi.mocked(bridges.agentDock.createSession).mock.calls[0]?.[0].prompt ?? '';
       expect(prompt).toContain('"React Frontend Engineer"');
@@ -112,10 +112,10 @@ describe('ResumeToolkit', () => {
       });
 
       expect(screen.getByRole('alert')).toHaveTextContent(/160 characters or fewer/i);
-      expect(screen.getByRole('button', { name: 'Run resume audit' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Run CV audit' })).toBeDisabled();
 
       // Even a direct click (bypassing the disabled attribute) must never start a session.
-      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run CV audit' }));
       expect(bridges.agentDock.createSession).not.toHaveBeenCalled();
     });
 
@@ -123,7 +123,7 @@ describe('ResumeToolkit', () => {
       const bridges = installBridges();
       render(<ResumeToolkit cv={CV} />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Run resume audit' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Run CV audit' }));
       await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalledTimes(1));
       bridges.emit('sess-cv-1', { type: 'assistant.message', text: 'General audit result.' });
       bridges.emit('sess-cv-1', { type: 'session.completed' });
@@ -138,7 +138,7 @@ describe('ResumeToolkit', () => {
         target: { value: 'Backend Engineer' },
       });
       expect(screen.queryByText('General audit result.')).not.toBeInTheDocument();
-      expect(screen.getByText('No resume audit yet.')).toBeInTheDocument();
+      expect(screen.getByText('No CV audit yet.')).toBeInTheDocument();
     });
   });
 });

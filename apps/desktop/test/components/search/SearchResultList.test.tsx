@@ -500,7 +500,7 @@ describe('SearchResultList', () => {
     // (`flex: 1 1 0%`, a zero flex basis). While this pane was `flex: 0 1 auto`, basing itself on its
     // own page-of-25-rows-tall content, the column had no free space left to distribute and the
     // detail pane stayed at its zero basis: it rendered at zero height, below the bottom of a
-    // `<main>` that does not scroll, so "Save job", "Generate Letter" and the verification cards were
+    // `<main>` that does not scroll, so "Save job", "Generate letter" and the verification cards were
     // all invisible and unclickable at the default window size.
     //
     // jsdom runs no layout engine, so the flex classes themselves are the testable contract here:

@@ -337,7 +337,7 @@ export function VacancyDetail({
               type="button"
               onClick={onGenerateLetter}
             >
-              Generate Letter
+              Generate letter
             </button>
             <button
               ref={openerRef}
@@ -404,7 +404,7 @@ export function VacancyDetail({
           <SectionHeading
             aside={
               result.profileScore !== null && result.profileMatch
-                ? 'Explains search-profile relevance, not a CV match'
+                ? 'Based on your search profile only'
                 : undefined
             }
           >

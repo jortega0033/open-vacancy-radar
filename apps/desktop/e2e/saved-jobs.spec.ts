@@ -1,8 +1,8 @@
 import { expect, goto, test } from './fixtures.js';
 
-test.describe('Saved Jobs', () => {
+test.describe('Saved jobs', () => {
   test('adds a job manually, edits it, and deletes it with undo', async ({ window }) => {
-    await goto(window, 'Saved Jobs');
+    await goto(window, 'Saved jobs');
     await window
       .getByRole('button', { name: /add job manually/i })
       .first()
@@ -50,7 +50,7 @@ test.describe('Saved Jobs', () => {
     electronApp,
     window,
   }) => {
-    await goto(window, 'Saved Jobs');
+    await goto(window, 'Saved jobs');
     await window
       .getByRole('button', { name: /add job manually/i })
       .first()
@@ -102,7 +102,7 @@ test.describe('Saved Jobs', () => {
               ...Array.from(actions?.querySelectorAll<HTMLElement>('button') ?? []),
             ];
             if (!table || !shell || !status || !actions || controls.some((control) => !control)) {
-              throw new Error('Saved Jobs geometry is incomplete');
+              throw new Error('Saved jobs geometry is incomplete');
             }
             const shellBounds = shell.getBoundingClientRect();
             const controlBounds = controls.map((control) => {

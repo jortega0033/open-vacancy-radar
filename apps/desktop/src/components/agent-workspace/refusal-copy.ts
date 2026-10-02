@@ -104,7 +104,7 @@ const COPY = {
   },
   daemon_unavailable: {
     title: 'The AI runtime is not running',
-    detail: 'Sessions cannot start until the local runtime is available. Check the AI Runtime page.',
+    detail: 'Sessions cannot start until the local runtime is available. Check the AI runtime page.',
   },
   workspace_lease_conflict: {
     title: 'Another session is already using this folder',
@@ -144,7 +144,7 @@ const COPY = {
   },
   refused: {
     title: 'The session was refused',
-    detail: 'The local runtime refused to start this session. Check the AI Runtime page, then try again.',
+    detail: 'The local runtime refused to start this session. Check the AI runtime page, then try again.',
   },
 } as const satisfies Record<StartSessionDenialReason, RefusalCopy>;
 

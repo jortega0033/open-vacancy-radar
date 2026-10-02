@@ -91,8 +91,8 @@ export function TailorCv({ cv, vacancy, sourceCv, profile, model, provider }: Ta
           <span className="badge badge-warning badge-sm">Draft</span>
         </div>
         <p className="text-sm text-base-content/60">
-          Your actual CV content, reordered and re-emphasized for this specific vacancy. It is a
-          draft to read, not a replacement for the CV on file. It is never approved, and copying it
+          Your CV content, reordered and re-emphasized for this vacancy. It is a draft to read and
+          never replaces the CV on file. It is never approved, and copying it
           does not approve it. Only the Approved CV panel builds a CV you can approve.
         </p>
 

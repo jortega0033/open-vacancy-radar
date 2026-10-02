@@ -52,7 +52,7 @@ test.describe('Escape and outside-click dismissal', () => {
   });
 
   test('Escape closes the add-saved-job drawer and the delete confirmation', async ({ window }) => {
-    await goto(window, 'Saved Jobs');
+    await goto(window, 'Saved jobs');
     await window
       .getByRole('button', { name: /add job manually/i })
       .first()

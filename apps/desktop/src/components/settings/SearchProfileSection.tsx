@@ -294,7 +294,7 @@ export function SearchProfileSection({ disabled, onSaved, onSaveError }: SearchP
       </SettingsRow>
       <SettingsRow
         label="Country"
-        description="Where you are based now. Used for the work-eligibility check, not scoring."
+        description="Where you are based now. Used only for the work-eligibility check."
         htmlFor="profile-primary-country"
       >
         <input

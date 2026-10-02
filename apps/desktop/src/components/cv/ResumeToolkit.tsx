@@ -25,10 +25,10 @@ const MODE_DETAILS: Record<
   { label: string; action: string; busy: string; output: string; description: string }
 > = {
   audit: {
-    label: 'Resume audit',
-    action: 'Run resume audit',
+    label: 'CV audit',
+    action: 'Run CV audit',
     busy: 'Auditing your CV…',
-    output: 'resume audit result',
+    output: 'CV audit result',
     description: 'Find clarity, evidence, structure and credibility issues in this CV.',
   },
   achievements: {
@@ -267,7 +267,7 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
           text={run.text}
           {...(run.error ? { error: run.error } : {})}
           label={detail.output}
-          idleHint={`No ${detail.label.toLowerCase()} yet.`}
+          idleHint={`No ${detail.label.replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase())} yet.`}
           busyLabel={detail.busy}
           providerLabel={PROVIDER_LABEL[provider ?? 'claude']}
         />

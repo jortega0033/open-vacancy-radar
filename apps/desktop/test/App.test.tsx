@@ -22,7 +22,7 @@ configure({ asyncUtilTimeout: 10_000 });
 vi.setConfig({ testTimeout: 15_000 });
 
 /**
- * One worldwide vacancy, enough to drive the "Generate Letter" handoff tests below. Matches
+ * One worldwide vacancy, enough to drive the "Generate letter" handoff tests below. Matches
  * `test/components/search/SearchPage.test.tsx`'s own fixtures, trimmed to the one row these tests
  * need.
  */
@@ -164,8 +164,8 @@ describe('App', () => {
     expect(resultsScroller).toHaveClass('overflow-y-auto');
     expect(detailScroller).toHaveClass('overflow-y-auto');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
     expect(main).toHaveClass('overflow-y-auto', 'px-6');
     expect(main).not.toHaveClass('overflow-hidden');
   });
@@ -189,15 +189,15 @@ describe('App', () => {
     expect(screen.getByText(/exited unexpectedly/)).toBeInTheDocument();
   });
 
-  it('renders the real AI Runtime screen: provider cards, not the old session-runner form', async () => {
+  it('renders the real AI runtime screen: provider cards, not the old session-runner form', async () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText(/claude code ready/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'AI Runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'AI runtime' }));
 
     // "Claude Code" also appears in the sidebar footer and header, so assert on card-specific
     // content instead of the ambiguous name text.
     await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
-    expect(screen.getByRole('heading', { level: 1, name: 'AI Runtime' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'AI runtime' })).toBeInTheDocument();
     // The old boilerplate's prompt-runner is gone: no cwd input, no free-text prompt box.
     expect(screen.queryByPlaceholderText('/path/to/project')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /prompt/i })).not.toBeInTheDocument();
@@ -294,8 +294,8 @@ describe('App', () => {
       Object.defineProperty(detailScroller, 'scrollTop', { configurable: true, value: 128, writable: true });
       fireEvent.scroll(detailScroller);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
@@ -327,7 +327,7 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: /Frontend Role 29/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
 
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
       fireEvent.click(screen.getByRole('button', { name: 'Back to Frontend Role 29' }));
@@ -383,8 +383,8 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Run new scan' }));
       await waitFor(() => expect(runScan).toHaveBeenCalledTimes(1));
 
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
       resolveScan(nextReport);
       fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
@@ -412,35 +412,35 @@ describe('App', () => {
       });
 
       render(<App />);
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
 
       // The subtitle never claims a count it does not have yet.
       expect(screen.getByText('Loading…')).toBeInTheDocument();
       expect(screen.queryByText(/\d+ saved/)).not.toBeInTheDocument();
-      // No sidebar badge at all next to "Saved Jobs" -- not "0", nothing.
-      expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs');
+      // No sidebar badge at all next to "Saved jobs" -- not "0", nothing.
+      expect(screen.getByRole('button', { name: 'Saved jobs' }).textContent).toBe('Saved jobs');
 
       resolveCounts?.({ savedJobs: 3, activeApplications: 0, letters: 0, cvDocuments: 0 });
       await waitFor(() => expect(screen.getByText('3 saved')).toBeInTheDocument());
-      expect(screen.getByRole('button', { name: 'Saved Jobs' }).textContent).toBe('Saved Jobs3');
+      expect(screen.getByRole('button', { name: 'Saved jobs' }).textContent).toBe('Saved jobs3');
     });
 
     it('keeps the last successfully loaded counts, rather than resetting to zero, when a later refresh fails', async () => {
-      // `mockResolvedValue` (not `Once`): both the mount fetch and the "Saved Jobs" click's own
+      // `mockResolvedValue` (not `Once`): both the mount fetch and the "Saved jobs" click's own
       // re-sync (`handleNavigate` refreshes on every navigation) must see the real value.
       const getCounts = vi.fn().mockResolvedValue({ savedJobs: 5, activeApplications: 0, letters: 0, cvDocuments: 0 });
       installWorkspaceBridge({ getCounts });
 
       render(<App />);
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
       await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
 
       // Every subsequent call (the next navigation's re-sync) fails.
       getCounts.mockRejectedValue(new Error('workspace unavailable'));
       fireEvent.click(screen.getByRole('button', { name: 'Applications' }));
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Applications' })).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
 
       // Still 5, not reset to 0 and not "Loading…" again -- the last real value survives a failed refresh.
       await waitFor(() => expect(screen.getByText('5 saved')).toBeInTheDocument());
@@ -500,7 +500,7 @@ describe('App', () => {
    * piece of cross-page state App.tsx now carries -- see `pendingVacancy`).
    */
   describe('Search -> Letters vacancy handoff', () => {
-    it('clicking "Generate Letter" on the vacancy detail navigates to Letters with that vacancy pre-selected, no manual retyping', async () => {
+    it('clicking "Generate letter" on the vacancy detail navigates to Letters with that vacancy pre-selected, no manual retyping', async () => {
       installVacancyRadarBridge({
         getStatus: vi.fn().mockResolvedValue({ ready: true } satisfies VacancyEngineStatus),
         getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
@@ -509,7 +509,7 @@ describe('App', () => {
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
 
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
 
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
       expect(screen.getByRole('tab', { name: /generator/i })).toHaveAttribute('aria-selected', 'true');
@@ -540,14 +540,14 @@ describe('App', () => {
 
       render(<App />);
       await waitFor(() => expect(screen.getAllByText('Remote Frontend Engineer').length).toBeGreaterThan(0));
-      fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
       expect(await screen.findByRole('combobox', { name: 'Job' })).toHaveValue('live');
 
       // Leave Letters for an unrelated page, then come back through the sidebar -- an ordinary,
       // non-handoff visit.
-      fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved Jobs' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
+      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Saved jobs' })).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('button', { name: 'Letters' }));
       await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Letters' })).toBeInTheDocument());
@@ -581,7 +581,7 @@ describe('App', () => {
     installWorkspaceBridge({ getCounts, listSavedJobs: vi.fn().mockResolvedValue([]), createSavedJob });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Saved Jobs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Saved jobs' }));
     await waitFor(() => expect(screen.getByText(/no saved jobs/i)).toBeInTheDocument());
 
     const callCountBeforeCreate = getCounts.mock.calls.length;

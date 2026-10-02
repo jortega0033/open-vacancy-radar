@@ -1177,9 +1177,9 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText('Employer verification: none for this vacancy')).toBeInTheDocument());
     // One line above the fold; the explanation sits behind the info toggle and appears once.
-    expect(screen.queryByText(/absent check, not a negative result/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no check ran, so this says nothing against the employer/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'About employer verification' }));
-    expect(screen.getAllByText(/absent check, not a negative result/i)).toHaveLength(1);
+    expect(screen.getAllByText(/no check ran, so this says nothing against the employer/i)).toHaveLength(1);
     expect(screen.queryByText(/employer verification is not available/i)).not.toBeInTheDocument();
 
     expect(screen.queryByText(/recognised sponsor/i)).not.toBeInTheDocument();
@@ -1569,7 +1569,7 @@ describe('SearchPage', () => {
 
       // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
       expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Generate letter' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Prepare application' })).toBeEnabled();
     });
   });
@@ -1781,16 +1781,16 @@ describe('SearchPage', () => {
     expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
   });
 
-  it('clicking "Generate Letter" hands the selected vacancy off as a SelectedVacancy, unchanged by any AI logic', async () => {
+  it('clicking "Generate letter" hands the selected vacancy off as a SelectedVacancy, unchanged by any AI logic', async () => {
     const onGenerateLetter = vi.fn();
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
     });
 
     render(<SearchPage onGenerateLetter={onGenerateLetter} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate letter' })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
 
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
     expect(onGenerateLetter).toHaveBeenCalledWith({
@@ -1829,15 +1829,15 @@ describe('SearchPage', () => {
     expect(screen.getByText('Himalayas (himalayas:salary-copy)')).toBeInTheDocument();
   });
 
-  it('"Generate Letter" is a harmless no-op when the page is used standalone, with no handler wired', async () => {
+  it('"Generate letter" is a harmless no-op when the page is used standalone, with no handler wired', async () => {
     installAllBridges({
       getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
     });
 
     render(<SearchPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate letter' })).toBeInTheDocument());
 
-    expect(() => fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }))).not.toThrow();
+    expect(() => fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }))).not.toThrow();
   });
 
   it('opens the CV assistant on demand for the selected vacancy', async () => {

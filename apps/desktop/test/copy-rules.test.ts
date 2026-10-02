@@ -114,7 +114,7 @@ function hasDash(p: Piece): boolean {
 }
 
 /** LLM prompt builders hold instructions for the model, not text a person reads. */
-const PROMPT_FILE = /(?:^|\/)(?:prompts|[\w-]+-prompt)\.ts$/;
+const PROMPT_FILE = /(?:^|\/)[\w-]*prompts?\.ts$/;
 
 /** Rendered copy: JSX text plus app-authored label strings in plain modules (nav, results, helpers). */
 function isAppCopy(p: Piece): boolean {
@@ -183,5 +183,53 @@ describe('copy rules: pipeline jargon', () => {
       if (banned && !allowed(JARGON_ALLOWLIST, p)) hits.push({ ...p, text: `[${banned.label}] ${p.text}` });
     }
     expectNone('Replace the jargon with plain wording from the glossary', hits);
+  });
+});
+
+// Glossary: vacancy (the posting), role (job title), CV, letter, tailoring. Sentence case for labels.
+const BANNED_VARIANTS: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'Saved Jobs', pattern: /\bSaved Jobs\b/ },
+  { label: 'AI Runtime', pattern: /\bAI Runtime\b/ },
+  { label: 'Generate Letter', pattern: /\bGenerate Letter\b/ },
+  { label: 'Search Jobs', pattern: /\bSearch Jobs\b/ },
+  { label: 'Resume audit', pattern: /\bresume audit\b/i },
+  // "resume" as a verb (resume a session) is fine. Only the document noun is banned.
+  { label: 'resume (use CV)', pattern: /\b(?:your|a|an|the|this|that|uploaded|my|saved) resumes?\b/i },
+  { label: 'Analyse (use US spelling)', pattern: /\b[Aa]nalys(?:e|ed|es|ing)\b/ },
+  { label: 'Title Case "Cover Letter"', pattern: /\bCover Letter\b/ },
+  { label: 'Title Case "Search Profile"', pattern: /\bSearch Profile\b/ },
+];
+
+/** Pieces that may keep a banned variant. Every entry needs a reason. */
+const VARIANT_ALLOWLIST: AllowEntry[] = [];
+
+describe('copy rules: glossary and spelling', () => {
+  it('uses the glossary terms, sentence case and US spelling in rendered copy', () => {
+    const hits: Piece[] = [];
+    for (const p of allPieces) {
+      if (!isAppCopy(p)) continue;
+      const banned = BANNED_VARIANTS.find((b) => b.pattern.test(p.text));
+      if (banned && !allowed(VARIANT_ALLOWLIST, p)) hits.push({ ...p, text: `[${banned.label}] ${p.text}` });
+    }
+    expectNone('Use the glossary term, sentence case or US spelling', hits);
+  });
+});
+
+// "X, not Y" antithesis reads as a stock phrase. State the point directly. Short status labels that
+// carry a real distinction can be listed here with the reason.
+const ANTITHESIS = /,\s+not\s+(?:a|an|the|your|just|only|about|to|for|on|in|\w+)\b/i;
+
+/** Short status labels where "not X" is the actual state. Every entry needs a reason. */
+const ANTITHESIS_ALLOWLIST: AllowEntry[] = [
+  { file: 'src/components/cv/EvidenceReview.tsx', includes: 'Draft, not approved', why: 'Status label: the approval gate is the point' },
+  { file: 'src/components/cv/CvArtifactPanel.tsx', includes: 'Exported by an earlier version, not verified', why: 'Status label for an export that has no file check' },
+  { file: 'src/components/cv/CvPdfPageReview.tsx', includes: ', not shown yet', why: 'Status suffix on a page that has not loaded' },
+  { file: 'src/components/applications/ApplicationReviewSwipeCard.tsx', includes: ', not filled automatically', why: 'Status label: the field was found but left for the person' },
+];
+
+describe('copy rules: antithesis phrasing', () => {
+  it('has no ", not X" antithesis in rendered copy', () => {
+    const hits = allPieces.filter((p) => isAppCopy(p) && ANTITHESIS.test(p.text) && !allowed(ANTITHESIS_ALLOWLIST, p));
+    expectNone('State the point directly instead of "X, not Y"', hits);
   });
 });

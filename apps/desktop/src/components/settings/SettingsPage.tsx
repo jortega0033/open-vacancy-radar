@@ -152,7 +152,7 @@ function SettingsSelect<T extends string>({ id, value, options, disabled, onChan
 }
 
 export interface SettingsPageProps {
-  /** Rendered as the "AI runtime" section's "Manage in AI Runtime" button. Optional so the page
+  /** Rendered as the "AI runtime" section's "Manage in AI runtime" button. Optional so the page
    * still works standalone (e.g. in isolation tests) without a real router behind it. */
   onNavigateToRuntime?: () => void;
 }
@@ -601,7 +601,7 @@ export function SettingsPage({ onNavigateToRuntime }: SettingsPageProps = {}) {
               description={`${PROVIDER_LABEL[settings.defaultProvider]} · CLI default model · AgentDock local runtime`}
             >
               <button type="button" className="btn btn-sm btn-outline" onClick={onNavigateToRuntime}>
-                Manage in AI Runtime
+                Manage in AI runtime
               </button>
             </SettingsRow>
           </SettingsSection>

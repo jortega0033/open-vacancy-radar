@@ -99,7 +99,7 @@ describe('VacancyDetail', () => {
 
     expect(screen.getByRole('button', { name: 'Save job' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate letter' }));
 
     expect(onGenerateLetter).toHaveBeenCalledTimes(1);
   });

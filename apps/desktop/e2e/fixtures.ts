@@ -111,8 +111,8 @@ export { expect } from '@playwright/test';
 
 /**
  * Selects a sidebar destination by its accessible name (`AppSidebar`'s `NavGroup` sets
- * `aria-label={item.label}` on every nav button: "Search", "Saved Jobs", "Applications", "CV",
- * "Letters", "AI Runtime", "Settings"). Scoped to the sidebar's own `aria-label="Main"` landmark:
+ * `aria-label={item.label}` on every nav button: "Search", "Saved jobs", "Applications", "CV",
+ * "Letters", "AI runtime", "Settings"). Scoped to the sidebar's own `aria-label="Main"` landmark:
  * "Search" is also the accessible name of the Search page's own filter-bar button once that page
  * is active, so a page-wide lookup is ambiguous.
  */
