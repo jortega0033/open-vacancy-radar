@@ -437,3 +437,25 @@
     min-width: 0;
   }
 }
+
+/*
+ * Accessibility sweep (#455, #496). Kept in its own block so it does not collide with other
+ * edits to this file.
+ */
+
+/* Muted text floor: 60% of base-content reaches 4.5:1 on base-100 and base-200 in both themes.
+   Use `text-base-content/60` in markup, or this token where a plain colour is needed. */
+:root {
+  --color-base-content-muted: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+  --icon-sm: 16px;
+  --icon-md: 20px;
+}
+
+/* The repeated small uppercase label. Colour is the muted floor, so it stays readable. */
+@utility ovr-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: var(--color-base-content-muted);
+}

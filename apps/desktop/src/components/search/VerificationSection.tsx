@@ -19,10 +19,10 @@ function KeyValue({ items }: { items: { k: string; v: string }[] }) {
 export function SectionHeading({ children, aside }: { children: string; aside?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-base-300 pb-2">
-      <h3 className="text-xs font-semibold tracking-wide text-base-content/70 uppercase">
+      <h3 className="ovr-eyebrow">
         {children}
       </h3>
-      {aside && <span className="text-xs text-base-content/50">{aside}</span>}
+      {aside && <span className="text-xs text-base-content/60">{aside}</span>}
     </div>
   );
 }

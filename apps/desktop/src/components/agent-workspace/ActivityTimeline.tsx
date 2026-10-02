@@ -4,6 +4,7 @@ import { HISTORY_ONLY_EXPLANATION } from './refusal-copy.js';
 import { formatInstant } from './status.js';
 import type { SessionEntry } from './workspace-reducer.js';
 import { hasOnlyDigestHistory } from './workspace-reducer.js';
+import { Eyebrow } from '../shell/index.js';
 
 /**
  * One session's merged timeline (ADI-07).
@@ -79,10 +80,8 @@ interface RowProps {
 function RowHeading({ label, at }: { label: string; at: string }) {
   return (
     <div className="mb-1 flex items-baseline justify-between gap-3">
-      <span className="text-[11px] font-semibold tracking-wide text-base-content/60 uppercase">
-        {label}
-      </span>
-      {at.length > 0 && <span className="font-mono text-[10px] text-base-content/40">{at}</span>}
+      <Eyebrow>{label}</Eyebrow>
+      {at.length > 0 && <span className="font-mono text-xs text-base-content/60">{at}</span>}
     </div>
   );
 }
@@ -111,7 +110,7 @@ function ProseBody({
         <p className="text-sm text-base-content/60">No text was recorded for this message.</p>
       )}
       {item.textTruncated === true && (
-        <p className="mt-1 text-xs text-base-content/50">
+        <p className="mt-1 text-xs text-base-content/60">
           This message was longer than the app shows, so it is cut off here.
         </p>
       )}
@@ -245,9 +244,9 @@ function RateLimitWindow({
           {headroomText !== undefined ? ` · ${headroomText}` : ''}
         </p>
       ) : (
-        <p className="text-xs text-base-content/50">Utilization unavailable</p>
+        <p className="text-xs text-base-content/60">Utilization unavailable</p>
       )}
-      <p className="text-xs text-base-content/50">
+      <p className="text-xs text-base-content/60">
         Resets:{' '}
         {reset !== undefined ? <time dateTime={reset.iso}>{reset.label}</time> : <span>Unavailable</span>}
       </p>
@@ -300,11 +299,11 @@ function TimelineRow({ item, toolNamesByAlias, sessionId }: RowProps) {
           <p className="text-sm">
             <span className="font-mono">{item.toolName}</span>
             {item.toolAlias !== undefined && (
-              <span className="ml-2 text-xs text-base-content/50">call {item.toolAlias}</span>
+              <span className="ml-2 text-xs text-base-content/60">call {item.toolAlias}</span>
             )}
           </p>
           {item.input !== undefined && (
-            <p className="mt-1 text-xs text-base-content/50">{digestLine(item.input.bytes, 'Input recorded')}</p>
+            <p className="mt-1 text-xs text-base-content/60">{digestLine(item.input.bytes, 'Input recorded')}</p>
           )}
         </>
       );
@@ -320,18 +319,18 @@ function TimelineRow({ item, toolNamesByAlias, sessionId }: RowProps) {
           <p className="text-sm">
             <span className="font-mono">{name ?? 'Unnamed tool'}</span>
             {item.toolAlias !== undefined && (
-              <span className="ml-2 text-xs text-base-content/50">call {item.toolAlias}</span>
+              <span className="ml-2 text-xs text-base-content/60">call {item.toolAlias}</span>
             )}
           </p>
           {item.resultPreview !== undefined ? (
             <p className="mt-1 text-xs break-words whitespace-pre-wrap text-base-content/70">{item.resultPreview}</p>
           ) : (
             item.result !== undefined && (
-              <p className="mt-1 text-xs text-base-content/50">{digestLine(item.result.bytes, 'Result recorded')}</p>
+              <p className="mt-1 text-xs text-base-content/60">{digestLine(item.result.bytes, 'Result recorded')}</p>
             )
           )}
           {item.resultPreviewTruncated === true && (
-            <p className="mt-1 text-xs text-base-content/50">
+            <p className="mt-1 text-xs text-base-content/60">
               This result was longer than the app shows, so it is cut off here.
             </p>
           )}
@@ -366,7 +365,7 @@ function TimelineRow({ item, toolNamesByAlias, sessionId }: RowProps) {
               .join(' · ') || 'No token counts were reported.'}
           </p>
           {contextLine !== undefined && (
-            <p className="mt-1 text-xs text-base-content/50">{contextLine}</p>
+            <p className="mt-1 text-xs text-base-content/60">{contextLine}</p>
           )}
         </>
       );
@@ -385,7 +384,7 @@ function TimelineRow({ item, toolNamesByAlias, sessionId }: RowProps) {
             The agent reported an error
             {item.code === undefined ? '.' : <> (<span className="font-mono">{item.code}</span>).</>}
           </p>
-          <p className="mt-1 text-xs text-base-content/50">
+          <p className="mt-1 text-xs text-base-content/60">
             {item.recoverable
               ? 'The session continued after this.'
               : 'The session could not continue after this.'}

@@ -25,5 +25,7 @@ export {
   isNavPage,
 } from './nav.js';
 export type { NavBadge, NavItem, NavPage } from './nav.js';
+export { Eyebrow } from './Eyebrow.js';
+export type { EyebrowProps } from './Eyebrow.js';
 export { WarningBanner } from './WarningBanner.js';
 export type { WarningBannerProps } from './WarningBanner.js';
