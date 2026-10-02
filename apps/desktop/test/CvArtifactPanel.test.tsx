@@ -49,6 +49,8 @@ function overlayWith(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidence
     id: 'overlay-1',
     cvId: 'cv-1',
     vacancyKey: 'url:https://example.invalid/jobs/1',
+    caseTitle: '',
+    caseCompany: '',
     sourceCvContentHash: 'a'.repeat(64),
     jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),

@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import * as workspace from '../electron/workspace/repository.js';
+import { cvEvidenceOverlays } from '../electron/workspace/schema.js';
 import { EMPTY_CV_SOURCE, stableCvSourceJson, type CvSourceDocument } from '../electron/workspace/cv-source-schema.js';
 import { describeCvEvidenceOverlayGaps, describeCvJdGaps } from '../electron/workspace/cv-evidence-schema.js';
 import { makeFact, makeOverlay, makeRequirement } from './fixtures/cv-evidence.js';
@@ -182,6 +184,44 @@ describe('candidate confirmation of a short JD', () => {
   it('is accepted by the patch validator as a boolean only', () => {
     expect(parseCvEvidenceOverlayPatch({ jdConfirmedComplete: true })).toEqual({ jdConfirmedComplete: true });
     expect(() => parseCvEvidenceOverlayPatch({ jdConfirmedComplete: 'yes' })).toThrow();
+  });
+});
+
+describe('a completeness-flag change on unchanged text', () => {
+  it('never lets a bare jdComplete:true clear a known source-side cut', () => {
+    const { overlay } = newCase(FULL_JD, { jdComplete: false });
+    const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdComplete: true });
+    expect(after.jdIncompleteReasons).toEqual(['truncated_at_source']);
+    expect(after.jdComplete).toBe(false);
+    expect(after.jdRevisions).toHaveLength(1);
+  });
+
+  it('is cleared only by new text', () => {
+    const { overlay } = newCase(FULL_JD, { jdComplete: false });
+    const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdSnapshot: `${FULL_JD}
+The end of the posting.` });
+    expect(after.jdIncompleteReasons).toEqual([]);
+    expect(after.jdComplete).toBe(true);
+  });
+
+  it('invalidates an approval like any other input change', () => {
+    const { overlay } = newCase(FULL_JD);
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { requirementCoverage: { status: 'complete', batches: 1 } });
+    const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, workspace.getCvEvidenceOverlayById(db, overlay.id).caseRevision);
+    expect(approved.state).toBe('candidate_approved');
+    const after = workspace.updateCvEvidenceOverlay(db, overlay.id, { jdComplete: false });
+    expect(after.state).toBe('draft');
+    expect(after.jdIncompleteReasons).toEqual(['truncated_at_source']);
+  });
+
+  it('is rechecked at export: a case whose JD is now known to be cut off is not ready', () => {
+    const { overlay } = newCase(FULL_JD);
+    workspace.updateCvEvidenceOverlay(db, overlay.id, { requirementCoverage: { status: 'complete', batches: 1 } });
+    const approved = workspace.approveCvEvidenceOverlay(db, overlay.id, workspace.getCvEvidenceOverlayById(db, overlay.id).caseRevision);
+    expect(workspace.checkCvCaseExportReadiness(db, approved.id).blockers).toEqual([]);
+    // A legacy row: the cut is recorded behind the repository's back, so approval is still standing.
+    db.update(cvEvidenceOverlays).set({ jdIncompleteReasons: ['truncated_at_source'], jdComplete: false }).where(eq(cvEvidenceOverlays.id, approved.id)).run();
+    expect(workspace.checkCvCaseExportReadiness(db, approved.id).blockers.join(' ')).toMatch(/cut off/);
   });
 });
 

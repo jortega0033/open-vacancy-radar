@@ -70,6 +70,8 @@ async function getOrCreateOverlay(
   return window.workspace.createCvEvidenceOverlay({
     cvId,
     vacancyKey,
+    caseTitle: vacancy.title,
+    caseCompany: vacancy.company,
     sourceCvContentHash,
     jdSnapshotHash,
     jdSnapshot: jobDescriptionBody(vacancy),
@@ -188,7 +190,11 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
     if (run.status !== 'completed' || !cvId || !vacancy || !vacancyKey) return;
     let cancelled = false;
     void (async () => {
-      const jdText = jobDescriptionBody(vacancy);
+      // The stored latest revision is the source of truth for the case's text (#419). When one
+      // exists, it is what the requirements are read against and what stays saved: a vacancy that
+      // still carries its original posting must never be written over a newer pasted revision.
+      const stored = overlay && overlay.jdSnapshot.trim().length > 0 ? overlay.jdSnapshot : null;
+      const jdText = stored ?? jobDescriptionBody(vacancy);
       let batch: ReturnType<typeof parseRequirementMappingResponse>;
       try {
         batch = parseRequirementMappingResponse(run.text, jdText);
@@ -198,9 +204,13 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
       }
       try {
         const base = await getOrCreateOverlay(overlay, cvId, vacancyKey, sourceCv, vacancy);
+        // A case created a moment ago by `getOrCreateOverlay` holds this same text already, and so
+        // does any case whose text is the stored one: only a changed text is sent.
+        const storedText = base.jdSnapshot;
+        const sendJd = jdText !== storedText;
         const [sourceCvContentHash, jdSnapshotHash] = await Promise.all([
           sha256HexOfSource(sourceCv ?? null),
-          sha256Hex(jdText),
+          sendJd ? sha256Hex(jdText) : Promise.resolve(''),
         ]);
         const merged = mergeRequirementMappings(base.requirements, batch.accepted);
         // A batch that comes back full may have been cut off by the model's output cap, so the list
@@ -208,11 +218,15 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         const exhausted = batch.hasMore && batchesRef.current >= CV_REQUIREMENT_MAX_BATCHES;
         const updated = await window.workspace.updateCvEvidenceOverlay(base.id, {
           sourceCvContentHash,
-          jdSnapshot: jdText,
-          jdSnapshotHash,
-          jdOrigin: vacancy.jdOrigin ?? 'found',
-          jdUrl: vacancy.url,
-          ...(vacancy.jdRequisition ? { jdRequisition: vacancy.jdRequisition } : {}),
+          ...(sendJd
+            ? {
+                jdSnapshot: jdText,
+                jdSnapshotHash,
+                jdOrigin: vacancy.jdOrigin ?? 'found',
+                jdUrl: vacancy.url,
+                ...(vacancy.jdRequisition ? { jdRequisition: vacancy.jdRequisition } : {}),
+              }
+            : {}),
           requirements: merged,
           ...(jdText.trim()
             ? { requirementCoverage: { status: batch.hasMore ? ('partial' as const) : ('complete' as const), batches: batchesRef.current } }

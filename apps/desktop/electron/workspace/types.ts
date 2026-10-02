@@ -280,6 +280,9 @@ export interface CvEvidenceOverlayRecord {
   id: string;
   cvId: string;
   vacancyKey: string;
+  /** #419: the role and company the case was opened for; empty for a case that predates them. */
+  caseTitle: string;
+  caseCompany: string;
   sourceCvContentHash: string;
   jdSnapshot: string;
   jdSnapshotHash: string;
@@ -326,6 +329,9 @@ export interface CvEvidenceOverlayRecord {
 export interface CvEvidenceOverlayInput {
   cvId: string;
   vacancyKey: string;
+  /** Role and company, stored so the case can be listed and reopened under its own name. */
+  caseTitle?: string;
+  caseCompany?: string;
   sourceCvContentHash: string;
   jdSnapshot?: string;
   jdSnapshotHash: string;

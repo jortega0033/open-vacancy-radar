@@ -34,6 +34,8 @@ function installStatefulOverlayBridge() {
         id: `overlay-${nextId++}`,
         cvId: input.cvId,
         vacancyKey: input.vacancyKey,
+        caseTitle: input.caseTitle ?? '',
+        caseCompany: input.caseCompany ?? '',
         sourceCvContentHash: input.sourceCvContentHash,
         jdSnapshot: input.jdSnapshot ?? '',
         jdSnapshotHash: input.jdSnapshotHash,
@@ -292,6 +294,41 @@ describe('RequirementMapping (#419)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
     await screen.findByText('A manual one');
+    expect(workspace.createCvEvidenceOverlay).not.toHaveBeenCalled();
+  });
+
+  it('never writes the vacancy original text over a newer stored JD revision', async () => {
+    const bridges = installBridges();
+    const workspace = installStatefulOverlayBridge();
+    const STORED = 'Pasted posting. Maintain GraphQL services every day.';
+    await workspace.createCvEvidenceOverlay({
+      cvId: 'cv-1',
+      vacancyKey: `url:${TEST_VACANCY.url}`,
+      sourceCvContentHash: 'a'.repeat(64),
+      jdSnapshot: STORED,
+      jdSnapshotHash: 'b'.repeat(64),
+    });
+    vi.mocked(workspace.createCvEvidenceOverlay).mockClear();
+
+    // The vacancy still carries its original posting, as it does after a remount.
+    render(<RequirementMapping cvId="cv-1" cv={CV} vacancy={TEST_VACANCY} />);
+    await screen.findByRole('button', { name: /map requirements/i });
+    await waitFor(() => expect(workspace.getCvEvidenceOverlay).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /map requirements/i }));
+    await waitFor(() => expect(bridges.agentDock.createSession).toHaveBeenCalled());
+    emitAnswer(bridges, {
+      requirements: [
+        { text: 'GraphQL services', jdAnchor: 'Maintain GraphQL services', classification: 'required', evidenceClass: 'needs_verification', anchorParentId: '' },
+      ],
+    });
+
+    await screen.findByText('GraphQL services');
+    const patches = vi.mocked(workspace.updateCvEvidenceOverlay).mock.calls.map((call) => call[1]);
+    expect(patches.length).toBeGreaterThan(0);
+    for (const patch of patches) {
+      expect(patch).not.toHaveProperty('jdSnapshot');
+      expect(patch).not.toHaveProperty('jdSnapshotHash');
+    }
     expect(workspace.createCvEvidenceOverlay).not.toHaveBeenCalled();
   });
 

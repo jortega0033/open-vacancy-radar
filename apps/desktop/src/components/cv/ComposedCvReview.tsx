@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { composeApprovedTailoredResume } from '../../../electron/resume-source.js';
 import { snapshotNeedsReapproval } from '../../../electron/workspace/cv-artifact-status.js';
-import { selectSourceProjects } from '../../../electron/workspace/cv-source-schema.js';
+import { describeCvSourceGaps, selectSourceProjects } from '../../../electron/workspace/cv-source-schema.js';
 import type {
   CvEvidenceOverlayRecord,
   CvProfile,
@@ -111,6 +111,10 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
     selectedProjects.length === 0 || (overlay?.projectSelection?.projectIds.join('\n') ?? null) === selectedIds;
   const selectionStale = !!overlay?.projectSelection && !selectionApproved;
   const needsRebase = !!rebasePlan?.inputsChanged;
+  // The main process refuses approval and export for the same reasons (#419); showing them here
+  // tells the candidate why, and where to fix it, before they press anything.
+  const sourceGaps = useMemo(() => (sourceCv ? describeCvSourceGaps(sourceCv) : []), [sourceCv]);
+  const sourceBlocked = sourceGaps.length > 0;
 
   const canPreview = !!overlay && !!cvId && !!vacancyKey && !!sourceCv;
 
@@ -223,6 +227,20 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
           </div>
         )}
 
+        {overlay && sourceBlocked && (
+          <div className="alert alert-warning text-sm" role="alert" aria-label="Source CV not ready">
+            <div>
+              <div className="font-medium">Your source CV is not ready for approval or export</div>
+              <ul className="list-disc pl-4">
+                {sourceGaps.map((gap) => (
+                  <li key={gap}>{gap}</li>
+                ))}
+              </ul>
+              <p className="mt-1">Open this CV in the CV Library and review its source, then come back to this case.</p>
+            </div>
+          </div>
+        )}
+
         {overlay && needsRebase && rebasePlan && (
           <section className="rounded-box border border-warning p-4 text-sm" aria-label="Changes since this case was started">
             <h3 className="font-medium">Your CV changed after this case was started</h3>
@@ -298,7 +316,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
                 type="button"
                 className="btn btn-outline"
                 onClick={() => void handleApproveProjects()}
-                disabled={approvingProjects || selectionApproved || needsRebase}
+                disabled={approvingProjects || selectionApproved || needsRebase || sourceBlocked}
               >
                 {approvingProjects && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
                 {selectionApproved ? 'Projects approved' : 'Approve these projects'}
@@ -321,7 +339,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
               type="button"
               className="btn btn-primary"
               onClick={() => void handleApprove()}
-              disabled={composed.blockers.length > 0 || approving || (isApproved && !needsReapproval) || needsRebase}
+              disabled={composed.blockers.length > 0 || approving || (isApproved && !needsReapproval) || needsRebase || sourceBlocked}
             >
               {approving && <span className="loading loading-spinner loading-xs" aria-hidden="true" />}
               {isApproved && !needsReapproval ? 'Approved' : needsReapproval ? 'Approve again' : 'Approve CV'}
@@ -347,7 +365,7 @@ export function ComposedCvReview({ cvId, vacancy, sourceCv, profile }: ComposedC
           </div>
         )}
 
-        {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} />}
+        {overlay && isApproved && !needsReapproval && <CvArtifactPanel overlay={overlay} onOverlayChange={setOverlay} sourceGaps={sourceGaps} />}
 
         {composed && composed.blockers.length > 0 && (
           <div className="alert alert-warning text-sm" role="alert">

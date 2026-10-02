@@ -8,26 +8,16 @@ import { CvDrawer, type CvDrawerSubmitPayload } from './CvDrawer.js';
 import { CvLibraryTable } from './CvLibraryTable.js';
 import { CvUploadAction } from './CvUploadAction.js';
 import { ManualCaseForm } from './ManualCaseForm.js';
+import { describeTailoringCase } from './tailoring-cases.js';
+import { TailoringCases } from './TailoringCases.js';
+
+export { describeTailoringCase };
 
 /** How long the "Exported" confirmation stays up next to a row, matching `TailorCv`'s own
  * copy-feedback window. */
 const EXPORT_FEEDBACK_MS = 2_000;
 
 type DrawerState = { mode: 'add' } | { mode: 'edit'; record: CvDocumentRecord };
-
-/** What the candidate sees for one tailoring case in the delete confirmation. A case stores a key
- * rather than a title, so the label is read back from the key (and, for a pasted job, from the start
- * of its saved text). */
-export function describeTailoringCase(overlay: CvEvidenceOverlayRecord): string {
-  const key = overlay.vacancyKey;
-  if (key.startsWith('fields:')) {
-    const [title = '', company = ''] = key.slice('fields:'.length).split('|');
-    if (title || company) return [title, company].filter(Boolean).join(' at ');
-  }
-  if (key.startsWith('url:')) return key.slice('url:'.length);
-  const firstLine = overlay.jdSnapshot.trim().split('\n')[0]?.slice(0, 60) ?? '';
-  return firstLine ? `Pasted job: ${firstLine}` : 'Pasted job with no text saved yet';
-}
 
 function describeError(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
@@ -110,8 +100,9 @@ export function CvLibraryPage() {
   const [deleteTarget, setDeleteTarget] = useState<CvDocumentRecord | null>(null);
   /** The tailoring cases that go with `deleteTarget`: `null` when they could not be listed. */
   const [deleteCases, setDeleteCases] = useState<CvEvidenceOverlayRecord[] | null>([]);
-  /** `'form'` while the candidate fills in the job, then the vacancy the workspace opens on. */
-  const [tailoring, setTailoring] = useState<'form' | VacancyLead | null>(null);
+  /** `'form'` while the candidate fills in the job, then the vacancy the workspace opens on. A
+   * reopened case also names the CV it belongs to. */
+  const [tailoring, setTailoring] = useState<'form' | { vacancy: VacancyLead; cvId?: string } | null>(null);
   const [actionError, setActionError] = useState<string>();
   const [actionStatus, setActionStatus] = useState<string>();
 
@@ -258,9 +249,9 @@ export function CvLibraryPage() {
           Back to CV library
         </button>
         {tailoring === 'form' ? (
-          <ManualCaseForm onSubmit={setTailoring} onCancel={() => setTailoring(null)} />
+          <ManualCaseForm onSubmit={(vacancy) => setTailoring({ vacancy })} onCancel={() => setTailoring(null)} />
         ) : (
-          <CvAssistant vacancy={tailoring} />
+          <CvAssistant vacancy={tailoring.vacancy} {...(tailoring.cvId ? { initialCvId: tailoring.cvId } : {})} />
         )}
       </div>
     );
@@ -316,6 +307,10 @@ export function CvLibraryPage() {
             exportedId={exportedId}
           />
         </div>
+      )}
+
+      {!isLoading && hasAnyDocuments && (
+        <TailoringCases documents={documents ?? []} onOpen={(vacancy, cvId) => setTailoring({ vacancy, cvId })} />
       )}
 
       {drawerState && (

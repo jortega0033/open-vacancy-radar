@@ -26,6 +26,8 @@ function overlay(partial: Partial<CvEvidenceOverlayRecord> = {}): CvEvidenceOver
     id: 'overlay-1',
     cvId: 'cv-1',
     vacancyKey: `url:${FOUND.url}`,
+    caseTitle: '',
+    caseCompany: '',
     sourceCvContentHash: 'a'.repeat(64),
     jdSnapshot: FULL_JD,
     jdSnapshotHash: 'b'.repeat(64),
@@ -217,6 +219,67 @@ describe('CvAssistant job description handoff (#419, steps 1 and 4)', () => {
         expect.objectContaining({ jdSnapshot: 'My pasted posting text.', jdOrigin: 'pasted' }),
       ),
     );
+  });
+
+  it('shows the stored pasted text after a remount, and creates no revision of its own', async () => {
+    installBridges();
+    const pasted = overlay({
+      jdSnapshot: 'My earlier pasted posting text.',
+      jdRevisions: [
+        ...overlay().jdRevisions,
+        {
+          revisionId: 'rev-2',
+          text: 'My earlier pasted posting text.',
+          textHash: 'd'.repeat(64),
+          complete: true,
+          capturedAt: '2026-10-01T10:00:00.000Z',
+          origin: 'pasted',
+          url: FOUND.url,
+          requisition: 'REQ-7',
+          incompleteReasons: [],
+          warning: '',
+        },
+      ],
+    });
+    const updateCvEvidenceOverlay = vi.fn();
+    const createCvEvidenceOverlay = vi.fn();
+    installWorkspaceBridge({
+      listCvDocuments: vi.fn().mockResolvedValue([makeCv()]),
+      getCvEvidenceOverlay: vi.fn().mockResolvedValue(pasted),
+      updateCvEvidenceOverlay,
+      createCvEvidenceOverlay,
+    });
+    // The vacancy still carries its original posting text, as it does every time the screen opens.
+    render(<CvAssistant vacancy={FOUND} />);
+
+    await waitFor(() => expect(screen.getByLabelText('Full job description text')).toHaveTextContent('My earlier pasted posting text.'));
+    expect(screen.getByLabelText('Full job description text')).not.toHaveTextContent('Fluent English is essential');
+    expect(screen.getByText(/Text you pasted/)).toHaveTextContent('requisition REQ-7');
+    expect(updateCvEvidenceOverlay).not.toHaveBeenCalled();
+    expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
+  });
+
+  it('JdReview itself prefers the stored latest revision over the text the vacancy carries', async () => {
+    installWorkspaceBridge({
+      getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'Stored replacement text.' })),
+    });
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText('Full job description text')).toHaveTextContent('Stored replacement text.'));
+    expect(screen.getByRole('button', { name: /save as new revision/i })).toBeDisabled();
+  });
+
+  it('replacing the text writes exactly one update and no create', async () => {
+    const updateCvEvidenceOverlay = vi.fn().mockResolvedValue(overlay({ jdSnapshot: 'Pasted text.' }));
+    const createCvEvidenceOverlay = vi.fn();
+    installWorkspaceBridge({ getCvEvidenceOverlay: vi.fn().mockResolvedValue(overlay()), updateCvEvidenceOverlay, createCvEvidenceOverlay });
+    render(<JdReview cvId="cv-1" vacancy={FOUND} onReplaceText={vi.fn()} onSaved={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /replace job description/i }));
+    fireEvent.change(screen.getByLabelText('Job description text'), { target: { value: 'Pasted text.' } });
+    fireEvent.click(screen.getByRole('button', { name: /use this text/i }));
+
+    await waitFor(() => expect(updateCvEvidenceOverlay).toHaveBeenCalledTimes(1));
+    expect(createCvEvidenceOverlay).not.toHaveBeenCalled();
   });
 
   it('uses the minted case key of a manual vacancy rather than one derived from its fields', async () => {

@@ -13,6 +13,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
+  describeCvSourceGaps,
   EMPTY_CV_SOURCE,
   selectSourceProjects,
   stableCvSourceJson,
@@ -25,6 +26,7 @@ import {
   CV_ARTIFACT_HISTORY_LIMIT,
   CV_RENDER_CONTRACT_VERSION,
   currentCvJdRevisionId,
+  describeCvJdGaps,
   EMPTY_CV_REQUIREMENT_COVERAGE,
   findCvFactConflicts,
   invalidatedOverlayState,
@@ -637,6 +639,8 @@ function toCvEvidenceOverlay(row: CvEvidenceOverlayRow): CvEvidenceOverlayRecord
     id: row.id,
     cvId: row.cvId,
     vacancyKey: row.vacancyKey,
+    caseTitle: row.caseTitle ?? '',
+    caseCompany: row.caseCompany ?? '',
     sourceCvContentHash: row.sourceCvContentHash,
     jdSnapshot: row.jdSnapshot,
     jdSnapshotHash: row.jdSnapshotHash,
@@ -758,6 +762,8 @@ export function createCvEvidenceOverlay(db: WorkspaceDb, input: CvEvidenceOverla
       .values({
         cvId: input.cvId,
         vacancyKey: input.vacancyKey,
+        caseTitle: input.caseTitle ?? '',
+        caseCompany: input.caseCompany ?? '',
         sourceCvContentHash: input.sourceCvContentHash,
         jdSnapshot,
         jdSnapshotHash,
@@ -817,8 +823,9 @@ export function updateCvEvidenceOverlay(
     jdTextChanged = jdSnapshot !== existing.jdSnapshot;
     // A source-side cut the caller reports applies to the text it is reported with. When the text
     // is unchanged and the caller says nothing, the earlier report stands.
-    const reportedComplete =
-      values.jdComplete ?? (jdTextChanged ? true : !existing.jdIncompleteReasons.includes('truncated_at_source'));
+    // A bare `jdComplete: true` on unchanged text never lifts a known cut: only new text can.
+    const knownCut = !jdTextChanged && existing.jdIncompleteReasons.includes('truncated_at_source');
+    const reportedComplete = knownCut ? false : (values.jdComplete ?? true);
     const assessment = assessJdText(jdSnapshot, reportedComplete);
     const lastRevision = existing.jdRevisions.at(-1);
     set.jdSnapshot = jdSnapshot;
@@ -888,6 +895,7 @@ export function updateCvEvidenceOverlay(
     values.sourceCvContentHash !== undefined ||
     values.jdSnapshot !== undefined ||
     values.jdSnapshotHash !== undefined ||
+    values.jdComplete !== undefined ||
     values.jdConfirmedComplete !== undefined ||
     values.requirements !== undefined ||
     values.requirementCoverage !== undefined ||
@@ -954,6 +962,16 @@ function bumpCaseRevision(current: string): string {
   return String(Number(current) + 1);
 }
 
+/** The main-process source gate (#419): a case is never approved, and its projects never approved,
+ * against a source CV that is incomplete or that the candidate has not reviewed. The reasons come
+ * from `describeCvSourceGaps`, so the banner and the refusal always say the same thing. */
+function assertCvSourceReviewed(source: CvSourceDocument): void {
+  const gaps = describeCvSourceGaps(source);
+  if (gaps.length > 0) {
+    throw new Error(`this CV cannot be approved yet: ${gaps.join('; ')}. Review the source CV in the CV Library first`);
+  }
+}
+
 function currentCaseInputs(doc: CvDocumentRecord): CvCurrentInputs {
   return {
     source: doc.source,
@@ -1010,6 +1028,7 @@ export function approveCvEvidenceOverlay(
     if (!doc.source) {
       throw new Error('this CV has no reviewed source yet, so there is nothing to compose an approved CV from');
     }
+    assertCvSourceReviewed(doc.source);
     const currentSourceCvContentHash = computeSourceCvContentHash(doc.source);
     // A case started before the CV changed has to be rebased onto the new CV by the candidate; it
     // cannot be approved against a CV it was not built from (#419).
@@ -1068,6 +1087,7 @@ export function approveCvProjectSelection(db: WorkspaceDb, id: string, expectedC
     if (existing.caseRevision !== expectedCaseRevision) throw new CvEvidenceOverlayRevisionConflictError(existing.caseRevision);
     const doc = getCvDocument(tx, existing.cvId);
     if (!doc.source) throw new Error('this CV has no reviewed source yet, so there are no projects to approve');
+    assertCvSourceReviewed(doc.source);
     const selection: CvProjectSelection = {
       projectIds: selectSourceProjects(doc.source).map((project) => project.id),
       maxProjects: doc.source.maxProjects,
@@ -1115,6 +1135,8 @@ export function checkCvCaseExportReadiness(
   if (snapshot.renderContractVersion !== CV_RENDER_CONTRACT_VERSION) {
     blockers.push('this CV was approved before the current document format, so approve it again to export it. Your facts and wording are kept');
   }
+  // A case whose JD was later found cut off, or that was approved before the JD gate, is a blocker.
+  blockers.push(...describeCvJdGaps(overlay));
   const jdHash = createHash('sha256').update(overlay.jdSnapshot).digest('hex');
   const lastRevision = overlay.jdRevisions.at(-1);
   if (overlay.jdSnapshot.trim() === '' || overlay.jdSnapshotHash !== jdHash || (lastRevision && lastRevision.textHash !== jdHash)) {
@@ -1123,6 +1145,10 @@ export function checkCvCaseExportReadiness(
   if (!doc.source) {
     blockers.push('this CV has no reviewed source, so there is nothing to export it against');
   } else {
+    // A legacy case approved against a source that is incomplete or unreviewed must not export.
+    for (const gap of describeCvSourceGaps(doc.source)) {
+      blockers.push(`${gap}. Review the source CV in the CV Library, then approve this CV again`);
+    }
     if (computeSourceCvContentHash(doc.source) !== overlay.sourceCvContentHash) {
       blockers.push('your reviewed CV changed since this case was approved, so review the changes and approve this CV again');
     }

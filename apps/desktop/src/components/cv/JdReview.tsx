@@ -46,8 +46,15 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
   const [error, setError] = useState<string>();
 
   const caseKey = caseKeyFor(vacancy);
-  const text = jobDescriptionBody(vacancy);
-  const origin: CvJdOrigin = vacancy.jdOrigin ?? 'found';
+  // The latest stored revision is the source of truth once the case has one (#419). The vacancy's own
+  // text is only what a first save starts from: showing it over a newer stored revision would hide
+  // what the case actually works from, and saving it would quietly replace the candidate's paste.
+  const storedLatest = overlay?.jdRevisions.at(-1);
+  const storedText = overlay && overlay.jdSnapshot.trim().length > 0 ? overlay.jdSnapshot : null;
+  const text = storedText ?? jobDescriptionBody(vacancy);
+  const origin: CvJdOrigin = (storedText !== null ? storedLatest?.origin : undefined) ?? vacancy.jdOrigin ?? 'found';
+  const shownUrl = (storedText !== null ? storedLatest?.url : undefined) || vacancy.url;
+  const shownRequisition = (storedText !== null ? storedLatest?.requisition : undefined) || vacancy.jdRequisition || '';
   const assessment = assessJdCompleteness({ ...vacancy, description: text, requirements: null });
 
   useEffect(() => {
@@ -89,6 +96,8 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
           : await window.workspace.createCvEvidenceOverlay({
               cvId,
               vacancyKey: caseKey,
+              caseTitle: vacancy.title,
+              caseCompany: vacancy.company,
               sourceCvContentHash: await sha256HexOfSource(sourceCv ?? null),
               jdSnapshot: nextText,
               jdSnapshotHash,
@@ -158,8 +167,8 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
           <>
             <div className="text-xs text-base-content/60">
               {ORIGIN_LABEL[origin]}
-              {vacancy.url ? ` (${vacancy.url})` : ''}
-              {vacancy.jdRequisition ? `, requisition ${vacancy.jdRequisition}` : ''}
+              {shownUrl ? ` (${shownUrl})` : ''}
+              {shownRequisition ? `, requisition ${shownRequisition}` : ''}
             </div>
             <pre
               className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-box border border-base-300 bg-base-200/40 p-3 text-xs"
@@ -203,7 +212,7 @@ export function JdReview({ cvId, vacancy, sourceCv, onReplaceText, onSaved }: Jd
             type="button"
             className="btn btn-primary btn-sm"
             disabled={!cvId || !hasText || busy || savedMatchesText}
-            onClick={() => void save(text, origin, vacancy.jdRequisition ?? '')}
+            onClick={() => void save(text, origin, shownRequisition)}
           >
             {overlay ? 'Save as new revision' : 'Save job description'}
           </button>
