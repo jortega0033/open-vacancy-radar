@@ -61,6 +61,8 @@ export interface ApplicationsPageProps {
   focusAttemptId?: string | null;
   onFocusAttemptConsumed?: () => void;
   onGenerateLetter?: (vacancy: SelectedVacancy, attemptId: string) => void;
+  /** Opens Saved Jobs, where "Prepare application" lives. The empty state offers it as the main action. */
+  onGoToSavedJobs?: () => void;
 }
 
 /**
@@ -75,6 +77,7 @@ export function ApplicationsPage({
   focusAttemptId = null,
   onFocusAttemptConsumed,
   onGenerateLetter,
+  onGoToSavedJobs,
 }: ApplicationsPageProps) {
   const [activeTab, setActiveTab] = useState<PageTab>('active');
   const [applications, setApplications] = useState<ApplicationRecord[] | null>(null);
@@ -90,6 +93,9 @@ export function ApplicationsPage({
   const [savedJobs, setSavedJobs] = useState<readonly SavedJobRecord[]>([]);
   const [cvDocuments, setCvDocuments] = useState<readonly CvDocumentRecord[]>([]);
   const [letters, setLetters] = useState<readonly LetterRecord[]>([]);
+  // Whether the saved-job lookup has settled, so the empty state does not show one action and then
+  // swap it for another a moment later.
+  const [linkedRecordsSettled, setLinkedRecordsSettled] = useState(false);
 
   const [drawerState, setDrawerState] = useState<DrawerState | null>(null);
   const [interviewPrepTarget, setInterviewPrepTarget] = useState<ApplicationRecord | null>(null);
@@ -128,6 +134,7 @@ export function ApplicationsPage({
       } catch {
         // Dropdowns degrade to "None"; the drawer still works for manual entry.
       }
+      if (!cancelled) setLinkedRecordsSettled(true);
     }
     void loadLinkedRecords();
     return () => {
@@ -371,10 +378,14 @@ export function ApplicationsPage({
   const isLoading = applications === null;
   const isEmpty = !isLoading && sortedApplications.length === 0;
   const isAttemptsLoading = attempts === null;
+  // The empty state carries the page's one primary action, so the toolbar button steps aside.
+  const emptyStateHasAction = isEmpty && activeTab !== 'archived';
+  const showEmptyAction = emptyStateHasAction && linkedRecordsSettled;
+  const canPrepareFromSavedJobs = savedJobs.length > 0 && onGoToSavedJobs !== undefined;
 
   return (
     <div>
-      {!isInProgressTab && (
+      {!isInProgressTab && !emptyStateHasAction && (
         <div className="flex justify-end">
           <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
             Add application
@@ -409,13 +420,26 @@ export function ApplicationsPage({
             <EmptyState
               illustration={emptyApplicationsIllustration}
               title={emptyStateTitle(activeTab)}
-              description="Track roles you're preparing for, applying to, or already hearing back from."
+              description={
+                canPrepareFromSavedJobs
+                  ? 'Prepare one from a saved job, or add one you sent outside the app.'
+                  : "Track roles you're preparing for, applying to, or already hearing back from."
+              }
               action={
-                activeTab !== 'archived' ? (
+                !showEmptyAction ? undefined : canPrepareFromSavedJobs ? (
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button type="button" className="btn btn-primary btn-sm" onClick={onGoToSavedJobs}>
+                      Go to Saved Jobs
+                    </button>
+                    <button type="button" className="btn btn-outline btn-sm" onClick={openCreateDrawer}>
+                      Add manually
+                    </button>
+                  </div>
+                ) : (
                   <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
                     Add your first application
                   </button>
-                ) : undefined
+                )
               }
             />
           )}

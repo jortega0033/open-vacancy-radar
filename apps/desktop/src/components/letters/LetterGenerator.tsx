@@ -44,6 +44,8 @@ const JOB_SAVED_PREFIX = 'saved:';
 /** How long the "Copied" / "Exported" feedback stays up. */
 const COPY_FEEDBACK_MS = 2_000;
 
+export type UnsavedKind = 'new' | 'edited' | null;
+
 export interface LetterGeneratorProps {
   /** An existing row to edit. Saving updates it in place rather than creating a second copy. */
   letter?: LetterRecord | null;
@@ -59,8 +61,16 @@ export interface LetterGeneratorProps {
   onSaved?: (letter: LetterRecord) => void;
   /** Rendered as a "Back to library" affordance when supplied. */
   onClose?: () => void;
+  /**
+   * Reports whether the text on screen would be lost by leaving: `new` for a draft that was never
+   * saved, `edited` for a saved letter changed since, `null` when nothing is at risk. The page uses
+   * it to ask before it unmounts this editor.
+   */
+  onUnsavedChange?: (kind: UnsavedKind) => void;
   /** Return to the vacancy that opened this generator. */
   onBackToVacancy?: () => void;
+  /** Opens the CV page, so the empty CV hint can link there. */
+  onOpenCvPage?: () => void;
 }
 
 /**
@@ -102,7 +112,9 @@ export function LetterGenerator({
   model,
   onSaved,
   onClose,
+  onUnsavedChange,
   onBackToVacancy,
+  onOpenCvPage,
 }: LetterGeneratorProps) {
   const run = useAgentRun({ chunkSeparator: '' });
 
@@ -342,6 +354,11 @@ export function LetterGenerator({
 
   const hasBody = body.trim().length > 0;
   const isDirty = body !== savedBody;
+  const unsavedKind: UnsavedKind = !isDirty || !hasBody ? null : letterId ? 'edited' : 'new';
+
+  useEffect(() => {
+    onUnsavedChange?.(unsavedKind);
+  }, [unsavedKind, onUnsavedChange]);
   const isGrounded = canGenerateGroundedLetter(bundle);
   const canGenerate = isGrounded && !run.isBusy;
 
@@ -576,8 +593,14 @@ export function LetterGenerator({
             {cvError && <ErrorBanner className="mb-2">{cvError}</ErrorBanner>}
             {cvs.length === 0 && !cvError ? (
               <p className="text-sm text-base-content/60">
-                No CVs saved yet. Upload one on the Search page and choose “Save to CV library”, then
-                come back here.
+                No CVs yet.{' '}
+                {onOpenCvPage ? (
+                  <button type="button" className="link" onClick={onOpenCvPage}>
+                    Add one on the CV page.
+                  </button>
+                ) : (
+                  'Add one on the CV page.'
+                )}
               </p>
             ) : (
               <label className="block">
@@ -798,7 +821,8 @@ export function LetterGenerator({
               Saved to your letters.
             </span>
           )}
-          {letterId && isDirty && <span className="text-base-content/60">Unsaved changes.</span>}
+          {unsavedKind === 'edited' && <span className="text-base-content/60">Unsaved changes.</span>}
+          {unsavedKind === 'new' && <span className="text-base-content/60">Not saved yet.</span>}
           {copyState === 'copied' && (
             <span className="text-success" role="status">
               Copied to clipboard.

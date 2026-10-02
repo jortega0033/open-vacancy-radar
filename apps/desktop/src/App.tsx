@@ -309,6 +309,7 @@ export function App() {
               focusAttemptId={applicationAttemptToOpen}
               onFocusAttemptConsumed={() => setApplicationAttemptToOpen(null)}
               onGenerateLetter={handleGenerateApplicationLetter}
+              onGoToSavedJobs={() => handleNavigate('saved')}
             />
           )}
           {nav === 'cv' && <CvLibraryPage />}
@@ -319,6 +320,7 @@ export function App() {
               onVacancyConsumed={handleVacancyConsumed}
               onLettersChanged={refreshCounts}
               onBackToVacancy={handleBackToVacancy}
+              onOpenCvPage={() => handleNavigate('cv')}
             />
           )}
           {nav === 'settings' && <SettingsPage onNavigateToRuntime={() => handleNavigate('runtime')} />}
