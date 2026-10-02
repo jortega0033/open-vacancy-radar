@@ -1,14 +1,24 @@
-import { memo, useLayoutEffect, useRef } from 'react';
+import { Fragment, memo, useLayoutEffect, useRef } from 'react';
 import noResultsIllustration from '../../../assets/illustrations/no-results.svg?no-inline';
 import { discoveryProviderLabel } from '../../discovery-provider-labels.js';
 import { EmptyState } from '../shell/index.js';
-import { descriptionExcerpt, formatDate, isStalePosting, orNotStated, type SearchResult } from './results.js';
+import {
+  descriptionExcerpt,
+  formatDate,
+  isStalePosting,
+  orNotStated,
+  profileFitSpoken,
+  profileFitText,
+  type SearchResult,
+} from './results.js';
 
 export interface SearchResultRowProps {
   result: SearchResult;
   selected: boolean;
   onSelect: (result: SearchResult) => void;
   saved: boolean;
+  /** Whether a scan is running right now. A provisional row only reads "Live" while this is true. */
+  scanActive?: boolean;
 }
 
 export const SearchResultRow = memo(function SearchResultRow({
@@ -16,6 +26,7 @@ export const SearchResultRow = memo(function SearchResultRow({
   selected,
   onSelect,
   saved,
+  scanActive = false,
 }: SearchResultRowProps) {
   const stale = isStalePosting(result.postedAt);
   const excerpt = descriptionExcerpt(result.description);
@@ -33,8 +44,9 @@ export const SearchResultRow = memo(function SearchResultRow({
   // decision" -- see `VacancyDetail.tsx`).
   const badges = [
     // Always first: a provisional row (issue #364's live view) must never read as an ordinary,
-    // fully-final result -- it has no score and no official-source cross-reference yet.
-    result.provisional ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
+    // fully-final result -- it has no score and no official-source cross-reference yet. Only while a
+    // scan is actually running: the badge claims the row is still arriving (issue #464).
+    result.provisional && scanActive ? { text: 'Live · not yet scored', tone: 'warning' as const } : null,
     result.verification.tone !== null ? { text: result.verification.label, tone: result.verification.tone } : null,
     result.employmentType ? { text: result.employmentType, tone: null } : null,
     result.salary ? { text: result.salary, tone: null } : null,
@@ -58,11 +70,6 @@ export const SearchResultRow = memo(function SearchResultRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-sm font-semibold">{result.title}</span>
-          {result.profileScore != null && (
-            <span className="flex-none font-mono text-xs text-base-content/70" title="Deterministic profile score">
-              {result.profileScore}
-            </span>
-          )}
         </div>
         <div className="truncate text-xs font-medium text-base-content/70">
           {result.company} · {orNotStated(result.location)}
@@ -70,8 +77,17 @@ export const SearchResultRow = memo(function SearchResultRow({
 
         {excerpt && <p className="mt-1 line-clamp-2 text-xs text-base-content/60">{excerpt}</p>}
 
-        {badges.length > 0 && (
+        {(result.profileScore != null || badges.length > 0) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {result.profileScore != null && (
+              <span
+                className="badge badge-xs badge-soft badge-primary font-mono"
+                title="Deterministic score against your search profile. It does not compare this vacancy to a CV."
+              >
+                <span aria-hidden="true">{profileFitText(result.profileScore)}</span>
+                <span className="sr-only">{profileFitSpoken(result.profileScore)}</span>
+              </span>
+            )}
             {badges.map((badge) => (
               <span
                 key={badge.text}
@@ -112,6 +128,10 @@ export interface SearchResultListProps {
   /** `vacancyKey`s already in the workspace database, so a saved row can say so. */
   savedKeys: ReadonlySet<string>;
   summary: string;
+  /** Whether a scan is running right now; passed through to each row's "Live" badge. */
+  scanActive?: boolean;
+  /** How many rows in the whole filtered list lack a score. Defaults to the count on this page. */
+  unscoredCount?: number;
   /** 0-indexed. */
   page: number;
   pageCount: number;
@@ -127,6 +147,8 @@ export const SearchResultList = memo(function SearchResultList({
   onSelect,
   savedKeys,
   summary,
+  scanActive = false,
+  unscoredCount,
   page,
   pageCount,
   onPageChange,
@@ -171,14 +193,23 @@ export const SearchResultList = memo(function SearchResultList({
             }
           />
         ) : (
-          results.map((result) => (
-            <SearchResultRow
-              key={result.key}
-              result={result}
-              selected={result.key === selectedKey}
-              onSelect={onSelect}
-              saved={savedKeys.has(result.key)}
-            />
+          results.map((result, index) => (
+            <Fragment key={result.key}>
+              {/* Scored rows sort first, so the divider goes before the first unscored row on this
+                  page (which is the top of the page when the page starts inside the unscored group). */}
+              {result.profileScore == null && (index === 0 || results[index - 1]?.profileScore != null) && (
+                <h3 className="border-b border-base-300 bg-base-200 px-4 py-1.5 text-xs font-semibold text-base-content/70">
+                  Not scored yet ({(unscoredCount ?? results.filter((row) => row.profileScore == null).length).toLocaleString()})
+                </h3>
+              )}
+              <SearchResultRow
+                result={result}
+                selected={result.key === selectedKey}
+                onSelect={onSelect}
+                saved={savedKeys.has(result.key)}
+                scanActive={scanActive}
+              />
+            </Fragment>
           ))
         )}
       </div>

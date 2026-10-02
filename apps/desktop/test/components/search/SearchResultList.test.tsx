@@ -210,6 +210,7 @@ describe('SearchResultList', () => {
         onSelect={vi.fn()}
         savedKeys={new Set()}
         summary="2 vacancies"
+        scanActive
         page={0}
         pageCount={1}
         onPageChange={vi.fn()}
@@ -217,6 +218,153 @@ describe('SearchResultList', () => {
     );
 
     expect(screen.getAllByText(/live · not yet scored/i)).toHaveLength(1);
+  });
+
+  it('never shows the live badge when no scan is running, even for a provisional row (issue #464)', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer', { provisional: true })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/live · not yet scored/i)).not.toBeInTheDocument();
+  });
+
+  it('labels the score as profile fit out of 100, visibly and for screen readers (issue #452)', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer', { profileScore: 98 })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Profile fit 98/100')).toBeInTheDocument();
+    expect(screen.getByText('Profile fit 98 out of 100')).toHaveClass('sr-only');
+    expect(screen.getByRole('button', { name: /profile fit 98 out of 100/i })).toBeInTheDocument();
+  });
+
+  it('shows no score chip, and never a zero, for an unscored row', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Frontend Engineer', { profileScore: null })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/profile fit/i)).not.toBeInTheDocument();
+  });
+
+  it('puts unscored rows under one "Not scored yet (N)" divider that follows the scored rows (issue #464)', () => {
+    render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Scored One', { profileScore: 98 }),
+          worldwideResult('2', 'Scored Two', { profileScore: 80 }),
+          worldwideResult('3', 'Unscored One'),
+          worldwideResult('4', 'Unscored Two'),
+        ]}
+        totalCount={4}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="4 vacancies"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    const divider = screen.getByRole('heading', { name: 'Not scored yet (2)' });
+    expect(screen.getAllByRole('heading', { name: /not scored yet/i })).toHaveLength(1);
+    const titles = screen.getAllByText(/^(Scored|Unscored) (One|Two)$/).map((node) => node.textContent);
+    expect(titles).toEqual(['Scored One', 'Scored Two', 'Unscored One', 'Unscored Two']);
+    // The divider sits between the last scored row and the first unscored row.
+    expect(divider.compareDocumentPosition(screen.getByText('Scored Two'))).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+    expect(divider.compareDocumentPosition(screen.getByText('Unscored One'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('counts the unscored rows of the whole list when the caller passes it, and repeats the divider at the top of a page that starts inside the group', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('5', 'Unscored Five'), worldwideResult('6', 'Unscored Six')]}
+        totalCount={40}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="40 vacancies"
+        unscoredCount={12}
+        page={1}
+        pageCount={2}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Not scored yet (12)' })).toBeInTheDocument();
+  });
+
+  it('shows no divider when every row is scored', () => {
+    render(
+      <SearchResultList
+        results={[worldwideResult('1', 'Scored One', { profileScore: 90 })]}
+        totalCount={1}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="1 vacancy"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('heading', { name: /not scored yet/i })).not.toBeInTheDocument();
+  });
+
+  it('renders no description line for a description that is only metadata or an employer introduction (issue #463)', () => {
+    const { container } = render(
+      <SearchResultList
+        results={[
+          worldwideResult('1', 'Principal Front End Engineer', {
+            description: 'Type of Requisition: Pipeline\nClearance Level Must Currently Possess: None',
+          }),
+          worldwideResult('2', 'Frontend Engineer', { description: 'Who We Are\nHi, we are a small search company.' }),
+        ]}
+        totalCount={2}
+        selectedKey={null}
+        onSelect={vi.fn()}
+        savedKeys={new Set()}
+        summary="2 vacancies"
+        page={0}
+        pageCount={1}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.line-clamp-2')).not.toBeInTheDocument();
+    expect(screen.queryByText(/type of requisition/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/who we are/i)).not.toBeInTheDocument();
   });
 
   it('flags a posting over 30 days old instead of showing its date as if it were fresh', () => {
