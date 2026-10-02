@@ -122,8 +122,8 @@ test('Search opens a compact manual swipe review with equivalent controls', asyn
       await window.waitForLoadState('domcontentloaded');
       await ensureLightTheme(window);
       await window.getByRole('complementary', { name: 'Main' }).getByRole('button', { name: 'Search', exact: true }).click();
-      await expect(window.getByRole('button', { name: 'Prepare application' })).toBeVisible();
-      await window.getByRole('button', { name: 'Prepare application' }).click();
+      await expect(window.getByRole('button', { name: 'Start application' })).toBeVisible();
+      await window.getByRole('button', { name: 'Start application' }).click();
 
       const dialog = window.getByRole('dialog');
       const card = dialog.getByTestId('manual-application-swipe-card');

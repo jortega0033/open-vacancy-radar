@@ -195,7 +195,7 @@ export function ResumeToolkit({ cv, model, provider }: ResumeToolkitProps) {
               id="resume-audit-target-role"
               type="text"
               className="input input-bordered input-sm w-full"
-              placeholder="e.g. React Frontend Engineer"
+              placeholder="e.g. Product Manager, Solutions Architect"
               value={targetRoleDraft}
               onChange={(event) => setTargetRoleDraft(event.target.value)}
               disabled={run.isBusy}
