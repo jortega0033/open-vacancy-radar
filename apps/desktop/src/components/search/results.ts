@@ -53,7 +53,7 @@ export const WORLDWIDE_VERIFICATION: Verification = {
   label: 'Not available for this vacancy',
   tone: null,
   note:
-    'No sponsor register match was found (or attempted, for a non-Netherlands location) for this employer. Nothing was verified: that is an absent check, not a negative result.',
+    'No sponsor register match was found (or attempted, for a non-Netherlands location) for this employer. Nothing was verified. No check ran, so this says nothing against the employer.',
 };
 
 interface CommonResult {
@@ -148,7 +148,7 @@ export function worldwideVerification(vacancy: DiscoveryVacancyAudit): Verificat
     level: 'possible_sponsor_match',
     label: 'Possible sponsor match (best effort)',
     tone: 'warning',
-    note: `A best-effort Wikidata name search matched this employer to ${match.legalName} (KVK ${match.kvkNumber}) on the IND public register. This is a best-effort, name-keyed match, not a curated verification: confirm the legal entity yourself before relying on sponsorship.`,
+    note: `A best-effort Wikidata name search matched this employer to ${match.legalName} (KVK ${match.kvkNumber}) on the IND public register. This is a best-effort match on the name alone and has not been curated. Confirm the legal entity yourself before relying on sponsorship.`,
   };
 }
 

@@ -52,7 +52,7 @@ export interface NavItem {
 /** The primary group: the job-hunting workflow itself. */
 export const PRIMARY_NAV: readonly NavItem[] = [
   { id: 'search', label: 'Search' },
-  { id: 'saved', label: 'Saved Jobs', badge: 'savedJobs' },
+  { id: 'saved', label: 'Saved jobs', badge: 'savedJobs' },
   { id: 'applications', label: 'Applications', badge: 'activeApplications' },
   { id: 'cv', label: 'CV' },
   { id: 'letters', label: 'Letters', badge: 'letters' },
@@ -76,7 +76,7 @@ export const PRIMARY_NAV: readonly NavItem[] = [
  * click.
  */
 export const SECONDARY_NAV: readonly NavItem[] = [
-  { id: 'runtime', label: 'AI Runtime' },
+  { id: 'runtime', label: 'AI runtime' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -105,11 +105,11 @@ export function headerCopy(
   switch (page) {
     case 'search':
       return {
-        title: 'Search Jobs',
+        title: 'Search jobs',
         subtitle: 'Find relevant roles, evaluate employers, and prepare applications',
       };
     case 'saved':
-      return { title: 'Saved Jobs', subtitle: counts === undefined ? 'Loading…' : `${counts.savedJobs} saved` };
+      return { title: 'Saved jobs', subtitle: counts === undefined ? 'Loading…' : `${counts.savedJobs} saved` };
     case 'applications':
       return {
         title: 'Applications',
@@ -125,7 +125,7 @@ export function headerCopy(
       // truth the shell would have to keep in step with the page's own list.
       return { title: 'AI Workspace', subtitle: 'Agent sessions running in folders you approved' };
     case 'runtime':
-      return { title: 'AI Runtime', subtitle: 'Your own Claude Code or Codex, running on this computer' };
+      return { title: 'AI runtime', subtitle: 'Your own Claude Code or Codex, running on this computer' };
     case 'settings':
       return { title: 'Settings', subtitle: 'Saved automatically to local data' };
   }

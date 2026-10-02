@@ -1,6 +1,7 @@
 import type { CvDocumentRecord, CvExportFormat } from '../../window.js';
 import { Menu } from '../shell/index.js';
 import { CV_KIND_LABEL, cvParseStatus, formatCvDate, type ParseStatusTone } from './cv-profile.js';
+import { NotSet } from '../shell/NotSet.js';
 
 export interface CvLibraryTableProps {
   documents: readonly CvDocumentRecord[];
@@ -79,7 +80,7 @@ export function CvLibraryTable({
                   className="ovr-responsive-table__cell text-base-content/80"
                   data-label="Target role"
                 >
-                  {doc.targetRole || '—'}
+                  {doc.targetRole || <NotSet />}
                 </td>
                 <td
                   className="ovr-responsive-table__cell whitespace-nowrap text-base-content/60"

@@ -435,13 +435,13 @@ export function RequirementMapping({ cvId, cv, vacancy, sourceCv, model, provide
         <div className="card-title text-base font-bold">Requirement mapping</div>
         <p className="text-sm text-base-content/60">
           Every material requirement in this vacancy, mapped to what your reviewed CV actually
-          evidences. This decides what a tailored CV may claim -- separate from the ATS fit check
+          evidences. This decides what a tailored CV may claim. It is separate from the ATS fit check
           above, which is advisory only.
         </p>
 
         {!cvId && (
           <div className="text-sm text-base-content/60">
-            Select a saved CV from your library above to enable this -- an uploaded CV not yet saved
+            Select a saved CV from your library above to enable this. An uploaded CV that is not yet saved
             has nowhere to keep this mapping.
           </div>
         )}
