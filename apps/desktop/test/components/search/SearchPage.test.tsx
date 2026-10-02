@@ -1569,8 +1569,8 @@ describe('SearchPage', () => {
 
       // A saved-report row (not provisional) keeps its safe actions enabled during the rescan.
       expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Prepare application' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Start application' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Compare with my CV' })).toBeEnabled();
     });
   });
 
@@ -1757,9 +1757,9 @@ describe('SearchPage', () => {
     const onViewApplicationAttempt = vi.fn();
 
     render(<SearchPage onViewApplicationAttempt={onViewApplicationAttempt} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare application' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start application' })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare application' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start application' }));
 
     await waitFor(() => expect(pipeline.startFromVacancy).toHaveBeenCalledWith('ww-1'));
     await waitFor(() => expect(onViewApplicationAttempt).toHaveBeenCalledWith('attempt-search-1'));
@@ -1779,31 +1779,6 @@ describe('SearchPage', () => {
 
     await waitFor(() => expect(screen.getByText(/workspace database is locked/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Save job' })).toBeEnabled();
-  });
-
-  it('clicking "Generate Letter" hands the selected vacancy off as a SelectedVacancy, unchanged by any AI logic', async () => {
-    const onGenerateLetter = vi.fn();
-    installAllBridges({
-      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
-    });
-
-    render(<SearchPage onGenerateLetter={onGenerateLetter} />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }));
-
-    expect(onGenerateLetter).toHaveBeenCalledTimes(1);
-    expect(onGenerateLetter).toHaveBeenCalledWith({
-      title: 'Remote Frontend Engineer',
-      company: 'Acme Corp',
-      location: 'Worldwide',
-      url: 'https://example.invalid/jobs/ww-1',
-      employmentType: 'full_time',
-      currency: 'USD',
-      salaryPeriod: 'year',
-      advertisedMinimum: 120_000,
-      key: 'ww-1',
-    });
   });
 
   it('shows the salary evidence provider and source key separately from the result provider', async () => {
@@ -1827,17 +1802,6 @@ describe('SearchPage', () => {
     render(<SearchPage />);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Remote Frontend Engineer' })).toBeInTheDocument());
     expect(screen.getByText('Himalayas (himalayas:salary-copy)')).toBeInTheDocument();
-  });
-
-  it('"Generate Letter" is a harmless no-op when the page is used standalone, with no handler wired', async () => {
-    installAllBridges({
-      getReport: vi.fn().mockResolvedValue(makeWorldwideReport([makeWorldwideVacancy()])),
-    });
-
-    render(<SearchPage />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Generate Letter' })).toBeInTheDocument());
-
-    expect(() => fireEvent.click(screen.getByRole('button', { name: 'Generate Letter' }))).not.toThrow();
   });
 
   it('opens the CV assistant on demand for the selected vacancy', async () => {
