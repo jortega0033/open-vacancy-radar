@@ -450,6 +450,7 @@ describe('ComposedCvReview names its real state (#472)', () => {
       validation: { ok: true, reasons: [], pageCount: 1 },
       savedPath: 'C:\\fake\\old.pdf',
       reviewOpenedAt: '',
+      pagesViewedAt: '',
       confirmedAt: '',
     };
   }
