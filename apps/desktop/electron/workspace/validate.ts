@@ -48,6 +48,7 @@ import type {
   CvRequirementMapping,
 } from './cv-evidence-schema.js';
 import { MCP_GRANT_LIMITS, MCP_GRANT_SCOPE_TYPES } from './mcp-grant-schema.js';
+import { parseSupportPromptStrict } from './support-prompt.js';
 import type {
   ApplicationAnswerInput,
   ApplicationAnswerPatch,
@@ -1034,6 +1035,12 @@ export function parseSettingsPatch(value: unknown): AppSettingsPatch {
   patch(input, out, 'agentSelectedSessionId', (v) => nullableStr(v, 'agentSelectedSessionId', LIMITS.short));
   patch(input, out, 'agentArchivedSessionIds', (v) => parseArchivedSessionIds(v));
   patch(input, out, 'agentUnreadCounts', (v) => parseUnreadCounts(v));
+  // #503: the one-time "Support OVR" ask state.
+  patch(input, out, 'supportPrompt', (v) => {
+    const parsed = parseSupportPromptStrict(v);
+    if (!parsed) fail('"supportPrompt" must be { answered: boolean, asks: 0-2, successesSinceDismissal: whole number }');
+    return parsed;
+  });
   return out;
 }
 

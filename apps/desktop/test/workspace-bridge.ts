@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS: AppSettingsRecord = {
   agentSelectedSessionId: null,
   agentArchivedSessionIds: [],
   agentUnreadCounts: {},
+  supportPrompt: { answered: false, asks: 0, successesSinceDismissal: 0 },
 };
 
 export const DEFAULT_COUNTS: WorkspaceCounts = { savedJobs: 0, activeApplications: 0, letters: 0, cvDocuments: 0 };

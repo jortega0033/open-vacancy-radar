@@ -1,0 +1,1 @@
+ALTER TABLE `app_settings` ADD `support_prompt` text DEFAULT '{"answered":false,"asks":0,"successesSinceDismissal":0}' NOT NULL;

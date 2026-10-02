@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SettingsSection } from './controls.js';
 import { redactDiagnosticsText } from '../shell/redact-diagnostics.js';
 import type { NavPage } from '../shell/nav.js';
+import { REPOSITORY_URL } from '../../support-links.js';
 
-const REPOSITORY_URL = 'https://github.com/jortega0033/open-vacancy-radar';
 const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 
 type CopyState = 'idle' | 'copied' | 'failed';
