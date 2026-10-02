@@ -777,6 +777,16 @@ export function parseCvArtifactActionInput(value: unknown): { overlayId: string;
   return { overlayId: parseId(input.overlayId), artifactId: parseId(input.artifactId) };
 }
 
+/** `{ overlayId, artifactId, pageCount }`: the renderer reports how many pages it displayed (#434). */
+export function parseCvArtifactPagesViewedInput(value: unknown): { overlayId: string; artifactId: string; pageCount: number } {
+  const input = asRecord(value, 'artifact request');
+  const pageCount = input.pageCount;
+  if (typeof pageCount !== 'number' || !Number.isInteger(pageCount) || pageCount < 1 || pageCount > 1000) {
+    throw new Error('pageCount must be a whole number of pages');
+  }
+  return { overlayId: parseId(input.overlayId), artifactId: parseId(input.artifactId), pageCount };
+}
+
 /**
  * #421's local-client grant. `sourceCvId`/`caseIds` are required or forbidden depending on
  * `scopeType` rather than both simply optional: a `source_cv` grant given a `caseIds` list (or

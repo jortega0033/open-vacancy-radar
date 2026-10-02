@@ -170,6 +170,32 @@ test.describe('document acceptance against real Electron PDF output (#276)', () 
     expect(acceptance.findings[0]?.detail).toContain('Jamie Rivera');
   });
 
+  test('a real render carries every claim of the approved CV, including long and multi-page ones (#434)', async ({ electronApp }) => {
+    for (const resume of [RESUME, DEMANDING_RESUME]) {
+      const pdf = await printRealPdf(electronApp, renderResumeHtml(resume));
+      const acceptance = await acceptRenderedDocument(pdf, {
+        ...resumeAcceptanceContract(resume, { checkClaims: true }),
+        pageBounds: { min: 1, max: 30 },
+      });
+      expect(acceptance.findings).toEqual([]);
+    }
+  });
+
+  test('a real render that dropped an approved bullet or the summary fails the claim check (#434)', async ({ electronApp }) => {
+    const [first, ...otherExperience] = RESUME.experience;
+    const dropped: TailoredResume = {
+      ...RESUME,
+      summary: '',
+      experience: [{ ...first!, bullets: ['Led the design system rewrite.'] }, ...otherExperience],
+    };
+    const pdf = await printRealPdf(electronApp, renderResumeHtml(dropped));
+    const acceptance = await acceptRenderedDocument(pdf, resumeAcceptanceContract(RESUME, { checkClaims: true }));
+    expect(acceptance.ok).toBe(false);
+    const details = acceptance.findings.map((finding) => finding.detail).join(' | ');
+    expect(details).toContain('bullet "Mentored three junior engineers." is missing');
+    expect(details).toContain('summary "Frontend engineer with eight years building design systems and developer tooling." is missing');
+  });
+
   test('a cover letter rendered by the real print pipeline gets -- and passes -- the same checks', async ({ electronApp }) => {
     const target = { company: 'Northwind Freight', role: 'Logistics Platform Engineer' };
     const title = 'Cover Letter';

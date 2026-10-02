@@ -8,6 +8,7 @@ import { jsPDF } from 'jspdf';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportCvCase, type CvCaseExportDeps } from '../electron/cv-case-export-handler.js';
 import { renderApprovedSnapshot } from '../electron/cv-case-export.js';
+import { resumeClaims } from '../electron/resume-claims.js';
 import type { TailoredResume } from '../electron/resume-schema.js';
 import { createWorkspaceDb, type WorkspaceDb } from '../electron/workspace/client.js';
 import { cvArtifactStatus } from '../electron/workspace/cv-artifact-status.js';
@@ -80,16 +81,11 @@ function approvedCase() {
   return { cv, overlay: approved };
 }
 
-/** Prints the words the validator looks for into a real, extractable PDF. */
+/** Prints every approved claim of the snapshot into a real, extractable PDF. */
 function printerFor(resume: () => TailoredResume | null, extra: string[] = []): (html: string) => Promise<Buffer> {
   return async () => {
     const source = resume();
-    const lines = [
-      source?.contact.name ?? '',
-      source?.summary ?? '',
-      ...(source?.experience.flatMap((entry) => [`${entry.title}, ${entry.company}`, ...entry.bullets]) ?? []),
-      ...extra,
-    ].filter(Boolean);
+    const lines = [...(source ? resumeClaims(source).map((claim) => claim.text) : []), ...extra].filter(Boolean);
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     let y = 50;
     for (const line of lines) {

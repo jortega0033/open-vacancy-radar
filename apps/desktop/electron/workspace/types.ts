@@ -1131,11 +1131,23 @@ export interface WorkspaceBridge {
    */
   exportCvEvidenceOverlay(overlayId: string, format: CvExportFormat): Promise<CvCaseExportResult>;
   /**
-   * #419 step 9: opens the saved file for the candidate to read, after checking that its bytes still
-   * match the hash recorded at export, and records that it was opened. A PDF cannot be accepted
-   * before this has happened.
+   * #419 step 9: opens the saved file in the system viewer, after checking that its bytes still
+   * match the hash recorded at export, and records that it was opened. A secondary way to look at the
+   * file: since #434 only reading every page in the app unlocks accepting a PDF.
    */
   openCvArtifact(overlayId: string, artifactId: string): Promise<CvEvidenceOverlayRecord>;
+  /**
+   * #434: the saved file's bytes, for showing a PDF's pages inside the app. Takes the artifact id only
+   * (the renderer never sends or learns a path), reads the stored saved path, and refuses a file that
+   * is missing, is not a PDF, is over the size limit or no longer matches the hash recorded at export.
+   */
+  readCvArtifactBytes(overlayId: string, artifactId: string): Promise<Uint8Array>;
+  /**
+   * #434: records that every page of the PDF was displayed in the app. The main process rechecks the
+   * file's hash and requires `pageCount` to equal the page count recorded at export. A PDF cannot be
+   * accepted before this has happened.
+   */
+  markCvArtifactPagesViewed(overlayId: string, artifactId: string, pageCount: number): Promise<CvEvidenceOverlayRecord>;
   /** #419 step 9: the candidate's explicit visual confirmation of one saved file. Refused for a file
    * that failed its checks or belongs to an earlier version of the CV. */
   confirmCvArtifact(overlayId: string, artifactId: string): Promise<CvEvidenceOverlayRecord>;
